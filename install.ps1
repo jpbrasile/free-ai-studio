@@ -14,36 +14,28 @@ if (-not (Test-Path ".env")) {
     Write-Host ".env créé depuis .env.example"
 }
 
-$content = Get-Content ".env" -Raw
-if ($content -notmatch "(?m)^WEBUI_SECRET_KEY=.+$") {
-    $bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    $secret = -join ($bytes | ForEach-Object { $_.ToString("x2") })
-    $content = [regex]::Replace($content, "(?m)^WEBUI_SECRET_KEY=.*$", "WEBUI_SECRET_KEY=$secret")
-    Set-Content ".env" $content -NoNewline
-    Write-Host "WEBUI_SECRET_KEY générée."
+# UTF-8 sans BOM : préserve les accents des commentaires du .env sur PowerShell 5.1,
+# dont Get-Content/Set-Content utilisent sinon l'encodage ANSI de la machine.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$envPath = Join-Path $PSScriptRoot ".env"
+
+function New-HexSecret {
+    param([int]$ByteCount = 32)
+    $bytes = New-Object byte[] $ByteCount
+    # RandomNumberGenerator::Fill n'existe que sur .NET Core (PowerShell 7+).
+    # Create().GetBytes() existe sur .NET Framework 4.x (PowerShell 5.1) ET sur .NET Core.
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return (-join ($bytes | ForEach-Object { $_.ToString("x2") }))
 }
 
-$content = Get-Content ".env" -Raw
-if ($content -notmatch "(?m)^FREE_TIER_MANAGER_KEY=.+$") {
-    $bytes2 = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes2)
-    $managerKey = -join ($bytes2 | ForEach-Object { $_.ToString("x2") })
-    $content = [regex]::Replace($content, "(?m)^FREE_TIER_MANAGER_KEY=.*$", "FREE_TIER_MANAGER_KEY=$managerKey")
-    Set-Content ".env" $content -NoNewline
-    Write-Host "FREE_TIER_MANAGER_KEY générée."
-}
-
-
-foreach ($name in @("SANDBOX_MANAGER_KEY", "SANDBOX_WORKER_KEY")) {
-    $content = Get-Content ".env" -Raw
+foreach ($name in @("WEBUI_SECRET_KEY", "FREE_TIER_MANAGER_KEY", "SANDBOX_MANAGER_KEY", "SANDBOX_WORKER_KEY")) {
+    $content = [System.IO.File]::ReadAllText($envPath, $utf8NoBom)
     if ($content -notmatch "(?m)^$name=.+$") {
-        $b = New-Object byte[] 32
-        [System.Security.Cryptography.RandomNumberGenerator]::Fill($b)
-        $value = -join ($b | ForEach-Object { $_.ToString("x2") })
+        $value = New-HexSecret 32
         $content = [regex]::Replace($content, "(?m)^$name=.*$", "$name=$value")
         if ($content -notmatch "(?m)^$name=") { $content += "`n$name=$value`n" }
-        Set-Content ".env" $content -NoNewline
+        [System.IO.File]::WriteAllText($envPath, $content, $utf8NoBom)
         Write-Host "$name générée."
     }
 }
