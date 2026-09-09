@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+# Cles saisies depuis la page /cles : meme sensibilite que .env.
+config/
 __pycache__/
 *.py[cod]
 .DS_Store

@@ -2,6 +2,7 @@ import os
 import time
 import json
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -56,6 +57,40 @@ PROVIDERS = {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
         "model": os.getenv("GEMINI_FREE_MODEL", "gemini-3.8-flash"),
         "strict_zero": False,
+    },
+}
+
+# --- Magasin de cles ecrit par la page /cles --------------------------------
+# Le conteneur recoit ses variables par env_file, evaluees a sa CREATION : une
+# cle ajoutee dans .env n'a aucun effet sur un conteneur deja lance, et
+# `docker compose restart` ne suffit pas non plus. Un debutant sans terminal ne
+# peut donc pas se depanner. Les cles saisies dans l'interface sont conservees
+# ici et relues a chaque appel, ce qui les rend actives immediatement.
+# Une variable d'environnement non vide reste prioritaire : le .env garde le
+# dernier mot pour qui sait s'en servir.
+CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
+KEYS_FILE = CONFIG_DIR / "keys.json"
+
+# Ce que le debutant doit comprendre de chaque fournisseur, et ou aller chercher
+# la cle. L'ordre d'essai reel reste FREE_PROVIDER_ORDER.
+PROVIDER_HELP = {
+    "gemini": {
+        "titre": "Gemini (Google)",
+        "role": "Le choix par defaut : il repond aux questions, lit vos images et sait resumer un long texte.",
+        "url": "https://aistudio.google.com/apikey",
+        "repere": "Connectez-vous avec votre compte Google, puis cliquez sur « Create API key ». La cle commence par AIza.",
+    },
+    "openrouter": {
+        "titre": "OpenRouter",
+        "role": "Le filet de secours quand Gemini a atteint sa limite du jour. Route sans aucun cout.",
+        "url": "https://openrouter.ai/settings/keys",
+        "repere": "Creez un compte, puis « Create Key ». La cle commence par sk-or-.",
+    },
+    "groq": {
+        "titre": "Groq",
+        "role": "Optionnel. Tres rapide, utile si les deux autres sont satures.",
+        "url": "https://console.groq.com/keys",
+        "repere": "Creez un compte, puis « Create API Key ». La cle commence par gsk_.",
     },
 }
 
@@ -214,8 +249,63 @@ def provider_order() -> List[str]:
     return [x for x in names if x in PROVIDERS]
 
 
+def stored_keys() -> Dict[str, str]:
+    try:
+        data = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        log.warning("magasin de cles illisible (%s) : %s", KEYS_FILE, exc)
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str)}
+
+
+def store_key(env_name: str, value: str) -> None:
+    data = stored_keys()
+    if value:
+        data[env_name] = value
+    else:
+        data.pop(env_name, None)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    blob = json.dumps(data, indent=2)
+    tmp = CONFIG_DIR / "keys.json.tmp"
+    try:
+        tmp.write_text(blob, encoding="utf-8")
+        tmp.replace(KEYS_FILE)
+    except OSError:
+        # Le renommage atomique echoue sur certains montages Windows ; le fichier
+        # est petit et n'a qu'un ecrivain, l'ecriture directe reste acceptable.
+        KEYS_FILE.write_text(blob, encoding="utf-8")
+    try:
+        KEYS_FILE.chmod(0o600)
+    except OSError:
+        pass
+
+
+def provider_key(name: str) -> str:
+    env_name = PROVIDERS[name]["key_env"]
+    value = os.getenv(env_name, "").strip()
+    if value:
+        return value
+    return stored_keys().get(env_name, "").strip()
+
+
+def key_source(name: str) -> Optional[str]:
+    env_name = PROVIDERS[name]["key_env"]
+    if os.getenv(env_name, "").strip():
+        return "env"
+    if stored_keys().get(env_name, "").strip():
+        return "interface"
+    return None
+
+
+def mask(value: str) -> str:
+    """Ne rend jamais la cle : juste de quoi la reconnaitre."""
+    return ("*" * 6 + value[-4:]) if len(value) >= 8 else "*" * 8
+
+
 def configured(name: str) -> bool:
-    return bool(os.getenv(PROVIDERS[name]["key_env"], "").strip())
+    return bool(provider_key(name))
 
 
 def enabled(name: str) -> bool:
@@ -367,6 +457,263 @@ async def status(authorization: Optional[str] = Header(default=None)):
 
 
 
+async def verify_key(name: str, key: str) -> Dict[str, Any]:
+    """Essaie vraiment la cle chez le fournisseur. Une cle n'est jamais declaree
+    bonne sans qu'un appel ait abouti : un `max_tokens: 1` coute zero sur les
+    plans gratuits et evite d'annoncer un chat qui ne repondra pas."""
+    p = PROVIDERS[name]
+    url = p["base_url"].rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "User-Agent": "Free-AI-Studio/1.0",
+    }
+    if name == "openrouter":
+        headers["X-Title"] = "Free AI Studio"
+    payload = {
+        "model": p["model"],
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(url, headers=headers, json=payload)
+    except httpx.HTTPError as exc:
+        return {
+            "valide": False,
+            "message": "Le fournisseur n'a pas repondu (%s). Verifiez votre connexion Internet." % type(exc).__name__,
+        }
+
+    # Les trois fournisseurs ne rendent pas la meme forme : OpenRouter et Groq un
+    # objet {"error": {"message": ...}}, Gemini parfois une LISTE d'objets. Un
+    # acces direct .get() plantait le point d'entree et le navigateur n'affichait
+    # qu'un « Internal Server Error » illisible au lieu du motif du refus.
+    def message_erreur(body: Any) -> str:
+        if isinstance(body, list):
+            body = body[0] if body else None
+        if not isinstance(body, dict):
+            return ""
+        err = body.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or "")
+        if isinstance(err, str):
+            return err
+        return str(body.get("message") or "")
+
+    try:
+        detail = message_erreur(response.json())
+    except ValueError:
+        detail = ""
+    detail = (detail or response.text)[:300]
+
+    if response.status_code == 200:
+        return {"valide": True, "message": "Cle valide : le fournisseur a repondu."}
+    if response.status_code == 429:
+        return {
+            "valide": True,
+            "message": "Cle valide, mais le quota du moment est atteint. Elle est enregistree et servira des que le quota repart. " + detail,
+        }
+    if response.status_code in (401, 403):
+        return {
+            "valide": False,
+            "message": "Cle refusee. Verifiez que vous l'avez copiee en entier, sans espace au debut ni a la fin. " + detail,
+        }
+    return {
+        "valide": False,
+        "message": "Refus du fournisseur (HTTP %d). %s" % (response.status_code, detail),
+    }
+
+
+@app.get("/cles/etat")
+async def cles_etat():
+    fournisseurs = []
+    for name in provider_order():
+        aide = PROVIDER_HELP.get(name, {})
+        key = provider_key(name)
+        fournisseurs.append({
+            "nom": name,
+            "titre": aide.get("titre", name),
+            "role": aide.get("role", ""),
+            "url": aide.get("url", ""),
+            "repere": aide.get("repere", ""),
+            "renseignee": bool(key),
+            "indice": mask(key) if key else "",
+            "source": key_source(name),
+            "active": provider_allowed(name),
+            "autorise": enabled(name),
+        })
+    return {
+        "fournisseurs": fournisseurs,
+        "chat_pret": any(f["active"] for f in fournisseurs),
+    }
+
+
+@app.post("/cles/tester")
+async def cles_tester(request: Request):
+    body = await request.json()
+    name = str(body.get("fournisseur", "")).strip().lower()
+    key = str(body.get("cle", "")).strip()
+    if name not in PROVIDERS:
+        raise HTTPException(status_code=400, detail="Fournisseur inconnu")
+    if not key:
+        raise HTTPException(status_code=400, detail="Aucune cle fournie")
+    result = await verify_key(name, key)
+    env_name = PROVIDERS[name]["key_env"]
+    if result["valide"]:
+        store_key(env_name, key)
+        log.info("cle enregistree pour %s (source interface)", name)
+        if os.getenv(env_name, "").strip():
+            # Sans cet avertissement, coller une cle ici serait sans effet visible :
+            # la variable d'environnement garde la priorite et le message
+            # « enregistree » laisserait croire au contraire.
+            result["message"] += (
+                " Attention : le fichier .env contient deja une cle pour ce service,"
+                " et c'est elle qui continue d'etre utilisee. Pour que la cle saisie"
+                " ici serve, videz la ligne %s du fichier .env." % env_name
+            )
+    return {
+        "valide": result["valide"],
+        "message": result["message"],
+        "enregistree": result["valide"],
+        "active": provider_allowed(name),
+        "autorise": enabled(name),
+    }
+
+
+@app.post("/cles/oublier")
+async def cles_oublier(request: Request):
+    body = await request.json()
+    name = str(body.get("fournisseur", "")).strip().lower()
+    if name not in PROVIDERS:
+        raise HTTPException(status_code=400, detail="Fournisseur inconnu")
+    store_key(PROVIDERS[name]["key_env"], "")
+    return {"oubliee": True, "encore_dans_env": key_source(name) == "env"}
+
+
+CLES_HTML = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Free AI Studio — vos cles</title>
+<style>
+:root{font-family:system-ui,sans-serif}
+body{max-width:820px;margin:32px auto;padding:0 18px;line-height:1.5}
+h1{margin-bottom:4px}
+.sous{opacity:.75;margin-top:0}
+.banniere{padding:16px 18px;border-radius:14px;margin:18px 0;border:1px solid #bbb}
+.pret{background:#e8f6ec;border-color:#7fb98f}
+.pasret{background:#fdf3e3;border-color:#d9ad63}
+.carte{border:1px solid #bbb;border-radius:16px;padding:18px;margin-bottom:16px}
+.entete{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.entete h2{margin:0;font-size:1.15rem}
+.pastille{font-size:.8rem;border-radius:999px;padding:3px 10px;border:1px solid #999}
+.verte{background:#e8f6ec;border-color:#7fb98f}
+.grise{background:#f1f1f1}
+.role{margin:8px 0 14px}
+.etape{margin:10px 0}
+.num{display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;
+ border-radius:999px;background:#333;color:#fff;font-size:.78rem;margin-right:7px}
+a.bouton,button{font:inherit;padding:9px 14px;border-radius:10px;border:1px solid #666;
+ background:#fff;cursor:pointer;text-decoration:none;color:inherit;display:inline-block}
+button.primaire{background:#222;color:#fff;border-color:#222}
+button[disabled]{opacity:.5;cursor:default}
+input[type=password]{font:inherit;padding:9px 11px;border-radius:10px;border:1px solid #999;
+ width:min(420px,100%);box-sizing:border-box}
+.repere{font-size:.86rem;opacity:.75;margin:6px 0 0 29px}
+.resultat{margin-top:10px;font-size:.92rem}
+.ok{color:#1d6b32}.ko{color:#9b2116}
+.pied{margin-top:26px;padding-top:16px;border-top:1px solid #ddd;font-size:.9rem;opacity:.8}
+</style></head><body>
+<h1>Vos cles</h1>
+<p class="sous">Une cle est un mot de passe que le service vous donne pour que ce studio puisse
+lui parler en votre nom. Elle reste sur cet ordinateur.</p>
+
+<div id="banniere" class="banniere pasret">Verification en cours...</div>
+<div id="cartes"></div>
+
+<div class="pied">
+Vous n'avez rien a payer : ces trois services ont une offre gratuite.
+La cle collee ici est verifiee par un vrai appel avant d'etre gardee, et elle
+prend effet tout de suite — rien d'autre a relancer.
+</div>
+
+<script>
+function element(html){const d=document.createElement("div");d.innerHTML=html.trim();return d.firstChild;}
+
+function pastille(f){
+  if(f.active) return '<span class="pastille verte">marche</span>';
+  if(f.renseignee && !f.autorise) return '<span class="pastille grise">cle enregistree, service desactive dans la configuration</span>';
+  if(f.renseignee) return '<span class="pastille grise">cle enregistree</span>';
+  return '<span class="pastille grise">pas encore de cle</span>';
+}
+
+function carte(f){
+  const indice = f.renseignee ? ' <span class="repere">Cle actuelle : '+f.indice+' (venue de '+(f.source==="env"?"votre fichier .env":"cette page")+')</span>' : '';
+  const c = element(
+    '<div class="carte">'+
+      '<div class="entete"><h2>'+f.titre+'</h2>'+pastille(f)+'</div>'+
+      '<p class="role">'+f.role+'</p>'+
+      '<div class="etape"><span class="num">1</span>'+
+        '<a class="bouton" href="'+f.url+'" target="_blank" rel="noopener">Ouvrir la page officielle</a>'+
+        '<div class="repere">'+f.repere+'</div>'+
+      '</div>'+
+      '<div class="etape"><span class="num">2</span>'+
+        '<input type="password" placeholder="Collez la cle ici" autocomplete="off">'+
+      '</div>'+
+      '<div class="etape"><span class="num">3</span>'+
+        '<button class="primaire">Verifier et enregistrer</button>'+
+        indice+
+      '</div>'+
+      '<div class="resultat"></div>'+
+    '</div>');
+  const champ = c.querySelector("input");
+  const bouton = c.querySelector("button");
+  const sortie = c.querySelector(".resultat");
+  bouton.addEventListener("click", async () => {
+    const cle = champ.value.trim();
+    if(!cle){ sortie.className="resultat ko"; sortie.textContent="Collez d'abord une cle."; return; }
+    bouton.disabled = true; sortie.className="resultat"; sortie.textContent="Verification aupres du fournisseur...";
+    try{
+      const r = await fetch("/cles/tester", {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({fournisseur: f.nom, cle: cle})});
+      const d = await r.json();
+      sortie.className = "resultat " + (d.valide ? "ok" : "ko");
+      sortie.textContent = d.message;
+      if(d.valide){ champ.value=""; setTimeout(charger, 600); }
+    }catch(e){
+      sortie.className="resultat ko"; sortie.textContent="Le studio local n'a pas repondu : "+e;
+    }finally{ bouton.disabled = false; }
+  });
+  champ.addEventListener("keydown", e => { if(e.key==="Enter") bouton.click(); });
+  return c;
+}
+
+async function charger(){
+  const r = await fetch("/cles/etat");
+  const d = await r.json();
+  const b = document.getElementById("banniere");
+  if(d.chat_pret){
+    b.className = "banniere pret";
+    b.innerHTML = 'Le chat fonctionne. <a href="http://localhost:3000/" target="_blank" rel="noopener">Ouvrir le chat</a>';
+  }else{
+    b.className = "banniere pasret";
+    b.textContent = "Le chat ne peut pas encore repondre : aucune cle valide. Remplissez au moins la premiere carte ci-dessous.";
+  }
+  const zone = document.getElementById("cartes");
+  zone.innerHTML = "";
+  d.fournisseurs.forEach(f => zone.appendChild(carte(f)));
+}
+charger();
+</script>
+</body></html>
+"""
+
+
+@app.get("/cles", response_class=HTMLResponse)
+async def cles_page():
+    return HTMLResponse(CLES_HTML)
+
+
 @app.get("/studio", response_class=HTMLResponse)
 async def studio_home():
     html = """
@@ -380,16 +727,21 @@ async def studio_home():
 .card{display:block;border:1px solid #bbb;border-radius:16px;padding:18px;text-decoration:none;color:inherit}
 .card:hover{transform:translateY(-1px)} .status{font-weight:700}.muted{opacity:.72}
 .pill{display:inline-block;border:1px solid #999;border-radius:999px;padding:5px 10px;margin:3px}
+.etat{padding:14px 16px;border-radius:12px;border:1px solid #bbb;margin:12px 0}
+.etat.pret{background:#e8f6ec;border-color:#7fb98f}
+.etat.pasret{background:#fdf3e3;border-color:#d9ad63}
 </style></head><body>
 <div class="hero">
 <h1>Free AI Studio</h1>
 <p>Votre studio IA local. Le chat est prêt après configuration d’au moins un fournisseur gratuit ; les fonctions média restent optionnelles et nécessitent un backend dédié.</p>
+<div class="etat" id="etat">Vérification de l’état…</div>
 <p class="status">🟢 Gratuit par défaut</p>
 <span class="pill">Pas de dépense automatique</span>
 <span class="pill">Fallback strictement contrôlé</span>
 <span class="pill">Boost volontaire et plafonné</span>
 </div>
 <div class="grid">
+<a class="card" href="/cles"><h2>🔑 Vos clés</h2><p>Première étape : brancher un service gratuit, en trois clics et sans toucher à un fichier.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation.</p></a>
 <div class="card"><h2>🎨 Image — optionnel</h2><p>Non installé par défaut. À activer dans Open WebUI avec un backend d’image compatible.</p></div>
 <div class="card"><h2>🎬 Vidéo — optionnel</h2><p>Non installé par défaut. Nécessite par exemple ComfyUI et un workflow vidéo compatible.</p></div>
@@ -404,6 +756,23 @@ async def studio_home():
 <a href="/boost">Voir le Boost et mes limites →</a>
 <p class="muted">Les noms techniques des fournisseurs sont volontairement masqués dans cette page débutant.</p>
 </div>
+<script>
+fetch("/cles/etat").then(r => r.json()).then(d => {
+  const e = document.getElementById("etat");
+  if (d.chat_pret) {
+    e.className = "etat pret";
+    e.textContent = "Le chat fonctionne : au moins un service gratuit répond.";
+  } else {
+    e.className = "etat pasret";
+    e.innerHTML = 'Le chat ne peut pas encore répondre : aucune clé valide. ' +
+                  '<a href="/cles">Brancher un service gratuit →</a>';
+  }
+}).catch(() => {
+  const e = document.getElementById("etat");
+  e.className = "etat pasret";
+  e.textContent = "État non vérifiable : le routeur local ne répond pas.";
+});
+</script>
 </body></html>
 """
     return HTMLResponse(html)
@@ -570,7 +939,7 @@ def clean_payload(payload: Dict[str, Any], upstream_model: str) -> Dict[str, Any
 
 async def open_upstream(client: httpx.AsyncClient, name: str, payload: Dict[str, Any]):
     p = PROVIDERS[name]
-    key = os.getenv(p["key_env"], "").strip()
+    key = provider_key(name)
     url = p["base_url"].rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",

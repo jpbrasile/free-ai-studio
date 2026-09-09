@@ -83,6 +83,12 @@ services:
       - .env
     ports:
       - "127.0.0.1:8010:8000"
+    volumes:
+      # Cles saisies depuis la page /cles. env_file etant evalue a la creation du
+      # conteneur, une cle ajoutee dans .env n'agit pas a chaud : ce repertoire
+      # permet a l'interface de brancher un fournisseur sans terminal. Il est
+      # exclu du depot par .gitignore.
+      - ./config:/config
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 15s
