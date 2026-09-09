@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import httpx
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -41,9 +41,46 @@ WORKER_UID = int(os.getenv("SANDBOX_WORKER_UID", "10001"))
 MAX_UPLOAD = int(os.getenv("SANDBOX_MAX_ARTIFACT_BYTES", str(100 * 1024 * 1024)))
 MAX_JOB_CODE = int(os.getenv("SANDBOX_MAX_CODE_BYTES", "500000"))
 MAX_OUTPUT = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "200000"))
-KAGGLE_ENABLED = os.getenv("KAGGLE_ENABLED", "false").lower() == "true"
 COLAB_API_ENABLED = os.getenv("COLAB_API_ENABLED", "false").lower() == "true"
-MODAL_ENABLED = os.getenv("MODAL_ENABLED", "false").lower() == "true"
+
+# --- Magasin de secrets ecrit par la page /cles ------------------------------
+# Meme raison que cote routeur de chat : les variables arrivent par le compose au
+# moment de la CREATION du conteneur, donc un jeton ajoute dans .env n'agit pas a
+# chaud. Ce magasin est relu a chaud, ce qui permet de brancher Modal ou Kaggle
+# depuis le navigateur, sans terminal.
+CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
+KEYS_FILE = CONFIG_DIR / "sandbox-keys.json"
+SECRET_NAMES = ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "KAGGLE_USERNAME", "KAGGLE_KEY")
+
+# Photographie de l'environnement AVANT toute injection du magasin : sert a
+# distinguer ce qui vient de .env (que l'interface ne doit pas pouvoir effacer)
+# de ce qu'elle a elle-meme pose.
+ENV_SECRETS = {name: os.getenv(name, "").strip() for name in SECRET_NAMES}
+
+# Ce que le debutant doit comprendre de chaque backend, et ou aller chercher les
+# identifiants. Les liens sont les pages officielles, pas des raccourcis maison.
+SANDBOX_HELP = {
+    "modal": {
+        "titre": "Modal — machine distante",
+        "role": "Prete un ordinateur puissant (CPU ou GPU) quand le votre ne suffit pas. Offre gratuite mensuelle, puis payant.",
+        "url": "https://modal.com/settings/tokens",
+        "repere": "Creez un compte, puis « New token ». Vous obtenez DEUX valeurs : un identifiant (ak-...) et un secret (as-...).",
+        "champs": [
+            {"nom": "MODAL_TOKEN_ID", "libelle": "Identifiant du jeton (ak-...)"},
+            {"nom": "MODAL_TOKEN_SECRET", "libelle": "Secret du jeton (as-...)"},
+        ],
+    },
+    "kaggle": {
+        "titre": "Kaggle — GPU gratuit",
+        "role": "GPU gratuit par tranches horaires, pour les travaux longs. Aucune facturation possible.",
+        "url": "https://www.kaggle.com/settings",
+        "repere": "Section « API », bouton « Create New Token » : un fichier kaggle.json se telecharge, contenant username et key.",
+        "champs": [
+            {"nom": "KAGGLE_USERNAME", "libelle": "Nom d'utilisateur Kaggle"},
+            {"nom": "KAGGLE_KEY", "libelle": "Cle d'API (champ « key » du fichier)"},
+        ],
+    },
+}
 
 
 class JobRequest(BaseModel):
@@ -131,16 +168,102 @@ def add_artifact(jid: str, path: Path, source: str) -> dict:
     return info
 
 
+def stored_keys() -> Dict[str, str]:
+    try:
+        data = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        log.warning("magasin de secrets illisible (%s) : %s", KEYS_FILE, exc)
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, str)}
+
+
+def store_key(name: str, value: str) -> None:
+    data = stored_keys()
+    if value:
+        data[name] = value
+    else:
+        data.pop(name, None)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    blob = json.dumps(data, indent=2)
+    tmp = CONFIG_DIR / "sandbox-keys.json.tmp"
+    try:
+        tmp.write_text(blob, encoding="utf-8")
+        tmp.replace(KEYS_FILE)
+    except OSError:
+        KEYS_FILE.write_text(blob, encoding="utf-8")
+    try:
+        KEYS_FILE.chmod(0o600)
+    except OSError:
+        pass
+    apply_stored_secrets()
+
+
+def apply_stored_secrets() -> None:
+    """Recopie les secrets du magasin dans l'environnement du processus, sans
+    jamais ecraser une variable deja posee par .env.
+
+    Le SDK Modal et la CLI Kaggle lisent leurs identifiants dans l'environnement.
+    Passer par lui evite de reecrire chacun de leurs points d'appel, et garde
+    une regle de priorite unique : .env d'abord, magasin ensuite."""
+    for name, value in stored_keys().items():
+        if value and not os.getenv(name, "").strip():
+            os.environ[name] = value
+
+
+def forget_secrets(names) -> None:
+    """Retire les secrets du magasin ET de l'environnement du processus.
+
+    Sans le second geste, le backend resterait actif jusqu'au prochain
+    redemarrage du conteneur : apply_stored_secrets() a deja recopie la valeur
+    dans os.environ. Une valeur venue de .env est restauree telle quelle : elle
+    n'appartient pas a l'interface, qui ne doit pas pouvoir l'effacer."""
+    for name in names:
+        store_key(name, "")
+        depuis_env = ENV_SECRETS.get(name, "")
+        if depuis_env:
+            os.environ[name] = depuis_env
+        else:
+            os.environ.pop(name, None)
+
+
+def mask(value: str) -> str:
+    """Ne rend jamais le secret : juste de quoi le reconnaitre."""
+    return ("*" * 6 + value[-4:]) if len(value) >= 8 else "*" * 8
+
+
+def modal_enabled() -> bool:
+    if os.getenv("MODAL_ENABLED", "false").strip().lower() == "true":
+        return True
+    # MODAL_ENABLED=false protege une installation fraiche d'un usage cloud
+    # accidentel. Coller un jeton dans l'interface est tout sauf accidentel :
+    # cet acte vaut activation, et le bouton << Oublier >> la revoque.
+    keys = stored_keys()
+    return bool(keys.get("MODAL_TOKEN_ID") and keys.get("MODAL_TOKEN_SECRET"))
+
+
+def kaggle_enabled() -> bool:
+    if os.getenv("KAGGLE_ENABLED", "false").strip().lower() == "true":
+        return True
+    keys = stored_keys()
+    return bool(keys.get("KAGGLE_USERNAME") and keys.get("KAGGLE_KEY"))
+
+
 def modal_configured() -> bool:
-    return MODAL_ENABLED and bool(os.getenv("MODAL_TOKEN_ID", "").strip()) and bool(
+    return modal_enabled() and bool(os.getenv("MODAL_TOKEN_ID", "").strip()) and bool(
         os.getenv("MODAL_TOKEN_SECRET", "").strip()
     )
 
 
 def kaggle_configured() -> bool:
-    return KAGGLE_ENABLED and bool(os.getenv("KAGGLE_USERNAME", "").strip()) and bool(
+    return kaggle_enabled() and bool(os.getenv("KAGGLE_USERNAME", "").strip()) and bool(
         os.getenv("KAGGLE_API_TOKEN", "").strip() or os.getenv("KAGGLE_KEY", "").strip()
     )
+
+
+# Au demarrage : ce qui a ete saisi lors d'une session precedente redevient actif.
+apply_stored_secrets()
 
 
 def collect_local_artifacts(jid: str, source: str) -> list[dict]:
@@ -313,7 +436,7 @@ def run_modal(jid: str, code: str, gpu: bool, internet: bool):
         job.update({
             "status": "needs_configuration",
             "finished_at": time.time(),
-            "error": "Modal requires MODAL_ENABLED=true plus MODAL_TOKEN_ID and MODAL_TOKEN_SECRET.",
+            "error": "Modal requires MODAL_TOKEN_ID and MODAL_TOKEN_SECRET (page /cles, or MODAL_ENABLED=true in .env).",
         })
         write_job(jid, job)
         return
@@ -341,7 +464,7 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool):
             {
                 "status": "needs_configuration",
                 "finished_at": time.time(),
-                "error": "Kaggle orchestration requires KAGGLE_ENABLED=true plus KAGGLE_USERNAME and KAGGLE_API_TOKEN (or legacy KAGGLE_KEY).",
+                "error": "Kaggle orchestration requires KAGGLE_USERNAME and KAGGLE_KEY (page /cles, or KAGGLE_ENABLED=true in .env).",
             }
         )
         write_job(jid, job)
@@ -522,15 +645,453 @@ def health():
     return {"ok": True, "service": "sandbox-manager", "version": "2.0.0"}
 
 
+def verifier_modal(token_id: str, token_secret: str) -> Dict[str, object]:
+    """Verifie le couple de jetons aupres de Modal. Client.verify n'ouvre aucune
+    machine et ne consomme aucun credit : c'est une authentification seche."""
+    try:
+        from modal.client import Client
+    except Exception as exc:
+        return {"valide": False, "message": "SDK Modal indisponible dans le conteneur (%s)." % exc}
+    url = os.getenv("MODAL_SERVER_URL", "https://api.modal.com")
+    try:
+        Client.verify(url, (token_id, token_secret))
+    except Exception as exc:
+        texte = str(exc)[:300]
+        return {
+            "valide": False,
+            "message": "Modal a refuse ces jetons. Verifiez que l'identifiant commence par ak- et le secret par as-, "
+                       "et qu'ils viennent du meme jeton. " + texte,
+        }
+    return {"valide": True, "message": "Jetons valides : Modal a repondu."}
+
+
+def verifier_kaggle(username: str, key: str) -> Dict[str, object]:
+    """Verifie les identifiants par un appel d'API authentifie et gratuit."""
+    try:
+        response = httpx.get(
+            "https://www.kaggle.com/api/v1/datasets/list",
+            auth=(username, key),
+            params={"pageSize": 1},
+            timeout=30,
+        )
+    except httpx.HTTPError as exc:
+        return {"valide": False, "message": "Kaggle n'a pas repondu (%s). Verifiez votre connexion Internet." % type(exc).__name__}
+    if response.status_code == 200:
+        return {"valide": True, "message": "Identifiants valides : Kaggle a repondu."}
+    if response.status_code in (401, 403):
+        return {
+            "valide": False,
+            "message": "Kaggle a refuse ces identifiants. Le nom d'utilisateur est celui du fichier kaggle.json, "
+                       "pas votre adresse e-mail.",
+        }
+    return {"valide": False, "message": "Refus de Kaggle (HTTP %d)." % response.status_code}
+
+
+def secret_source(name: str) -> Optional[str]:
+    if ENV_SECRETS.get(name):
+        return "env"
+    if stored_keys().get(name):
+        return "interface"
+    return None
+
+
+@app.get("/cles/etat")
+def cles_etat():
+    backends = []
+    for nom, aide in SANDBOX_HELP.items():
+        configure = modal_configured() if nom == "modal" else kaggle_configured()
+        champs = []
+        for champ in aide["champs"]:
+            valeur = os.getenv(champ["nom"], "").strip()
+            champs.append({
+                "nom": champ["nom"],
+                "libelle": champ["libelle"],
+                "renseigne": bool(valeur),
+                "indice": mask(valeur) if valeur else "",
+                "source": secret_source(champ["nom"]),
+            })
+        backends.append({
+            "nom": nom,
+            "titre": aide["titre"],
+            "role": aide["role"],
+            "url": aide["url"],
+            "repere": aide["repere"],
+            "configure": configure,
+            "champs": champs,
+            # Un secret venu de .env n'appartient pas a l'interface : elle ne
+            # propose pas de l'oublier, elle ne saurait pas le remettre.
+            "oubliable": any(c["source"] == "interface" for c in champs),
+        })
+    return {"backends": backends, "backend_automatique": "modal" if modal_configured() else ("kaggle" if kaggle_configured() else "local")}
+
+
+@app.post("/cles/tester")
+async def cles_tester(request: Request):
+    body = await request.json()
+    nom = str(body.get("backend", "")).strip().lower()
+    if nom not in SANDBOX_HELP:
+        raise HTTPException(400, "Backend inconnu")
+    valeurs = body.get("valeurs") or {}
+    attendus = [c["nom"] for c in SANDBOX_HELP[nom]["champs"]]
+    fournis = {k: str(valeurs.get(k, "")).strip() for k in attendus}
+    manquants = [k for k, v in fournis.items() if not v]
+    if manquants:
+        raise HTTPException(400, "Champ(s) vide(s) : " + ", ".join(manquants))
+
+    if nom == "modal":
+        resultat = verifier_modal(fournis["MODAL_TOKEN_ID"], fournis["MODAL_TOKEN_SECRET"])
+    else:
+        resultat = verifier_kaggle(fournis["KAGGLE_USERNAME"], fournis["KAGGLE_KEY"])
+
+    if resultat["valide"]:
+        for cle, valeur in fournis.items():
+            store_key(cle, valeur)
+        log.info("identifiants %s enregistres (source interface)", nom)
+        deja_env = [k for k in attendus if ENV_SECRETS.get(k)]
+        if deja_env:
+            resultat["message"] += (
+                " Attention : %s vient deja du fichier .env, et c'est cette valeur qui reste utilisee."
+                % ", ".join(deja_env)
+            )
+    configure = modal_configured() if nom == "modal" else kaggle_configured()
+    return {"valide": resultat["valide"], "message": resultat["message"],
+            "enregistre": resultat["valide"], "configure": configure}
+
+
+@app.post("/cles/oublier")
+async def cles_oublier(request: Request):
+    body = await request.json()
+    nom = str(body.get("backend", "")).strip().lower()
+    if nom not in SANDBOX_HELP:
+        raise HTTPException(400, "Backend inconnu")
+    forget_secrets([c["nom"] for c in SANDBOX_HELP[nom]["champs"]])
+    configure = modal_configured() if nom == "modal" else kaggle_configured()
+    return {"oublie": True, "configure": configure}
+
+
+CLES_SANDBOX_HTML = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sandbox — vos identifiants</title>
+<style>
+:root{font-family:system-ui,sans-serif}
+body{max-width:820px;margin:32px auto;padding:0 18px;line-height:1.5}
+h1{margin-bottom:4px}.sous{opacity:.75;margin-top:0}
+.banniere{padding:16px 18px;border-radius:14px;margin:18px 0;border:1px solid #bbb;background:#eef4fb}
+.carte{border:1px solid #bbb;border-radius:16px;padding:18px;margin-bottom:16px}
+.entete{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.entete h2{margin:0;font-size:1.15rem}
+.pastille{font-size:.8rem;border-radius:999px;padding:3px 10px;border:1px solid #999;background:#f1f1f1}
+.pastille.verte{background:#e8f6ec;border-color:#7fb98f}
+.role{margin:8px 0 14px}.etape{margin:10px 0}
+.num{display:inline-block;width:22px;height:22px;line-height:22px;text-align:center;
+ border-radius:999px;background:#333;color:#fff;font-size:.78rem;margin-right:7px}
+a.bouton,button{font:inherit;padding:9px 14px;border-radius:10px;border:1px solid #666;
+ background:#fff;cursor:pointer;text-decoration:none;color:inherit;display:inline-block}
+button.primaire{background:#222;color:#fff;border-color:#222}
+button[disabled]{opacity:.5;cursor:default}
+label{display:block;font-size:.86rem;margin:8px 0 3px 29px}
+input{font:inherit;padding:9px 11px;border-radius:10px;border:1px solid #999;
+ width:min(420px,100%);box-sizing:border-box;margin-left:29px}
+.repere{font-size:.86rem;opacity:.75;margin:6px 0 0 29px}
+.resultat{margin-top:10px;font-size:.92rem}.ok{color:#1d6b32}.ko{color:#9b2116}
+.pied{margin-top:26px;padding-top:16px;border-top:1px solid #ddd;font-size:.9rem;opacity:.8}
+</style></head><body>
+<h1>Vos identifiants Sandbox</h1>
+<p class="sous">Ces services executent votre code ailleurs que sur votre ordinateur.
+Sans eux, tout tourne en local — ce qui suffit dans la plupart des cas.</p>
+
+<div id="banniere" class="banniere">Verification en cours...</div>
+<div id="cartes"></div>
+
+<div class="pied">
+Chaque valeur est essayee aupres du service avant d'etre gardee : une valeur refusee
+n'est jamais enregistree. Elle prend effet tout de suite, sans rien relancer.
+<br><a href="/">Retour au Sandbox</a>
+</div>
+
+<script>
+function element(html){const d=document.createElement("div");d.innerHTML=html.trim();return d.firstChild;}
+
+function carte(b){
+  let champs = "";
+  b.champs.forEach(c => {
+    const venu = c.renseigne ? ' &nbsp;<span style="opacity:.7">actuel : '+c.indice+
+      ' ('+(c.source==="env"?"fichier .env":"cette page")+')</span>' : '';
+    champs += '<label>'+c.libelle+venu+'</label>'+
+              '<input type="password" data-nom="'+c.nom+'" placeholder="Collez ici" autocomplete="off">';
+  });
+  const oubli = b.oubliable ? '<button class="oublier" style="margin-left:10px">Oublier</button>' : '';
+  const c = element(
+    '<div class="carte">'+
+      '<div class="entete"><h2>'+b.titre+'</h2>'+
+        '<span class="pastille'+(b.configure?" verte":"")+'">'+(b.configure?"actif":"pas configure")+'</span>'+
+      '</div>'+
+      '<p class="role">'+b.role+'</p>'+
+      '<div class="etape"><span class="num">1</span>'+
+        '<a class="bouton" href="'+b.url+'" target="_blank" rel="noopener">Ouvrir la page officielle</a>'+
+        '<div class="repere">'+b.repere+'</div></div>'+
+      '<div class="etape"><span class="num">2</span>Collez les valeurs :</div>'+
+      champs+
+      '<div class="etape" style="margin-top:14px"><span class="num">3</span>'+
+        '<button class="primaire verifier">Verifier et enregistrer</button>'+oubli+'</div>'+
+      '<div class="resultat"></div>'+
+    '</div>');
+
+  const sortie = c.querySelector(".resultat");
+  const bouton = c.querySelector(".verifier");
+  bouton.addEventListener("click", async () => {
+    const valeurs = {};
+    let vide = false;
+    c.querySelectorAll("input").forEach(i => {
+      valeurs[i.dataset.nom] = i.value.trim();
+      if(!i.value.trim()) vide = true;
+    });
+    if(vide){ sortie.className="resultat ko"; sortie.textContent="Remplissez les deux champs."; return; }
+    bouton.disabled = true; sortie.className="resultat"; sortie.textContent="Verification aupres du service...";
+    try{
+      const r = await fetch("/cles/tester", {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({backend: b.nom, valeurs: valeurs})});
+      const d = await r.json();
+      sortie.className = "resultat " + (d.valide ? "ok" : "ko");
+      sortie.textContent = d.message || (d.detail || "Reponse inattendue.");
+      if(d.valide){ c.querySelectorAll("input").forEach(i => i.value=""); setTimeout(charger, 600); }
+    }catch(e){
+      sortie.className="resultat ko"; sortie.textContent="Le Sandbox local n'a pas repondu : "+e;
+    }finally{ bouton.disabled = false; }
+  });
+
+  const oublier = c.querySelector(".oublier");
+  if(oublier){
+    oublier.addEventListener("click", async () => {
+      oublier.disabled = true;
+      try{
+        await fetch("/cles/oublier", {method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({backend: b.nom})});
+        charger();
+      }finally{ oublier.disabled = false; }
+    });
+  }
+  return c;
+}
+
+async function charger(){
+  const d = await (await fetch("/cles/etat")).json();
+  const nom = {modal:"Modal, une machine distante", kaggle:"Kaggle", local:"votre ordinateur, isole dans Docker"}[d.backend_automatique];
+  document.getElementById("banniere").textContent = "Actuellement, le code envoye au Sandbox s'execute sur : " + nom + ".";
+  const zone = document.getElementById("cartes");
+  zone.innerHTML = "";
+  d.backends.forEach(b => zone.appendChild(carte(b)));
+}
+charger();
+</script>
+</body></html>
+"""
+
+
+@app.get("/cles", response_class=HTMLResponse)
+def cles_page():
+    return HTMLResponse(CLES_SANDBOX_HTML)
+
+
+# --- Page d'essai ------------------------------------------------------------
+# Sans elle, brancher Modal ne sert a rien pour qui n'a pas d'assistant de code :
+# la seule facon de lancer un calcul est POST /jobs, qui reclame la cle Bearer,
+# donc un terminal. La page est servie par ce meme service, publie sur 127.0.0.1
+# seulement ; le serveur y depose la cle et le navigateur appelle l'API normale,
+# celle qui est deja authentifiee. Aucune route d'execution sans cle n'est ouverte.
+
+CODE_DEMO = """import os
+import platform
+import socket
+from pathlib import Path
+
+print("machine     :", platform.node())
+print("systeme     :", platform.platform())
+print("processeurs :", os.cpu_count())
+
+total = sum(i * i for i in range(1, 1001))
+print("somme des carres 1..1000 =", total, "(attendu 333833500)")
+
+sortie = Path(os.environ["FREE_AI_OUTPUT_DIR"])
+sortie.mkdir(parents=True, exist_ok=True)
+(sortie / "preuve.txt").write_text(
+    "execute sur %s, somme=%d" % (platform.node(), total), encoding="utf-8"
+)
+print("artefact ecrit : preuve.txt")
+
+try:
+    socket.setdefaulttimeout(5)
+    socket.create_connection(("1.1.1.1", 443)).close()
+    print("reseau      : disponible")
+except Exception as exc:
+    print("reseau      : bloque (%s)" % type(exc).__name__)
+"""
+
+ESSAI_HTML = r"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Essai - Sandbox</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:900px;
+ margin:34px auto;padding:0 18px;line-height:1.55}
+h1{font-size:1.5rem;margin-bottom:4px}
+.sous{opacity:.8;margin-top:0}
+.banniere{padding:14px 16px;border-radius:14px;margin:16px 0;border:1px solid #bbb;background:#eef4fb}
+.ligne{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0}
+select,button{font:inherit;padding:9px 12px;border-radius:10px;border:1px solid #666;background:#fff}
+button.primaire{background:#222;color:#fff;border-color:#222;cursor:pointer}
+button[disabled]{opacity:.5;cursor:default}
+textarea{font:13px ui-monospace,Consolas,monospace;width:100%;box-sizing:border-box;
+ height:250px;padding:12px;border-radius:12px;border:1px solid #999}
+pre{background:#f6f6f6;border:1px solid #ddd;border-radius:12px;padding:12px;
+ overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+.ok{color:#1d6b32}.ko{color:#9b2116}
+.avert{font-size:.86rem;opacity:.75}
+.pied{margin-top:26px;padding-top:16px;border-top:1px solid #ddd;font-size:.9rem;opacity:.8}
+</style></head><body>
+<h1>Lancer un essai</h1>
+<p class="sous">Le meme chemin que celui de l'agent, sans terminal : votre code part sur le
+backend choisi, la reponse revient ici.</p>
+
+<div id="banniere" class="banniere">Verification en cours...</div>
+
+<div class="ligne">
+  <label for="backend">Ou executer :</label>
+  <select id="backend">
+    <option value="auto">Automatique</option>
+    <option value="modal">Modal - machine distante</option>
+    <option value="local">Votre ordinateur, isole dans Docker</option>
+    <option value="kaggle">Kaggle</option>
+  </select>
+  <label><input type="checkbox" id="gpu"> carte graphique</label>
+  <button id="lancer" class="primaire">Lancer</button>
+</div>
+<p class="avert">La carte graphique n'existe pas sur le backend local. Sur Modal, elle
+consomme l'offre gratuite beaucoup plus vite qu'un calcul sur processeur.</p>
+
+<textarea id="code" spellcheck="false"></textarea>
+
+<div id="etat" class="ligne"></div>
+<pre id="sortie" hidden></pre>
+<div id="artefacts" class="ligne"></div>
+
+<div class="pied">Le code part au service local sur 127.0.0.1 ; il ne quitte votre machine
+que si vous choisissez un backend distant.
+<br><a href="/">Retour au Sandbox</a> &nbsp; <a href="/cles">Brancher Modal ou Kaggle</a></div>
+
+<script>
+const CLE = "__CLE__";
+const DEMO = "__DEMO__";
+const ENTETES = {"Authorization": "Bearer " + CLE, "Content-Type": "application/json"};
+const OU = {modal:"Modal (machine distante)", local:"votre ordinateur, isole dans Docker",
+            kaggle:"Kaggle", colab:"Colab"};
+
+document.getElementById("code").value = DEMO;
+
+fetch("/etat").then(r => r.json()).then(d => {
+  const b = document.getElementById("banniere");
+  b.textContent = "En mode automatique, le code s'execute sur : "
+    + (OU[d.backend_automatique] || d.backend_automatique) + ".";
+  if(!d.modal.configure){ b.textContent += " Modal n'est pas branche : rien ne part sur une machine distante."; }
+}).catch(() => {
+  document.getElementById("banniere").textContent = "Etat non verifiable : le service Sandbox ne repond pas.";
+});
+
+function afficher(d){
+  const etat = document.getElementById("etat");
+  const sortie = document.getElementById("sortie");
+  const ou = OU[d.provider_effective] || d.provider_effective || "backend inconnu";
+  const bien = d.status === "succeeded" && d.exit_code === 0;
+  etat.className = "ligne " + (bien ? "ok" : "ko");
+  let texte = bien ? ("Termine sur " + ou) : ("Statut : " + d.status + " (" + ou + ")");
+  if(d.exit_code !== undefined && d.exit_code !== null){ texte += " - code de sortie " + d.exit_code; }
+  if(d.status === "needs_configuration"){ texte += ". Ce backend n'est pas branche : voir la page des cles."; }
+  if(d.status === "handoff_ready"){ texte += ". Aucun backend automatique disponible : un notebook Colab a ete prepare."; }
+  etat.textContent = texte;
+
+  let brut = d.stdout || "";
+  if(d.stderr){ brut += "\n--- erreurs ---\n" + d.stderr; }
+  if(d.error){ brut += "\n--- service ---\n" + d.error; }
+  sortie.hidden = !brut;
+  sortie.textContent = brut;
+
+  const arts = document.getElementById("artefacts");
+  arts.innerHTML = "";
+  (d.artifacts || []).forEach(a => {
+    const b = document.createElement("button");
+    b.textContent = "Telecharger " + a.name + " (" + a.size + " octets)";
+    b.addEventListener("click", async () => {
+      const r = await fetch("/artifacts/" + a.id, {headers: {"Authorization": "Bearer " + CLE}});
+      const blob = await r.blob();
+      const u = URL.createObjectURL(blob);
+      const l = document.createElement("a");
+      l.href = u; l.download = a.name; l.click();
+      URL.revokeObjectURL(u);
+    });
+    arts.appendChild(b);
+  });
+}
+
+document.getElementById("lancer").addEventListener("click", async () => {
+  const bouton = document.getElementById("lancer");
+  const etat = document.getElementById("etat");
+  document.getElementById("sortie").hidden = true;
+  document.getElementById("artefacts").innerHTML = "";
+  bouton.disabled = true;
+  etat.className = "ligne";
+  etat.textContent = "Envoi...";
+  try{
+    const r = await fetch("/jobs", {method: "POST", headers: ENTETES, body: JSON.stringify({
+      provider: document.getElementById("backend").value,
+      code: document.getElementById("code").value,
+      title: "Essai depuis la page Sandbox",
+      gpu: document.getElementById("gpu").checked,
+      internet: false
+    })});
+    if(!r.ok){
+      etat.className = "ligne ko";
+      etat.textContent = "Le service a refuse la demande (HTTP " + r.status + ").";
+      return;
+    }
+    let d = await r.json();
+    const debut = Date.now();
+    while(["queued", "routing", "running"].indexOf(d.status) >= 0){
+      etat.textContent = "En cours (" + d.status + ", " + Math.round((Date.now() - debut) / 1000) + " s)...";
+      await new Promise(f => setTimeout(f, 2000));
+      const q = await fetch("/jobs/" + d.id, {headers: ENTETES});
+      d = await q.json();
+    }
+    afficher(d);
+  }catch(e){
+    etat.className = "ligne ko";
+    etat.textContent = "Le Sandbox local n'a pas repondu : " + e;
+  }finally{
+    bouton.disabled = false;
+  }
+});
+</script>
+</body></html>
+"""
+
+
+@app.get("/essai", response_class=HTMLResponse)
+def essai_page():
+    page = ESSAI_HTML.replace("__CLE__", KEY)
+    # json.dumps rend un litteral JavaScript valide : guillemets, sauts de ligne et
+    # antislashs du code de demonstration sont echappes au lieu d'etre colles tels quels.
+    page = page.replace('"__DEMO__"', json.dumps(CODE_DEMO))
+    return HTMLResponse(page)
+
+
 @app.get("/etat")
 def etat():
     """Etat reel des backends, sans secret ni authentification, pour que la page
     d'accueil dise ce qui marche au lieu d'annoncer Modal en principal alors
     qu'il est desactive et sans jeton. Ne rend que des booleens."""
     return {
-        "modal": {"configure": modal_configured(), "autorise": MODAL_ENABLED},
+        "modal": {"configure": modal_configured(), "autorise": modal_enabled()},
         "local": {"disponible": True},
-        "kaggle": {"configure": kaggle_configured(), "autorise": KAGGLE_ENABLED},
+        "kaggle": {"configure": kaggle_configured(), "autorise": kaggle_enabled()},
         "colab": {"handoff": True},
         "backend_automatique": "modal" if modal_configured() else ("kaggle" if kaggle_configured() else "local"),
     }
@@ -544,7 +1105,7 @@ def providers(authorization: Optional[str] = Header(default=None)):
         "automatic_order": ["modal", "local", "kaggle", "colab"],
         "modal": {
             "configured": modal_configured(),
-            "enabled": MODAL_ENABLED,
+            "enabled": modal_enabled(),
             "automatic": True,
             "primary_when_configured": True,
             "gpu_default": os.getenv("MODAL_GPU_DEFAULT", "T4"),
@@ -696,7 +1257,7 @@ def home():
 <div class=card><h2>Local <span id=b-local></span></h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
 <div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré, avec accès utilisateur direct toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
-</div><p><a href='/docs'>API Sandbox / Agent →</a></p>
+</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
 <script>
 (function(){
  var pastille = function(ok, oui, non){
