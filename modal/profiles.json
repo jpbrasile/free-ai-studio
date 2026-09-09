@@ -1,0 +1,77 @@
+{
+  "verified": "2026-09-09",
+  "policy": {
+    "automatic_backend": "modal",
+    "fallback_manual": [
+      "colab",
+      "kaggle"
+    ],
+    "allow_paid_gpu_default": false,
+    "notes": "Use Modal only while usage is expected to remain covered by free credit; never assume unlimited free compute."
+  },
+  "profiles": {
+    "IMAGE_FAST": {
+      "reference": "Stable Diffusion 3.5 Large Turbo",
+      "status": "official_modal_example",
+      "url": "https://modal.com/docs/examples/a1111_webui"
+    },
+    "IMAGE_HIGH": {
+      "reference": "FLUX / current high-quality diffusion model",
+      "status": "dynamic_verify"
+    },
+    "IMAGE_EDIT": {
+      "reference": "Flux Kontext / current image editor",
+      "status": "dynamic_verify",
+      "url": "https://modal.com/solutions/image-and-video"
+    },
+    "VIDEO_FAST": {
+      "reference": "Mochi or current practical video fallback",
+      "status": "dynamic_verify",
+      "url": "https://modal.com/solutions/image-and-video"
+    },
+    "VIDEO_HIGH": {
+      "reference": "Wan current compatible version",
+      "status": "dynamic_verify",
+      "url": "https://modal.com/solutions/image-and-video"
+    },
+    "IMAGE_TO_VIDEO": {
+      "reference": "Bring images to life example / current compatible model",
+      "status": "dynamic_verify",
+      "url": "https://modal.com/solutions/image-and-video"
+    },
+    "VIDEO_AUDIO": {
+      "reference": "LTX or current video+audio model",
+      "status": "dynamic_verify"
+    },
+    "TTS_HIGH": {
+      "reference": "Chatterbox Turbo",
+      "status": "official_modal_example",
+      "url": "https://modal.com/docs/examples/chatterbox_tts"
+    },
+    "VOICE_CLONE": {
+      "reference": "Chatterbox Turbo",
+      "status": "official_modal_example",
+      "url": "https://modal.com/docs/examples/chatterbox_tts"
+    },
+    "STT_FAST": {
+      "reference": "Whisper",
+      "status": "official_modal_example",
+      "url": "https://modal.com/blog/how-to-deploy-whisper"
+    },
+    "STT_HIGH": {
+      "reference": "Parakeet streaming",
+      "status": "official_modal_example",
+      "url": "https://modal.com/docs/examples/streaming_parakeet"
+    },
+    "VISION": {
+      "reference": "Qwen 3.6 VLM via SGLang",
+      "status": "official_modal_example",
+      "url": "https://modal.com/docs/examples/sglang_vlm"
+    },
+    "LLM_LARGE": {
+      "reference": "Modal Endpoint / current open-weight LLM",
+      "status": "official_modal_capability",
+      "url": "https://modal.com/docs/cli/latest/endpoint"
+    }
+  }
+}

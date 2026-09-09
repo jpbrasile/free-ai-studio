@@ -1,0 +1,118 @@
+services:
+  sandbox-worker:
+    build:
+      context: ./sandbox-worker
+    container_name: free-ai-studio-sandbox-worker
+    restart: unless-stopped
+    environment:
+      SANDBOX_WORKER_KEY: ${SANDBOX_WORKER_KEY}
+      SANDBOX_TIMEOUT_SECONDS: ${SANDBOX_TIMEOUT_SECONDS:-120}
+      SANDBOX_MAX_CODE_BYTES: ${SANDBOX_MAX_CODE_BYTES:-500000}
+      SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-200000}
+    networks:
+      - sandbox-internal
+    volumes:
+      - sandbox-data:/workspace
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  sandbox-manager:
+    build:
+      context: ./sandbox-manager
+    container_name: free-ai-studio-sandbox-manager
+    restart: unless-stopped
+    depends_on:
+      sandbox-worker:
+        condition: service_healthy
+    environment:
+      SANDBOX_MANAGER_KEY: ${SANDBOX_MANAGER_KEY}
+      SANDBOX_WORKER_KEY: ${SANDBOX_WORKER_KEY}
+      SANDBOX_WORKER_URL: http://sandbox-worker:8000
+      SANDBOX_TIMEOUT_SECONDS: ${SANDBOX_TIMEOUT_SECONDS:-120}
+      SANDBOX_MAX_CODE_BYTES: ${SANDBOX_MAX_CODE_BYTES:-500000}
+      SANDBOX_MAX_ARTIFACT_BYTES: ${SANDBOX_MAX_ARTIFACT_BYTES:-104857600}
+      # Modal = backend automatique principal lorsqu'il est explicitement configuré.
+      MODAL_ENABLED: ${MODAL_ENABLED:-false}
+      MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}
+      MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:-}
+      MODAL_APP_NAME: ${MODAL_APP_NAME:-free-ai-studio-sandbox}
+      MODAL_JOB_TIMEOUT_SECONDS: ${MODAL_JOB_TIMEOUT_SECONDS:-300}
+      MODAL_IDLE_TIMEOUT_SECONDS: ${MODAL_IDLE_TIMEOUT_SECONDS:-60}
+      MODAL_CLEANUP_GRACE_SECONDS: ${MODAL_CLEANUP_GRACE_SECONDS:-60}
+      MODAL_CPU: ${MODAL_CPU:-1.0}
+      MODAL_MEMORY_MB: ${MODAL_MEMORY_MB:-2048}
+      MODAL_GPU_DEFAULT: ${MODAL_GPU_DEFAULT:-T4}
+      KAGGLE_ENABLED: ${KAGGLE_ENABLED:-false}
+      KAGGLE_JOB_TIMEOUT_SECONDS: ${KAGGLE_JOB_TIMEOUT_SECONDS:-3600}
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
+      KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN:-}
+      KAGGLE_KEY: ${KAGGLE_KEY:-}
+      COLAB_API_ENABLED: ${COLAB_API_ENABLED:-false}
+    ports:
+      - "127.0.0.1:8020:8000"
+    networks:
+      - default
+      - sandbox-internal
+    volumes:
+      - sandbox-data:/workspace
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  free-tier-manager:
+    build:
+      context: ./free-tier-manager
+    container_name: free-ai-studio-manager
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8010:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.11.3
+    container_name: free-ai-studio-open-webui
+    restart: unless-stopped
+    depends_on:
+      free-tier-manager:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URL: http://free-tier-manager:8000/v1
+      OPENAI_API_KEY: ${FREE_TIER_MANAGER_KEY}
+    volumes:
+      - open-webui-data:/app/backend/data
+
+volumes:
+  open-webui-data:
+  sandbox-data:
+
+networks:
+  sandbox-internal:
+    internal: true

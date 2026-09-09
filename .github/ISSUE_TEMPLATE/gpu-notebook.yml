@@ -1,0 +1,31 @@
+name: Notebook GPU cassé
+description: Signaler un lien Colab/Kaggle ou un workflow GPU qui ne fonctionne plus
+title: "[GPU] "
+labels: ["gpu", "notebook"]
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Plateforme
+      options:
+        - Google Colab
+        - Kaggle
+        - Autre
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Modèle / workflow
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problème rencontré
+    validations:
+      required: true
+  - type: textarea
+    id: gpu
+    attributes:
+      label: GPU obtenu et mémoire affichée

@@ -1,0 +1,35 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python syntax
+        run: python -m py_compile free-tier-manager/app.py
+
+      - name: Bash syntax
+        run: |
+          bash -n install.sh
+          bash -n start.sh
+          bash -n scripts/diagnose.sh
+          bash -n scripts/check-providers.sh
+          bash -n scripts/check-assistant-capabilities.sh
+          bash -n scripts/free-tier-status.sh
+          bash -n scripts/configure-beginner.sh
+          bash -n scripts/check-modal.sh
+
+      - name: Verify free-only defaults
+        run: |
+          grep -q '^FREE_ONLY=true$' .env.example
+          grep -q '^ALLOW_PAID_MODELS=false$' .env.example
+          grep -q '^ALLOW_PAID_GPU=false$' .env.example
+          grep -q '^MAX_DAILY_COST=0$' .env.example
+
+      - name: Docker Compose config
+        run: docker compose --env-file .env.example config >/dev/null
