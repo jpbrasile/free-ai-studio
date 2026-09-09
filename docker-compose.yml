@@ -116,6 +116,23 @@ services:
       ENABLE_OPENAI_API: "true"
       OPENAI_API_BASE_URL: http://free-tier-manager:8000/v1
       OPENAI_API_KEY: ${FREE_TIER_MANAGER_KEY}
+      # Le port n'est publie que sur 127.0.0.1 : la porte est deja fermee au reseau.
+      # Exiger en plus un compte avec e-mail et mot de passe pour utiliser une appli
+      # posee sur son propre ordinateur arrete le debutant des le premier ecran, en
+      # anglais, sans rien proteger de plus. Mettre WEBUI_AUTH=true retablit le compte
+      # (utile si plusieurs personnes partagent la machine) -- a faire AVANT le premier
+      # demarrage, Open WebUI refusant de basculer une base qui contient deja un compte.
+      WEBUI_AUTH: ${WEBUI_AUTH:-false}
+      WEBUI_NAME: ${WEBUI_NAME:-Free AI Studio}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-fr}
+      # Recherche web : DuckDuckGo ne demande aucune cle et aucun compte.
+      # ATTENTION : ces deux variables ne sont lues qu'au TOUT PREMIER demarrage.
+      # Ensuite Open WebUI ne lit plus que sa propre base, et le fait sans le
+      # dire : mesure du 09/09, la variable etait bien dans le conteneur et le
+      # reglage valait quand meme false. C'est le routeur qui pose le reglage
+      # par l'API d'administration, une seule fois (voir poser_reglages_webui).
+      ENABLE_WEB_SEARCH: ${ENABLE_WEB_SEARCH:-true}
+      WEB_SEARCH_ENGINE: ${WEB_SEARCH_ENGINE:-duckduckgo}
     volumes:
       - open-webui-data:/app/backend/data
 

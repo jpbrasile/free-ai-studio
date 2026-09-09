@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 import json
@@ -445,6 +446,178 @@ async def safe_status() -> Dict[str, Any]:
     }
 
 
+# --- Reglages d'Open WebUI, poses une seule fois -----------------------------
+# Open WebUI garde ses reglages dans SA base. Les variables du docker-compose ne
+# sont lues qu'au tout premier demarrage : ensuite la base gagne, en silence.
+# Mesure du 09/09 : ENABLE_WEB_SEARCH=true etait bien dans le conteneur et
+# << web.search.enable >> valait quand meme false en base. Resultat pour le
+# debutant : le bouton de recherche web n'existait nulle part, et rien
+# n'expliquait pourquoi.
+#
+# Ce reglage est donc pose par un appel a l'API d'administration, UNE SEULE
+# FOIS : le temoin ecrit dans /config dit que c'est fait. Sans ce temoin, une
+# personne qui coupe volontairement la recherche web la verrait revenir a chaque
+# redemarrage.
+WEBUI_URL = os.getenv("OPEN_WEBUI_INTERNAL_URL", "http://open-webui:8080")
+WEBUI_ADMIN_EMAIL = "admin@localhost"
+WEBUI_ADMIN_PASSWORD = "admin"
+REGLAGES_FAITS = CONFIG_DIR / "open-webui-regle.json"
+IMAGE_SIZE_DEFAUT = "1024x1024"
+
+# Les six exemples proposes sur la page d'accueil du chat. Ceux d'origine sont en
+# anglais, sur une interface qu'on vient de mettre en francais : le debutant lit
+# << Overcome procrastination >> comme premier contact.
+SUGGESTIONS = [
+    {"title": ["Expliquer simplement", "ce qu'est la méthanisation"],
+     "content": "Explique en trois phrases simples ce qu'est la méthanisation."},
+    {"title": ["Résumer un texte", "que je vais coller"],
+     "content": "Je vais coller un texte. Résume-le en cinq points, en français simple."},
+    {"title": ["Écrire un courriel", "poli et bref"],
+     "content": "Aide-moi à écrire un courriel poli et bref pour demander un rendez-vous."},
+    {"title": ["Fabriquer une image", "à partir d'une description"],
+     "content": "Active « Image » dans les intégrations (le bouton en forme de rouage sous la zone de saisie), puis décris l'image voulue. Exemple : un phare breton sous un ciel d'orage, peinture à l'huile."},
+    {"title": ["Chercher sur le Web", "et citer les sources"],
+     "content": "Active « Recherche Web » dans les intégrations (le bouton en forme de rouage sous la zone de saisie), puis pose ta question. Exemple : quel est le prix du gaz naturel en France cette semaine ?"},
+    {"title": ["Comprendre une photo", "que je joins"],
+     "content": "Je joins une photo avec le bouton +. Dis-moi ce qu'elle montre et ce qui mérite attention."},
+]
+
+
+async def webui_jeton(client: httpx.AsyncClient) -> Optional[str]:
+    """Ouvre une session d'administration. Avec WEBUI_AUTH=false, Open WebUI
+    cree et accepte admin@localhost/admin ; avec un vrai compte, il refuse et
+    les reglages restent a faire a la main, ce que le journal dit."""
+    try:
+        r = await client.post(
+            f"{WEBUI_URL}/api/v1/auths/signin",
+            json={"email": WEBUI_ADMIN_EMAIL, "password": WEBUI_ADMIN_PASSWORD},
+        )
+    except httpx.HTTPError:
+        return None
+    if r.status_code != 200:
+        return None
+    return r.json().get("token")
+
+
+async def poser_reglages_webui() -> None:
+    if REGLAGES_FAITS.exists():
+        return
+
+    faits: List[str] = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
+        # Open WebUI demarre apres nous : on attend, sans jamais bloquer le
+        # routeur lui-meme (cette fonction tourne dans une tache de fond).
+        for _ in range(120):
+            try:
+                r = await client.get(f"{WEBUI_URL}/health")
+                if r.status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(5)
+        else:
+            log.info("Open WebUI n'a pas repondu : reglages remis a plus tard.")
+            return
+
+        jeton = await webui_jeton(client)
+        if not jeton:
+            log.info("Open WebUI demande un compte : recherche web et image a "
+                     "activer depuis ses parametres d'administration.")
+            return
+        entetes = {"Authorization": f"Bearer {jeton}"}
+
+        # 1. Appel d'outils << legacy >>. Sans cela, les interrupteurs
+        #    << Recherche Web >> et << Image >> ne declenchent RIEN : Open WebUI
+        #    se contente alors de proposer l'outil au modele, qui decide seul --
+        #    et avec le routeur gratuit, la reponse revenait vide (mesure du
+        #    09/09 : bulle vide, aucun appel a /v1/images/generations). En
+        #    << legacy >>, c'est Open WebUI lui-meme qui fabrique l'image ou
+        #    lance la recherche des que l'interrupteur est mis. Ce que le
+        #    debutant coche se produit.
+        try:
+            r = await client.get(f"{WEBUI_URL}/api/v1/configs/models", headers=entetes)
+            cfg = r.json()
+            cfg.pop("status", None)
+            params = dict(cfg.get("DEFAULT_MODEL_PARAMS") or {})
+            if params.get("function_calling") != "legacy":
+                params["function_calling"] = "legacy"
+                cfg["DEFAULT_MODEL_PARAMS"] = params
+                r = await client.post(f"{WEBUI_URL}/api/v1/configs/models",
+                                      headers=entetes, json=cfg)
+                r.raise_for_status()
+                faits.append("interrupteurs d'integrations effectifs")
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("Appel d'outils non regle : %s", exc)
+
+        # 2. Exemples de depart en francais, l'interface l'etant deja.
+        try:
+            r = await client.post(f"{WEBUI_URL}/api/v1/configs/suggestions",
+                                  headers=entetes, json={"suggestions": SUGGESTIONS})
+            r.raise_for_status()
+            faits.append("exemples de depart en francais")
+        except httpx.HTTPError as exc:
+            log.warning("Exemples de depart non poses : %s", exc)
+
+        # 3. Recherche web. DuckDuckGo ne demande ni cle ni compte.
+        try:
+            r = await client.get(f"{WEBUI_URL}/api/v1/retrieval/config", headers=entetes)
+            cfg = r.json()
+            cfg.pop("status", None)
+            web = cfg.get("web") or {}
+            if not web.get("ENABLE_WEB_SEARCH") or not web.get("WEB_SEARCH_ENGINE"):
+                web["ENABLE_WEB_SEARCH"] = True
+                web["WEB_SEARCH_ENGINE"] = os.getenv("WEB_SEARCH_ENGINE", "duckduckgo")
+                cfg["web"] = web
+                r = await client.post(f"{WEBUI_URL}/api/v1/retrieval/config/update",
+                                      headers=entetes, json=cfg)
+                r.raise_for_status()
+                faits.append("recherche web (%s)" % web["WEB_SEARCH_ENGINE"])
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("Recherche web non activee : %s", exc)
+
+        # 4. Fabrication d'images, adressee a NOTRE route /v1/images/generations.
+        #    La cle Google reste ainsi au seul endroit ou le debutant la saisit.
+        try:
+            r = await client.get(f"{WEBUI_URL}/api/v1/images/config", headers=entetes)
+            cfg = r.json()
+            cfg.pop("status", None)
+            if not cfg.get("ENABLE_IMAGE_GENERATION"):
+                cfg["ENABLE_IMAGE_GENERATION"] = True
+                cfg["IMAGE_GENERATION_ENGINE"] = "openai"
+                cfg["IMAGES_OPENAI_API_BASE_URL"] = os.getenv(
+                    "FREE_TIER_MANAGER_INTERNAL_URL", "http://free-tier-manager:8000/v1")
+                cfg["IMAGES_OPENAI_API_KEY"] = INTERNAL_KEY
+                cfg["IMAGE_GENERATION_MODEL"] = IMAGE_MODEL
+                cfg["IMAGE_SIZE"] = IMAGE_SIZE_DEFAUT
+                r = await client.post(f"{WEBUI_URL}/api/v1/images/config/update",
+                                      headers=entetes, json=cfg)
+                r.raise_for_status()
+                faits.append("fabrication d'images")
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("Fabrication d'images non activee : %s", exc)
+
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        REGLAGES_FAITS.write_text(
+            json.dumps({
+                "pose_le": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "reglages": faits,
+                "note": "Tant que ce fichier existe, Free AI Studio ne retouche plus "
+                        "les reglages d'Open WebUI : ce que vous y changez reste. "
+                        "Supprimez ce fichier et redemarrez pour les reposer.",
+            }, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        log.warning("Temoin de reglages non ecrit (%s) : %s", REGLAGES_FAITS, exc)
+    log.info("Reglages Open WebUI poses : %s", ", ".join(faits) or "rien a changer")
+
+
+@app.on_event("startup")
+async def demarrage() -> None:
+    asyncio.create_task(poser_reglages_webui())
+
+
 @app.get("/health")
 async def health():
     return {"ok": True, "service": "free-tier-manager", "free_only": FREE_ONLY}
@@ -751,7 +924,7 @@ async def studio_home():
 </style></head><body>
 <div class="hero">
 <h1>Free AI Studio</h1>
-<p>Votre studio IA local. Le chat est prêt après configuration d’au moins un fournisseur gratuit ; les fonctions média restent optionnelles et nécessitent un backend dédié.</p>
+<p>Votre studio IA local. Une clé gratuite suffit : le chat, la lecture d’images, la fabrication d’images, la recherche Web et la voix marchent alors sans rien installer d’autre. La vidéo, elle, n’a pas de service gratuit aujourd’hui.</p>
 <div class="etat" id="etat">Vérification de l’état…</div>
 <p class="status">🟢 Gratuit par défaut</p>
 <span class="pill">Pas de dépense automatique</span>
@@ -761,9 +934,10 @@ async def studio_home():
 <div class="grid">
 <a class="card" href="/cles"><h2>🔑 Vos clés</h2><p>Première étape : brancher un service gratuit, en trois clics et sans toucher à un fichier.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation.</p></a>
-<div class="card"><h2>🎨 Image — optionnel</h2><p>Non installé par défaut. À activer dans Open WebUI avec un backend d’image compatible.</p></div>
-<div class="card"><h2>🎬 Vidéo — optionnel</h2><p>Non installé par défaut. Nécessite par exemple ComfyUI et un workflow vidéo compatible.</p></div>
-<div class="card"><h2>🎤 Voix — optionnel</h2><p>Les capacités audio dépendent de la configuration Open WebUI et des moteurs choisis.</p></div>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix</h2><p>🔊 sous chaque réponse pour l’écouter, 🎙️ dans la barre de saisie pour dicter. Tout se passe sur votre ordinateur, sans clé.</p></a>
+<div class="card"><h2>🎬 Vidéo — pas encore</h2><p>Aucun service de fabrication de vidéo n’est gratuit aujourd’hui. Rien n’est donc branché : la tuile le dira quand ce sera le cas.</p></div>
 <a class="card" href="/notebooklm"><h2>📚 Étudier</h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💻 Code</h2><p>Demander de l'aide pour coder ; les résultats Sandbox peuvent devenir des ressources de travail de l'agent.</p></a>
 <a class="card" href="http://localhost:8020/" target="_blank"><h2>🧪 Sandbox</h2><p>Local isolé, Kaggle automatisable et Colab direct. Les sorties sont conservées comme artefacts réutilisables.</p></a>
@@ -941,6 +1115,103 @@ async def models(authorization: Optional[str] = Header(default=None)):
     }
 
 
+# --- Fabriquer une image -----------------------------------------------------
+# Open WebUI sait demander une image a n'importe quel service << compatible
+# OpenAI >>. En le pointant ici plutot que directement sur Google, la cle reste
+# au seul endroit que le debutant connait : la page << Vos cles >>, relue a
+# chaque appel. S'il remplace sa cle, l'image continue de marcher sans qu'il
+# ait rien a recopier ailleurs -- et il n'existe pas de deuxieme exemplaire de
+# la cle qui vieillit en silence dans la base d'Open WebUI.
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-lite-image")
+IMAGE_MODEL = "free-ai-image"
+# Une image par appel chez Google. Le plafond evite qu'un client bavard vide le
+# quota du jour d'un seul coup.
+IMAGE_MAX_N = 4
+
+
+def aspect_ratio(size: Any) -> Optional[str]:
+    """Traduit un << 1024x1024 >> d'Open WebUI en proportion comprise par Google."""
+    try:
+        largeur, hauteur = (int(x) for x in str(size).lower().split("x"))
+    except (ValueError, TypeError):
+        return None
+    if largeur == hauteur:
+        return "1:1"
+    return "16:9" if largeur > hauteur else "9:16"
+
+
+@app.post("/v1/images/generations")
+async def images_generations(request: Request, authorization: Optional[str] = Header(default=None)):
+    if not auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    payload = await request.json()
+    prompt = str(payload.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Aucune description d'image n'a ete envoyee.")
+
+    key = provider_key("gemini")
+    if not key or not enabled("gemini"):
+        raise HTTPException(
+            status_code=503,
+            detail="La fabrication d'images passe par la cle Google (Gemini). "
+                   "Ajoutez-la sur la page « Vos cles », puis reessayez.",
+        )
+
+    combien = 1
+    try:
+        combien = max(1, min(int(payload.get("n") or 1), IMAGE_MAX_N))
+    except (TypeError, ValueError):
+        pass
+
+    corps: Dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
+    ratio = aspect_ratio(payload.get("size"))
+    if ratio:
+        corps["generationConfig"] = {"imageConfig": {"aspectRatio": ratio}}
+
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{GEMINI_IMAGE_MODEL}:generateContent")
+    headers = {
+        "x-goog-api-key": key,
+        "Content-Type": "application/json",
+        "User-Agent": "Free-AI-Studio/1.0",
+    }
+
+    images: List[Dict[str, str]] = []
+    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0, connect=15.0)) as client:
+        for _ in range(combien):
+            r = await client.post(url, headers=headers, json=corps)
+            if r.status_code >= 400:
+                # Le corps de la reponse peut contenir le detail du refus (quota,
+                # securite). Il part dans le journal, pas vers le navigateur.
+                log.warning("Gemini image HTTP %s : %s", r.status_code, r.text[:300])
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Google a refuse la demande d'image (HTTP {r.status_code}).",
+                )
+            data = r.json()
+            for candidat in data.get("candidates", []):
+                for part in candidat.get("content", {}).get("parts", []):
+                    inline = part.get("inlineData") or part.get("inline_data") or {}
+                    b64 = inline.get("data")
+                    if not b64:
+                        continue
+                    mime = inline.get("mimeType") or inline.get("mime_type") or "image/png"
+                    # b64_json : du base64 nu, comme le veut l'API OpenAI.
+                    # url : la meme image en data-URI, qui porte en plus le vrai
+                    # type MIME -- Google rend souvent du JPEG, et sans cette
+                    # indication le client l'enregistrerait sous une etiquette PNG.
+                    images.append({"b64_json": b64, "url": f"data:{mime};base64,{b64}"})
+
+    if not images:
+        raise HTTPException(
+            status_code=502,
+            detail="Google n'a renvoye aucune image : la description a probablement ete refusee.",
+        )
+
+    return JSONResponse({"created": int(time.time()), "data": images})
+
+
 def clean_payload(payload: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:
     out = dict(payload)
     out["model"] = upstream_model
@@ -1030,7 +1301,13 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
             if stream:
                 async def iterator(resp=response, cli=client):
                     try:
-                        async for chunk in resp.aiter_raw():
+                        # aiter_bytes() defait la compression du fournisseur ; aiter_raw()
+                        # rendait les octets gzip TELS QUELS, sous une etiquette
+                        # text/event-stream et sans Content-Encoding. Le client recevait
+                        # donc du binaire illisible : dans Open WebUI, la reponse
+                        # s'affichait vide, alors que le titre et les questions de suivi
+                        # (appels non streames) arrivaient normalement.
+                        async for chunk in resp.aiter_bytes():
                             yield chunk
                     finally:
                         await resp.aclose()
