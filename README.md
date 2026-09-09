@@ -40,10 +40,19 @@ Quatre gestes. Aucun terminal, aucun assistant de code.
 1. **Docker Desktop** — <https://www.docker.com/products/docker-desktop/>. Installer,
    redémarrer si on le demande, puis **ouvrir Docker Desktop** et attendre que la baleine
    en bas à gauche soit verte. C'est le seul vrai prérequis : sans lui, rien ne tourne.
+   S'il affiche **« Virtualization support not detected »**, ce n'est pas votre
+   installation qui est en cause et ce n'est pas une impasse :
+   [docs/DEPANNAGE.md](docs/DEPANNAGE.md) donne les trois causes possibles, dans l'ordre,
+   avec le chemin à cliquer pour chacune.
 2. **Git pour Windows** — <https://git-scm.com/download/win>. Suivant jusqu'au bout.
    Sert uniquement à ce que le bouton « Mettre à jour » sache quelle version vous avez.
-3. **Récupérer le dossier.** Dans VS Code : `Ctrl+Shift+P`, taper `Git: Clone`, coller
-   `https://github.com/jpbrasile/free-ai-studio.git`, choisir où le mettre.
+   Si VS Code était déjà ouvert, le fermer et le rouvrir : il ne cherche Git qu'à son
+   démarrage.
+3. **Récupérer le dossier.** Dans VS Code : menu **Affichage** → **Palette de commandes**,
+   taper `Git: Clone`, coller `https://github.com/jpbrasile/free-ai-studio.git`, et
+   **désigner le dossier parent** — `Documents`, pas un dossier `free-ai-studio` déjà
+   créé : git fabrique lui-même le sous-dossier à son nom. Deux dossiers du même nom
+   partagent le même projet Docker, ce qui casse le chat plus tard.
    *(Sans Git : bouton vert « Code » sur GitHub → « Download ZIP » → extraire. Tout
    marchera sauf le bouton de mise à jour, et l'installateur vous le dira.)*
 4. **Double-cliquer `demarrer.cmd`**, à la racine du dossier.
@@ -51,7 +60,10 @@ Quatre gestes. Aucun terminal, aucun assistant de code.
 `demarrer.cmd` vérifie l'ordinateur avant d'agir : version de Windows, Docker installé,
 Docker **démarré** (ce n'est pas la même chose, et c'est ce qui manque neuf fois sur dix),
 ports 3000/8010/8020 libres, dossier complet. Quand quelque chose manque, il dit quoi faire
-et ouvre la page de téléchargement — il ne montre jamais une erreur technique. Puis il crée
+et ouvre la page de téléchargement — il ne montre jamais une erreur technique. Quand Docker
+ne démarre pas, il ne se contente pas de dire « ouvrez-le » : il lit l'état réel de la
+virtualisation et nomme la cause — micrologiciel éteint, composants Windows non cochés,
+WSL en panne, ou Docker simplement pas lancé. Puis il crée
 les réglages, fabrique les mots de passe internes au hasard, construit les services, lance
 le veilleur de mise à jour, attend que la page réponde vraiment, et l'ouvre.
 
@@ -60,6 +72,12 @@ deuxième veilleur.
 
 Il reste alors **une seule chose** à faire : sur la page, cliquer **Clés** et coller une clé
 Google Gemini gratuite. Elle suffit pour écrire, lire une image et fabriquer une image.
+
+**Si quelque chose ne marche pas**, le Studio se diagnostique lui-même :
+<http://127.0.0.1:8010/diagnostic> teste la chaîne maillon par maillon, dit où elle casse,
+propose un bouton **Réparer la liaison** et un bouton **Copier ce diagnostic** — de quoi
+montrer l'état exact à quelqu'un sans avoir à le décrire. Aucune clé n'y figure. Les pannes
+déjà rencontrées et ce qui les a réglées : [docs/DEPANNAGE.md](docs/DEPANNAGE.md).
 
 ## Installation avec un assistant de codage
 
