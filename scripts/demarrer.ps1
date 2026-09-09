@@ -115,6 +115,22 @@ if ($info.Code -ne 0) {
     $reglageBios = "Intel Virtualization Technology (VT-x)"
     if ($marque -match "AMD") { $reglageBios = "SVM Mode (AMD-V)" }
 
+    # Les deux cases a cocher dans << fonctionnalites Windows >>. Get-WindowsOptionalFeature
+    # exige l'elevation et serait donc inutilisable ici, mais la meme information passe par
+    # WMI SANS elevation (mesure le 09/09) : InstallState 1 = activee, 2 = non.
+    # Mesure du meme jour sur une machine qui marche : HypervisorPlatform vaut 2. Cette
+    # troisieme case n'est donc PAS necessaire -- l'exiger enverrait cocher pour rien.
+    $vmp = $null
+    $wslCase = $null
+    try {
+        Get-CimInstance -ClassName Win32_OptionalFeature `
+            -Filter "Name='VirtualMachinePlatform' OR Name='Microsoft-Windows-Subsystem-Linux'" |
+            ForEach-Object {
+                if ($_.Name -eq "VirtualMachinePlatform") { $vmp = [int]$_.InstallState }
+                else { $wslCase = [int]$_.InstallState }
+            }
+    } catch { }
+
     $wsl = Executer "wsl" @("--status") "wsl-status"
 
     if ($hyperviseur -eq $false -and $firmware -eq $false) {
@@ -137,16 +153,43 @@ if ($info.Code -ne 0) {
     }
 
     if ($hyperviseur -eq $false) {
-        Abandonner "Les composants Windows de virtualisation ne sont pas actives." `
-            @("Le processeur est pret, mais Windows n'a pas allume les deux pieces qu'il faut.",
-              "",
-              "  1. Touche Windows, taper : fonctionnalites windows",
-              "  2. Ouvrir << Activer ou desactiver des fonctionnalites Windows >>",
-              "  3. Cocher : Plateforme de machine virtuelle",
-              "  4. Cocher : Sous-systeme Windows pour Linux",
-              "  5. OK, puis REDEMARRER l'ordinateur (indispensable).",
-              "",
-              "Au redemarrage, ouvrir Docker Desktop et attendre la baleine verte.") $null
+        $aCocher = @()
+        if ($vmp -ne 1) { $aCocher += "Plateforme de machine virtuelle" }
+        if ($wslCase -ne 1) { $aCocher += "Sous-systeme Windows pour Linux" }
+
+        # Les deux cases sont cochees et pourtant aucun hyperviseur ne tourne : il
+        # manque le redemarrage. C'est le geste qu'on saute, et sans ce message la
+        # personne recoche indefiniment des cases deja cochees.
+        if ($aCocher.Count -eq 0) {
+            Abandonner "Les composants Windows sont coches, mais l'ordinateur n'a pas redemarre." `
+                @("Plateforme de machine virtuelle et Sous-systeme Windows pour Linux sont",
+                  "bien actives. Ils ne se chargent qu'au demarrage de Windows : tant que",
+                  "l'ordinateur n'a pas redemarre, la case est cochee et rien n'a change.",
+                  "Fermer et rouvrir Docker Desktop ne suffit pas.",
+                  "",
+                  "  1. REDEMARRER l'ordinateur (un vrai redemarrage, pas une mise en veille).",
+                  "  2. Ouvrir Docker Desktop, attendre la baleine verte.",
+                  "  3. Double-cliquer de nouveau sur demarrer.cmd.") $null
+        }
+
+        $lignes = @("Le processeur est pret, mais il manque une piece du cote de Windows.",
+                    "",
+                    "  1. Touche Windows, taper : fonctionnalites windows",
+                    "  2. Ouvrir << Activer ou desactiver des fonctionnalites Windows >>")
+        $numero2 = 3
+        foreach ($case in $aCocher) {
+            $lignes += ("  " + $numero2 + ". Cocher : " + $case)
+            $numero2 = $numero2 + 1
+        }
+        $lignes += ("  " + $numero2 + ". OK, puis REDEMARRER l'ordinateur (indispensable).")
+        $lignes += ""
+        if ($vmp -eq $null -and $wslCase -eq $null) {
+            $lignes += "(L'etat de ces cases n'a pas pu etre lu : verifiez les deux.)"
+        } else {
+            $lignes += "Les autres cases de cette liste n'ont pas a etre touchees."
+        }
+        $lignes += "Au redemarrage, ouvrir Docker Desktop et attendre la baleine verte."
+        Abandonner "Il manque un composant Windows de virtualisation." $lignes $null
     }
 
     if ($wsl.Code -ne 0) {

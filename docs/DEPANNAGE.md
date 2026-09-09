@@ -61,17 +61,23 @@ C'est la cause la plus fréquente quand le point 1 dit « Activé ». Installer 
 ne coche pas toujours ce qu'il faut.
 
 Touche Windows → `fonctionnalités windows` → **Activer ou désactiver des
-fonctionnalités Windows**. Cocher :
+fonctionnalités Windows**. Cocher exactement ces deux-là, et rien d'autre :
 
 - **Plateforme de machine virtuelle**
 - **Sous-système Windows pour Linux**
-- **Plateforme d'hyperviseur Windows**, si elle est présente
 
-*Hyper-V n'est pas nécessaire : Docker passe par WSL2.*
+**Ni Hyper-V, ni « Plateforme d'hyperviseur Windows » ne sont nécessaires** —
+mesuré le 09/09/2026 sur une machine qui marche : `HypervisorPlatform` y est à
+l'état *non activée*. Docker passe par WSL2.
 
 Puis **redémarrer l'ordinateur**. C'est le geste qu'on saute et qui coûte une
 heure : tant que la machine n'a pas redémarré, la case est cochée et **rien n'a
 changé**. Fermer et rouvrir Docker Desktop ne suffit pas.
+
+`demarrer.cmd` lit l'état réel de ces deux cases — `Win32_OptionalFeature` est
+lisible **sans élévation**, contrairement à `Get-WindowsOptionalFeature` — et il
+distingue les deux situations que l'on confond toujours : *une case manque* (il
+dit laquelle) et *les cases sont mises mais l'ordinateur n'a pas redémarré*.
 
 ### 3. WSL lui-même
 
