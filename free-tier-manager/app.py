@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import os
 import re
 import time
@@ -966,6 +967,227 @@ async def cles_page():
     return HTMLResponse(CLES_HTML)
 
 
+# --- Diagnostic ---------------------------------------------------------------
+# Sur un ordinateur sans terminal, une panne se raconte de memoire : << il n'y a
+# pas de modele dans le chat >>. On ne peut rien en tirer, et on repart pour un
+# tour de suppositions. Cette page fait les mesures a la place de la personne,
+# les ecrit en phrases, et les met dans le presse-papier d'un clic.
+#
+# Aucune cle n'y figure. D'une cle on ne montre que sa longueur et une empreinte
+# tronquee : cela suffit a dire si les deux cotes portent la MEME sans jamais
+# reveler laquelle.
+
+def empreinte(valeur: str) -> str:
+    if not valeur:
+        return "absente"
+    return "%d signes, empreinte %s" % (
+        len(valeur), hashlib.sha256(valeur.encode()).hexdigest()[:12])
+
+
+async def etat_liaison() -> Dict[str, Any]:
+    """La chaine chat -> routeur, maillon par maillon."""
+    sortie: Dict[str, Any] = {
+        "cle_du_routeur": empreinte(INTERNAL_KEY),
+        "chat_joignable": False,
+        "session_admin": False,
+        "api_activee": None,
+        "url_configuree": None,
+        "cle_du_chat": None,
+        "memes_cles": None,
+        "modeles": None,
+        "detail": None,
+    }
+    async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
+        try:
+            r = await client.get(f"{WEBUI_URL}/health")
+            sortie["chat_joignable"] = r.status_code == 200
+        except httpx.HTTPError as exc:
+            sortie["detail"] = "Le chat ne repond pas : %s" % exc
+            return sortie
+        if not sortie["chat_joignable"]:
+            sortie["detail"] = "Le chat repond, mais pas normalement."
+            return sortie
+
+        jeton = await webui_jeton(client)
+        if not jeton:
+            sortie["detail"] = ("Le chat demande un compte (WEBUI_AUTH=true) : le Studio ne "
+                                "peut pas verifier la liaison a votre place.")
+            return sortie
+        sortie["session_admin"] = True
+        entetes = {"Authorization": f"Bearer {jeton}"}
+
+        interne = os.getenv("FREE_TIER_MANAGER_INTERNAL_URL",
+                            "http://free-tier-manager:8000/v1")
+        try:
+            r = await client.get(f"{WEBUI_URL}/openai/config", headers=entetes)
+            cfg = r.json()
+            urls = list(cfg.get("OPENAI_API_BASE_URLS") or [])
+            cles = list(cfg.get("OPENAI_API_KEYS") or [])
+            sortie["api_activee"] = bool(cfg.get("ENABLE_OPENAI_API"))
+            sortie["url_configuree"] = ", ".join(urls) if urls else None
+            gardee = ""
+            if interne in urls:
+                rang = urls.index(interne)
+                if rang < len(cles):
+                    gardee = cles[rang]
+            sortie["cle_du_chat"] = empreinte(gardee)
+            sortie["memes_cles"] = bool(gardee) and gardee == INTERNAL_KEY
+        except (httpx.HTTPError, ValueError) as exc:
+            sortie["detail"] = "Reglages du chat illisibles : %s" % exc
+            return sortie
+
+        try:
+            r = await client.get(f"{WEBUI_URL}/api/models", headers=entetes)
+            sortie["modeles"] = [m.get("id") for m in (r.json().get("data") or [])]
+        except (httpx.HTTPError, ValueError) as exc:
+            sortie["detail"] = "Liste des modeles illisible : %s" % exc
+    return sortie
+
+
+@app.get("/diagnostic/etat")
+async def diagnostic_etat():
+    return {
+        "version": version_locale(),
+        "fournisseurs_branches": [n for n in PROVIDERS if configured(n)],
+        "liaison": await etat_liaison(),
+    }
+
+
+@app.post("/diagnostic/reparer")
+async def diagnostic_reparer():
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+        jeton = await webui_jeton(client)
+        if not jeton:
+            raise HTTPException(
+                409, "Le chat demande un compte : reparation impossible depuis cette page.")
+        await reparer_connexion_webui(client, {"Authorization": f"Bearer {jeton}"})
+    return {"fait": True, "liaison": await etat_liaison()}
+
+
+DIAGNOSTIC_HTML = """
+<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Diagnostic - Free AI Studio</title>
+<style>
+:root{font-family:system-ui,sans-serif} body{max-width:820px;margin:32px auto;padding:0 18px;line-height:1.5}
+.bloc{border:1px solid #bbb;border-radius:16px;padding:18px;margin-bottom:16px}
+.ligne{display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-bottom:1px solid #eee}
+.ligne:last-child{border-bottom:0}
+.quoi{flex:1}.det{opacity:.7;font-size:.92em}
+button{font:inherit;padding:10px 16px;border-radius:10px;border:1px solid #222;background:#222;color:#fff;cursor:pointer}
+button.pale{background:#fff;color:#222}
+textarea{width:100%;height:190px;font-family:ui-monospace,Consolas,monospace;font-size:.86em;
+ border:1px solid #bbb;border-radius:10px;padding:10px}
+.verdict{padding:12px 14px;border-radius:12px;border:1px solid #bbb;margin:10px 0}
+.bon{background:#e8f6ec;border-color:#7fb98f}.mauvais{background:#fdecec;border-color:#d98d8d}
+</style></head><body>
+<h1>Diagnostic</h1>
+<p>Cette page mesure la chaine qui va du chat jusqu'aux services gratuits, et dit
+ou elle casse. Aucune cle n'est affichee : d'une cle on ne montre que sa longueur
+et une empreinte, de quoi verifier que deux endroits portent la meme.</p>
+
+<div class="bloc">
+  <div id="verdict" class="verdict">Mesure en cours...</div>
+  <div id="lignes"></div>
+</div>
+
+<div class="bloc">
+  <button id="reparer">Reparer la liaison</button>
+  <button id="relancer" class="pale">Refaire la mesure</button>
+  <span id="mot" class="det"></span>
+</div>
+
+<div class="bloc">
+  <h2>A montrer si vous demandez de l'aide</h2>
+  <button id="copier" class="pale">Copier ce diagnostic</button>
+  <p class="det">Ce texte ne contient aucune cle.</p>
+  <textarea id="texte" readonly></textarea>
+</div>
+<p><a href="/studio">&larr; Retour au Studio</a></p>
+
+<script>
+function ligne(ok, quoi, detail) {
+  var d = document.createElement("div");
+  d.className = "ligne";
+  var marque = ok === null ? "\\u2753" : (ok ? "\\u2705" : "\\u274C");
+  d.innerHTML = "<div>" + marque + "</div><div class='quoi'>" + quoi
+              + "<div class='det'>" + (detail || "") + "</div></div>";
+  return d;
+}
+
+function rendre(d) {
+  var L = d.liaison, zone = document.getElementById("lignes");
+  zone.innerHTML = "";
+  var modeles = L.modeles || [];
+  zone.appendChild(ligne(true, "Routeur en marche",
+    "version " + (d.version || "inconnue") + ", mot de passe interne : " + L.cle_du_routeur));
+  zone.appendChild(ligne(L.chat_joignable, "Le chat repond",
+    L.chat_joignable ? "" : "le conteneur du chat ne repond pas"));
+  zone.appendChild(ligne(L.session_admin, "Le Studio peut regler le chat",
+    L.session_admin ? "" : (L.detail || "")));
+  zone.appendChild(ligne(L.api_activee, "Connexion au routeur activee dans le chat",
+    L.url_configuree || "aucune adresse enregistree"));
+  zone.appendChild(ligne(L.memes_cles, "Les deux cotes portent le meme mot de passe",
+    "cote chat : " + (L.cle_du_chat || "inconnue")));
+  zone.appendChild(ligne(modeles.length > 0, "Un modele est proposable dans le chat",
+    modeles.length ? modeles.join(", ") : "la liste est vide"));
+  zone.appendChild(ligne(d.fournisseurs_branches.length > 0, "Au moins un service gratuit est branche",
+    d.fournisseurs_branches.length ? d.fournisseurs_branches.join(", ") : "aucune cle enregistree"));
+
+  var v = document.getElementById("verdict");
+  if (modeles.length && d.fournisseurs_branches.length) {
+    v.className = "verdict bon";
+    v.textContent = "Tout est en place. Le chat doit proposer un modele.";
+  } else if (!modeles.length && L.session_admin && L.memes_cles === false) {
+    v.className = "verdict mauvais";
+    v.textContent = "Le chat garde un ancien mot de passe interne. Cliquez Reparer la liaison.";
+  } else if (!modeles.length) {
+    v.className = "verdict mauvais";
+    v.textContent = "Le chat ne propose aucun modele. Le detail ci-dessous dit a quel maillon ca casse.";
+  } else {
+    v.className = "verdict mauvais";
+    v.textContent = "Le chat a un modele, mais aucun service gratuit n'est branche : allez a la page Cles.";
+  }
+  document.getElementById("texte").value = JSON.stringify(d, null, 2);
+}
+
+function mesurer() {
+  document.getElementById("mot").textContent = "";
+  fetch("/diagnostic/etat").then(function (r) { return r.json(); }).then(rendre)
+    .catch(function (e) {
+      document.getElementById("verdict").className = "verdict mauvais";
+      document.getElementById("verdict").textContent = "Le routeur ne repond pas : " + e;
+    });
+}
+
+document.getElementById("relancer").onclick = mesurer;
+document.getElementById("reparer").onclick = function () {
+  document.getElementById("mot").textContent = "Reparation en cours...";
+  fetch("/diagnostic/reparer", { method: "POST" }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      document.getElementById("mot").textContent = "Repare. Rechargez l'onglet du chat.";
+      if (d.liaison) { rendre({ version: null, fournisseurs_branches: [], liaison: d.liaison }); }
+      mesurer();
+    })
+    .catch(function (e) { document.getElementById("mot").textContent = "Echec : " + e; });
+};
+document.getElementById("copier").onclick = function () {
+  var t = document.getElementById("texte");
+  t.select();
+  try { navigator.clipboard.writeText(t.value); } catch (e) { document.execCommand("copy"); }
+  document.getElementById("copier").textContent = "Copie";
+};
+mesurer();
+</script>
+</body></html>
+"""
+
+
+@app.get("/diagnostic", response_class=HTMLResponse)
+async def diagnostic_page():
+    return HTMLResponse(DIAGNOSTIC_HTML)
+
+
 # --- Mise a jour --------------------------------------------------------------
 # Un conteneur ne peut pas se reconstruire lui-meme, et donner a une page web les
 # pleins pouvoirs sur Docker serait une mauvaise affaire pour l'utilisateur. Le
@@ -1223,6 +1445,8 @@ services : ils se coupent une ou deux minutes. Rien n’est envoyé nulle part, 
 <h2>⚡ Besoin de plus de puissance ?</h2>
 <p>Le Boost reste désactivé tant que vous ne le demandez pas. Free AI Studio peut expliquer le gain attendu avant toute dépense.</p>
 <a href="/boost">Voir le Boost et mes limites →</a>
+<p style="margin-top:14px">Quelque chose ne marche pas ? <a href="/diagnostic"><b>🩺 Diagnostic</b></a> —
+la page mesure la chaîne et dit où elle casse, sans terminal.</p>
 <p class="muted">Les noms techniques des fournisseurs sont volontairement masqués dans cette page débutant.</p>
 </div>
 <script>
