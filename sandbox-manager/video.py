@@ -370,6 +370,27 @@ if resultat is None:
 
 chemin = os.path.join(SORTIE, "video.mp4")
 export_to_video(resultat, chemin, fps=16)
+
+# Un MP4 range son sommaire (duree, taille, position des images) a la FIN du
+# fichier. Un navigateur doit alors telecharger tout le fichier avant d'afficher
+# la premiere image. Le deplacer au debut ne recompresse rien -- on recopie les
+# memes donnees dans un autre ordre -- et la lecture demarre tout de suite.
+# Si quoi que ce soit echoue ici, on garde le fichier d'origine : il est bon,
+# seulement moins commode.
+try:
+    import imageio_ffmpeg
+    provisoire = chemin + ".rapide.mp4"
+    subprocess.run(
+        [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-hide_banner", "-loglevel", "error",
+         "-i", chemin, "-c", "copy", "-movflags", "+faststart", provisoire],
+        check=True, timeout=120,
+    )
+    if os.path.getsize(provisoire) > 0:
+        os.replace(provisoire, chemin)
+        print("Index deplace en tete : la lecture demarre sans tout telecharger.", flush=True)
+except Exception as exc:  # noqa: BLE001 - une commodite, jamais une condition
+    print("Index laisse en fin de fichier (%s). Le clip reste lisible." % exc, flush=True)
+
 taille = os.path.getsize(chemin)
 resume = {
     "fichier": "video.mp4",
@@ -497,6 +518,10 @@ h1{font-size:1.5rem;margin-bottom:4px}
 select,button,input{font:inherit;padding:9px 12px;border-radius:10px;border:1px solid #666;background:#fff}
 button.primaire{background:#222;color:#fff;border-color:#222;cursor:pointer}
 button[disabled]{opacity:.5;cursor:default}
+a.bouton{display:inline-block;font:inherit;padding:10px 16px;border-radius:10px;
+ border:1px solid #222;background:#222;color:#fff;text-decoration:none;cursor:pointer}
+a.bouton.discret{background:#fff;color:#222;border-color:#666}
+a.bouton:hover{opacity:.86}
 textarea{font:inherit;width:100%;box-sizing:border-box;height:110px;padding:12px;
  border-radius:12px;border:1px solid #999}
 .images{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
@@ -547,7 +572,8 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
 </div>
 
 <div id="etat" class="ligne"></div>
-<pre id="journal" hidden></pre>
+<details id="detailJournal" hidden><summary>Voir le détail technique</summary>
+<pre id="journal"></pre></details>
 <div id="resultat"></div>
 
 <div class="pied" id="pied"></div>
@@ -626,9 +652,41 @@ function rafraichirBudget(){
     });
 }
 
+function condenser(t){
+  // Les barres d'avancement ecrivent une ligne par pourcentage : le
+  // telechargement du modele en produit plusieurs centaines, toutes pareilles,
+  // et le debutant se retrouve devant un mur de chiffres ou il ne trouve plus
+  // le message qui compte. On ne garde que la ligne d'arrivee de chaque barre,
+  // et on dit combien de lignes ont ete mises de cote -- masquer sans le dire
+  // serait mentir sur ce qui s'est passe.
+  const gardees = []; let cachees = 0;
+  for(const ligne of (t || "").split("\n")){
+    if(/\d+%\|/.test(ligne) && !/100%\|/.test(ligne)){ cachees++; continue; }
+    gardees.push(ligne);
+  }
+  if(cachees) gardees.push("… " + cachees + " lignes d’avancement masquées.");
+  return gardees.join("\n");
+}
+
 function afficherJournal(t){
-  const j = document.getElementById("journal");
-  j.hidden = !t; j.textContent = t || "";
+  document.getElementById("detailJournal").hidden = !t;
+  document.getElementById("journal").textContent = condenser(t);
+}
+
+function nomDeFichier(){
+  // Dix clips fabriques, et le dossier Telechargements contient video.mp4,
+  // video(1).mp4, video(2).mp4 : plus personne ne sait lequel est lequel. Le nom
+  // porte donc la date, l'heure, et le debut de la phrase demandee.
+  const d = new Date();
+  const jour = d.getFullYear() + "-"
+    + String(d.getMonth()+1).padStart(2,"0") + "-"
+    + String(d.getDate()).padStart(2,"0");
+  const heure = String(d.getHours()).padStart(2,"0") + "h" + String(d.getMinutes()).padStart(2,"0");
+  const mots = (document.getElementById("description").value || "")
+    .normalize("NFD").replace(/[^\x00-\x7F]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "").slice(0, 40).replace(/-+$/, "");
+  return jour + "-" + heure + "-" + (mots || "video") + ".mp4";
 }
 
 function suivre(id){
@@ -650,9 +708,18 @@ function suivre(id){
         if(j.video_url){
           etat.innerHTML = '<span class="ok">✔ Vidéo prête</span> — ' + (j.resume ?
             (j.resume.secondes_calcul + " s de calcul, " + Math.round(j.resume.octets/1024) + " Ko") : "");
+          const nom = nomDeFichier();
+          const lienTelecharger = j.video_url + "&telecharger=1&nom=" + encodeURIComponent(nom);
           document.getElementById("resultat").innerHTML =
             '<video controls autoplay loop src="' + j.video_url + '"></video>'
-            + '<p><a href="' + j.video_url + '" download="video.mp4">Enregistrer la vidéo</a></p>';
+            + '<div class="ligne">'
+            + '<a class="bouton" href="' + lienTelecharger + '" download="' + nom + '">'
+            + '⬇️ Télécharger la vidéo</a>'
+            + '<a class="bouton discret" href="' + j.video_url + '" target="_blank" '
+            + 'rel="noopener">Ouvrir dans un onglet</a>'
+            + '<span class="avert">Le fichier s’appellera <code>' + nom + '</code> et ira '
+            + 'dans votre dossier Téléchargements.</span>'
+            + '</div>';
         } else {
           etat.innerHTML = '<span class="ko">✖ Échec</span> — ' + (j.message || "voir le journal ci-dessous.");
         }

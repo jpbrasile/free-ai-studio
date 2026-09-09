@@ -1466,7 +1466,8 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
 
 
 @app.get("/video/jobs/{jid}/fichier")
-def video_fichier(jid: str, cle: str = Query(default="")):
+def video_fichier(jid: str, cle: str = Query(default=""),
+                  telecharger: int = Query(default=0), nom: str = Query(default="")):
     attendu = jeton_video(jid)
     # compare_digest compare en temps constant : le temps de reponse ne dit pas
     # combien de caracteres du jeton etaient bons.
@@ -1478,7 +1479,19 @@ def video_fichier(jid: str, cle: str = Query(default="")):
     chemin = ART / art["path"]
     if not chemin.exists() or chemin.is_symlink():
         raise HTTPException(404, "Fichier absent")
-    return FileResponse(chemin, media_type="video/mp4", filename="video.mp4")
+    if not telecharger:
+        # Meme adresse pour lire et pour enregistrer, mais pas la meme reponse :
+        # annoncer une piece jointe a un lecteur video, c'est lui demander de
+        # ranger un fichier au lieu de le jouer. Sans le drapeau, on sert le
+        # fichier tel quel et la balise <video> le lit.
+        return FileResponse(chemin, media_type="video/mp4")
+    # Le nom vient de la page, donc de la description tapee par l'utilisateur :
+    # il passe par le meme nettoyage que tout nom de fichier venu du dehors.
+    propre = clean_name(nom) if nom else ""
+    if propre.lower().endswith(".mp4"):
+        propre = propre[:-4]
+    propre = propre.strip("._-")
+    return FileResponse(chemin, media_type="video/mp4", filename=(propre or "video") + ".mp4")
 
 
 @app.get("/video", response_class=HTMLResponse)
