@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -17,6 +18,9 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+log = logging.getLogger("sandbox-manager")
+
 app = FastAPI(title="Free AI Studio Sandbox Manager", version="2.0.0")
 
 KEY = os.getenv("SANDBOX_MANAGER_KEY", "").strip()
@@ -27,6 +31,12 @@ JOBS = ROOT / "jobs"
 ART = ROOT / "artifacts"
 JOBS.mkdir(parents=True, exist_ok=True)
 ART.mkdir(parents=True, exist_ok=True)
+
+# Le worker execute le code utilisateur sous un compte non privilegie (USER sandbox,
+# uid 10001 dans sandbox-worker/Dockerfile) et partage ce volume avec le manager, qui
+# tourne en root. Sans transfert de propriete, le worker ne peut ni ecrire main.py ni
+# creer <job>/output dans un repertoire cree par le manager : POST /run rend 500.
+WORKER_UID = int(os.getenv("SANDBOX_WORKER_UID", "10001"))
 
 MAX_UPLOAD = int(os.getenv("SANDBOX_MAX_ARTIFACT_BYTES", str(100 * 1024 * 1024)))
 MAX_JOB_CODE = int(os.getenv("SANDBOX_MAX_CODE_BYTES", "500000"))
@@ -71,7 +81,15 @@ def read_job(jid: str) -> dict:
 
 def write_job(jid: str, data: dict):
     d = JOBS / jid
+    created = not d.exists()
     d.mkdir(parents=True, exist_ok=True)
+    if created:
+        # Le groupe reste inchange (-1) : le proprietaire suffit, et cela evite de
+        # coder en dur le gid que useradd attribue dans l'image du worker.
+        try:
+            os.chown(d, WORKER_UID, -1)
+        except OSError as exc:
+            log.warning("chown %s -> uid %s impossible : %s", d, WORKER_UID, exc)
     tmp = d / "job.json.tmp"
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(meta_path(jid))
