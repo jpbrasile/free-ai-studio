@@ -500,10 +500,60 @@ async def webui_jeton(client: httpx.AsyncClient) -> Optional[str]:
     return r.json().get("token")
 
 
-async def poser_reglages_webui() -> None:
-    if REGLAGES_FAITS.exists():
-        return
+async def reparer_connexion_webui(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
+    """Remet d'aplomb la liaison entre le chat et le routeur, a CHAQUE demarrage.
 
+    Open WebUI recopie OPENAI_API_KEY dans sa propre base au tout premier
+    demarrage, puis n'ecoute plus la variable d'environnement. Le jour ou la cle
+    interne change -- un second dossier clone par megarde, un .env efface et
+    refait, une reinstallation qui garde l'ancien volume -- les deux cotes ne
+    parlent plus de la meme cle. Le routeur repond alors 401, et Open WebUI
+    affiche simplement une liste de modeles VIDE, sans un mot d'explication.
+    Impossible a deviner pour un debutant : il vient de coller une cle de
+    fournisseur et croit que c'est elle qui ne marche pas.
+
+    On ne peut donc pas poser cette liaison une fois pour toutes comme les
+    reglages de confort : elle se verifie a chaque demarrage. On n'ecrit que si
+    la valeur gardee differe, pour ne rien deranger dans le cas normal.
+    """
+    if not INTERNAL_KEY:
+        return
+    interne = os.getenv("FREE_TIER_MANAGER_INTERNAL_URL",
+                        "http://free-tier-manager:8000/v1")
+    try:
+        r = await client.get(f"{WEBUI_URL}/openai/config", headers=entetes)
+        cfg = r.json()
+        cfg.pop("status", None)
+        urls = list(cfg.get("OPENAI_API_BASE_URLS") or [])
+        cles = list(cfg.get("OPENAI_API_KEYS") or [])
+
+        if interne in urls:
+            rang = urls.index(interne)
+        else:
+            urls.append(interne)
+            rang = len(urls) - 1
+        # Open WebUI apparie les deux listes par leur rang : une cle manquante
+        # decalerait toutes les suivantes.
+        while len(cles) < len(urls):
+            cles.append("")
+
+        if cles[rang] == INTERNAL_KEY and cfg.get("ENABLE_OPENAI_API"):
+            return
+
+        cles[rang] = INTERNAL_KEY
+        cfg["ENABLE_OPENAI_API"] = True
+        cfg["OPENAI_API_BASE_URLS"] = urls
+        cfg["OPENAI_API_KEYS"] = cles
+        r = await client.post(f"{WEBUI_URL}/openai/config/update",
+                              headers=entetes, json=cfg)
+        r.raise_for_status()
+        log.info("Liaison chat -> routeur remise d'aplomb (la cle gardee par "
+                 "Open WebUI ne correspondait plus).")
+    except (httpx.HTTPError, ValueError, IndexError) as exc:
+        log.warning("Liaison chat -> routeur non verifiee : %s", exc)
+
+
+async def poser_reglages_webui() -> None:
     faits: List[str] = []
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
         # Open WebUI demarre apres nous : on attend, sans jamais bloquer le
@@ -526,6 +576,16 @@ async def poser_reglages_webui() -> None:
                      "activer depuis ses parametres d'administration.")
             return
         entetes = {"Authorization": f"Bearer {jeton}"}
+
+        # 0. La liaison elle-meme, verifiee a chaque demarrage. Elle passe AVANT
+        #    le temoin ci-dessous : sans elle, il n'y a aucun modele dans le chat
+        #    et tout le reste est sans objet.
+        await reparer_connexion_webui(client, entetes)
+
+        # Les reglages de confort, eux, ne se posent qu'une fois : ce que
+        # l'utilisateur y change ensuite lui appartient.
+        if REGLAGES_FAITS.exists():
+            return
 
         # 1. Appel d'outils << legacy >>. Sans cela, les interrupteurs
         #    << Recherche Web >> et << Image >> ne declenchent RIEN : Open WebUI

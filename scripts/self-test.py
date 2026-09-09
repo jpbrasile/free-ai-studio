@@ -143,7 +143,8 @@ def webui_reglages():
     lu={}
     for nom, chemin in (('recherche','/api/v1/retrieval/config'),
                         ('image','/api/v1/images/config'),
-                        ('modeles','/api/v1/configs/models')):
+                        ('modeles','/api/v1/configs/models'),
+                        ('proposes','/api/models')):
         req=urllib.request.Request('http://127.0.0.1:3000'+chemin, headers=h)
         with urllib.request.urlopen(req, timeout=10) as r:
             lu[nom]=json.loads(r.read())
@@ -163,6 +164,16 @@ try:
     all_ok &= check('Open WebUI : interrupteurs d’intégrations effectifs',
                     params.get('function_calling')=='legacy',
                     'function_calling = ' + str(params.get('function_calling')))
+    # Le contrôle qui manquait : ce que l'utilisateur voit dans le menu déroulant.
+    # Tout le reste peut être vert et cette liste être VIDE — c'est arrivé le 09/09.
+    # Open WebUI garde la clé du routeur dans sa base dès le premier démarrage ;
+    # si la clé interne change ensuite, il présente l'ancienne, le routeur refuse,
+    # et le chat n'affiche aucun modèle sans un mot d'explication.
+    proposes=[m.get('id') for m in (lu['proposes'].get('data') or [])]
+    all_ok &= check('Open WebUI : le chat propose au moins un modèle',
+                    'free-ai-auto' in proposes,
+                    ('liste VIDE — la clé gardée par le chat ne correspond plus à celle du routeur'
+                     if not proposes else 'modèles : ' + ', '.join(proposes)))
 except urllib.error.HTTPError as exc:
     print(f'[INFO] réglages Open WebUI non lisibles (HTTP {exc.code}) : normal si vous avez mis WEBUI_AUTH=true. '
           'Vérifiez à la main dans ses paramètres d’administration.')
