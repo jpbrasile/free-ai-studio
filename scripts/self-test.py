@@ -117,5 +117,60 @@ try:
 except Exception as exc:
     all_ok &= check('Open WebUI accessible', False, str(exc))
 
-print('\nRésultat : ' + ('TOUT EST OPÉRATIONNEL' if all_ok else 'DES CORRECTIONS SONT NÉCESSAIRES'))
+# La route « fabriquer une image » existe-t-elle ? On la sonde SANS clé : une
+# route presente repond 401, une route absente repond 404. Rien n'est demande
+# a Google, donc aucun quota consomme.
+try:
+    req=urllib.request.Request('http://127.0.0.1:8010/v1/images/generations',
+                               data=b'{}', headers={'Content-Type':'application/json'}, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r: code=r.status
+    except urllib.error.HTTPError as e: code=e.code
+    all_ok &= check('route « fabriquer une image »', code==401, f'HTTP {code} (401 attendu : la route existe et exige la clé locale)')
+except Exception as exc:
+    all_ok &= check('route « fabriquer une image »', False, str(exc))
+
+# Reglages d'Open WebUI reellement poses. Une variable presente dans le conteneur
+# ne prouve rien : Open WebUI ne lit ses variables qu'au tout premier demarrage,
+# ensuite c'est sa base qui decide. On lit donc la base, par son API.
+def webui_reglages():
+    corps=json.dumps({'email':'admin@localhost','password':'admin'}).encode()
+    req=urllib.request.Request('http://127.0.0.1:3000/api/v1/auths/signin', data=corps,
+                               headers={'Content-Type':'application/json'}, method='POST')
+    with urllib.request.urlopen(req, timeout=10) as r:
+        jeton=json.loads(r.read())['token']
+    h={'Authorization':'Bearer '+jeton}
+    lu={}
+    for nom, chemin in (('recherche','/api/v1/retrieval/config'),
+                        ('image','/api/v1/images/config'),
+                        ('modeles','/api/v1/configs/models')):
+        req=urllib.request.Request('http://127.0.0.1:3000'+chemin, headers=h)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            lu[nom]=json.loads(r.read())
+    return lu
+
+try:
+    lu=webui_reglages()
+    web=lu['recherche'].get('web', {})
+    all_ok &= check('Open WebUI : recherche Web active',
+                    bool(web.get('ENABLE_WEB_SEARCH')) and bool(web.get('WEB_SEARCH_ENGINE')),
+                    'moteur = ' + (web.get('WEB_SEARCH_ENGINE') or 'aucun'))
+    img=lu['image']
+    all_ok &= check('Open WebUI : fabrication d’images active',
+                    bool(img.get('ENABLE_IMAGE_GENERATION')) and 'free-tier-manager' in (img.get('IMAGES_OPENAI_API_BASE_URL') or ''),
+                    'passe par ' + (img.get('IMAGES_OPENAI_API_BASE_URL') or 'aucun service'))
+    params=lu['modeles'].get('DEFAULT_MODEL_PARAMS') or {}
+    all_ok &= check('Open WebUI : interrupteurs d’intégrations effectifs',
+                    params.get('function_calling')=='legacy',
+                    'function_calling = ' + str(params.get('function_calling')))
+except urllib.error.HTTPError as exc:
+    print(f'[INFO] réglages Open WebUI non lisibles (HTTP {exc.code}) : normal si vous avez mis WEBUI_AUTH=true. '
+          'Vérifiez à la main dans ses paramètres d’administration.')
+except Exception as exc:
+    all_ok &= check('réglages Open WebUI lisibles', False, str(exc))
+
+print('\nRésultat : ' + ('TOUT CE QUI EST TESTÉ ICI RÉPOND' if all_ok else 'DES CORRECTIONS SONT NÉCESSAIRES'))
+print('[INFO] Non testé ici : la qualité des réponses et le quota restant chez les fournisseurs. '
+      'Cet auto-test n’appelle aucun service payant ni gratuit, pour ne rien consommer. '
+      'Posez une question dans le chat pour la preuve de bout en bout.')
 sys.exit(0 if all_ok else 1)
