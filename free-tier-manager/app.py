@@ -993,6 +993,41 @@ def veilleuse_vivante() -> bool:
     return 0 <= age < VEILLEUSE_FRAICHE_S
 
 
+# La page se rafraichit toutes les cinq secondes pour suivre une mise a jour en
+# cours. Sans garde-fou, cela ferait 720 appels par heure a GitHub, qui en
+# autorise 60 sans jeton : au bout de cinq minutes, l'API refuserait tout et la
+# page annoncerait « depot prive » sur un depot parfaitement public. La reponse
+# de GitHub est donc gardee quelques minutes -- ce qui vient de .git, lui, est
+# relu a chaque fois, parce que c'est ce qui bouge pendant une mise a jour.
+_GITHUB_CACHE: Dict[str, Any] = {"cle": None, "quand": 0.0, "valeur": None}
+GITHUB_CACHE_S = max(60, int(os.getenv("MAJ_CACHE_SECONDS", "600")))
+_CHAMPS_CACHES = ("comparaison", "a_jour", "retard", "version_distante", "quota_repris_a")
+
+
+def _cle_cache(slug: str, locale: str) -> str:
+    # La version installee entre dans la cle : sitot la mise a jour finie, la
+    # reponse gardee ne vaut plus rien puisqu'elle comparait l'ANCIENNE version.
+    return slug + "@" + locale
+
+
+def _github_en_cache(slug: str, locale: str) -> Optional[Dict[str, Any]]:
+    if _GITHUB_CACHE["cle"] != _cle_cache(slug, locale) or not _GITHUB_CACHE["valeur"]:
+        return None
+    if time.time() - _GITHUB_CACHE["quand"] > GITHUB_CACHE_S:
+        return None
+    valeur = dict(_GITHUB_CACHE["valeur"])
+    valeur["age_secondes"] = round(time.time() - _GITHUB_CACHE["quand"])
+    return valeur
+
+
+def _github_mettre_en_cache(slug: str, locale: str, sortie: Dict[str, Any]) -> None:
+    _GITHUB_CACHE.update({
+        "cle": _cle_cache(slug, locale),
+        "quand": time.time(),
+        "valeur": {c: sortie[c] for c in _CHAMPS_CACHES if c in sortie},
+    })
+
+
 @app.get("/maj/etat")
 async def maj_etat():
     locale = version_locale()
@@ -1009,6 +1044,10 @@ async def maj_etat():
     sortie["travaux"] = lire_json_windows(MAJ_ETAT)
 
     if locale and slug:
+        frais = _github_en_cache(slug, locale)
+        if frais is not None:
+            sortie.update(frais)
+            return sortie
         # Sans jeton, l'API GitHub ne repond que pour un depot public. Un depot
         # prive rend 404 : ce n'est pas une panne, et le dire evite de faire
         # croire a une erreur.
@@ -1037,10 +1076,17 @@ async def maj_etat():
                     # Le commit installe n'est pas dans les dix derniers : soit tres
                     # en retard, soit une version locale modifiee.
                     sortie["a_jour"] = False
+            elif r.status_code in (403, 429) and r.headers.get("x-ratelimit-remaining") == "0":
+                # Quota epuise n'est PAS « depot prive » : confondre les deux
+                # ferait dire a la page que le depot est ferme alors qu'il est
+                # ouvert, et le proprietaire chercherait du cote des droits.
+                sortie["comparaison"] = "quota_github"
+                sortie["quota_repris_a"] = r.headers.get("x-ratelimit-reset")
             elif r.status_code in (401, 403, 404):
                 sortie["comparaison"] = "depot_prive"
             else:
                 sortie["comparaison"] = f"http_{r.status_code}"
+            _github_mettre_en_cache(slug, locale, sortie)
         except httpx.HTTPError as exc:
             log.warning("comparaison de version impossible : %s", exc)
             sortie["comparaison"] = "reseau"
@@ -1168,6 +1214,15 @@ function majAfficher(d){
     majCase.textContent = "Une version plus récente existe (" + version + ")."
       + (liste ? "\nCe qui vous manque :\n" + liste : "");
     majCase.style.whiteSpace = "pre-line";
+  } else if(d.comparaison === "quota_github"){
+    majCase.className = "etat";
+    const reprise = d.quota_repris_a
+      ? new Date(Number(d.quota_repris_a) * 1000).toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"})
+      : null;
+    majCase.textContent = "GitHub ne répond plus pour l’instant : trop de questions posées "
+      + "depuis cette connexion (" + version + ")."
+      + (reprise ? " Réessayez après " + reprise + "." : "")
+      + " Le bouton met quand même à jour.";
   } else if(d.comparaison === "depot_prive"){
     majCase.className = "etat";
     majCase.textContent = "Dépôt privé : je ne peux pas comparer avec GitHub sans identifiants ("
