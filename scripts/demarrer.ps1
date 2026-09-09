@@ -89,10 +89,96 @@ Bon "Docker Desktop est installe"
 # c'est la deuxieme qui manque neuf fois sur dix.
 $info = Executer "docker" @("info", "--format", "{{.ServerVersion}}") "docker-info"
 if ($info.Code -ne 0) {
+
+    # Docker refuse de demarrer pour trois raisons tres differentes, qui
+    # demandent trois gestes tres differents. Se tromper de raison, c'est
+    # envoyer quelqu'un fouiller le BIOS alors qu'il suffisait de cocher une
+    # case -- ou l'inverse. On regarde donc avant de parler.
+    #
+    # ATTENTION au piege, mesure le 09/09 sur une machine qui MARCHE :
+    # VirtualizationFirmwareEnabled y vaut False, et VMMonitorModeExtensions
+    # aussi. Ce n'est pas une panne : des qu'un hyperviseur tourne, Windows
+    # s'execute au-dessus de lui et ne voit plus les drapeaux bruts du
+    # processeur. Ces deux valeurs ne veulent donc dire quelque chose que
+    # lorsque AUCUN hyperviseur ne tourne. La valeur qui tranche est
+    # HypervisorPresent.
+    $hyperviseur = $null
+    $firmware = $null
+    $marque = ""
+    try {
+        $hyperviseur = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+        $proc = Get-CimInstance Win32_Processor | Select-Object -First 1
+        $firmware = $proc.VirtualizationFirmwareEnabled
+        $marque = [string]$proc.Manufacturer
+    } catch { }
+
+    $reglageBios = "Intel Virtualization Technology (VT-x)"
+    if ($marque -match "AMD") { $reglageBios = "SVM Mode (AMD-V)" }
+
+    $wsl = Executer "wsl" @("--status") "wsl-status"
+
+    if ($hyperviseur -eq $false -and $firmware -eq $false) {
+        Abandonner "La virtualisation est eteinte dans le micrologiciel de la carte mere." `
+            @("C'est exactement ce que dit Docker par << Virtualization support not detected >>.",
+              "Le processeur en est capable, mais l'interrupteur est sur arret. Il faut le",
+              "basculer dans le reglage de la carte mere -- une fois pour toutes.",
+              "",
+              "Verifier d'abord, sans rien risquer :",
+              "  Ctrl+Maj+Echap (gestionnaire des taches) > Performance > Processeur.",
+              "  La ligne << Virtualisation >> doit dire Active. Si elle dit Desactive, continuez.",
+              "",
+              "Y aller sans deviner la touche du demarrage :",
+              "  Parametres > Systeme > Recuperation > Demarrage avance > Redemarrer maintenant",
+              "  puis Depannage > Options avancees > Changer les parametres du microprogramme UEFI",
+              "",
+              "Une fois dedans, chercher dans Advanced ou CPU Configuration :",
+              ("  " + $reglageBios + "  -> Enabled"),
+              "Enregistrer et quitter (souvent F10). Windows redemarre.") $null
+    }
+
+    if ($hyperviseur -eq $false) {
+        Abandonner "Les composants Windows de virtualisation ne sont pas actives." `
+            @("Le processeur est pret, mais Windows n'a pas allume les deux pieces qu'il faut.",
+              "",
+              "  1. Touche Windows, taper : fonctionnalites windows",
+              "  2. Ouvrir << Activer ou desactiver des fonctionnalites Windows >>",
+              "  3. Cocher : Plateforme de machine virtuelle",
+              "  4. Cocher : Sous-systeme Windows pour Linux",
+              "  5. OK, puis REDEMARRER l'ordinateur (indispensable).",
+              "",
+              "Au redemarrage, ouvrir Docker Desktop et attendre la baleine verte.") $null
+    }
+
+    if ($wsl.Code -ne 0) {
+        Abandonner "Docker ne demarre pas : sa machine Linux (WSL) repond mal." `
+            @("La virtualisation est bonne, c'est WSL qui coince.",
+              "",
+              "  1. Ouvrir Docker Desktop : il propose souvent lui-meme de reparer WSL.",
+              "     Accepter, puis redemarrer l'ordinateur.",
+              "  2. Si rien n'est propose, installer la mise a jour du noyau WSL :",
+              "     https://aka.ms/wsl2kernel",
+              "",
+              "Ensuite, rouvrir Docker Desktop et attendre la baleine verte.") $null
+    }
+
+    # Si la lecture du materiel a echoue plus haut, $hyperviseur vaut $null et on
+    # arrive ici sans rien savoir. Ecrire quand meme << la virtualisation est en
+    # ordre >> serait affirmer une mesure qu'on n'a pas faite, et envoyer quelqu'un
+    # cliquer sur Docker en boucle alors que son micrologiciel est eteint. On dit
+    # donc ce qu'on sait, et rien de plus.
+    $premiereLigne = "La virtualisation est en ordre : il ne manque que le demarrage."
+    if ($null -eq $hyperviseur) {
+        $premiereLigne = "L'etat de la virtualisation n'a pas pu etre lu ; commencez par le plus simple."
+    }
     Abandonner "Docker Desktop est installe, mais il ne tourne pas." `
-        @("1. Ouvrez Docker Desktop (menu Demarrer).",
-          "2. Attendez que la baleine, en bas a gauche, devienne verte.",
-          "   Cela peut prendre une a deux minutes au premier lancement.") $null
+        @($premiereLigne,
+          "",
+          "  1. Ouvrez Docker Desktop (menu Demarrer).",
+          "  2. Attendez que la baleine, en bas a gauche, devienne verte.",
+          "     Une a deux minutes au premier lancement.",
+          "",
+          "Pour ne plus y penser : dans Docker Desktop, Settings > General,",
+          "cocher << Start Docker Desktop when you sign in >>.") $null
 }
 Bon ("Docker tourne (moteur " + $info.Texte.Trim() + ")")
 
