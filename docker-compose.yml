@@ -61,6 +61,16 @@ services:
       KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN:-}
       KAGGLE_KEY: ${KAGGLE_KEY:-}
       COLAB_API_ENABLED: ${COLAB_API_ENABLED:-false}
+      # Video : seule fonction du Studio qui loue une carte graphique a la
+      # minute. Le plafond est un refus AVANT de lancer, pas un constat apres
+      # coup ; le compteur du mois vit dans config/video-budget.json.
+      VIDEO_BUDGET_USD_PAR_MOIS: ${VIDEO_BUDGET_USD_PAR_MOIS:-20}
+      MODAL_CREDIT_MENSUEL_USD: ${MODAL_CREDIT_MENSUEL_USD:-30}
+      VIDEO_TIMEOUT_SECONDS: ${VIDEO_TIMEOUT_SECONDS:-2400}
+      VIDEO_GPU_RAPIDE: ${VIDEO_GPU_RAPIDE:-L4}
+      VIDEO_GPU_SOIGNE: ${VIDEO_GPU_SOIGNE:-A100}
+      VIDEO_MEMORY_MB: ${VIDEO_MEMORY_MB:-16384}
+      VIDEO_MODAL_VOLUME: ${VIDEO_MODAL_VOLUME:-free-ai-studio-modeles}
     ports:
       - "127.0.0.1:8020:8000"
     networks:
@@ -93,6 +103,10 @@ services:
       # permet a l'interface de brancher un fournisseur sans terminal. Il est
       # exclu du depot par .gitignore.
       - ./config:/config
+      # LECTURE SEULE, et seulement .git : de quoi lire le numero de version
+      # installe pour le comparer a celui de GitHub. Ni le code, ni .env ne sont
+      # exposes, et rien ici ne peut ecrire dans le depot.
+      - ./.git:/depot/.git:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 15s

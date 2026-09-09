@@ -244,4 +244,41 @@ Le routage LLM livré est **Gemini Free Tier d’abord**, puis `openrouter/free`
 
 ### Fonctions média
 
-Le chat est inclus. Image, vidéo et voix sont affichés comme **optionnels** : ils nécessitent un backend compatible configuré séparément dans Open WebUI. Le paquet n’annonce plus ces fonctions comme installées lorsqu’elles ne le sont pas.
+Mesuré le 09/09/2026, chaque ligne par un appel réel :
+
+| Fonction | Ce qui la fait tourner | Coût |
+|---|---|---|
+| Chat, lecture d’image | votre clé Google (Gemini) | gratuit |
+| Fabrication d’image | la même clé, route `/v1/images/generations` du routeur | gratuit |
+| Recherche Web | DuckDuckGo | gratuit, sans compte |
+| Lire à haute voix, dictée | voix du navigateur, Whisper local du conteneur | gratuit, sans clé |
+| **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, offert et renouvelé** |
+
+**Pourquoi la vidéo est à part.** Aucun service de fabrication de vidéo n’est gratuit et
+hébergé en septembre 2026. Le Studio fait donc tourner un modèle ouvert sur une carte
+graphique louée. Un seul modèle couvre les trois demandes : décrire une scène, partir d’une
+image, finir sur une autre, et garder un personnage ressemblant grâce à une image de
+référence. La page `/video` du Sandbox affiche en permanence ce qui a été dépensé dans le
+mois, et **refuse de lancer un clip avant** qu’il fasse dépasser le plafond
+(`VIDEO_BUDGET_USD_PAR_MOIS`, 20 $ par défaut sur les 30 $ offerts).
+
+**Ce que coûte un clip, mesuré le 09/09/2026.** Réglage le moins cher (3 s, « Rapide »,
+carte L4) : 832×480, 49 images, **7 minutes d’attente**, **0,096 $**. Le crédit mensuel offert
+paie donc environ 300 clips de cette taille. Le premier lancement d’un modèle prend 1 à
+2 minutes de plus, le temps de le télécharger ; ensuite il reste sur un disque persistant.
+Le petit modèle fait des plans presque fixes : la scène est juste, le mouvement est discret.
+
+Attention si vous cherchez « mieux » : les licences de **MiniMax H3** et de **HunyuanVideo**
+excluent l’Union européenne, le Royaume-Uni et la Corée du déploiement local. Wan est sous
+Apache 2.0, sans restriction de territoire.
+
+### Mettre à jour
+
+Bouton **« Mettre à jour »** sur `http://127.0.0.1:8010/studio`. Il compare votre version à
+celle du dépôt, puis récupère la dernière et reconstruit les services.
+
+Un conteneur ne peut pas se reconstruire lui-même, et donner à une page web les pleins
+pouvoirs sur Docker serait une mauvaise affaire. Le bouton dépose donc une demande, et un
+petit veilleur qui tourne sous votre compte (lancé par `start.ps1`) fait le travail avec vos
+propres identifiants git. Si le veilleur n’est pas là, le bouton vous dit exactement quoi
+faire : **double-cliquer `mettre-a-jour.cmd`**, à la racine du dossier.

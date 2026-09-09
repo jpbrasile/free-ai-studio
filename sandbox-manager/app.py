@@ -14,9 +14,11 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import httpx
-from fastapi import FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
+
+import video
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("sandbox-manager")
@@ -292,7 +294,28 @@ def local_execute(jid: str, code: str) -> dict:
     return data
 
 
-def modal_execute(jid: str, code: str, gpu: bool, internet: bool) -> dict:
+def modal_execute(
+    jid: str,
+    code: str,
+    gpu: bool,
+    internet: bool,
+    *,
+    gpu_type: Optional[str] = None,
+    timeout_s: Optional[int] = None,
+    memory_mb: Optional[int] = None,
+    paquets: Optional[tuple] = None,
+    apt: Optional[tuple] = None,
+    volume: Optional[str] = None,
+    point_de_montage: str = "/modeles",
+) -> dict:
+    """Execute du code sur une machine Modal.
+
+    Les arguments nommes ne servent qu'aux travaux lourds (la video). Sans eux,
+    le comportement est exactement celui d'avant. Ils permettent de demander une
+    carte plus grosse, un delai plus long, une image ou les bibliotheques sont
+    deja installees, et un disque persistant ou garder les modeles telecharges
+    d'un clip a l'autre.
+    """
     if not modal_configured():
         raise BackendUnavailable("Modal is not configured")
     try:
@@ -300,13 +323,21 @@ def modal_execute(jid: str, code: str, gpu: bool, internet: bool) -> dict:
     except Exception as exc:
         raise BackendUnavailable(f"Modal SDK unavailable: {exc}") from exc
 
-    timeout = max(1, int(os.getenv("MODAL_JOB_TIMEOUT_SECONDS", os.getenv("SANDBOX_TIMEOUT_SECONDS", "120"))))
-    idle_timeout = max(1, int(os.getenv("MODAL_IDLE_TIMEOUT_SECONDS", "60")))
+    timeout = timeout_s or max(1, int(os.getenv("MODAL_JOB_TIMEOUT_SECONDS", os.getenv("SANDBOX_TIMEOUT_SECONDS", "120"))))
     cleanup_grace = max(15, int(os.getenv("MODAL_CLEANUP_GRACE_SECONDS", "60")))
     sandbox_lifetime = timeout + cleanup_grace
+    # Le delai d'inactivite est un filet contre une machine oubliee si CE service
+    # meurt en cours de route. Il ne doit jamais etre plus court que le travail
+    # lui-meme : la documentation de Modal ne dit pas si un calcul de vingt
+    # minutes, qui n'echange rien pendant ce temps, compte comme inactif. Dans le
+    # doute, on ne parie pas la reussite du clip dessus -- le vrai plafond reste
+    # la duree absolue ci-dessus, qui, elle, est sans ambiguite.
+    idle_timeout = max(1, int(os.getenv("MODAL_IDLE_TIMEOUT_SECONDS", "60")))
+    if idle_timeout < sandbox_lifetime and timeout_s:
+        idle_timeout = sandbox_lifetime
     cpu = float(os.getenv("MODAL_CPU", "1.0"))
-    memory = int(os.getenv("MODAL_MEMORY_MB", "2048"))
-    gpu_name = os.getenv("MODAL_GPU_DEFAULT", "T4").strip() if gpu else None
+    memory = memory_mb or int(os.getenv("MODAL_MEMORY_MB", "2048"))
+    gpu_name = (gpu_type or os.getenv("MODAL_GPU_DEFAULT", "T4")).strip() if gpu else None
     app_name = os.getenv("MODAL_APP_NAME", "free-ai-studio-sandbox").strip() or "free-ai-studio-sandbox"
     sb = None
     local_out = JOBS / jid / "modal-output"
@@ -315,6 +346,16 @@ def modal_execute(jid: str, code: str, gpu: bool, internet: bool) -> dict:
     try:
         modal_app = modal.App.lookup(app_name, create_if_missing=True)
         image = modal.Image.debian_slim(python_version="3.12")
+        if apt:
+            image = image.apt_install(*apt)
+        if paquets:
+            # Modal garde l'image construite en cache : PyTorch n'est telecharge
+            # qu'une fois, pas a chaque clip. La construction est facturee en
+            # temps processeur, pas en temps de carte graphique.
+            image = image.pip_install(*paquets)
+        volumes = {}
+        if volume:
+            volumes[point_de_montage] = modal.Volume.from_name(volume, create_if_missing=True)
         sb = modal.Sandbox.create(
             "sleep",
             str(sandbox_lifetime),
@@ -326,6 +367,7 @@ def modal_execute(jid: str, code: str, gpu: bool, internet: bool) -> dict:
             memory=memory,
             gpu=gpu_name,
             block_network=not internet,
+            volumes=volumes,
             tags={"free-ai-studio-job": jid},
         )
         sb.filesystem.make_directory("/tmp/free_ai_output")
@@ -1261,6 +1303,170 @@ def download_artifact(aid: str, authorization: Optional[str] = Header(default=No
     return FileResponse(p, filename=info["name"], media_type="application/octet-stream")
 
 
+# --- Video --------------------------------------------------------------------
+# Seule fonction du Studio qui loue une carte graphique a la minute : elle a donc
+# son compteur, son plafond, et un refus AVANT de lancer plutot qu'une facture
+# apres coup. Le detail (modeles, prix, script envoye au GPU) est dans video.py.
+
+# Bibliotheques installees une fois pour toutes dans l'image Modal : sans cela,
+# chaque clip retelechargerait PyTorch pendant que la carte tourne a vide.
+VIDEO_PAQUETS = (
+    "torch", "torchvision", "diffusers>=0.35.0", "transformers", "accelerate",
+    "sentencepiece", "protobuf", "ftfy", "imageio", "imageio-ffmpeg", "pillow",
+)
+
+
+def video_fichiers(jid: str) -> dict:
+    """Retrouve la video et son resume parmi les artefacts du travail."""
+    trouve = {}
+    for art in read_job(jid).get("artifacts", []):
+        nom = str(art.get("name", ""))
+        if art.get("skipped") or not art.get("id"):
+            continue
+        if nom.endswith("video.mp4"):
+            trouve["video"] = art
+        elif nom.endswith("resume.json"):
+            trouve["resume"] = art
+    return trouve
+
+
+def run_video(jid: str, code: str, gpu_type: str, ou: str):
+    """Lance le clip, puis encaisse le temps de carte reellement consomme.
+
+    Le temps est encaisse meme si le calcul echoue : une carte louee qui plante
+    a la derniere minute a quand meme ete louee. Ne compter que les reussites
+    donnerait un compteur menteur, donc un plafond qui ne tient pas.
+    """
+    debut = time.time()
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": debut, "provider_effective": ou})
+    write_job(jid, job)
+    try:
+        if ou == "kaggle":
+            # Kaggle ne facture rien : pas de compteur, mais un GPU plus petit et
+            # un modele a retelecharger a chaque fois.
+            run_kaggle(jid, code, True, True)
+            return
+        donnees = modal_execute(
+            jid, code, True, True,
+            gpu_type=gpu_type,
+            timeout_s=video.DUREE_MAX_S,
+            memory_mb=int(os.getenv("VIDEO_MEMORY_MB", "16384")),
+            paquets=VIDEO_PAQUETS,
+            apt=("ffmpeg",),
+            volume=video.VOLUME_MODELES,
+        )
+        finish_execution(jid, "modal", donnees)
+    except BackendUnavailable as exc:
+        job = read_job(jid)
+        job.update({"status": "failed", "finished_at": time.time(), "error": str(exc)[:1000]})
+        write_job(jid, job)
+    finally:
+        if ou == "modal":
+            reste = video.budget_consommer(gpu_type, time.time() - debut)
+            job = read_job(jid)
+            job["budget"] = reste
+            write_job(jid, job)
+
+
+@app.get("/video/budget")
+def video_budget(authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    return {
+        "budget": video.budget_lire(),
+        "modeles": video.MODELES,
+        "durees": video.DUREES,
+        "modal_configure": modal_configured(),
+        "kaggle_configure": kaggle_configured(),
+    }
+
+
+@app.post("/video/creer")
+async def video_creer(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    payload = await request.json()
+    ou = str(payload.get("ou") or "modal")
+    if ou not in ("modal", "kaggle"):
+        ou = "modal"
+    try:
+        plan = video.preparer(payload, pour_modal=(ou == "modal"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if ou == "modal":
+        if not modal_configured():
+            raise HTTPException(503, "Modal n'est pas branche. Ouvrez la page « Brancher Modal "
+                                     "ou Kaggle » et collez les deux valeurs du jeton Modal.")
+        try:
+            video.budget_verifier(plan["gpu"], video.DUREE_MAX_S)
+        except video.BudgetDepasse as exc:
+            raise HTTPException(429, str(exc)) from exc
+    elif not kaggle_configured():
+        raise HTTPException(503, "Kaggle n'est pas branche. Ouvrez la page « Brancher Modal "
+                                 "ou Kaggle » et collez votre nom d'utilisateur et votre cle Kaggle.")
+
+    code = video.construire_script(plan["demande"])
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid,
+        "provider": ou,
+        "title": "Free AI Studio video",
+        "gpu": True,
+        "internet": True,
+        "status": "queued",
+        "created_at": time.time(),
+        "artifacts": [],
+        "video": plan["resume_public"],
+    })
+    threading.Thread(target=run_video, args=(jid, code, plan["gpu"], ou), daemon=True).start()
+    return read_job(jid)
+
+
+@app.get("/video/jobs/{jid}")
+def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    job = read_job(jid)
+    fichiers = video_fichiers(jid)
+    sortie = {
+        "id": jid,
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "stdout": job.get("stdout", ""),
+        "stderr": job.get("stderr", ""),
+        "message": job.get("error") or "",
+        "video": job.get("video"),
+    }
+    if fichiers.get("video"):
+        # La balise <video> ne sait pas envoyer d'en-tete : la cle passe donc en
+        # parametre, sur une adresse qui n'ecoute que 127.0.0.1.
+        sortie["video_url"] = f"/video/jobs/{jid}/fichier?cle={KEY}"
+    if fichiers.get("resume"):
+        try:
+            chemin = ART / fichiers["resume"]["path"]
+            sortie["resume"] = json.loads(chemin.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    return sortie
+
+
+@app.get("/video/jobs/{jid}/fichier")
+def video_fichier(jid: str, cle: str = Query(default="")):
+    if not KEY or cle != KEY:
+        raise HTTPException(401, "Unauthorized")
+    art = video_fichiers(jid).get("video")
+    if not art:
+        raise HTTPException(404, "Pas de video pour ce travail")
+    chemin = ART / art["path"]
+    if not chemin.exists() or chemin.is_symlink():
+        raise HTTPException(404, "Fichier absent")
+    return FileResponse(chemin, media_type="video/mp4", filename="video.mp4")
+
+
+@app.get("/video", response_class=HTMLResponse)
+def video_page():
+    return HTMLResponse(video.PAGE_HTML.replace("__CLE__", KEY))
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse(
@@ -1274,7 +1480,7 @@ def home():
 <div class=card><h2>Local <span id=b-local></span></h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
 <div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré, avec accès utilisateur direct toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
-</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
+</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
 <script>
 (function(){
  var pastille = function(ok, oui, non){

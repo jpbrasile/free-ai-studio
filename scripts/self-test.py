@@ -169,6 +169,45 @@ except urllib.error.HTTPError as exc:
 except Exception as exc:
     all_ok &= check('réglages Open WebUI lisibles', False, str(exc))
 
+# Vidéo. Rien n'est fabriqué ici : on vérifie que la page existe, que le compteur
+# de dépense répond, et que le modèle annoncé est bien sous licence libre.
+try:
+    status, body = get('http://127.0.0.1:8020/video', timeout=5)
+    all_ok &= check('page « fabriquer une vidéo »', status == 200, f'HTTP {status}')
+except Exception as exc:
+    all_ok &= check('page « fabriquer une vidéo »', False, str(exc))
+
+if sandbox_key:
+    try:
+        status, body = get('http://127.0.0.1:8020/video/budget', {'Authorization': f'Bearer {sandbox_key}'})
+        if status == 200:
+            data = json.loads(body)
+            b, m = data['budget'], data['modeles']['rapide']
+            all_ok &= check('compteur de dépense vidéo', True,
+                            f"{b['usd']:.2f} $ dépensés ce mois-ci sur un plafond de {b['plafond_usd']:.2f} $")
+            all_ok &= check('modèle vidéo sous licence libre', m['licence'] == 'Apache 2.0',
+                            f"{m['hf']} ({m['licence']})")
+            print('[INFO] La vidéo est la seule fonction qui loue une carte graphique. '
+                  'Le plafond refuse AVANT de lancer, il ne constate pas après coup.')
+        else:
+            all_ok &= check('compteur de dépense vidéo', False, f'HTTP {status}')
+    except Exception as exc:
+        all_ok &= check('compteur de dépense vidéo', False, str(exc))
+
+# Mise à jour : le numéro de version installé doit être lisible, sinon le bouton
+# « Mettre à jour » ne peut rien dire d'utile.
+try:
+    status, body = get('http://127.0.0.1:8010/maj/etat', timeout=12)
+    data = json.loads(body) if status == 200 else {}
+    all_ok &= check('version installée lisible', status == 200 and bool(data.get('version_locale_courte')),
+                    f"version {data.get('version_locale_courte') or '?'}, comparaison : {data.get('comparaison')}")
+    if not data.get('veilleuse'):
+        print('[INFO] Le veilleur de mise à jour n’est pas lancé : le bouton « Mettre à jour » '
+              'renverra vers le double-clic sur mettre-a-jour.cmd. Démarrez avec start.ps1 '
+              'pour qu’il agisse directement.')
+except Exception as exc:
+    all_ok &= check('version installée lisible', False, str(exc))
+
 print('\nRésultat : ' + ('TOUT CE QUI EST TESTÉ ICI RÉPOND' if all_ok else 'DES CORRECTIONS SONT NÉCESSAIRES'))
 print('[INFO] Non testé ici : la qualité des réponses et le quota restant chez les fournisseurs. '
       'Cet auto-test n’appelle aucun service payant ni gratuit, pour ne rien consommer. '

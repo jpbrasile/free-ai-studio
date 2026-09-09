@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import time
 import json
 import logging
@@ -905,6 +906,167 @@ async def cles_page():
     return HTMLResponse(CLES_HTML)
 
 
+# --- Mise a jour --------------------------------------------------------------
+# Un conteneur ne peut pas se reconstruire lui-meme, et donner a une page web les
+# pleins pouvoirs sur Docker serait une mauvaise affaire pour l'utilisateur. Le
+# bouton depose donc une DEMANDE dans le repertoire partage ; un veilleur qui
+# tourne sous le compte de l'utilisateur (lance par start.ps1) la ramasse et fait
+# le travail avec ses propres identifiants git. Sans veilleur, la page renvoie
+# vers le double-clic sur mettre-a-jour.cmd : le bouton dit toujours quoi faire.
+
+DEPOT_GIT = Path(os.getenv("DEPOT_GIT_DIR", "/depot/.git"))
+MAJ_DEMANDE = CONFIG_DIR / "maj-demandee.json"
+MAJ_ETAT = CONFIG_DIR / "maj-etat.json"
+MAJ_VEILLEUSE = CONFIG_DIR / "maj-veilleuse.json"
+VEILLEUSE_FRAICHE_S = 30
+
+
+def version_locale() -> Optional[str]:
+    """Le commit installe, lu directement dans .git : aucun binaire git requis."""
+    try:
+        tete = (DEPOT_GIT / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not tete.startswith("ref:"):
+        return tete or None
+    ref = tete.split(":", 1)[1].strip()
+    try:
+        return (DEPOT_GIT / ref).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        pass
+    # Un depot fraichement clone range ses references dans un seul fichier.
+    try:
+        for ligne in (DEPOT_GIT / "packed-refs").read_text(encoding="utf-8").splitlines():
+            if ligne.startswith("#") or " " not in ligne:
+                continue
+            sha, nom = ligne.split(" ", 1)
+            if nom.strip() == ref:
+                return sha.strip()
+    except OSError:
+        pass
+    return None
+
+
+def depot_github() -> Optional[str]:
+    """« proprietaire/depot » deduit de l'adresse d'origine, ou None."""
+    try:
+        config = (DEPOT_GIT / "config").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    for motif in (r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$",):
+        for ligne in config.splitlines():
+            ligne = ligne.strip()
+            if not ligne.startswith("url"):
+                continue
+            trouve = re.search(motif, ligne)
+            if trouve:
+                return trouve.group(1)
+    return None
+
+
+def lire_json_windows(chemin: Path) -> Optional[dict]:
+    """Lit un fichier JSON ecrit par PowerShell.
+
+    PowerShell 5.1 met une marque d'octets en tete de ses fichiers « utf8 » :
+    trois octets invisibles que json.loads refuse. Les lire en utf-8-sig les
+    enleve. Mesure du 09/09 : sans cela, le veilleur tournait et la page le
+    croyait absent.
+    """
+    try:
+        return json.loads(chemin.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+
+
+def veilleuse_vivante() -> bool:
+    """Le veilleur a-t-il donne signe de vie recemment ?
+
+    On regarde la DATE DU FICHIER, pas l'heure ecrite dedans : le veilleur note
+    son heure locale, ce conteneur vit en heure universelle, et comparer les deux
+    donnerait deux heures d'ecart -- assez pour croire vivant un veilleur mort,
+    ou l'inverse. La date du fichier, elle, est la meme des deux cotes.
+    """
+    try:
+        age = time.time() - MAJ_VEILLEUSE.stat().st_mtime
+    except OSError:
+        return False
+    return 0 <= age < VEILLEUSE_FRAICHE_S
+
+
+@app.get("/maj/etat")
+async def maj_etat():
+    locale = version_locale()
+    slug = depot_github()
+    sortie: Dict[str, Any] = {
+        "version_locale": locale,
+        "version_locale_courte": locale[:7] if locale else None,
+        "depot": slug,
+        "veilleuse": veilleuse_vivante(),
+        "comparaison": "impossible",
+        "a_jour": None,
+        "retard": [],
+    }
+    sortie["travaux"] = lire_json_windows(MAJ_ETAT)
+
+    if locale and slug:
+        # Sans jeton, l'API GitHub ne repond que pour un depot public. Un depot
+        # prive rend 404 : ce n'est pas une panne, et le dire evite de faire
+        # croire a une erreur.
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get(
+                    f"https://api.github.com/repos/{slug}/commits",
+                    params={"sha": os.getenv("DEPOT_BRANCHE", "main"), "per_page": "10"},
+                    headers={"Accept": "application/vnd.github+json",
+                             "User-Agent": "Free-AI-Studio/1.0"},
+                )
+            if r.status_code == 200:
+                commits = r.json()
+                distants = [c.get("sha", "") for c in commits]
+                sortie["comparaison"] = "faite"
+                sortie["version_distante"] = distants[0] if distants else None
+                if locale in distants:
+                    retard = distants[: distants.index(locale)]
+                    sortie["a_jour"] = not retard
+                    sortie["retard"] = [
+                        {"sha": c.get("sha", "")[:7],
+                         "titre": (c.get("commit", {}).get("message") or "").splitlines()[0][:120]}
+                        for c in commits[: len(retard)]
+                    ]
+                else:
+                    # Le commit installe n'est pas dans les dix derniers : soit tres
+                    # en retard, soit une version locale modifiee.
+                    sortie["a_jour"] = False
+            elif r.status_code in (401, 403, 404):
+                sortie["comparaison"] = "depot_prive"
+            else:
+                sortie["comparaison"] = f"http_{r.status_code}"
+        except httpx.HTTPError as exc:
+            log.warning("comparaison de version impossible : %s", exc)
+            sortie["comparaison"] = "reseau"
+    return sortie
+
+
+@app.post("/maj/lancer")
+async def maj_lancer():
+    if not veilleuse_vivante():
+        raise HTTPException(
+            503,
+            "Le veilleur de mise a jour n'est pas la. Fermez cette page, ouvrez le "
+            "dossier free-ai-studio et double-cliquez « mettre-a-jour.cmd ». "
+            "Pour que ce bouton marche la prochaine fois, demarrez le Studio avec "
+            "start.ps1 : il lance le veilleur.",
+        )
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    MAJ_DEMANDE.write_text(
+        json.dumps({"demande_le": time.strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return {"demande": True,
+            "message": "Mise a jour demandee. La reconstruction prend quelques minutes ; "
+                       "les services se coupent brievement."}
+
+
 @app.get("/studio", response_class=HTMLResponse)
 async def studio_home():
     html = """
@@ -924,7 +1086,7 @@ async def studio_home():
 </style></head><body>
 <div class="hero">
 <h1>Free AI Studio</h1>
-<p>Votre studio IA local. Une clé gratuite suffit : le chat, la lecture d’images, la fabrication d’images, la recherche Web et la voix marchent alors sans rien installer d’autre. La vidéo, elle, n’a pas de service gratuit aujourd’hui.</p>
+<p>Votre studio IA local. Une clé gratuite suffit : le chat, la lecture d’images, la fabrication d’images, la recherche Web et la voix marchent alors sans rien installer d’autre. La vidéo demande en plus un compte Modal, dont le crédit mensuel offert suffit.</p>
 <div class="etat" id="etat">Vérification de l’état…</div>
 <p class="status">🟢 Gratuit par défaut</p>
 <span class="pill">Pas de dépense automatique</span>
@@ -937,11 +1099,20 @@ async def studio_home():
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix</h2><p>🔊 sous chaque réponse pour l’écouter, 🎙️ dans la barre de saisie pour dicter. Tout se passe sur votre ordinateur, sans clé.</p></a>
-<div class="card"><h2>🎬 Vidéo — pas encore</h2><p>Aucun service de fabrication de vidéo n’est gratuit aujourd’hui. Rien n’est donc branché : la tuile le dira quand ce sera le cas.</p></div>
+<a class="card" href="http://localhost:8020/video" target="_blank"><h2>🎬 Vidéo</h2><p>Décrivez une scène, ou donnez l’image de départ, celle d’arrivée, et une image de référence pour garder le même personnage. Le calcul tourne sur une machine louée à la minute : la page affiche ce qui reste du crédit offert.</p></a>
 <a class="card" href="/notebooklm"><h2>📚 Étudier</h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💻 Code</h2><p>Demander de l'aide pour coder ; les résultats Sandbox peuvent devenir des ressources de travail de l'agent.</p></a>
 <a class="card" href="http://localhost:8020/" target="_blank"><h2>🧪 Sandbox</h2><p>Local isolé, Kaggle automatisable et Colab direct. Les sorties sont conservées comme artefacts réutilisables.</p></a>
 </div>
+<div class="hero" style="margin-top:18px">
+<h2>🔄 Mise à jour</h2>
+<div class="etat" id="maj">Vérification de la version…</div>
+<button id="majBouton" style="font:inherit;padding:10px 16px;border-radius:10px;border:1px solid #222;background:#222;color:#fff;cursor:pointer">Mettre à jour</button>
+<span id="majMot" class="muted"></span>
+<p class="muted" style="margin-top:10px">La mise à jour récupère la dernière version puis reconstruit les
+services : ils se coupent une ou deux minutes. Rien n’est envoyé nulle part, et vos clés ne sont pas touchées.</p>
+</div>
+
 <div class="hero" style="margin-top:18px">
 <h2>⚡ Besoin de plus de puissance ?</h2>
 <p>Le Boost reste désactivé tant que vous ne le demandez pas. Free AI Studio peut expliquer le gain attendu avant toute dépense.</p>
@@ -964,6 +1135,77 @@ fetch("/cles/etat").then(r => r.json()).then(d => {
   e.className = "etat pasret";
   e.textContent = "État non vérifiable : le routeur local ne répond pas.";
 });
+
+// --- Mise à jour ---
+const majCase = document.getElementById("maj");
+const majBouton = document.getElementById("majBouton");
+const majMot = document.getElementById("majMot");
+let majEnCours = false;
+
+function majAfficher(d){
+  const version = d.version_locale_courte ? ("version installée " + d.version_locale_courte) : "version inconnue";
+  if(d.travaux && !d.travaux.fini){
+    majEnCours = true;
+    majCase.className = "etat pasret";
+    majCase.textContent = "⏳ " + d.travaux.message;
+    majBouton.disabled = true;
+    return;
+  }
+  if(d.travaux && d.travaux.fini && majEnCours){
+    majEnCours = false;
+    majCase.className = d.travaux.ok ? "etat pret" : "etat pasret";
+    majCase.textContent = (d.travaux.ok ? "✔ " : "✖ ") + d.travaux.message;
+    majBouton.disabled = false;
+    return;
+  }
+  majBouton.disabled = false;
+  if(d.a_jour === true){
+    majCase.className = "etat pret";
+    majCase.textContent = "À jour (" + version + ").";
+  } else if(d.a_jour === false){
+    majCase.className = "etat pasret";
+    const liste = (d.retard || []).map(c => "• " + c.titre).join("\n");
+    majCase.textContent = "Une version plus récente existe (" + version + ")."
+      + (liste ? "\nCe qui vous manque :\n" + liste : "");
+    majCase.style.whiteSpace = "pre-line";
+  } else if(d.comparaison === "depot_prive"){
+    majCase.className = "etat";
+    majCase.textContent = "Dépôt privé : je ne peux pas comparer avec GitHub sans identifiants ("
+      + version + "). Le bouton met quand même à jour.";
+  } else {
+    majCase.className = "etat";
+    majCase.textContent = "Comparaison impossible pour l’instant (" + version + "). Le bouton met quand même à jour.";
+  }
+  majMot.textContent = d.veilleuse ? "" : " — le veilleur n’est pas lancé ; le bouton dira quoi faire.";
+}
+
+function majRafraichir(){
+  return fetch("/maj/etat").then(r => r.json()).then(majAfficher).catch(() => {
+    majCase.className = "etat pasret";
+    majCase.textContent = "Version non vérifiable : le routeur local ne répond pas.";
+  });
+}
+
+majBouton.addEventListener("click", () => {
+  majBouton.disabled = true;
+  majCase.className = "etat";
+  majCase.textContent = "Demande envoyée…";
+  fetch("/maj/lancer", {method:"POST"}).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok){ throw new Error(d.detail || ("HTTP " + r.status)); }
+    majEnCours = true;
+    majCase.className = "etat pasret";
+    majCase.textContent = "⏳ " + d.message;
+  }).catch(e => {
+    majBouton.disabled = false;
+    majCase.className = "etat pasret";
+    majCase.style.whiteSpace = "pre-line";
+    majCase.textContent = e.message;
+  });
+});
+
+majRafraichir();
+setInterval(majRafraichir, 5000);
 </script>
 </body></html>
 """
