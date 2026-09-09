@@ -273,12 +273,32 @@ Titre "Demarrage des services"
 Note "Premiere fois : plusieurs minutes de telechargement. C'est normal."
 $up = Executer "docker" @("compose", "up", "-d", "--build") "compose-up"
 if ($up.Code -ne 0) {
+    # Les 25 dernieres lignes defilent dans une fenetre noire qu'on ne sait pas
+    # faire remonter et encore moins recopier. Le texte entier existe deja sur le
+    # disque ; on l'ecrit dans UN fichier lisible et on l'ouvre dans le Bloc-notes,
+    # pour que la personne n'ait qu'a le montrer.
+    $rapport = Join-Path $Journal "erreur-demarrage.txt"
+    try {
+        [System.IO.File]::WriteAllText($rapport, $up.Texte, (New-Object System.Text.UTF8Encoding($false)))
+    } catch { $rapport = "" }
+
     Write-Host ""
     Write-Host "Le demarrage a echoue. Les dernieres lignes :" -ForegroundColor Red
     ($up.Texte -split "`n" | Select-Object -Last 25) | ForEach-Object { Write-Host ("   " + $_) }
-    Abandonner "Docker n'a pas pu demarrer les services." `
-        @("Verifiez que Docker Desktop est bien vert, puis relancez.",
-          "Si cela recommence, le texte ci-dessus est ce qu'il faut montrer.") $null
+
+    $quoiFaire = @("Le plus souvent, ce n'est PAS votre ordinateur : le magasin d'images de",
+                   "Docker repond mal pendant une minute. Une erreur 500, 502 ou",
+                   "<< connection reset >> se resout en relancant demarrer.cmd.",
+                   "",
+                   "  1. Verifiez que la baleine de Docker Desktop est verte.",
+                   "  2. Double-cliquez de nouveau sur demarrer.cmd.",
+                   "  3. Si cela recommence trois fois de suite, ce n'est plus un hasard :",
+                   "     le rapport complet vient de s'ouvrir dans le Bloc-notes.")
+    if ($rapport) {
+        $quoiFaire += @("", ("Rapport complet : " + $rapport))
+        try { Start-Process "notepad.exe" $rapport | Out-Null } catch { }
+    }
+    Abandonner "Docker n'a pas pu construire ou demarrer les services." $quoiFaire $null
 }
 Bon "Services demarres"
 
