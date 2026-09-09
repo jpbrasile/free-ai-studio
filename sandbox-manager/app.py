@@ -479,7 +479,13 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool):
     (d / "job.py").write_text(wrapped, encoding="utf-8")
     metadata = {
         "id": ref,
-        "title": job["title"][:50],
+        # Kaggle ne retient pas l'id tel quel : il fabrique le slug a partir du TITRE.
+        # Avec un titre libre, le push avertit << your kernel title does not resolve to
+        # the specified id >> puis cree le kernel sous un autre nom ; le manager
+        # interrogeait alors un slug inexistant, recevait << cannot access kernel >> et
+        # tournait jusqu'au delai d'une heure. Le titre est donc le slug lui-meme.
+        # Le titre lisible choisi par l'appelant reste dans notre fiche de job.
+        "title": slug,
         "code_file": "job.py",
         "language": "python",
         "kernel_type": "script",
@@ -512,6 +518,10 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool):
             write_job(jid, job)
             if "complete" in text:
                 break
+            # Un statut illisible n'est pas un statut << en cours >>. Sans cette ligne,
+            # un refus d'acces faisait patienter une heure entiere sans rien dire.
+            if s.returncode or "cannot access" in text or "not found" in text or "denied" in text:
+                raise RuntimeError(text[-1000:])
             if any(x in text for x in ("error", "cancel", "failed")):
                 raise RuntimeError(text[-1000:])
             time.sleep(15)
@@ -1001,7 +1011,9 @@ function afficher(d){
   const etat = document.getElementById("etat");
   const sortie = document.getElementById("sortie");
   const ou = OU[d.provider_effective] || d.provider_effective || "backend inconnu";
-  const bien = d.status === "succeeded" && d.exit_code === 0;
+  // Kaggle ne rend pas de code de sortie : exiger exit_code === 0 affichait en rouge
+  // une execution parfaitement reussie.
+  const bien = d.status === "succeeded" && (d.exit_code === undefined || d.exit_code === null || d.exit_code === 0);
   etat.className = "ligne " + (bien ? "ok" : "ko");
   let texte = bien ? ("Termine sur " + ou) : ("Statut : " + d.status + " (" + ou + ")");
   if(d.exit_code !== undefined && d.exit_code !== null){ texte += " - code de sortie " + d.exit_code; }
@@ -1012,6 +1024,11 @@ function afficher(d){
   let brut = d.stdout || "";
   if(d.stderr){ brut += "\n--- erreurs ---\n" + d.stderr; }
   if(d.error){ brut += "\n--- service ---\n" + d.error; }
+  if(!brut && bien){
+    // Kaggle n'expose pas la sortie standard dans la fiche du job : elle arrive
+    // dans le fichier .log rapatrie avec les artefacts.
+    brut = "Ce backend ne renvoie pas la sortie directement : elle est dans le fichier .log ci-dessous.";
+  }
   sortie.hidden = !brut;
   sortie.textContent = brut;
 
