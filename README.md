@@ -33,7 +33,35 @@ Free AI Studio sépare deux interfaces :
 
 Le dépôt contient `AGENTS.md`, qui briefe directement les assistants de codage compatibles.
 
-## Installation recommandée
+## Installation sur l'ordinateur de quelqu'un qui n'écrira jamais une commande
+
+Quatre gestes. Aucun terminal, aucun assistant de code.
+
+1. **Docker Desktop** — <https://www.docker.com/products/docker-desktop/>. Installer,
+   redémarrer si on le demande, puis **ouvrir Docker Desktop** et attendre que la baleine
+   en bas à gauche soit verte. C'est le seul vrai prérequis : sans lui, rien ne tourne.
+2. **Git pour Windows** — <https://git-scm.com/download/win>. Suivant jusqu'au bout.
+   Sert uniquement à ce que le bouton « Mettre à jour » sache quelle version vous avez.
+3. **Récupérer le dossier.** Dans VS Code : `Ctrl+Shift+P`, taper `Git: Clone`, coller
+   `https://github.com/jpbrasile/free-ai-studio.git`, choisir où le mettre.
+   *(Sans Git : bouton vert « Code » sur GitHub → « Download ZIP » → extraire. Tout
+   marchera sauf le bouton de mise à jour, et l'installateur vous le dira.)*
+4. **Double-cliquer `demarrer.cmd`**, à la racine du dossier.
+
+`demarrer.cmd` vérifie l'ordinateur avant d'agir : version de Windows, Docker installé,
+Docker **démarré** (ce n'est pas la même chose, et c'est ce qui manque neuf fois sur dix),
+ports 3000/8010/8020 libres, dossier complet. Quand quelque chose manque, il dit quoi faire
+et ouvre la page de téléchargement — il ne montre jamais une erreur technique. Puis il crée
+les réglages, fabrique les mots de passe internes au hasard, construit les services, lance
+le veilleur de mise à jour, attend que la page réponde vraiment, et l'ouvre.
+
+Le rappeler plus tard ne casse rien : il redémarre, conserve `.env`, et ne relance pas un
+deuxième veilleur.
+
+Il reste alors **une seule chose** à faire : sur la page, cliquer **Clés** et coller une clé
+Google Gemini gratuite. Elle suffit pour écrire, lire une image et fabriquer une image.
+
+## Installation avec un assistant de codage
 
 ### 1. Installer
 - Git
