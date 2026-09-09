@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -1316,6 +1318,22 @@ VIDEO_PAQUETS = (
 )
 
 
+def jeton_video(jid: str) -> str:
+    """Laissez-passer pour UN fichier, a mettre dans une adresse sans danger.
+
+    La balise <video> du navigateur ne sait pas envoyer d'en-tete : la
+    permission doit donc voyager dans l'adresse. Y mettre la cle maitresse
+    serait une faute -- une adresse se recopie, se retrouve dans l'historique du
+    navigateur, dans un journal, dans un message ; celui qui la lit peut alors
+    lancer n'importe quel calcul sur le compte Modal de l'utilisateur. Ce jeton
+    n'ouvre qu'un seul fichier, en lecture, et ne dit rien de la cle qui l'a
+    fabrique.
+    """
+    if not KEY:
+        return ""
+    return hmac.new(KEY.encode(), ("video:" + jid).encode(), hashlib.sha256).hexdigest()[:32]
+
+
 def video_fichiers(jid: str) -> dict:
     """Retrouve la video et son resume parmi les artefacts du travail."""
     trouve = {}
@@ -1437,9 +1455,7 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "video": job.get("video"),
     }
     if fichiers.get("video"):
-        # La balise <video> ne sait pas envoyer d'en-tete : la cle passe donc en
-        # parametre, sur une adresse qui n'ecoute que 127.0.0.1.
-        sortie["video_url"] = f"/video/jobs/{jid}/fichier?cle={KEY}"
+        sortie["video_url"] = f"/video/jobs/{jid}/fichier?cle={jeton_video(jid)}"
     if fichiers.get("resume"):
         try:
             chemin = ART / fichiers["resume"]["path"]
@@ -1451,7 +1467,10 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
 
 @app.get("/video/jobs/{jid}/fichier")
 def video_fichier(jid: str, cle: str = Query(default="")):
-    if not KEY or cle != KEY:
+    attendu = jeton_video(jid)
+    # compare_digest compare en temps constant : le temps de reponse ne dit pas
+    # combien de caracteres du jeton etaient bons.
+    if not attendu or not hmac.compare_digest(cle, attendu):
         raise HTTPException(401, "Unauthorized")
     art = video_fichiers(jid).get("video")
     if not art:

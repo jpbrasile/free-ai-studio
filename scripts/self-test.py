@@ -194,6 +194,34 @@ if sandbox_key:
     except Exception as exc:
         all_ok &= check('compteur de dépense vidéo', False, str(exc))
 
+    # Une adresse de vidéo se recopie, s'enregistre dans l'historique du
+    # navigateur, se colle dans un message. Elle ne doit donc jamais contenir la
+    # clé du Sandbox, qui donnerait à son lecteur le droit de lancer n'importe
+    # quel calcul sur le compte de l'utilisateur. On vérifie ici que le
+    # laissez-passer mis dans l'adresse n'est PAS cette clé.
+    try:
+        status, body = get('http://127.0.0.1:8020/jobs',
+                           {'Authorization': f'Bearer {sandbox_key}'}, timeout=10)
+        jobs = json.loads(body) if status == 200 else []
+        jids = [j.get('id') for j in jobs if j.get('video') and j.get('status') == 'succeeded']
+        url = ''
+        for jid in jids[:5]:
+            s, b = get(f'http://127.0.0.1:8020/video/jobs/{jid}',
+                       {'Authorization': f'Bearer {sandbox_key}'}, timeout=10)
+            if s == 200:
+                url = json.loads(b).get('video_url') or ''
+                if url:
+                    break
+        if url:
+            all_ok &= check("l'adresse d'une vidéo ne porte pas la clé du Sandbox",
+                            sandbox_key not in url,
+                            'laissez-passer limité à ce seul fichier'
+                            if sandbox_key not in url else 'FUITE : la clé est dans l’adresse')
+        else:
+            print('[INFO] adresse de vidéo non vérifiée : aucun clip fabriqué sur cette machine.')
+    except Exception as exc:
+        all_ok &= check("l'adresse d'une vidéo ne porte pas la clé du Sandbox", False, str(exc))
+
 # Mise à jour : le numéro de version installé doit être lisible, sinon le bouton
 # « Mettre à jour » ne peut rien dire d'utile.
 try:
