@@ -522,6 +522,20 @@ def health():
     return {"ok": True, "service": "sandbox-manager", "version": "2.0.0"}
 
 
+@app.get("/etat")
+def etat():
+    """Etat reel des backends, sans secret ni authentification, pour que la page
+    d'accueil dise ce qui marche au lieu d'annoncer Modal en principal alors
+    qu'il est desactive et sans jeton. Ne rend que des booleens."""
+    return {
+        "modal": {"configure": modal_configured(), "autorise": MODAL_ENABLED},
+        "local": {"disponible": True},
+        "kaggle": {"configure": kaggle_configured(), "autorise": KAGGLE_ENABLED},
+        "colab": {"handoff": True},
+        "backend_automatique": "modal" if modal_configured() else ("kaggle" if kaggle_configured() else "local"),
+    }
+
+
 @app.get("/providers")
 def providers(authorization: Optional[str] = Header(default=None)):
     auth(authorization)
@@ -674,12 +688,36 @@ def home():
     return HTMLResponse(
         """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>Sandbox — Free AI Studio</title><style>body{font-family:system-ui;max-width:980px;margin:35px auto;padding:0 18px;line-height:1.5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.card{border:1px solid #aaa;border-radius:14px;padding:18px}.primary{border-width:2px}a.button{display:inline-block;border:1px solid #777;border-radius:9px;padding:9px 12px;text-decoration:none;margin:4px 4px 4px 0}.flow{padding:12px;border-radius:10px;background:#eee;font-family:ui-monospace,monospace}</style>
-<h1>🧪 Sandbox</h1><p>L’agent utilise <strong>Modal en priorité lorsqu’il est configuré</strong>. En cas d’indisponibilité d’infrastructure, il peut basculer vers Local, Kaggle puis un handoff Colab. Une erreur dans votre code n’est jamais dupliquée automatiquement sur un autre fournisseur.</p>
+<h1>🧪 Sandbox</h1><p id=etat style='padding:12px;border-radius:10px;border:1px solid #bbb'>Vérification de l’état…</p>
+<p>L’agent utilise <strong>Modal en priorité lorsqu’il est configuré</strong>. En cas d’indisponibilité d’infrastructure, il peut basculer vers Local, Kaggle puis un handoff Colab. Une erreur dans votre code n’est jamais dupliquée automatiquement sur un autre fournisseur.</p>
 <div class=flow>Agent → Modal → artefacts → Agent &nbsp; | &nbsp; fallback: Local → Kaggle → Colab</div>
 <div class=grid>
-<div class='card primary'><h2>⚡ Modal — principal</h2><p>Backend automatique distant. CPU/GPU selon le job; résultats récupérés comme ressources de l’agent.</p><a class=button href='https://modal.com/' target=_blank rel='noopener'>Ouvrir Modal ↗</a></div>
-<div class=card><h2>Local</h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
-<div class=card><h2>Kaggle</h2><p>Fallback automatisable si configuré, avec accès utilisateur direct toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
+<div class='card primary'><h2>⚡ Modal <span id=b-modal></span></h2><p>Backend automatique distant. CPU/GPU selon le job; résultats récupérés comme ressources de l’agent.</p><a class=button href='https://modal.com/' target=_blank rel='noopener'>Ouvrir Modal ↗</a></div>
+<div class=card><h2>Local <span id=b-local></span></h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
+<div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré, avec accès utilisateur direct toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
-</div><p><a href='/docs'>API Sandbox / Agent →</a></p></html>"""
+</div><p><a href='/docs'>API Sandbox / Agent →</a></p>
+<script>
+(function(){
+ var pastille = function(ok, oui, non){
+   return "<span style='font-size:.72rem;border:1px solid #999;border-radius:999px;padding:2px 9px;vertical-align:middle;background:"
+        + (ok ? "#e8f6ec" : "#f1f1f1") + "'>" + (ok ? oui : non) + "</span>";
+ };
+ fetch('/etat').then(function(r){return r.json();}).then(function(d){
+   document.getElementById('b-modal').innerHTML  = pastille(d.modal.configure, 'actif', d.modal.autorise ? 'jeton manquant' : 'desactive');
+   document.getElementById('b-local').innerHTML  = pastille(d.local.disponible, 'actif', 'indisponible');
+   document.getElementById('b-kaggle').innerHTML = pastille(d.kaggle.configure, 'actif', d.kaggle.autorise ? 'identifiants manquants' : 'desactive');
+   var e = document.getElementById('etat');
+   var nom = {modal:'Modal (machine distante)', kaggle:'Kaggle', local:'votre ordinateur, isole dans Docker'}[d.backend_automatique];
+   e.style.background = '#e8f6ec'; e.style.borderColor = '#7fb98f';
+   e.textContent = "Le code envoye ici s'execute sur : " + nom + "."
+     + (d.modal.configure ? "" : " Modal n'est pas configure : rien ne part sur une machine distante, et rien ne peut etre facture.");
+ }).catch(function(){
+   var e = document.getElementById('etat');
+   e.style.background = '#fdf3e3'; e.style.borderColor = '#d9ad63';
+   e.textContent = "Etat non verifiable : le service Sandbox ne repond pas.";
+ });
+})();
+</script>
+</html>"""
     )
