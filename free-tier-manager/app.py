@@ -313,7 +313,13 @@ def enabled(name: str) -> bool:
     # Gemini Free Tier is the normal first choice; OpenRouter Free is the
     # strict-zero fallback. Groq remains an optional third fallback.
     default = "true" if name in ("gemini", "openrouter") else "false"
-    return os.getenv(env_name, default).lower() == "true"
+    if os.getenv(env_name, default).lower() == "true":
+        return True
+    # Coller une cle dans /cles est un acte delibere : il vaut activation, comme
+    # les jetons Modal/Kaggle cote Sandbox. Sans cela, ENABLE_GROQ=false rendrait
+    # la saisie sans effet et la page annoncerait une cle qui ne sert jamais.
+    # Le bouton << Oublier >> revoque.
+    return bool(stored_keys().get(PROVIDERS[name]["key_env"], "").strip())
 
 
 def provider_allowed(name: str) -> bool:
@@ -661,14 +667,26 @@ function carte(f){
         '<input type="password" placeholder="Collez la cle ici" autocomplete="off">'+
       '</div>'+
       '<div class="etape"><span class="num">3</span>'+
-        '<button class="primaire">Verifier et enregistrer</button>'+
+        '<button class="primaire verifier">Verifier et enregistrer</button>'+
+        (f.source==="interface" ? '<button class="oublier" style="margin-left:10px">Oublier</button>' : '')+
         indice+
       '</div>'+
       '<div class="resultat"></div>'+
     '</div>');
   const champ = c.querySelector("input");
-  const bouton = c.querySelector("button");
+  const bouton = c.querySelector(".verifier");
   const sortie = c.querySelector(".resultat");
+  const oublier = c.querySelector(".oublier");
+  if(oublier){
+    oublier.addEventListener("click", async () => {
+      oublier.disabled = true;
+      try{
+        await fetch("/cles/oublier", {method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({fournisseur: f.nom})});
+        charger();
+      }finally{ oublier.disabled = false; }
+    });
+  }
   bouton.addEventListener("click", async () => {
     const cle = champ.value.trim();
     if(!cle){ sortie.className="resultat ko"; sortie.textContent="Collez d'abord une cle."; return; }
