@@ -152,6 +152,11 @@ services:
       # par l'API d'administration, une seule fois (voir poser_reglages_webui).
       ENABLE_WEB_SEARCH: ${ENABLE_WEB_SEARCH:-true}
       WEB_SEARCH_ENGINE: ${WEB_SEARCH_ENGINE:-duckduckgo}
+      # << Arena Model >> tire au sort entre les modeles et demande un vote : un
+      # choix d'Open WebUI, pas du Studio, et incomprehensible pour un debutant.
+      # Meme regle : lue au tout premier demarrage seulement ; pour une base
+      # existante, c'est le routeur qui coupe le reglage (voir masquer_arena).
+      ENABLE_EVALUATION_ARENA_MODELS: "false"
     volumes:
       - open-webui-data:/app/backend/data
 

@@ -176,6 +176,9 @@ try:
                     'free-ai-auto' in proposes,
                     ('liste VIDE — la clé gardée par le chat ne correspond plus à celle du routeur'
                      if not proposes else 'modèles : ' + ', '.join(proposes)))
+    # « Arena Model » vient d'Open WebUI : le routeur le retire au démarrage.
+    all_ok &= check('Open WebUI : « Arena Model » absent du chat', 'arena-model' not in proposes,
+                    'modèles : ' + ', '.join(proposes))
     if 'gemini_max' in eligible:
         # Une clé Gemini branchée doit faire paraître le second choix du chat.
         all_ok &= check('Open WebUI : Free AI Max proposé', 'free-ai-max' in proposes,

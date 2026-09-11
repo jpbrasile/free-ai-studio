@@ -305,12 +305,11 @@ def kaggle_configured() -> bool:
     )
 
 
-def backend_automatique(kaggle_permis: bool = True) -> str:
-    if modal_configured():
-        return "modal"
-    if kaggle_permis and kaggle_configured():
-        return "kaggle"
-    return "local"
+def backend_automatique() -> str:
+    """Ou part un job << auto >> ordinaire. run_auto essaie le worker local
+    avant Kaggle, et ne propose Kaggle qu'aux jobs GPU : Kaggle n'est donc
+    jamais la destination ordinaire, meme configure."""
+    return "modal" if modal_configured() else "local"
 
 
 # Au demarrage : ce qui a ete saisi lors d'une session precedente redevient actif.
@@ -732,6 +731,11 @@ def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool
         # Studio partage : les identifiants Kaggle presents sont ceux d'une seule
         # personne. On passe au notebook Colab, que chacun ouvre avec son compte.
         attempts.append({"provider": "kaggle", "result": "disabled_shared_context"})
+    elif not gpu:
+        # Politique d'usage de Kaggle : de la science des donnees, pas un code
+        # quelconque. Le mode auto ne lui envoie que les jobs GPU (decision de
+        # l'utilisateur du 11/09/2026, option b du PLAN).
+        attempts.append({"provider": "kaggle", "result": "cpu_job_not_sent"})
     elif kaggle_configured():
         attempts.append({"provider": "kaggle", "result": "selected"})
         job = read_job(jid)
@@ -832,7 +836,7 @@ def cles_etat(request: Request):
             # identifiants qui serviraient a d'autres personnes.
             "coupe": raison if nom == "kaggle" else None,
         })
-    return {"backends": backends, "backend_automatique": backend_automatique(raison is None)}
+    return {"backends": backends, "backend_automatique": backend_automatique()}
 
 
 @app.post("/cles/tester")
@@ -1233,7 +1237,7 @@ def etat(request: Request):
             "acces_manuel": KAGGLE_MANUEL,
         },
         "colab": {"handoff": True},
-        "backend_automatique": backend_automatique(raison is None),
+        "backend_automatique": backend_automatique(),
     }
 
 
@@ -1267,6 +1271,9 @@ def providers(request: Request, authorization: Optional[str] = Header(default=No
             "direct_url": KAGGLE_MANUEL,
             "automatic": raison is None,
             "disabled_reason": raison,
+            # Kaggle n'accepte que la science des donnees : auto ne lui envoie
+            # que les jobs gpu=true, et seulement si le worker local manque.
+            "automatic_only_for": "gpu_jobs",
         },
         "colab": {
             "direct_url": "https://colab.research.google.com/",

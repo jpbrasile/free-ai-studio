@@ -78,3 +78,42 @@ def test_auto_saute_kaggle_en_contexte_partage(sandbox, monkeypatch):
     assert lances == []
     assert job["status"] == "handoff_ready"
     assert {"provider": "kaggle", "result": "disabled_shared_context"} in job["fallback_attempts"]
+
+
+def lancer_auto(sandbox, monkeypatch, gpu):
+    """Modal absent, worker local en panne, Kaggle configure, machine du
+    proprietaire : seul le drapeau gpu decide si auto part sur Kaggle."""
+    lances = []
+
+    def worker_absent(*_):
+        raise sandbox.BackendUnavailable("pas de worker")
+
+    monkeypatch.setattr(sandbox, "kaggle_configured", lambda: True)
+    monkeypatch.setattr(sandbox, "local_execute", worker_absent)
+    monkeypatch.setattr(sandbox, "run_kaggle", lambda *args: lances.append(args))
+    jid = ("c" if gpu else "b") * 32
+    sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    sandbox.run_auto(jid, "print(1)", gpu, False, kaggle_permis=True)
+    return lances, sandbox.read_job(jid)
+
+
+def test_auto_n_envoie_pas_un_job_cpu_sur_kaggle(sandbox, monkeypatch):
+    # Politique d'usage de Kaggle : pas un code quelconque.
+    lances, job = lancer_auto(sandbox, monkeypatch, gpu=False)
+    assert lances == []
+    assert job["status"] == "handoff_ready"
+    assert {"provider": "kaggle", "result": "cpu_job_not_sent"} in job["fallback_attempts"]
+
+
+def test_auto_envoie_un_job_gpu_sur_kaggle(sandbox, monkeypatch):
+    lances, job = lancer_auto(sandbox, monkeypatch, gpu=True)
+    assert len(lances) == 1 and lances[0][2] is True
+    assert {"provider": "kaggle", "result": "selected"} in job["fallback_attempts"]
+
+
+def test_kaggle_jamais_destination_ordinaire(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "kaggle_configured", lambda: True)
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    assert client.get("/etat").json()["backend_automatique"] == "local"
+    fournisseurs = client.get("/providers", headers=CLE).json()
+    assert fournisseurs["kaggle"]["automatic_only_for"] == "gpu_jobs"

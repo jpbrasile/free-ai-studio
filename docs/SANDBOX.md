@@ -26,7 +26,7 @@ Important : le fallback concerne les **pannes/configurations d'infrastructure**.
 |---|---|---|---|
 | Modal | Dashboard Modal | oui, principal si configuré | automatique |
 | Local | via Studio/API | oui, fallback | automatique |
-| Kaggle | **oui, kaggle.com/code** | oui si activé/configuré | automatique via outputs kernel |
+| Kaggle | **oui, kaggle.com/code** | oui si activé/configuré ; en `auto`, jobs `gpu=true` seulement | automatique via outputs kernel |
 | Colab | **oui, colab.research.google.com** | handoff notebook | import vers le registre d'artefacts |
 
 Les boutons **Ouvrir Kaggle** et **Ouvrir Colab** restent toujours visibles dans `http://127.0.0.1:8020/`, indépendamment de Modal.
@@ -85,6 +85,8 @@ KAGGLE_API_TOKEN=votre_token
 Le manager crée un kernel privé, suit son état et récupère ses outputs. Le bouton direct Kaggle reste utilisable même lorsque l'orchestration automatique n'est pas configurée.
 
 Ce pilotage suppose **vos** identifiants, sur **votre** machine. Si le Studio semble servir d'autres personnes (`STUDIO_HEBERGE=true`, `WEBUI_AUTH=true`, page ouverte par l'adresse réseau de la machine, ou requête relayée par un proxy), le Sandbox coupe Kaggle automatique. `POST /jobs` avec `provider=kaggle` répond alors 403, le mode `auto` passe directement au handoff Colab, et `GET /etat` indique `kaggle.automatique_permis: false` avec la raison. Détail : `docs/GPU_CLOUD.md`.
+
+Même sur votre machine, le mode `auto` n'envoie sur Kaggle que les jobs `gpu=true` : la politique d'usage de Kaggle exclut ce qui n'est pas de la science des données. Un job sans GPU passe au handoff Colab, avec `cpu_job_not_sent` dans `fallback_attempts` ; `GET /providers` le dit (`kaggle.automatic_only_for: "gpu_jobs"`).
 
 ## Colab direct / handoff
 

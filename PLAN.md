@@ -16,11 +16,11 @@ officielles ont contredit, et ce qui reste. Travail mené sur la branche
 | **P0-1** Quota Gemini, bascule annoncée | **fait ; en réel, seul le régime sans refus est vérifié** | essai du 11/09 : 65 messages à `gemini-3.5-flash-lite`, aucun refus de Google, aucun recours à OpenRouter (§ P0-1) ; bascule, pauses et refus vérifiés hors réseau par `tests/test_quotas.py`, 20 tests après `f9d5c91` | une **bascule réelle** (aucun refus en 65 messages) ; le rendu de l'avis dans Open WebUI ; les installations existantes gardent `gemini-3.8-flash` si leur `.env` le fixe |
 | **P0-2** Modal : carte, crédit, plafond | **fait** | README, `.env.example`, page `/video`, `docs/MODAL_CATALOG.md`, `docs/SERVICES_DEBUTANT.md` ; nombre de clips recalculé avec la règle du code | le palier Modal ne peut pas être **détecté** (aucune API de crédit lue) : il est affiché comme une déclaration |
 | **P0-3** « open source » / « gratuit » | **fait dans le dépôt** | README, section « Ce qui est ouvert, ce qui ne l'est pas » ; licence et territoire affichés à côté du choix sur `/video` ; règle de vocabulaire dans `AGENTS.md` | documents de présentation hors dépôt : non touchés |
-| **P1-1** CI | **fait, critère vérifié en local** | une faute dans une copie de `video.py` fait échouer la CI (§ P1-1) | un premier passage réel sur GitHub Actions : rien n'est poussé |
-| **P1-2** Kaggle | **fait** | `tests/test_kaggle.py`, 5 tests ; conditions de Kaggle lues | la politique d'usage soulève une question nouvelle (étape 4) |
+| **P1-1** CI | **fait, critère vérifié en local** | une faute dans une copie de `video.py` fait échouer la CI (§ P1-1) | premier passage réel le 11/09 (run `34610911922`) : **échec** à « Docker Compose config », `.env` absent sur le runner. `main` échoue de la même façon depuis au moins le 09/09 (run `34394306955`) : le vrai `.env` masquait le défaut en local. Correction : la CI pose une copie de `.env.example`. Résultat après correction : étape 3 |
+| **P1-2** Kaggle | **fait** | `tests/test_kaggle.py`, 8 tests ; conditions de Kaggle lues ; option (b) appliquée le 11/09 : en `auto`, Kaggle ne reçoit que les jobs `gpu=true` (étape 4) | aucun job réel envoyé à Kaggle depuis le changement |
 | **P2** Périmètre | **commencé** | pastilles « expérimental » sur `/studio` (Voix, Vidéo, Étudier, Code, Sandbox) | parcours complet sur une machine vierge avec une vraie personne ; l'indicateur |
 | **P2** Registre | **non commencé** | — | tout (étape 6) |
-| Hors audit : **Free AI Max**, deuxième choix du chat | **fait et en service** (commit `9b5be4d`, reconstruit le 11/09) | décision de l'utilisateur le 11/09 ; `gemini-3.8-flash` en tête, puis la chaîne d'Auto ; quota et pause à part ; `tests/test_quotas.py` (4 tests de plus, 17 au total) ; essai réel dans le conteneur reconstruit le 11/09 : `/v1/models` propose les deux choix, une demande Max en flux servie par `gemini-3.8-flash` (1,4 s), une demande Auto par `gemini-3.5-flash-lite` (0,8 s) ; le sélecteur d'Open WebUI liste Free AI Auto et Free AI Max | bascule de Max vers Flash-Lite vérifiée seulement par les tests ; aucune demande envoyée depuis Open WebUI même ; le sélecteur montre aussi « Arena Model », fourni par Open WebUI, pas par le Studio |
+| Hors audit : **Free AI Max**, deuxième choix du chat | **fait et en service** (commit `9b5be4d`, reconstruit le 11/09) | décision de l'utilisateur le 11/09 ; `gemini-3.8-flash` en tête, puis la chaîne d'Auto ; quota et pause à part ; `tests/test_quotas.py` (4 tests de plus, 17 au total) ; essai réel dans le conteneur reconstruit le 11/09 : `/v1/models` propose les deux choix, une demande Max en flux servie par `gemini-3.8-flash` (1,4 s), une demande Auto par `gemini-3.5-flash-lite` (0,8 s) ; le sélecteur d'Open WebUI liste Free AI Auto et Free AI Max | bascule de Max vers Flash-Lite vérifiée seulement par les tests ; aucune demande envoyée depuis Open WebUI même ; « Arena Model », fourni par Open WebUI, est retiré du sélecteur depuis le 11/09 : variable `ENABLE_EVALUATION_ARENA_MODELS=false` pour une installation neuve, API d'administration une fois pour une installation existante (`tests/test_reglages_webui.py`, 3 tests) |
 | Hors audit : **revue du 11/09**, cinq défauts de P0-1 | **corrigé** (commit `f9d5c91`) | l'avis vaut pour toute pause, y compris survenue pendant une demande Max ; 429 en français dès le premier refus avec une seule clé ; 5xx et coupures : pause courte et avis ; `ENABLE_GEMINI_MAX=false` respecté avec une clé saisie dans /cles ; messages « sans clé » et « fausse clé » en français ; 8 tests, qui échouent tous sur `80bcfee` | voir « Parcours débutant sur une machine vierge » |
 | Hors audit : `/studio` sans JavaScript | **corrigé** | `scripts/verifier-js.py`, ajouté à la CI | vue dans Chrome (service d'essai, 0 erreur console) ; conteneurs reconstruits depuis `dcc742d` |
 
@@ -55,15 +55,19 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
    - une demande de chat : HTTP 200, servie par Gemini, `x-free-ai-secours: non`.
 
    Les pages ont été vues dans Chrome sur le service d'essai hors conteneur, avec le même code. **Reste non vérifié** : une vraie bascule, et son avis tel qu'Open WebUI l'affiche.
-3. **Pousser la branche** et lire le premier passage de GitHub Actions.
+3. ~~**Pousser la branche**~~ Poussée le 11/09, à la demande de l'utilisateur. Premier passage de GitHub Actions (run `34610911922`) : toutes les étapes passent sauf la dernière, « Docker Compose config », qui échoue. Le compose lit `.env` (`env_file`), qui n'est jamais dans le dépôt. `main` échoue de la même façon depuis au moins le 09/09 (run `34394306955`). Correction : la CI pose une copie de `.env.example`, sans secret, avant `docker compose config`. Rejouée en local sur une copie des seuls fichiers suivis, donc sans `.env` : code 1 avant, code 0 après.
 4. **Kaggle et la politique d'usage : décision humaine.** Même sur la machine de la personne, le mode `auto` peut envoyer sur Kaggle un code quelconque. Trois choix :
    - (a) laisser tel quel, avec l'avertissement de `docs/GPU_CLOUD.md` ;
    - (b) ne proposer Kaggle en `auto` qu'aux jobs `gpu=true` ;
    - (c) retirer Kaggle du mode `auto` et ne garder que le lien manuel.
 
-   Recommandation : (b). Le coût est faible, et un job GPU relève presque toujours du calcul d'apprentissage. **Décision de l'utilisateur, 11/09/2026 : (b).**
+   Recommandation : (b). Le coût est faible, et un job GPU relève presque toujours du calcul d'apprentissage. **Décision de l'utilisateur, 11/09/2026 : (b). Appliquée le même jour.**
+   - `run_auto` n'envoie sur Kaggle que les jobs `gpu=true`. Un job CPU passe au notebook Colab, avec `cpu_job_not_sent` dans `fallback_attempts`.
+   - `/providers` le dit : `kaggle.automatic_only_for = "gpu_jobs"`.
+   - `backend_automatique` n'annonce plus Kaggle : `run_auto` essaie le worker local avant lui.
+   - 3 tests dans `tests/test_kaggle.py`.
 5. **P2 : verrouiller Chat, Recherche et Image** sur une machine vierge, avec une personne qui n'a jamais ouvert un terminal.
-   - Écrire le protocole avant la séance : une liste fixe de tâches (installer, coller la clé, poser une question, chercher sur le Web, fabriquer une image, ouvrir le diagnostic), et pour chacune une case « menée à terme sans aide ».
+   - Écrire le protocole avant la séance : une liste fixe de tâches (installer, coller la clé, poser une question, chercher sur le Web, fabriquer une image, ouvrir le diagnostic), et pour chacune une case « menée à terme sans aide ». **Écrit le 11/09 : `docs/ESSAI_MACHINE_NEUVE.md`**, un Windows 11 neuf dans une machine virtuelle Hyper-V, avec des points de contrôle. Il demande une session administrateur et une ISO de Windows : c'est l'utilisateur qui le joue. **Pas encore joué.**
    - Indicateur : le pourcentage de tâches menées à terme, à la place de la taille du catalogue.
    - Aucune nouvelle fonction avant un premier chiffre.
 6. **P2 : le registre**, après l'étape 5.
@@ -182,7 +186,7 @@ docker compose --env-file .env.example config   exit 0 (sortie jetée : elle ré
   - `/cles` : la carte Kaggle dit « Pilotage automatique réservé à votre machine ».
 - **Non vérifié à l'écran** : la carte Kaggle grisée, et l'option Kaggle désactivée, quand le contexte est partagé. Le navigateur ne peut pas se présenter sous une autre adresse que localhost. Ce cas n'a été vérifié qu'au niveau de l'API (voir P1-2).
 
-Les deux services d'essai ont été arrêtés après les mesures. Les conteneurs ont ensuite été reconstruits depuis `dcc742d`, à la demande de l'utilisateur (voir « Prochaines étapes », point 2). **Pas lancé** : aucun push.
+Les deux services d'essai ont été arrêtés après les mesures. Les conteneurs ont ensuite été reconstruits depuis `dcc742d`, à la demande de l'utilisateur (voir « Prochaines étapes », point 2). La branche `audit-20260911` a été poussée le 11/09, à la demande de l'utilisateur (étape 3).
 
 ## Parcours débutant sur une machine vierge (Linux simulé), 11/09/2026
 

@@ -916,6 +916,45 @@ async def reparer_connexion_webui(client: httpx.AsyncClient, entetes: Dict[str, 
         log.warning("Liaison chat -> routeur non verifiee : %s", exc)
 
 
+ARENA_FAIT = CONFIG_DIR / "open-webui-arena.json"
+
+
+async def masquer_arena(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
+    """Retire << Arena Model >> du choix du chat, une seule fois.
+
+    Open WebUI l'ajoute d'office (ENABLE_EVALUATION_ARENA_MODELS vaut true par
+    defaut). Son temoin est a part de celui des reglages de confort : une
+    installation qui a deja ce temoin recoit quand meme ce reglage, une fois.
+    Ensuite, si l'utilisateur le remet dans Admin > Evaluations, il reste."""
+    if ARENA_FAIT.exists():
+        return
+    url = f"{WEBUI_URL}/api/v1/evaluations/config"
+    try:
+        r = await client.get(url, headers=entetes)
+        r.raise_for_status()
+        if r.json().get("ENABLE_EVALUATION_ARENA_MODELS"):
+            r = await client.post(url, headers=entetes, json={"ENABLE_EVALUATION_ARENA_MODELS": False})
+            r.raise_for_status()
+            etat = "Arena Model retire du chat"
+        else:
+            etat = "Arena Model deja absent"
+    except (httpx.HTTPError, ValueError) as exc:
+        # Pas de temoin : nouvel essai au prochain demarrage.
+        log.warning("Arena Model non retire : %s", exc)
+        return
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ARENA_FAIT.write_text(json.dumps({
+            "pose_le": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "etat": etat,
+            "note": "Tant que ce fichier existe, Free AI Studio ne touche plus a Arena. "
+                    "Pour le remettre : Open WebUI, Admin, Settings, Evaluations.",
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        log.warning("Temoin Arena non ecrit (%s) : %s", ARENA_FAIT, exc)
+    log.info("%s", etat)
+
+
 async def poser_reglages_webui() -> None:
     faits: List[str] = []
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
@@ -944,6 +983,8 @@ async def poser_reglages_webui() -> None:
         #    le temoin ci-dessous : sans elle, il n'y a aucun modele dans le chat
         #    et tout le reste est sans objet.
         await reparer_connexion_webui(client, entetes)
+        # Avant le temoin, lui aussi : il a son propre temoin (voir masquer_arena).
+        await masquer_arena(client, entetes)
 
         # Les reglages de confort, eux, ne se posent qu'une fois : ce que
         # l'utilisateur y change ensuite lui appartient.

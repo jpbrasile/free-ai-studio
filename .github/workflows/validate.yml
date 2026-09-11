@@ -74,5 +74,12 @@ jobs:
           grep -q '^ALLOW_PAID_GPU=false$' .env.example
           grep -q '^MAX_DAILY_COST=0$' .env.example
 
+      # Le compose lit aussi .env (env_file), qui n'est jamais dans le depot. Sur
+      # le runner, on en pose une copie de .env.example, sans aucun secret.
+      # Premier passage reel sur GitHub, le 11/09/2026 : sans cette copie,
+      # l'etape echouait (<< env file .env not found >>) ; en local, le vrai
+      # .env masquait le defaut.
       - name: Docker Compose config
-        run: docker compose --env-file .env.example config >/dev/null
+        run: |
+          cp .env.example .env
+          docker compose --env-file .env.example config >/dev/null
