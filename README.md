@@ -144,10 +144,11 @@ Open WebUI
     ↓
 Free Tier Manager
     ↓
-Gemini (palier gratuit) → OpenRouter `openrouter/free` → Groq (si activé)
+Free AI Auto : Gemini Flash-Lite (palier gratuit) → OpenRouter `openrouter/free` → Groq (si activé)
+Free AI Max  : Gemini 3.8 Flash (palier gratuit) → puis la même chaîne qu'Auto
 ```
 
-Le débutant voit principalement **Free AI Auto**. Le manager tente les fournisseurs éligibles dans cet ordre (`FREE_PROVIDER_ORDER`). Quand le premier a épuisé son quota, **le basculement n’est pas silencieux** : la réponse suivante du chat commence par une ligne qui le dit, et les pages `/studio` et `/diagnostic` affichent le service en pause, la limite annoncée par le fournisseur et l’heure de reprise.
+Le chat propose deux choix : **Free AI Auto** pour l'usage courant, **Free AI Max** pour les questions difficiles. Max essaie d'abord Gemini 3.8 Flash, qui a son propre quota gratuit (Google le compte par modèle) ; Auto n'y touche jamais. Le manager tente les fournisseurs éligibles dans cet ordre (`FREE_PROVIDER_ORDER`). Quand le premier a épuisé son quota, **le basculement n’est pas silencieux** : la réponse suivante du chat commence par une ligne qui le dit, et les pages `/studio` et `/diagnostic` affichent le service en pause, la limite annoncée par le fournisseur et l’heure de reprise.
 
 Détails : `docs/FREE_TIER_MANAGER.md`.
 

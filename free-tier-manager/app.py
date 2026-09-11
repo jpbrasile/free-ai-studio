@@ -28,6 +28,9 @@ ALLOW_PAID = os.getenv("ALLOW_PAID_MODELS", "false").lower() == "true"
 ALLOW_FREE_TIER_ACCOUNTS = os.getenv("ALLOW_FREE_TIER_ACCOUNTS", "true").lower() == "true"
 
 AUTO_MODEL = "free-ai-auto"
+# Deuxieme choix du chat, pour les questions difficiles : Gemini haut de gamme
+# d'abord, puis la meme chaine qu'Auto. Auto ne touche jamais a ce quota-la.
+MAX_MODEL = "free-ai-max"
 BOOST_MODEL = os.getenv("OPENROUTER_BOOST_MODEL", "openrouter/auto")
 BOOST_RESERVE_USD = float(os.getenv("OPENROUTER_PROTECTED_RESERVE_USD", "10"))
 BOOST_TOTAL_BUDGET_USD = float(os.getenv("OPENROUTER_BOOST_TOTAL_BUDGET_USD", "5"))
@@ -59,10 +62,17 @@ PROVIDERS = {
     "gemini": {
         "key_env": "GEMINI_API_KEY",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        # Flash-Lite : la variante prevue pour l'usage courant. Le modele haut de
-        # gamme (gemini-3.8-flash) reste accessible sur choix explicite, par
-        # GEMINI_FREE_MODEL ; il a son propre quota gratuit, compte par modele.
+        # Flash-Lite : la variante prevue pour l'usage courant (Free AI Auto).
         "model": os.getenv("GEMINI_FREE_MODEL", "gemini-3.5-flash-lite"),
+        "strict_zero": False,
+    },
+    "gemini_max": {
+        # Free AI Max : le modele haut de gamme, pour les questions difficiles.
+        # Meme cle et meme projet que "gemini", mais Google compte le quota
+        # gratuit PAR MODELE : chacun a donc sa propre pause.
+        "key_env": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model": os.getenv("GEMINI_MAX_MODEL", "gemini-3.8-flash"),
         "strict_zero": False,
     },
 }
@@ -101,6 +111,12 @@ PROVIDER_HELP = {
     },
 }
 
+# Les deux modeles Gemini partagent la cle et la remise a zero (minuit, heure du
+# Pacifique) ; pas le quota.
+GEMINI = ("gemini", "gemini_max")
+# Titre d'un service sans carte de cle a lui : la cle de Max est celle de Gemini.
+TITRES = {"gemini_max": "Gemini Max (Google)"}
+
 provider_cooldown_until: Dict[str, float] = {p: 0.0 for p in PROVIDERS}
 openrouter_credit_cache: Dict[str, Any] = {"checked_at": 0.0, "data": None, "error": None}
 
@@ -138,6 +154,8 @@ LIMITES_PUBLIEES: Dict[str, Dict[str, Any]] = {
     },
 }
 
+LIMITES_PUBLIEES["gemini_max"] = LIMITES_PUBLIEES["gemini"]
+
 quota_state: Dict[str, Dict[str, Any]] = {p: {} for p in PROVIDERS}
 # Derniere limite ecrite par le fournisseur dans un refus du jour : gardee apres
 # la fin de la pause, pour estimer ce qui reste le lendemain.
@@ -146,9 +164,9 @@ limites_annoncees: Dict[str, Dict[str, Any]] = {}
 # du routeur remet ce compte a zero, et la page le dit.
 servies_du_jour: Dict[str, Dict[str, Any]] = {}
 DEMARRE_A = time.time()
-# Vrai quand le service attendu vient d'etre mis en pause et que personne ne l'a
-# encore dit dans le chat.
-avis_bascule: Dict[str, bool] = {"du": False}
+# Par service attendu (le premier d'un choix du chat) : vrai quand il vient
+# d'etre mis en pause et que personne ne l'a encore dit dans le chat.
+avis_bascule: Dict[str, bool] = {}
 dernier_service: Dict[str, Any] = {}
 
 
@@ -298,6 +316,21 @@ def provider_order() -> List[str]:
     return [x for x in names if x in PROVIDERS]
 
 
+def chaine_de(modele: str) -> List[str]:
+    """Ordre d'essai pour le choix fait dans le chat."""
+    auto = [n for n in provider_order() if n != "gemini_max"]
+    if modele == MAX_MODEL:
+        return ["gemini_max"] + auto
+    return auto
+
+
+def ordre_affiche() -> List[str]:
+    """Tous les services, dans l'ordre ou les pages les montrent."""
+    ordre = [n for n in provider_order() if n != "gemini_max"]
+    ordre.insert(ordre.index("gemini") + 1 if "gemini" in ordre else 0, "gemini_max")
+    return ordre
+
+
 def stored_keys() -> Dict[str, str]:
     try:
         data = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
@@ -358,10 +391,13 @@ def configured(name: str) -> bool:
 
 
 def enabled(name: str) -> bool:
+    if name == "gemini_max" and not enabled("gemini"):
+        # Couper Gemini coupe ses deux modeles.
+        return False
     env_name = f"ENABLE_{name.upper()}"
     # Gemini Free Tier is the normal first choice; OpenRouter Free is the
     # strict-zero fallback. Groq remains an optional third fallback.
-    default = "true" if name in ("gemini", "openrouter") else "false"
+    default = "true" if name in ("gemini", "gemini_max", "openrouter") else "false"
     if os.getenv(env_name, default).lower() == "true":
         return True
     # Coller une cle dans /cles est un acte delibere : il vaut activation, comme
@@ -570,7 +606,7 @@ def apply_rate_limit_cooldown(name: str, response: httpx.Response, corps: Any = 
         return
     maintenant = time.time()
     quota = lire_quota(corps)
-    if quota.get("par_jour") and name == "gemini":
+    if quota.get("par_jour") and name in GEMINI:
         # Reessayer toutes les 30 s jusqu'a minuit ne ferait que rallonger chaque
         # reponse d'un refus : la pause court jusqu'a la remise a zero documentee.
         jusqu_a = minuit_pacifique(maintenant)
@@ -597,7 +633,7 @@ def apply_rate_limit_cooldown(name: str, response: httpx.Response, corps: Any = 
 
 
 def titre_de(name: str) -> str:
-    return PROVIDER_HELP.get(name, {}).get("titre", name)
+    return TITRES.get(name) or PROVIDER_HELP.get(name, {}).get("titre", name)
 
 
 def duree_lisible(secondes: float) -> str:
@@ -619,7 +655,7 @@ def noter_service(name: str, prefere: Optional[str]) -> bool:
     compte["n"] += 1
     if name == prefere:
         quota_state[name] = {}
-        avis_bascule["du"] = False
+        avis_bascule[name] = False
     bascule = prefere is not None and name != prefere
     dernier_service.update({
         "fournisseur": name,
@@ -634,23 +670,25 @@ def noter_service(name: str, prefere: Optional[str]) -> bool:
 def texte_avis(prefere: str, servi: str) -> str:
     q = quota_state.get(prefere) or {}
     reste = duree_lisible(provider_cooldown_until.get(prefere, 0.0) - time.time())
+    # Le modele est nomme : entre les deux Gemini, le titre seul ne dit pas lequel repond.
+    par = "%s (%s)" % (titre_de(servi), PROVIDERS[servi]["model"])
     if q.get("cause") == "quota_du_jour":
         limite = " (%d demandes)" % q["limite"] if q.get("limite") else ""
         quand = ("Retour prévu dans environ %s, à minuit heure du Pacifique." % reste
-                 if prefere == "gemini" else "Nouvel essai dans %s." % reste)
+                 if prefere in GEMINI else "Nouvel essai dans %s." % reste)
         return "_ℹ️ %s a atteint sa limite gratuite du jour%s : cette réponse est fournie par %s. %s_\n\n" % (
-            titre_de(prefere), limite, titre_de(servi), quand)
+            titre_de(prefere), limite, par, quand)
     return "_ℹ️ %s est saturé pour l’instant : cette réponse est fournie par %s. Nouvel essai dans %s._\n\n" % (
-        titre_de(prefere), titre_de(servi), reste)
+        titre_de(prefere), par, reste)
 
 
-def morceau_avis(texte: str) -> bytes:
+def morceau_avis(texte: str, modele: str = AUTO_MODEL) -> bytes:
     """Un morceau SSE au format OpenAI, place en tete du flux du secours."""
     morceau = {
         "id": "free-ai-avis",
         "object": "chat.completion.chunk",
         "created": int(time.time()),
-        "model": AUTO_MODEL,
+        "model": modele,
         "choices": [{"index": 0, "delta": {"role": "assistant", "content": texte}, "finish_reason": None}],
     }
     return ("data: " + json.dumps(morceau, ensure_ascii=False) + "\n\n").encode("utf-8")
@@ -661,7 +699,7 @@ def etat_quotas() -> Dict[str, Any]:
     maintenant = time.time()
     jour = jour_pacifique(maintenant)
     fiches = []
-    for name in provider_order():
+    for name in ordre_affiche():
         q = quota_state.get(name) or {}
         jusqu_a = provider_cooldown_until.get(name, 0.0)
         en_pause = maintenant < jusqu_a
@@ -686,7 +724,7 @@ def etat_quotas() -> Dict[str, Any]:
             "reprise_a": jusqu_a if en_pause else None,
             # Faux quand on sait seulement quand on REESSAIERA, pas quand le
             # quota repart (fournisseur sans heure de remise a zero documentee).
-            "reprise_connue": en_pause and (not du_jour or name == "gemini"),
+            "reprise_connue": en_pause and (not du_jour or name in GEMINI),
             "quota_du_jour_atteint": du_jour,
             "limite_annoncee": limite,
             "servies_aujourdhui": servies,
@@ -694,12 +732,18 @@ def etat_quotas() -> Dict[str, Any]:
             "limite_publiee": LIMITES_PUBLIEES.get(name, {}),
             "demandes": {"essais": s["attempts"], "reussites": s["successes"], "echecs": s["failures"]},
         })
-    eligibles = [f for f in fiches if f["eligible"]]
-    secours = bool(eligibles) and eligibles[0]["en_pause"] and any(not f["en_pause"] for f in eligibles[1:])
+    par_nom = {f["nom"]: f for f in fiches}
+
+    def secours(modele: str) -> bool:
+        # Secours : le premier service de CE choix est en pause, un suivant repond.
+        el = [par_nom[n] for n in chaine_de(modele) if n in par_nom and par_nom[n]["eligible"]]
+        return bool(el) and el[0]["en_pause"] and any(not f["en_pause"] for f in el[1:])
+
     return {
         "maintenant": maintenant,
         "fournisseurs": fiches,
-        "secours_en_cours": secours,
+        "secours_en_cours": secours(AUTO_MODEL),
+        "secours_max_en_cours": secours(MAX_MODEL),
         "dernier_service": dict(dernier_service) or None,
         "compte_depuis": max(DEMARRE_A, debut_du_jour_pacifique(maintenant)),
         "limites_relevees_le": LIMITES_RELEVEES_LE,
@@ -713,7 +757,7 @@ def auth_ok(auth: Optional[str]) -> bool:
 
 async def safe_status() -> Dict[str, Any]:
     providers = []
-    for name in provider_order():
+    for name in ordre_affiche():
         p = PROVIDERS[name]
         providers.append({
             "name": name,
@@ -732,6 +776,7 @@ async def safe_status() -> Dict[str, Any]:
         "allow_paid_models": ALLOW_PAID,
         "allow_free_tier_accounts": ALLOW_FREE_TIER_ACCOUNTS,
         "public_model": AUTO_MODEL,
+        "public_models": [AUTO_MODEL, MAX_MODEL],
         "boost": {
             "active": boost_active(),
             "protected_reserve_usd": BOOST_RESERVE_USD,
@@ -1349,7 +1394,8 @@ async def etat_liaison() -> Dict[str, Any]:
 async def diagnostic_etat():
     return {
         "version": version_locale(),
-        "fournisseurs_branches": [n for n in PROVIDERS if configured(n)],
+        # gemini_max porte la cle de gemini : la compter serait compter une cle deux fois.
+        "fournisseurs_branches": [n for n in PROVIDERS if n != "gemini_max" and configured(n)],
         "quotas": etat_quotas(),
         "liaison": await etat_liaison(),
     }
@@ -1754,7 +1800,7 @@ ul.quotas{margin:6px 0 8px;padding-left:20px} ul.quotas li{margin:5px 0}
 <div class="etat" id="quotas" hidden></div>
 <div class="grid">
 <a class="card" href="/cles"><h2>🔑 Vos clés</h2><p>Première étape : brancher un service gratuit, en trois clics et sans toucher à un fichier.</p></a>
-<a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation.</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation. Deux choix en haut du chat : <b>Free AI Auto</b> pour le courant, <b>Free AI Max</b> pour les questions difficiles (modèle plus fort, avec son propre quota).</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter, 🎙️ dans la barre de saisie pour dicter. Tout se passe sur votre ordinateur, sans clé.</p></a>
@@ -2065,16 +2111,14 @@ async def boost_status(authorization: Optional[str] = Header(default=None)):
 async def models(authorization: Optional[str] = Header(default=None)):
     if not auth_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    return {
-        "object": "list",
-        "data": [{
-            "id": AUTO_MODEL,
-            "object": "model",
-            "created": 0,
-            "owned_by": "free-ai-studio",
-            "name": "Free AI Auto",
-        }],
-    }
+    data = [{"id": AUTO_MODEL, "object": "model", "created": 0,
+             "owned_by": "free-ai-studio", "name": "Free AI Auto"}]
+    # Max n'a de sens qu'avec une cle Gemini : sans elle, il repondrait
+    # exactement comme Auto, sous un nom qui promet plus.
+    if provider_allowed("gemini_max"):
+        data.append({"id": MAX_MODEL, "object": "model", "created": 0,
+                     "owned_by": "free-ai-studio", "name": "Free AI Max"})
+    return {"object": "list", "data": data}
 
 
 # --- Fabriquer une image -----------------------------------------------------
@@ -2219,17 +2263,19 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
         payload["stream"] = False
     requested_model = payload.get("model", AUTO_MODEL)
 
-    # The beginner-facing API exposes only the automatic free route.
-    if requested_model not in (AUTO_MODEL, "auto", "free"):
+    # Deux choix gratuits, et eux seuls : Auto (usage courant) et Max (questions
+    # difficiles). Aucun modele ne se choisit directement.
+    if requested_model not in (AUTO_MODEL, MAX_MODEL, "auto", "free"):
         if FREE_ONLY or not ALLOW_PAID:
             raise HTTPException(
                 status_code=403,
-                detail="Paid or direct model selection is blocked. Use 'free-ai-auto'."
+                detail="Paid or direct model selection is blocked. Use 'free-ai-auto' or 'free-ai-max'."
             )
+    modele_chat = MAX_MODEL if requested_model == MAX_MODEL else AUTO_MODEL
 
-    # Le service que la personne attend : le premier de l'ordre qui soit branche.
+    # Le service que la personne attend : le premier de SON choix qui soit branche.
     # Toute reponse venue d'un autre est un secours, et se dit.
-    eligibles = [name for name in provider_order() if provider_allowed(name)]
+    eligibles = [name for name in chaine_de(modele_chat) if provider_allowed(name)]
     prefere = eligibles[0] if eligibles else None
     candidates = [name for name in eligibles if not provider_on_cooldown(name)]
     if boost_active() and "openrouter" in candidates:
@@ -2273,7 +2319,7 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                     corps = None
                 apply_rate_limit_cooldown(name, response, corps)
                 if response.status_code == 429 and name == prefere:
-                    avis_bascule["du"] = True
+                    avis_bascule[name] = True
                 body = brut[:800].decode("utf-8", errors="replace")
                 stats[name]["failures"] += 1
                 stats[name]["last_error"] = f"HTTP {response.status_code}: {body[:300]}"
@@ -2292,9 +2338,9 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                 # seule fois. En flux SSE seulement : dans une reponse d'un bloc,
                 # l'avis finirait dans un titre de conversation.
                 debut = b""
-                if bascule and avis_bascule["du"] and "text/event-stream" in media_type:
-                    debut = morceau_avis(texte_avis(prefere, name))
-                    avis_bascule["du"] = False
+                if bascule and avis_bascule.get(prefere) and "text/event-stream" in media_type:
+                    debut = morceau_avis(texte_avis(prefere, name), modele_chat)
+                    avis_bascule[prefere] = False
 
                 async def iterator(resp=response, cli=client, debut=debut):
                     try:

@@ -4,9 +4,10 @@ Le **Free Tier Manager** est la passerelle transparente entre Open WebUI et les 
 
 ## Ce que voit le débutant
 
-Dans Open WebUI, le modèle principal est :
+Dans Open WebUI, deux choix :
 
-**Free AI Auto**
+- **Free AI Auto** : l'usage courant. C'est le premier de la liste.
+- **Free AI Max** : les questions difficiles (code, raisonnement long, documents lourds). Il n'apparaît que si une clé Gemini est branchée.
 
 Il n'a pas besoin de choisir Gemini, Groq ou OpenRouter.
 
@@ -24,7 +25,23 @@ Free AI Auto
 3. Groq → modèle du free plan
 ```
 
-`gemini-3.5-flash-lite` est le modèle par défaut depuis le 11/09/2026 (avant : `gemini-3.8-flash`). C'est la variante Flash-Lite, prévue pour l'usage courant. Le modèle haut de gamme reste accessible sur **choix explicite** : `GEMINI_FREE_MODEL=gemini-3.8-flash` dans `.env`. Les deux ont chacun leur quota gratuit, compté par projet Google et par modèle.
+`gemini-3.5-flash-lite` est le modèle de Free AI Auto depuis le 11/09/2026 (avant : `gemini-3.8-flash`). C'est la variante Flash-Lite, prévue pour l'usage courant.
+
+**Free AI Max** essaie d'abord le modèle haut de gamme, puis retombe sur la chaîne d'Auto :
+
+```text
+1. Gemini Max → gemini-3.8-flash (Free Tier, son propre quota)
+   ↓ si indisponible / quota atteint
+2. Gemini → gemini-3.5-flash-lite
+   ↓
+3. OpenRouter → openrouter/free
+   ↓
+4. Groq → modèle du free plan
+```
+
+Google compte le quota gratuit **par projet et par modèle** : Max a le sien. Auto n'y touche jamais, pour qu'il reste disponible quand on choisit Max. Réglages : `GEMINI_MAX_MODEL` (défaut `gemini-3.8-flash`) ; `ENABLE_GEMINI_MAX=false` retire Max du chat ; `ENABLE_GEMINI=false` coupe les deux modèles Gemini.
+
+Pourquoi deux choix : sur les fiches techniques de Google, 3.8 Flash obtient 89,4 % à Terminal-bench 2.1 contre 54,0 % pour 3.5 Flash-Lite, et 1545 contre 1140 Elo à GDPVal-AA v2 ([Flash-Lite](https://deepmind.google/models/model-cards/gemini-3-5-flash-lite/), [3.8 Flash](https://deepmind.google/models/model-cards/gemini-3-8-flash/), relevé du 11/09/2026). Son quota gratuit n'est pas publié.
 
 L'ordre est configurable dans `.env` :
 
@@ -42,7 +59,7 @@ ALLOW_PAID_MODELS=false
 MAX_DAILY_COST=0
 ```
 
-Le manager refuse la sélection directe d'un modèle arbitraire. Open WebUI ne publie que `free-ai-auto`.
+Le manager refuse la sélection directe d'un modèle arbitraire. Il ne publie que `free-ai-auto` et `free-ai-max`, tous deux limités aux routes gratuites.
 
 Pour OpenRouter, le manager force :
 

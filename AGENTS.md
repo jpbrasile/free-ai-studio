@@ -87,7 +87,7 @@ Pour une nouvelle intégration :
 1. clé côté serveur uniquement ;
 2. intégrer le fournisseur dans le manager ;
 3. définir `strict-zero` ou `free-tier-account` uniquement sur preuve actuelle ;
-4. conserver `free-ai-auto` comme choix simple pour le débutant ;
+4. conserver `free-ai-auto` comme choix simple pour le débutant. `free-ai-max` est le seul autre choix : même routage gratuit, avec le modèle Gemini haut de gamme en tête et son propre quota ;
 5. implémenter fallback et cooldown ;
 6. tester ;
 7. documenter les limites.

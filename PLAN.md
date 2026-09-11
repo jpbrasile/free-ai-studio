@@ -20,13 +20,14 @@ officielles ont contredit, et ce qui reste. Travail mené sur la branche
 | **P1-2** Kaggle | **fait** | `tests/test_kaggle.py`, 5 tests ; conditions de Kaggle lues | la politique d'usage soulève une question nouvelle (étape 4) |
 | **P2** Périmètre | **commencé** | pastilles « expérimental » sur `/studio` (Voix, Vidéo, Étudier, Code, Sandbox) | parcours complet sur une machine vierge avec une vraie personne ; l'indicateur |
 | **P2** Registre | **non commencé** | — | tout (étape 6) |
-| Hors audit : `/studio` sans JavaScript | **corrigé** | `scripts/verifier-js.py`, ajouté à la CI | voir la page dans un navigateur après reconstruction |
+| Hors audit : **Free AI Max**, deuxième choix du chat | **fait dans le dépôt** | décision de l'utilisateur le 11/09 ; `gemini-3.8-flash` en tête, puis la chaîne d'Auto ; quota et pause à part ; `tests/test_quotas.py` (4 tests de plus, 17 au total) ; essai réel hors conteneur le 11/09 : `/v1/models` propose les deux choix, une demande Max servie par `gemini-3.8-flash`, une demande Auto par `gemini-3.5-flash-lite` | pas encore reconstruit ni vu dans Open WebUI ; bascule de Max vers Flash-Lite vérifiée seulement par les tests |
+| Hors audit : `/studio` sans JavaScript | **corrigé** | `scripts/verifier-js.py`, ajouté à la CI | vue dans Chrome (service d'essai, 0 erreur console) ; conteneurs reconstruits depuis `dcc742d` |
 
 Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`, un `\n` mal échappé dans la chaîne Python de la page `/studio` cassait **tout** son script dans le navigateur. Les effets : état des clés absent, bouton « Mettre à jour » inerte, et le bandeau des quotas n'aurait jamais paru. Ni `py_compile`, ni ruff, ni le test d'import ne pouvaient le voir ; `node --check` le voit.
 
 ## Règles qui tiennent pendant tout le plan
 
-- **Gel des fonctions.** Aucune nouvelle fonction tant que P0-1 et P0-2 ne sont pas vérifiés **en réel**. Aujourd'hui, ils ne sont vérifiés que hors réseau.
+- **Gel des fonctions.** Aucune nouvelle fonction tant que P0-1 et P0-2 ne sont pas vérifiés **en réel**. Aujourd'hui, ils ne sont vérifiés que hors réseau. Seule exception, levée par l'utilisateur le 11/09/2026 : Free AI Max. Sur les fiches de Google, Flash-Lite est nettement en dessous de 3.8 Flash (Terminal-bench 2.1 : 54,0 % contre 89,4 %), et les deux quotas sont distincts.
 - P0 avant P1, P1 avant P2.
 - Source officielle d'abord. Si elle contredit l'audit, elle gagne, et l'écart s'écrit ci-dessous.
 - Rien de payant en secours, jamais. `ALLOW_PAID_MODELS=false` ne s'assouplit pas.
@@ -45,7 +46,14 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
 ## Prochaines étapes, dans l'ordre
 
 1. ~~**Vérifier P0-1 en réel.**~~ Fait le 11/09 : 65 messages sur 65 servis par Gemini (§ P0-1). Il reste à observer une **bascule réelle**. Elle viendra d'elle-même le jour où Google refusera ; ne pas brûler le quota d'OpenRouter pour la provoquer, cela n'apprend rien que les tests ne montrent déjà. Ce jour-là, relever la limite écrite par Google dans son refus et la reporter, datée, dans `docs/FREE_TIER_MANAGER.md`.
-2. **Reconstruire les conteneurs et regarder les pages** dans un navigateur : `/studio`, `/diagnostic`, `/video`, et `/cles` du Sandbox. `node --check` vérifie la syntaxe du JavaScript, pas son rendu.
+2. ~~**Reconstruire les conteneurs et regarder les pages**~~ **Fait le 11/09/2026.** Commit `dcc742d` sur `audit-20260911`, puis `docker compose up -d --build` : les 4 conteneurs sont en bonne santé. Contrôles sur les conteneurs reconstruits :
+   - le routeur annonce la version `dcc742d` ;
+   - le bloc `quotas` est présent dans `/diagnostic/etat` ;
+   - Gemini (`gemini-3.5-flash-lite`), OpenRouter et Groq sont éligibles ;
+   - la garde Kaggle dit permis depuis localhost et coupé par 192.168.1.20 ;
+   - une demande de chat : HTTP 200, servie par Gemini, `x-free-ai-secours: non`.
+
+   Les pages ont été vues dans Chrome sur le service d'essai hors conteneur, avec le même code. **Reste non vérifié** : une vraie bascule, et son avis tel qu'Open WebUI l'affiche.
 3. **Pousser la branche** et lire le premier passage de GitHub Actions.
 4. **Kaggle et la politique d'usage : décision humaine.** Même sur la machine de la personne, le mode `auto` peut envoyer sur Kaggle un code quelconque. Trois choix :
    - (a) laisser tel quel, avec l'avertissement de `docs/GPU_CLOUD.md` ;
@@ -167,4 +175,4 @@ docker compose --env-file .env.example config   exit 0 (sortie jetée : elle ré
   - `/cles` : la carte Kaggle dit « Pilotage automatique réservé à votre machine ».
 - **Non vérifié à l'écran** : la carte Kaggle grisée, et l'option Kaggle désactivée, quand le contexte est partagé. Le navigateur ne peut pas se présenter sous une autre adresse que localhost. Ce cas n'a été vérifié qu'au niveau de l'API (voir P1-2).
 
-Les deux services d'essai ont été arrêtés après les mesures. **Pas lancé** : aucune reconstruction des conteneurs, aucun push.
+Les deux services d'essai ont été arrêtés après les mesures. Les conteneurs ont ensuite été reconstruits depuis `dcc742d`, à la demande de l'utilisateur (voir « Prochaines étapes », point 2). **Pas lancé** : aucun push.

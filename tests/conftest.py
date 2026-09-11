@@ -46,7 +46,8 @@ def routeur(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-factice")
     monkeypatch.setenv("FREE_PROVIDER_ORDER", "gemini,openrouter,groq")
     monkeypatch.setenv("ENABLE_GROQ", "false")
-    for nom in ("GEMINI_FREE_MODEL", "GROQ_API_KEY", "ALLOW_FREE_TIER_ACCOUNTS", "FREE_ONLY"):
+    for nom in ("GEMINI_FREE_MODEL", "GEMINI_MAX_MODEL", "ENABLE_GEMINI", "ENABLE_GEMINI_MAX",
+                "GROQ_API_KEY", "ALLOW_FREE_TIER_ACCOUNTS", "FREE_ONLY"):
         monkeypatch.delenv(nom, raising=False)
     monkeypatch.setenv("FREE_AI_CONFIG_DIR", str(_JETABLE / ("config-%d" % next(_numero))))
     return charger("free-tier-manager")

@@ -1,6 +1,7 @@
 """Quota gratuit de Gemini epuise : le chat doit continuer ET le dire."""
 from __future__ import annotations
 
+import json
 import time
 
 import httpx
@@ -31,19 +32,23 @@ REFUS_JOUR = [{"error": {
 }}]
 REFUS_JOUR_DOC = {"error": {"code": "quota_exceeded", "message": "You have exceeded your daily quota."}}
 REFUS_MINUTE = {"error": {"code": "rate_limit_exceeded", "message": "Too many requests. Please retry in 12s."}}
+# Le meme refus, pour le modele de Free AI Max : Google compte le quota par modele.
+REFUS_JOUR_MAX = json.loads(json.dumps(REFUS_JOUR).replace("gemini-3.5-flash-lite", "gemini-3.8-flash"))
 
 
 class FauxAmont:
-    """Remplace les fournisseurs : Gemini refuse, OpenRouter repond en flux."""
+    """Remplace les fournisseurs : ceux de `refuse` renvoient 429, les autres
+    repondent en flux."""
 
-    def __init__(self, refus):
+    def __init__(self, refus, refuse=("gemini",)):
         self.refus = refus
+        self.refuse = refuse
         self.appels = []
 
     async def __call__(self, client, name, payload):
         self.appels.append(name)
         requete = httpx.Request("POST", f"https://{name}.invalid/chat/completions")
-        if name == "gemini":
+        if name in self.refuse:
             return httpx.Response(429, json=self.refus, request=requete)
         flux = (b'data: {"choices":[{"index":0,"delta":{"content":"Bonjour"}}]}\n\n'
                 b"data: [DONE]\n\n")
@@ -51,9 +56,9 @@ class FauxAmont:
                               content=flux, request=requete)
 
 
-def demander(client):
+def demander(client, modele="free-ai-auto"):
     return client.post("/v1/chat/completions", headers=CLE, json={
-        "model": "free-ai-auto", "stream": True,
+        "model": modele, "stream": True,
         "messages": [{"role": "user", "content": "Bonjour"}],
     })
 
@@ -160,3 +165,54 @@ def test_sans_bascule_aucun_avis(routeur, monkeypatch):
     assert amont.appels == ["gemini"]
     assert "free-ai-avis" not in r.text
     assert client.get("/quotas/etat").json()["secours_en_cours"] is False
+
+
+def modeles_proposes(client):
+    return [m["id"] for m in client.get("/v1/models", headers=CLE).json()["data"]]
+
+
+def test_deux_choix_dans_le_chat(routeur):
+    assert modeles_proposes(TestClient(routeur.app)) == ["free-ai-auto", "free-ai-max"]
+    assert routeur.PROVIDERS["gemini_max"]["model"] == "gemini-3.8-flash"
+
+
+def test_max_absent_sans_cle_gemini(routeur, monkeypatch):
+    # Sans cle Gemini, Max repondrait comme Auto sous un nom qui promet plus.
+    monkeypatch.delenv("GEMINI_API_KEY")
+    assert modeles_proposes(TestClient(routeur.app)) == ["free-ai-auto"]
+
+
+def test_choix_direct_d_un_modele_refuse(routeur):
+    r = TestClient(routeur.app).post("/v1/chat/completions", headers=CLE, json={
+        "model": "gemini-3.8-flash", "messages": [{"role": "user", "content": "x"}]})
+    assert r.status_code == 403
+
+
+def test_max_quota_a_part(routeur, monkeypatch):
+    amont = FauxAmont(REFUS_JOUR_MAX, refuse=("gemini_max",))
+    monkeypatch.setattr(routeur, "open_upstream", amont)
+    client = TestClient(routeur.app)
+
+    # Max essaie le modele fort ; refuse pour la journee, Flash-Lite prend le
+    # relais, et l'avis nomme les deux.
+    r1 = demander(client, "free-ai-max")
+    assert r1.status_code == 200
+    assert amont.appels == ["gemini_max", "gemini"]
+    assert "Gemini Max" in r1.text
+    assert "limite gratuite du jour" in r1.text
+    assert "gemini-3.5-flash-lite" in r1.text
+    assert r1.text.index("limite gratuite") < r1.text.index("Bonjour")
+
+    # Le quota de Max est a part : Auto sert toujours avec Flash-Lite, sans
+    # avis, et Max ne resollicite pas le modele en pause.
+    r2 = demander(client, "free-ai-auto")
+    assert "free-ai-avis" not in r2.text
+    demander(client, "free-ai-max")
+    assert amont.appels == ["gemini_max", "gemini", "gemini", "gemini"]
+
+    etat = client.get("/quotas/etat").json()
+    assert fiche(etat, "gemini_max")["quota_du_jour_atteint"] is True
+    assert abs(fiche(etat, "gemini_max")["reprise_a"] - routeur.minuit_pacifique(time.time())) < 5
+    assert fiche(etat, "gemini")["en_pause"] is False
+    assert etat["secours_max_en_cours"] is True
+    assert etat["secours_en_cours"] is False
