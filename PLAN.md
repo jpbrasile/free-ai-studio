@@ -13,7 +13,7 @@ officielles ont contredit, et ce qui reste. Travail mené sur la branche
 
 | Tâche | État | Preuve | Ce qui manque |
 |---|---|---|---|
-| **P0-1** Quota Gemini, bascule annoncée | **fait ; critère vérifié en réel** | essai du 11/09 : 65 messages à `gemini-3.5-flash-lite`, aucun refus de Google, aucun recours à OpenRouter (§ P0-1) ; bascule vérifiée par `tests/test_quotas.py`, 8 tests | une **bascule réelle** (aucun refus en 65 messages) ; le rendu de l'avis dans Open WebUI ; les installations existantes gardent `gemini-3.8-flash` si leur `.env` le fixe |
+| **P0-1** Quota Gemini, bascule annoncée | **fait ; en réel, seul le régime sans refus est vérifié** | essai du 11/09 : 65 messages à `gemini-3.5-flash-lite`, aucun refus de Google, aucun recours à OpenRouter (§ P0-1) ; bascule, pauses et refus vérifiés hors réseau par `tests/test_quotas.py`, 20 tests après `f9d5c91` | une **bascule réelle** (aucun refus en 65 messages) ; le rendu de l'avis dans Open WebUI ; les installations existantes gardent `gemini-3.8-flash` si leur `.env` le fixe |
 | **P0-2** Modal : carte, crédit, plafond | **fait** | README, `.env.example`, page `/video`, `docs/MODAL_CATALOG.md`, `docs/SERVICES_DEBUTANT.md` ; nombre de clips recalculé avec la règle du code | le palier Modal ne peut pas être **détecté** (aucune API de crédit lue) : il est affiché comme une déclaration |
 | **P0-3** « open source » / « gratuit » | **fait dans le dépôt** | README, section « Ce qui est ouvert, ce qui ne l'est pas » ; licence et territoire affichés à côté du choix sur `/video` ; règle de vocabulaire dans `AGENTS.md` | documents de présentation hors dépôt : non touchés |
 | **P1-1** CI | **fait, critère vérifié en local** | une faute dans une copie de `video.py` fait échouer la CI (§ P1-1) | un premier passage réel sur GitHub Actions : rien n'est poussé |
@@ -21,6 +21,7 @@ officielles ont contredit, et ce qui reste. Travail mené sur la branche
 | **P2** Périmètre | **commencé** | pastilles « expérimental » sur `/studio` (Voix, Vidéo, Étudier, Code, Sandbox) | parcours complet sur une machine vierge avec une vraie personne ; l'indicateur |
 | **P2** Registre | **non commencé** | — | tout (étape 6) |
 | Hors audit : **Free AI Max**, deuxième choix du chat | **fait et en service** (commit `9b5be4d`, reconstruit le 11/09) | décision de l'utilisateur le 11/09 ; `gemini-3.8-flash` en tête, puis la chaîne d'Auto ; quota et pause à part ; `tests/test_quotas.py` (4 tests de plus, 17 au total) ; essai réel dans le conteneur reconstruit le 11/09 : `/v1/models` propose les deux choix, une demande Max en flux servie par `gemini-3.8-flash` (1,4 s), une demande Auto par `gemini-3.5-flash-lite` (0,8 s) ; le sélecteur d'Open WebUI liste Free AI Auto et Free AI Max | bascule de Max vers Flash-Lite vérifiée seulement par les tests ; aucune demande envoyée depuis Open WebUI même ; le sélecteur montre aussi « Arena Model », fourni par Open WebUI, pas par le Studio |
+| Hors audit : **revue du 11/09**, cinq défauts de P0-1 | **corrigé** (commit `f9d5c91`) | l'avis vaut pour toute pause, y compris survenue pendant une demande Max ; 429 en français dès le premier refus avec une seule clé ; 5xx et coupures : pause courte et avis ; `ENABLE_GEMINI_MAX=false` respecté avec une clé saisie dans /cles ; messages « sans clé » et « fausse clé » en français ; 8 tests, qui échouent tous sur `80bcfee` | voir « Parcours débutant sur une machine vierge » |
 | Hors audit : `/studio` sans JavaScript | **corrigé** | `scripts/verifier-js.py`, ajouté à la CI | vue dans Chrome (service d'essai, 0 erreur console) ; conteneurs reconstruits depuis `dcc742d` |
 
 Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`, un `\n` mal échappé dans la chaîne Python de la page `/studio` cassait **tout** son script dans le navigateur. Les effets : état des clés absent, bouton « Mettre à jour » inerte, et le bandeau des quotas n'aurait jamais paru. Ni `py_compile`, ni ruff, ni le test d'import ne pouvaient le voir ; `node --check` le voit.
@@ -60,7 +61,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
    - (b) ne proposer Kaggle en `auto` qu'aux jobs `gpu=true` ;
    - (c) retirer Kaggle du mode `auto` et ne garder que le lien manuel.
 
-   Recommandation : (b). Le coût est faible, et un job GPU relève presque toujours du calcul d'apprentissage.
+   Recommandation : (b). Le coût est faible, et un job GPU relève presque toujours du calcul d'apprentissage. **Décision de l'utilisateur, 11/09/2026 : (b).**
 5. **P2 : verrouiller Chat, Recherche et Image** sur une machine vierge, avec une personne qui n'a jamais ouvert un terminal.
    - Écrire le protocole avant la séance : une liste fixe de tâches (installer, coller la clé, poser une question, chercher sur le Web, fabriquer une image, ouvrir le diagnostic), et pour chacune une case « menée à terme sans aide ».
    - Indicateur : le pourcentage de tâches menées à terme, à la place de la taille du catalogue.
@@ -71,18 +72,24 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
    3. Faire lire le registre par `free-tier-manager` (`PROVIDERS`, `LIMITES_PUBLIEES`) et par `sandbox-manager` (`video.MODELES`). Aujourd'hui ces données sont en dur, et le tableau du README en est une troisième copie.
    4. Seulement ensuite, un job qui propose des candidats par PR, avec validation humaine.
 7. **Dette relevée en passant, hors audit.** `@app.on_event("startup")` est déprécié par FastAPI (avertissements des tests). Passer à `lifespan` au prochain changement du démarrage.
+8. **Reste de la revue du 11/09, non commencé.**
+   - `/studio` et `/diagnostic` raisonnent par service, pas par choix du chat : avec la seule clé Gemini, Auto à bout et Max libre, le verdict dit encore « Tout est en place ».
+   - Le bouton « Mettre à jour » compare toujours à `main` : sur `audit-20260911`, il annonce une version plus récente alors que la branche est en avance.
+   - `/maj/lancer`, `/diagnostic/reparer` et `/cles/oublier` n'ont aucune garde d'origine : une page Web ouverte par l'utilisateur peut les appeler (supposé, non testé).
+   - Petites dettes : une carte « gemini_max » sans titre sur /cles si `FREE_PROVIDER_ORDER` le contient ; `fournisseurs_branches` hors de l'ordre d'affichage.
 
 ## Détail par tâche
 
 ### P0-1 — Le chat ne se dégrade plus en silence
 
 - **Code** (`free-tier-manager/app.py`) :
-  - défaut `gemini-3.5-flash-lite` ; le modèle haut de gamme `gemini-3.8-flash` reste accessible par `GEMINI_FREE_MODEL` ;
+  - défaut `gemini-3.5-flash-lite` ; le modèle haut de gamme `gemini-3.8-flash` est le premier service de Free AI Max (`GEMINI_MAX_MODEL`) ;
   - `lire_quota()` lit un refus 429 de l'une ou l'autre forme (documentée ou réelle) ;
   - un quota du jour met Gemini en pause jusqu'à minuit, heure du Pacifique ; une limite par minute, de 5 s à 5 min ;
   - la première réponse du secours commence par une ligne d'avis ;
   - `GET /quotas/etat` ; bloc « quotas » dans `/diagnostic/etat` ; bandeau et liste sur `/studio` ;
-  - un `429` explicite quand **tous** les services sont en pause.
+  - un `429` explicite quand **tous** les services sont en pause, dès la demande qui met en pause le dernier (`f9d5c91`) ;
+  - un 5xx ou une coupure : pause courte, avis « ne répond pas pour l'instant » (`f9d5c91`).
 - **Docs** : `docs/FREE_TIER_MANAGER.md` (tableau des limites, avec date et sources), `README.md`, `.env.example`.
 - **Vérifié hors réseau** : `tests/test_quotas.py`. Les fournisseurs y sont simulés, avec un refus au format réel et un au format documenté.
 - **Vérifié en réel le 11/09/2026.** Le nouveau routeur a été lancé hors conteneur, sur un port d'essai. Conditions : la clé Gemini gratuite du `.env`, un dossier de configuration neuf, et `GEMINI_FREE_MODEL` retiré pour simuler une installation neuve. Déroulé :
@@ -92,7 +99,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
 
   Le critère d'acceptation (« plus de 20 échanges sans dégradation silencieuse ») est donc tenu sans bascule. Faute de refus, la bascule elle-même n'a pas pu être observée en réel.
 - **Installations existantes.** Un `.env` créé avant le 11/09 peut contenir `GEMINI_FREE_MODEL=gemini-3.8-flash`, qui prime sur le défaut du code. C'est le cas sur la machine de l'essai. Pour passer à Flash-Lite, supprimer la ligne ou la remplacer par `gemini-3.5-flash-lite`. Le Studio ne réécrit jamais `.env`.
-- **Pages rendues dans Chrome** (même service d'essai, après les 65 demandes). Sur `/studio`, le bloc « Services gratuits » affiche Gemini (`gemini-3.5-flash-lite`) « disponible, 65 réponse(s) servie(s) aujourd'hui » et OpenRouter à 0. Chaque ligne porte sa limite publiée, et les pastilles « expérimental » sont présentes. Sur `/diagnostic`, une ligne par service. Aucune erreur dans la console sur les deux pages. Groq n'apparaissait pas : `ENABLE_GROQ=false` dans le `.env`, donc le service n'était pas éligible. À la demande de l'utilisateur, `.env` a ensuite été remis sur le plan de `.env.example` et Groq activé, le 11/09. La clé Groq est acceptée (GET `/openai/v1/models`, HTTP 200), et `openai/gpt-oss-20b` figure dans la liste. Ce changement ne prend effet qu'à la recréation des conteneurs. Or `/diagnostic` le liste quand même parmi les services « branchés » ; ce décalage existait avant.
+- **Pages rendues dans Chrome** (même service d'essai, après les 65 demandes). Sur `/studio`, le bloc « Services gratuits » affiche Gemini (`gemini-3.5-flash-lite`) « disponible, 65 réponse(s) servie(s) aujourd'hui » et OpenRouter à 0. Chaque ligne porte sa limite publiée, et les pastilles « expérimental » sont présentes. Sur `/diagnostic`, une ligne par service. Aucune erreur dans la console sur les deux pages. Groq n'apparaissait pas : `ENABLE_GROQ=false` dans le `.env`, donc le service n'était pas éligible. À la demande de l'utilisateur, `.env` a ensuite été remis sur le plan de `.env.example` et Groq activé, le 11/09. La clé Groq est acceptée (GET `/openai/v1/models`, HTTP 200), et `openai/gpt-oss-20b` figure dans la liste. Ce changement ne prend effet qu'à la recréation des conteneurs. Or `/diagnostic` le liste quand même parmi les services « branchés » ; ce décalage existait avant. Mesuré le 11/09, conteneurs reconstruits depuis `9b5be4d` : `/quotas/etat` donne Gemini, Gemini Max, OpenRouter et Groq éligibles.
 - **Non vérifié** : la vraie limite du jour de Google, et le rendu de l'avis dans Open WebUI.
 
 ### P0-2 — Modal : la carte bancaire est dite partout
@@ -164,7 +171,7 @@ ruff check .                       All checks passed!
 compilation de tous les .py        exit 0
 python scripts/verifier-imports.py 3 services chargés
 python scripts/verifier-js.py      9 scripts, 0 en échec (avant correction : /studio en échec)
-python -m pytest -q tests          13 passed
+python -m pytest -q tests          25 passed après f9d5c91 (13 à dcc742d)
 docker compose --env-file .env.example config   exit 0 (sortie jetée : elle résout les variables)
 ```
 
@@ -176,3 +183,19 @@ docker compose --env-file .env.example config   exit 0 (sortie jetée : elle ré
 - **Non vérifié à l'écran** : la carte Kaggle grisée, et l'option Kaggle désactivée, quand le contexte est partagé. Le navigateur ne peut pas se présenter sous une autre adresse que localhost. Ce cas n'a été vérifié qu'au niveau de l'API (voir P1-2).
 
 Les deux services d'essai ont été arrêtés après les mesures. Les conteneurs ont ensuite été reconstruits depuis `dcc742d`, à la demande de l'utilisateur (voir « Prochaines étapes », point 2). **Pas lancé** : aucun push.
+
+## Parcours débutant sur une machine vierge (Linux simulé), 11/09/2026
+
+Machine : un conteneur `docker:dind` privilégié sur ce PC (`fas-debutant-simule`), sans aucune image Docker ni `.env` au départ, le clone du dépôt monté dedans. Le script (hors dépôt) suit le README à la lettre, `./install.sh` puis `./start.sh`, sans aucune clé de fournisseur, et ne corrige rien.
+
+| | `9b5be4d`, premier passage | `f9d5c91`, après corrections |
+|---|---|---|
+| `install.sh`, `start.sh`, attente des services sains | 108 s, 78 s, 32 s | 100 s, 68 s, 31 s |
+| durée totale | 219 s | 201 s |
+| auto-test | code 0 | code 0 |
+| conseil de l'auto-test, sans clé | « Ajoutez OPENROUTER_API_KEY dans .env » | « ouvrez http://127.0.0.1:8010/cles » |
+| une question dans le chat, sans clé | message anglais qui renvoie à `.env` | message français qui renvoie à la page Clés ; Open WebUI le relaie tel quel (HTTP 400) |
+| fausse clé Gemini sur /cles | « Refus du fournisseur (HTTP 400). Please pass a valid API key » | « Cle refusee. Verifiez que vous l'avez copiee en entier… », puis le motif de Google, annoncé comme anglais |
+| menu du chat | `free-ai-auto`, `arena-model` | inchangé ; Arena est l'étape suivante |
+
+Les durées dépendent du réseau : elles ne mesurent pas un débutant. Ce passage ne dit rien de Windows (`demarrer.cmd`, politique d'exécution, marque du Web), de Docker Desktop, d'une vraie clé ni d'une vraie personne : c'est l'objet de l'étape 5.

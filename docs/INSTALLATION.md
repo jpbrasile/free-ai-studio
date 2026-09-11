@@ -1,5 +1,7 @@
 # Installation guidée — débutant
 
+Ce guide suit le README ; en cas d'écart, le README fait foi.
+
 
 ## 0. Vérifier les permissions de l'assistant
 
@@ -46,37 +48,17 @@ docker --version
 docker compose version
 ```
 
-## B. Préparer Free AI Studio
+## B. Récupérer Free AI Studio
 
-Copier `.env.example` vers `.env`.
+Le README, section « Installation sur l'ordinateur de quelqu'un qui n'écrira jamais une
+commande », donne les gestes : Git et VS Code puis `Git: Clone`, ou le ZIP de GitHub.
 
-Linux/macOS :
+Rien à copier à la main : le premier lancement crée `.env` à partir de `.env.example` et
+fabrique au hasard les mots de passe internes.
 
-```bash
-cp .env.example .env
-```
+## C. Lancer
 
-Windows PowerShell :
-
-```powershell
-Copy-Item .env.example .env
-```
-
-## C. Ajouter les clés API
-
-Ouvrir `.env` dans VS Code.
-
-Commencer idéalement par :
-
-- `GEMINI_API_KEY`
-- `GROQ_API_KEY`
-- `OPENROUTER_API_KEY`
-
-Les liens officiels sont dans `API_KEYS.md`.
-
-Ne partagez jamais le fichier `.env`.
-
-## D. Lancer Open WebUI
+Windows : double-cliquer `demarrer.cmd`, à la racine du dossier.
 
 Linux/macOS :
 
@@ -85,41 +67,44 @@ Linux/macOS :
 ./start.sh
 ```
 
-Windows :
+Windows, en PowerShell (chemin de l'assistant de code). Sur un Windows neuf, la politique
+d'exécution des scripts bloque `.\install.ps1` lancé tel quel :
 
 ```powershell
-.\install.ps1
-.\start.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
-Puis ouvrir :
+## D. Coller une clé
 
-http://localhost:3000
+Ouvrir <http://127.0.0.1:8010/cles> (bouton **Clés** du portail) et coller une clé Google
+Gemini gratuite, créée sur <https://aistudio.google.com/apikey>. Le Studio l'essaie aussitôt
+chez Google et dit si elle marche. Elle suffit pour écrire, lire une image et fabriquer une
+image. OpenRouter et Groq, facultatifs, servent de secours : liens dans `docs/API_KEYS.md`.
 
-## E. Premier démarrage
+Les clés collées restent sur cet ordinateur, dans le dossier `config` du Studio. Ne partagez
+jamais ce dossier ni le fichier `.env`.
 
-Open WebUI peut demander de créer un compte administrateur local au premier lancement.
+## E. Premier démarrage du chat
 
-Les clés API présentes dans `.env` ne sont volontairement pas toutes injectées directement dans le navigateur. Les futures intégrations/pipe doivent les consommer côté serveur.
+Ouvrir <http://localhost:3000>. Aucun compte à créer : avec `WEBUI_AUTH=false` (le défaut),
+le chat s'ouvre directement, et son port n'écoute que sur cet ordinateur. En haut du chat,
+deux choix : **Free AI Auto** pour le courant, **Free AI Max** pour les questions difficiles.
 
 ## F. Vérifier
 
-Linux/macOS :
+Sans terminal : <http://127.0.0.1:8010/diagnostic> teste la chaîne maillon par maillon et dit
+où elle casse.
 
-```bash
-./scripts/diagnose.sh
-```
-
-Vous devez voir Open WebUI en fonctionnement.
+Avec un terminal : `./scripts/self-test.sh` (Linux/macOS) ou
+`powershell -ExecutionPolicy Bypass -File .\scripts\self-test.ps1` (Windows ; Python requis).
 
 ## G. Étape suivante
 
-Une fois le chat minimal validé :
-
-1. connecter les fournisseurs compatibles,
-2. ajouter le routeur gratuit,
-3. installer ComfyUI si génération image/vidéo nécessaire,
-4. ajouter éventuellement un backend GPU distant.
+La recherche Web et la fabrication d'image sont déjà réglées : rouage sous la zone de saisie
+du chat. La vidéo (<http://127.0.0.1:8020/video>) loue une carte graphique chez Modal, carte
+bancaire exigée : lire le README avant. Les GPU distants (Modal, Kaggle, Colab) :
+`docs/GPU_CLOUD.md`.
 
 
 ## NotebookLM — optionnel

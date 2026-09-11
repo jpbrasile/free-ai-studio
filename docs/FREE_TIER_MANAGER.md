@@ -172,14 +172,16 @@ Lorsqu'un fournisseur renvoie `429 Too Many Requests`, le Free Tier Manager lit 
 - **quota du jour** (Gemini : `quotaId` contenant `PerDay`, ou code `quota_exceeded`) : Gemini est mis en pause **jusqu'à minuit heure du Pacifique**, au lieu d'être réessayé toutes les 30 secondes ;
 - **limite par minute** (`rate_limit_exceeded`, ou tout autre refus) : pause courte, de 5 s à 5 min, d'après le délai indiqué par le fournisseur. Pour OpenRouter et Groq, l'heure de remise à zéro du quota du jour n'est pas documentée : même un refus « du jour » y reçoit une pause courte, puis un nouvel essai.
 
+Un service **qui ne répond pas** (statut `5xx`, par exemple `503 The model is overloaded` chez Google, coupure réseau, délai dépassé) reçoit lui aussi une pause courte : de 5 à 60 s, 30 s si le fournisseur n'indique rien. Sans elle, chaque message repaierait l'aller-retour raté.
+
 Il essaie aussitôt le fournisseur gratuit suivant. Le basculement n'est **pas silencieux** :
 
-- la première réponse servie par le secours commence par une ligne en italique : « ℹ️ Gemini (Google) a atteint sa limite gratuite du jour (N demandes) : cette réponse est fournie par OpenRouter. Retour prévu dans environ X h, à minuit heure du Pacifique. » ; elle n'est écrite qu'une fois par pause, et seulement dans une réponse en flux (celles du chat) ;
+- la première réponse servie par le secours commence par une ligne en italique : « ℹ️ Gemini (Google) a atteint sa limite gratuite du jour (N demandes) : cette réponse est fournie par OpenRouter. Retour prévu dans environ X h, à minuit heure du Pacifique. » ; elle n'est écrite qu'une fois par pause, et seulement dans une réponse en flux (celles du chat). Pour un service qui ne répond pas, elle dit : « ℹ️ Gemini (Google) ne répond pas pour l'instant : cette réponse est fournie par … Nouvel essai dans 30 s. » Toute mise en pause arme l'avis, même survenue pendant une demande de l'autre choix du chat : si Flash-Lite atteint sa limite pendant une demande Free AI Max, la demande Free AI Auto suivante le dit ;
 - `/studio` affiche un bandeau « Le chat répond en ce moment avec un service de secours » et, pour chaque service : disponible ou en pause, heure de reprise, demandes restantes estimées ;
 - `/diagnostic` ajoute une ligne par service, avec la même information ;
-- `GET /quotas/etat` (sans clé, sans secret) rend l'état brut : `en_pause`, `reprise_a`, `quota_du_jour_atteint`, `limite_annoncee`, `servies_aujourdhui`, `reste_estime`, `secours_en_cours`, `dernier_service` ;
+- `GET /quotas/etat` (sans clé, sans secret) rend l'état brut : `en_pause`, `reprise_a`, `quota_du_jour_atteint`, `indisponible`, `limite_annoncee`, `servies_aujourdhui`, `reste_estime`, `secours_en_cours`, `dernier_service` ;
 - les réponses non-flux portent l'en-tête `X-Free-AI-Secours: oui|non`.
 
-Si **tous** les services branchés sont en pause, le chat répond `429` avec l'heure du premier retour, au lieu de « aucune clé configurée ». Rien de payant n'est essayé.
+Si **tous** les services branchés du choix sont en pause, le chat répond `429`, en français, avec l'heure du premier retour. C'est vrai dès la demande dont le refus met en pause le dernier service libre : avec la seule clé Gemini, le premier refus du jour donne ce message, pas une erreur technique. Si la pause vient de services qui ne répondent pas, la réponse est `503`, avec le même délai. Quand Free AI Auto est à bout et que Free AI Max répond encore, le message propose de le choisir. Sans aucune clé, le chat répond `503` et envoie à la page Clés (`http://localhost:8010/cles`). Rien de payant n'est essayé.
 
 Ce que le Studio **ne sait pas** : le quota restant côté Google avant le premier refus. Il compte les réponses servies depuis minuit (ou depuis son dernier démarrage) ; l'estimation « reste N » n'apparaît qu'une fois que Google a écrit sa limite dans un refus, et seulement pour le même modèle.

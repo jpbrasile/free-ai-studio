@@ -35,7 +35,7 @@ Le dépôt contient `AGENTS.md`, qui briefe directement les assistants de codage
 
 ## Installation sur l'ordinateur de quelqu'un qui n'écrira jamais une commande
 
-Quatre gestes. Aucun terminal, aucun assistant de code.
+Cinq gestes. Aucun terminal, aucun assistant de code.
 
 1. **Docker Desktop** — <https://www.docker.com/products/docker-desktop/>. Installer,
    redémarrer si on le demande, puis **ouvrir Docker Desktop** et attendre que la baleine
@@ -48,14 +48,16 @@ Quatre gestes. Aucun terminal, aucun assistant de code.
    Sert uniquement à ce que le bouton « Mettre à jour » sache quelle version vous avez.
    Si VS Code était déjà ouvert, le fermer et le rouvrir : il ne cherche Git qu'à son
    démarrage.
-3. **Récupérer le dossier.** Dans VS Code : menu **Affichage** → **Palette de commandes**,
+3. **VS Code** — <https://code.visualstudio.com/>. Installer avec les choix proposés. Il
+   sert au geste suivant, et plus tard à ouvrir un assistant de code si vous le souhaitez.
+4. **Récupérer le dossier.** Dans VS Code : menu **Affichage** → **Palette de commandes**,
    taper `Git: Clone`, coller `https://github.com/jpbrasile/free-ai-studio.git`, et
    **désigner le dossier parent** — `Documents`, pas un dossier `free-ai-studio` déjà
    créé : git fabrique lui-même le sous-dossier à son nom. Deux dossiers du même nom
    partagent le même projet Docker, ce qui casse le chat plus tard.
-   *(Sans Git : bouton vert « Code » sur GitHub → « Download ZIP » → extraire. Tout
-   marchera sauf le bouton de mise à jour, et l'installateur vous le dira.)*
-4. **Double-cliquer `demarrer.cmd`**, à la racine du dossier.
+   *(Sans Git ni VS Code : bouton vert « Code » sur GitHub → « Download ZIP » → extraire.
+   Tout marchera sauf le bouton de mise à jour, et l'installateur vous le dira.)*
+5. **Double-cliquer `demarrer.cmd`**, à la racine du dossier.
 
 `demarrer.cmd` vérifie l'ordinateur avant d'agir : version de Windows, Docker installé,
 Docker **démarré** (ce n'est pas la même chose, et c'est ce qui manque neuf fois sur dix),
@@ -109,11 +111,13 @@ Linux/macOS :
 ./start.sh
 ```
 
-Windows PowerShell :
+Windows PowerShell. Sur un Windows neuf, la politique d'exécution des scripts (*Restricted*
+par défaut) bloque `.\install.ps1` lancé tel quel ; d'où la forme ci-dessous. Pour un
+débutant, le chemin Windows reste le double-clic sur `demarrer.cmd`.
 
 ```powershell
-.\install.ps1
-.\start.ps1
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+powershell -ExecutionPolicy Bypass -File .\start.ps1
 ```
 
 Open WebUI :
@@ -283,16 +287,20 @@ Voir `LICENSE`.
 
 ## Vérification après installation
 
-Après `./start.sh` (Linux/macOS) ou `.\start.ps1` (Windows), lancez le test intégré :
+Sans terminal : ouvrir <http://127.0.0.1:8010/diagnostic>. La page teste la chaîne maillon
+par maillon et dit où elle casse.
+
+Avec un terminal, ou pour l'assistant de code, le test intégré :
 
 - Linux/macOS : `./scripts/self-test.sh`
-- Windows : `.\scripts\self-test.ps1`
+- Windows : `powershell -ExecutionPolicy Bypass -File .\scripts\self-test.ps1` (il demande
+  Python, qu'un Windows neuf n'a pas : sans Python, la page `/diagnostic` suffit)
 
-Le test ne consomme aucun crédit IA : il valide Docker Compose, l’état des conteneurs, `/health`, l’authentification du manager et l’accès local à Open WebUI.
+Le test ne consomme aucun crédit IA : il valide Docker Compose, l’état des conteneurs, `/health`, l’authentification du manager, l’accès local à Open WebUI et les choix proposés dans le chat.
 
 ### Mode gratuit strict
 
-Le routage LLM livré est **Gemini Free Tier d’abord**, puis `openrouter/free`, puis Groq si activé. Gemini utilise `gemini-3.5-flash-lite` par défaut ; le modèle haut de gamme `gemini-3.8-flash` reste accessible sur choix explicite (`GEMINI_FREE_MODEL`), avec son propre quota. Le Studio ne peut pas déterminer automatiquement si une clé Google/Groq est rattachée à un niveau gratuit ou payant : pour une garantie ultra-stricte, passez `ALLOW_FREE_TIER_ACCOUNTS=false`, ce qui conserve uniquement les routes explicitement zéro coût comme `openrouter/free`.
+Le routage LLM livré est **Gemini Free Tier d’abord**, puis `openrouter/free`, puis Groq si activé. **Free AI Auto** utilise `gemini-3.5-flash-lite`. Le second choix du chat, **Free AI Max**, essaie d'abord `gemini-3.8-flash` (`GEMINI_MAX_MODEL`), avec la même clé mais son propre quota, puis la chaîne d'Auto ; `ENABLE_GEMINI_MAX=false` le retire du chat. Le Studio ne peut pas déterminer automatiquement si une clé Google/Groq est rattachée à un niveau gratuit ou payant : pour une garantie ultra-stricte, passez `ALLOW_FREE_TIER_ACCOUNTS=false`, ce qui conserve uniquement les routes explicitement zéro coût comme `openrouter/free`.
 
 ### Fonctions média
 
@@ -349,7 +357,8 @@ Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 
 | Fonction | Fournisseur, modèle | Nature | Licence |
 |---|---|---|---|
-| Chat (1er choix) | Google, `gemini-3.5-flash-lite` | API propriétaire, palier gratuit | poids non publiés ; conditions de l’API Gemini |
+| Chat, Free AI Auto | Google, `gemini-3.5-flash-lite` | API propriétaire, palier gratuit | poids non publiés ; conditions de l’API Gemini |
+| Chat, Free AI Max | Google, `gemini-3.8-flash`, puis la chaîne d’Auto | API propriétaire, palier gratuit, quota à part | poids non publiés ; conditions de l’API Gemini |
 | Chat (1er secours) | OpenRouter, `openrouter/free` | API tierce, palier gratuit ; le modèle servi change d’une requête à l’autre, ouvert ou non | celle du modèle routé, variable |
 | Chat (2e secours, si activé) | Groq, `openai/gpt-oss-20b` | modèle ouvert exécuté à distance, par un service propriétaire | Apache 2.0 ([fiche](https://huggingface.co/openai/gpt-oss-20b)) |
 | Lecture d’image | Google, modèle du chat | API propriétaire, palier gratuit | poids non publiés |
