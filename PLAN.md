@@ -16,7 +16,7 @@ officielles ont contredit, et ce qui reste. Travail mené sur la branche
 | **P0-1** Quota Gemini, bascule annoncée | **fait ; en réel, seul le régime sans refus est vérifié** | essai du 11/09 : 65 messages à `gemini-3.5-flash-lite`, aucun refus de Google, aucun recours à OpenRouter (§ P0-1) ; bascule, pauses et refus vérifiés hors réseau par `tests/test_quotas.py`, 20 tests après `f9d5c91` | une **bascule réelle** (aucun refus en 65 messages) ; le rendu de l'avis dans Open WebUI ; les installations existantes gardent `gemini-3.8-flash` si leur `.env` le fixe |
 | **P0-2** Modal : carte, crédit, plafond | **fait** | README, `.env.example`, page `/video`, `docs/MODAL_CATALOG.md`, `docs/SERVICES_DEBUTANT.md` ; nombre de clips recalculé avec la règle du code | le palier Modal ne peut pas être **détecté** (aucune API de crédit lue) : il est affiché comme une déclaration |
 | **P0-3** « open source » / « gratuit » | **fait dans le dépôt** | README, section « Ce qui est ouvert, ce qui ne l'est pas » ; licence et territoire affichés à côté du choix sur `/video` ; règle de vocabulaire dans `AGENTS.md` | documents de présentation hors dépôt : non touchés |
-| **P1-1** CI | **fait, critère vérifié en local** | une faute dans une copie de `video.py` fait échouer la CI (§ P1-1) | premier passage réel le 11/09 (run `34610911922`) : **échec** à « Docker Compose config », `.env` absent sur le runner. `main` échoue de la même façon depuis au moins le 09/09 (run `34394306955`) : le vrai `.env` masquait le défaut en local. Correction : la CI pose une copie de `.env.example`. Résultat après correction : étape 3 |
+| **P1-1** CI | **fait, critère vérifié en local** | une faute dans une copie de `video.py` fait échouer la CI (§ P1-1) | premier passage réel le 11/09 (run `34610911922`) : **échec** à « Docker Compose config », `.env` absent sur le runner. `main` échoue de la même façon depuis au moins le 09/09 (run `34394306955`) : le vrai `.env` masquait le défaut en local. Correction : la CI pose une copie de `.env.example`. **Vert sur GitHub** après correction : commit `41cdd9a`, run `34611618281`, toutes les étapes |
 | **P1-2** Kaggle | **fait** | `tests/test_kaggle.py`, 8 tests ; conditions de Kaggle lues ; option (b) appliquée le 11/09 : en `auto`, Kaggle ne reçoit que les jobs `gpu=true` (étape 4) | aucun job réel envoyé à Kaggle depuis le changement |
 | **P2** Périmètre | **commencé** | pastilles « expérimental » sur `/studio` (Voix, Vidéo, Étudier, Code, Sandbox) | parcours complet sur une machine vierge avec une vraie personne ; l'indicateur |
 | **P2** Registre | **non commencé** | — | tout (étape 6) |
@@ -55,7 +55,8 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
    - une demande de chat : HTTP 200, servie par Gemini, `x-free-ai-secours: non`.
 
    Les pages ont été vues dans Chrome sur le service d'essai hors conteneur, avec le même code. **Reste non vérifié** : une vraie bascule, et son avis tel qu'Open WebUI l'affiche.
-3. ~~**Pousser la branche**~~ Poussée le 11/09, à la demande de l'utilisateur. Premier passage de GitHub Actions (run `34610911922`) : toutes les étapes passent sauf la dernière, « Docker Compose config », qui échoue. Le compose lit `.env` (`env_file`), qui n'est jamais dans le dépôt. `main` échoue de la même façon depuis au moins le 09/09 (run `34394306955`). Correction : la CI pose une copie de `.env.example`, sans secret, avant `docker compose config`. Rejouée en local sur une copie des seuls fichiers suivis, donc sans `.env` : code 1 avant, code 0 après.
+3. ~~**Pousser la branche**~~ Poussée le 11/09, à la demande de l'utilisateur. Premier passage de GitHub Actions (run `34610911922`) : toutes les étapes passent sauf la dernière, « Docker Compose config », qui échoue. Le compose lit `.env` (`env_file`), qui n'est jamais dans le dépôt. `main` échoue de la même façon depuis au moins le 09/09 (run `34394306955`). Correction : la CI pose une copie de `.env.example`, sans secret, avant `docker compose config`. Rejouée en local sur une copie des seuls fichiers suivis, donc sans `.env` : code 1 avant, code 0 après. **Sur GitHub, après correction : vert**, commit `41cdd9a`, run `34611618281`, toutes les étapes en 23 s. Seul avertissement : Node.js 20 déprécié pour `checkout@v4`, `setup-node@v4` et `setup-python@v5`, que le runner force déjà en Node.js 24. `main` reste rouge tant que la branche n'y est pas fusionnée.
+   Après la reconstruction du Studio de l'utilisateur sur `41cdd9a` : l'auto-test rend le code 0 ; « Arena Model » est absent du chat, retiré par le chemin « installation existante » (témoin posé à 14:42:02) ; Free AI Auto et Free AI Max sont proposés ; gemini, gemini_max, openrouter et groq sont éligibles. Une question réelle par choix, en direct au routeur : Auto servi par gemini (HTTP 200, 1,0 s), Max par gemini_max (HTTP 200, 1,5 s), `x-free-ai-secours: non` pour les deux.
 4. **Kaggle et la politique d'usage : décision humaine.** Même sur la machine de la personne, le mode `auto` peut envoyer sur Kaggle un code quelconque. Trois choix :
    - (a) laisser tel quel, avec l'avertissement de `docs/GPU_CLOUD.md` ;
    - (b) ne proposer Kaggle en `auto` qu'aux jobs `gpu=true` ;
@@ -192,14 +193,16 @@ Les deux services d'essai ont été arrêtés après les mesures. Les conteneurs
 
 Machine : un conteneur `docker:dind` privilégié sur ce PC (`fas-debutant-simule`), sans aucune image Docker ni `.env` au départ, le clone du dépôt monté dedans. Le script (hors dépôt) suit le README à la lettre, `./install.sh` puis `./start.sh`, sans aucune clé de fournisseur, et ne corrige rien.
 
-| | `9b5be4d`, premier passage | `f9d5c91`, après corrections |
-|---|---|---|
-| `install.sh`, `start.sh`, attente des services sains | 108 s, 78 s, 32 s | 100 s, 68 s, 31 s |
-| durée totale | 219 s | 201 s |
-| auto-test | code 0 | code 0 |
-| conseil de l'auto-test, sans clé | « Ajoutez OPENROUTER_API_KEY dans .env » | « ouvrez http://127.0.0.1:8010/cles » |
-| une question dans le chat, sans clé | message anglais qui renvoie à `.env` | message français qui renvoie à la page Clés ; Open WebUI le relaie tel quel (HTTP 400) |
-| fausse clé Gemini sur /cles | « Refus du fournisseur (HTTP 400). Please pass a valid API key » | « Cle refusee. Verifiez que vous l'avez copiee en entier… », puis le motif de Google, annoncé comme anglais |
-| menu du chat | `free-ai-auto`, `arena-model` | inchangé ; Arena est l'étape suivante |
+| | `9b5be4d`, premier passage | `f9d5c91`, après corrections | `41cdd9a`, Arena et Kaggle, repris de zéro |
+|---|---|---|---|
+| `install.sh`, `start.sh`, attente des services sains | 108 s, 78 s, 32 s | 100 s, 68 s, 31 s | 100 s, 50 s, 31 s |
+| durée totale | 219 s | 201 s | 182 s |
+| auto-test | code 0 | code 0 | code 0 |
+| conseil de l'auto-test, sans clé | « Ajoutez OPENROUTER_API_KEY dans .env » | « ouvrez http://127.0.0.1:8010/cles » | inchangé |
+| une question dans le chat, sans clé | message anglais qui renvoie à `.env` | message français qui renvoie à la page Clés ; Open WebUI le relaie tel quel (HTTP 400) | même message, HTTP 503 au routeur, d'un bloc et en flux ; Open WebUI non rejoué |
+| fausse clé Gemini sur /cles | « Refus du fournisseur (HTTP 400). Please pass a valid API key » | « Cle refusee. Verifiez que vous l'avez copiee en entier… », puis le motif de Google, annoncé comme anglais | inchangé |
+| menu du chat | `free-ai-auto`, `arena-model` | inchangé ; Arena est l'étape suivante | `free-ai-auto` seul ; Open WebUI dit `ENABLE_EVALUATION_ARENA_MODELS: false` et le témoin `open-webui-arena.json` est posé |
+
+Le troisième passage est parti d'une machine remise à zéro : aucune image Docker, ni `.env`, ni fichier dans `config/`. Il ne dit pas lequel des deux mécanismes a retiré Arena, la variable du compose au premier démarrage ou l'appel du routeur : le résultat est le même. Le chemin « installation existante » a été vu sur le Studio de l'utilisateur (étape 3).
 
 Les durées dépendent du réseau : elles ne mesurent pas un débutant. Ce passage ne dit rien de Windows (`demarrer.cmd`, politique d'exécution, marque du Web), de Docker Desktop, d'une vraie clé ni d'une vraie personne : c'est l'objet de l'étape 5.
