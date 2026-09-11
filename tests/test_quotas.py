@@ -1,10 +1,12 @@
 """Quota gratuit de Gemini epuise : le chat doit continuer ET le dire."""
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 CLE = {"Authorization": "Bearer cle-interne-de-test"}
@@ -216,3 +218,119 @@ def test_max_quota_a_part(routeur, monkeypatch):
     assert fiche(etat, "gemini")["en_pause"] is False
     assert etat["secours_max_en_cours"] is True
     assert etat["secours_en_cours"] is False
+
+
+def test_pause_de_gemini_pendant_max_est_dite_a_auto(routeur, monkeypatch):
+    # Flash-Lite atteint sa limite pendant une demande Max : la demande Auto
+    # suivante, servie par le secours, doit le dire.
+    amont = FauxAmont(REFUS_JOUR, refuse=("gemini_max", "gemini"))
+    monkeypatch.setattr(routeur, "open_upstream", amont)
+    client = TestClient(routeur.app)
+
+    assert demander(client, "free-ai-max").status_code == 200
+    assert amont.appels == ["gemini_max", "gemini", "openrouter"]
+    r2 = demander(client, "free-ai-auto")
+    assert r2.status_code == 200
+    assert amont.appels[3:] == ["openrouter"]
+    assert "free-ai-avis" in r2.text
+    assert "limite gratuite du jour" in r2.text
+    assert r2.text.index("limite gratuite") < r2.text.index("Bonjour")
+
+
+def test_une_seule_cle_refus_du_jour_des_la_premiere_demande(routeur, monkeypatch):
+    # Le cas du debutant : une cle Gemini, rien d'autre. Le refus du jour doit
+    # arriver en francais des la premiere demande, pas en erreur technique.
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    amont = FauxAmont(REFUS_JOUR)
+    monkeypatch.setattr(routeur, "open_upstream", amont)
+    client = TestClient(routeur.app)
+
+    r1 = demander(client)
+    assert r1.status_code == 429
+    assert "ont atteint leur limite" in r1.json()["detail"]
+    assert "Free AI Max" in r1.json()["detail"]
+    assert int(r1.headers["retry-after"]) > 0
+    r2 = demander(client)
+    assert r2.status_code == 429
+    assert amont.appels == ["gemini"]
+
+
+class Coupure(FauxAmont):
+    """Les services de `refuse` ne repondent pas : 503, ou coupure reseau."""
+
+    def __init__(self, maniere, refuse=("gemini",)):
+        super().__init__(None, refuse)
+        self.maniere = maniere
+
+    async def __call__(self, client, name, payload):
+        if name not in self.refuse:
+            return await super().__call__(client, name, payload)
+        self.appels.append(name)
+        requete = httpx.Request("POST", f"https://{name}.invalid/chat/completions")
+        if self.maniere == "coupure":
+            raise httpx.ConnectError("coupure", request=requete)
+        return httpx.Response(503, json={"error": {"code": 503, "message": "The model is overloaded."}},
+                              request=requete)
+
+
+@pytest.mark.parametrize("maniere", ["503", "coupure"])
+def test_service_qui_ne_repond_pas(routeur, monkeypatch, maniere):
+    amont = Coupure(maniere)
+    monkeypatch.setattr(routeur, "open_upstream", amont)
+    client = TestClient(routeur.app)
+
+    r1 = demander(client)
+    assert r1.status_code == 200
+    assert "ne répond pas" in r1.text
+    assert r1.text.index("ne répond pas") < r1.text.index("Bonjour")
+    # Pause courte : le message suivant ne repaie pas l'aller-retour rate, et
+    # l'avis n'est pas repete.
+    r2 = demander(client)
+    assert amont.appels == ["gemini", "openrouter", "openrouter"]
+    assert "free-ai-avis" not in r2.text
+    gemini = fiche(client.get("/quotas/etat").json(), "gemini")
+    assert gemini["en_pause"] is True
+    assert gemini["indisponible"] is True
+    assert gemini["quota_du_jour_atteint"] is False
+    assert gemini["reprise_a"] - time.time() <= 60
+
+
+def test_tout_coupe_dit_503_en_francais(routeur, monkeypatch):
+    monkeypatch.setattr(routeur, "open_upstream", Coupure("coupure", refuse=("gemini", "openrouter")))
+    r = demander(TestClient(routeur.app))
+    assert r.status_code == 503
+    assert "Aucun service gratuit branché ne répond" in r.json()["detail"]
+
+
+def test_enable_gemini_max_false_meme_cle_saisie_dans_cles(routeur, monkeypatch):
+    # La cle collee dans /cles active Gemini ; elle ne doit pas ramener Max.
+    monkeypatch.delenv("GEMINI_API_KEY")
+    routeur.store_key("GEMINI_API_KEY", "gemini-factice")
+    client = TestClient(routeur.app)
+    assert modeles_proposes(client) == ["free-ai-auto", "free-ai-max"]
+    monkeypatch.setenv("ENABLE_GEMINI_MAX", "false")
+    assert modeles_proposes(client) == ["free-ai-auto"]
+
+
+def test_sans_cle_le_chat_envoie_a_la_page_cles(routeur, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY")
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    r = demander(TestClient(routeur.app))
+    assert r.status_code == 503
+    assert "http://localhost:8010/cles" in r.json()["detail"]
+    assert ".env" not in r.json()["detail"]
+
+
+def test_fausse_cle_gemini_message_francais(routeur, monkeypatch):
+    # Refus releve sur la machine vierge : Google repond 400, pas 401.
+    def refus(requete):
+        return httpx.Response(400, json={"error": {"code": 400, "message": "Please pass a valid API key",
+                                                   "status": "INVALID_ARGUMENT"}})
+
+    vrai = httpx.AsyncClient
+    monkeypatch.setattr(routeur.httpx, "AsyncClient",
+                        lambda **kw: vrai(transport=httpx.MockTransport(refus), **kw))
+    r = asyncio.run(routeur.verify_key("gemini", "cle-factice-du-debutant"))
+    assert r["valide"] is False
+    assert r["message"].startswith("Cle refusee.")
+    assert "en anglais : Please pass a valid API key" in r["message"]

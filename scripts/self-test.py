@@ -69,6 +69,7 @@ for _ in range(8):
 all_ok &= check('manager /health', manager_ok, 'http://127.0.0.1:8010/health')
 
 vals=env_values(); key=vals.get('FREE_TIER_MANAGER_KEY','')
+eligible=[]
 if key:
     try:
         status, body=get('http://127.0.0.1:8010/status', {'Authorization':f'Bearer {key}'})
@@ -78,7 +79,8 @@ if key:
             eligible=[p['name'] for p in data.get('providers',[]) if p.get('eligible')]
             print('[INFO] fournisseurs éligibles : ' + (', '.join(eligible) if eligible else 'aucun'))
             if not eligible:
-                print('[INFO] Ajoutez OPENROUTER_API_KEY dans .env pour le chat gratuit strict.')
+                print('[INFO] Aucun service de chat branché : ouvrez http://127.0.0.1:8010/cles '
+                      'et collez-y une clé Gemini gratuite.')
     except Exception as exc:
         all_ok &= check('manager authentifié /status', False, str(exc))
 else:
@@ -174,6 +176,10 @@ try:
                     'free-ai-auto' in proposes,
                     ('liste VIDE — la clé gardée par le chat ne correspond plus à celle du routeur'
                      if not proposes else 'modèles : ' + ', '.join(proposes)))
+    if 'gemini_max' in eligible:
+        # Une clé Gemini branchée doit faire paraître le second choix du chat.
+        all_ok &= check('Open WebUI : Free AI Max proposé', 'free-ai-max' in proposes,
+                        'modèles : ' + ', '.join(proposes))
 except urllib.error.HTTPError as exc:
     print(f'[INFO] réglages Open WebUI non lisibles (HTTP {exc.code}) : normal si vous avez mis WEBUI_AUTH=true. '
           'Vérifiez à la main dans ses paramètres d’administration.')

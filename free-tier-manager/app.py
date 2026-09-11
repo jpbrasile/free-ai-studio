@@ -391,9 +391,11 @@ def configured(name: str) -> bool:
 
 
 def enabled(name: str) -> bool:
-    if name == "gemini_max" and not enabled("gemini"):
-        # Couper Gemini coupe ses deux modeles.
-        return False
+    if name == "gemini_max":
+        # Couper Gemini coupe ses deux modeles. La cle de Max est celle de
+        # Gemini : la coller dans /cles active Gemini, pas Max, que
+        # ENABLE_GEMINI_MAX=false retire dans tous les cas.
+        return enabled("gemini") and os.getenv("ENABLE_GEMINI_MAX", "true").lower() == "true"
     env_name = f"ENABLE_{name.upper()}"
     # Gemini Free Tier is the normal first choice; OpenRouter Free is the
     # strict-zero fallback. Groq remains an optional third fallback.
@@ -601,9 +603,23 @@ def lire_quota(corps: Any) -> Dict[str, Any]:
     return sortie
 
 
-def apply_rate_limit_cooldown(name: str, response: httpx.Response, corps: Any = None) -> None:
+def pause_indisponible(name: str, attente: Optional[float] = None) -> None:
+    """Service qui ne repond pas (5xx, coupure reseau) : pause courte, puis
+    nouvel essai. Sans elle, chaque message repaierait l'aller-retour rate."""
+    maintenant = time.time()
+    jusqu_a = maintenant + max(5.0, min(attente or 30.0, 60.0))
+    provider_cooldown_until[name] = jusqu_a
+    quota_state[name] = {"cause": "indisponible", "depuis": maintenant, "jusqu_a": jusqu_a, "limite": None}
+
+
+def apply_rate_limit_cooldown(name: str, response: httpx.Response, corps: Any = None) -> bool:
+    """Met le service en pause si le refus le demande ; rend vrai s'il l'a ete."""
+    if response.status_code >= 500:
+        # Google renvoie regulierement 503 << The model is overloaded >>.
+        pause_indisponible(name, _nombre(response.headers.get("retry-after")))
+        return True
     if response.status_code != 429:
-        return
+        return False
     maintenant = time.time()
     quota = lire_quota(corps)
     if quota.get("par_jour") and name in GEMINI:
@@ -630,6 +646,7 @@ def apply_rate_limit_cooldown(name: str, response: httpx.Response, corps: Any = 
             "modele": quota.get("modele") or PROVIDERS[name]["model"],
             "le": maintenant,
         }
+    return True
 
 
 def titre_de(name: str) -> str:
@@ -678,6 +695,9 @@ def texte_avis(prefere: str, servi: str) -> str:
                  if prefere in GEMINI else "Nouvel essai dans %s." % reste)
         return "_ℹ️ %s a atteint sa limite gratuite du jour%s : cette réponse est fournie par %s. %s_\n\n" % (
             titre_de(prefere), limite, par, quand)
+    if q.get("cause") == "indisponible":
+        return "_ℹ️ %s ne répond pas pour l’instant : cette réponse est fournie par %s. Nouvel essai dans %s._\n\n" % (
+            titre_de(prefere), par, reste)
     return "_ℹ️ %s est saturé pour l’instant : cette réponse est fournie par %s. Nouvel essai dans %s._\n\n" % (
         titre_de(prefere), par, reste)
 
@@ -726,6 +746,7 @@ def etat_quotas() -> Dict[str, Any]:
             # quota repart (fournisseur sans heure de remise a zero documentee).
             "reprise_connue": en_pause and (not du_jour or name in GEMINI),
             "quota_du_jour_atteint": du_jour,
+            "indisponible": en_pause and q.get("cause") == "indisponible",
             "limite_annoncee": limite,
             "servies_aujourdhui": servies,
             "reste_estime": reste,
@@ -1096,14 +1117,18 @@ async def verify_key(name: str, key: str) -> Dict[str, Any]:
             "valide": True,
             "message": "Cle valide, mais le quota du moment est atteint. Elle est enregistree et servira des que le quota repart. " + detail,
         }
-    if response.status_code in (401, 403):
+    # Le motif du fournisseur est en anglais : il suit la phrase francaise, annonce.
+    motif = (" Reponse du fournisseur, en anglais : " + detail) if detail.strip() else ""
+    # Google refuse une cle inconnue par un 400 << API key not valid >>, pas un 401.
+    cle_inconnue = response.status_code == 400 and "api key" in detail.lower().replace("_", " ")
+    if response.status_code in (401, 403) or cle_inconnue:
         return {
             "valide": False,
-            "message": "Cle refusee. Verifiez que vous l'avez copiee en entier, sans espace au debut ni a la fin. " + detail,
+            "message": "Cle refusee. Verifiez que vous l'avez copiee en entier, sans espace au debut ni a la fin." + motif,
         }
     return {
         "valide": False,
-        "message": "Refus du fournisseur (HTTP %d). %s" % (response.status_code, detail),
+        "message": "Le fournisseur a refuse l'essai (HTTP %d)." % response.status_code + motif,
     }
 
 
@@ -1490,7 +1515,8 @@ function rendre(d) {
     var det = officielle;
     if (f.en_pause) {
       quoi = f.titre + " (" + f.modele + ") : "
-           + (f.quota_du_jour_atteint ? "limite gratuite du jour atteinte" : "sature pour l'instant");
+           + (f.quota_du_jour_atteint ? "limite gratuite du jour atteinte"
+              : f.indisponible ? "ne repond pas pour l'instant" : "sature pour l'instant");
       det = (f.limite_annoncee ? "limite annoncee dans le refus : " + f.limite_annoncee + " demandes ; " : "")
           + (f.reprise_connue ? "reprise vers " : "nouvel essai vers ")
           + new Date(f.reprise_a * 1000).toLocaleTimeString("fr-FR") + " ; " + officielle;
@@ -1863,7 +1889,7 @@ function quotasAfficher(q){
     if(f.en_pause){
       t += f.quota_du_jour_atteint
         ? "limite gratuite du jour atteinte" + (f.limite_annoncee ? " (" + f.limite_annoncee + " demandes)" : "")
-        : "saturé pour l’instant";
+        : f.indisponible ? "ne répond pas pour l’instant" : "saturé pour l’instant";
       t += (f.reprise_connue ? ", reprise vers " : ", nouvel essai vers ") + heureLocale(f.reprise_a)
         + " (dans " + dureeLisible(f.reprise_a - q.maintenant) + ")";
     } else if(f.reste_estime !== null && f.reste_estime !== undefined){
@@ -2252,6 +2278,31 @@ async def open_upstream(client: httpx.AsyncClient, name: str, payload: Dict[str,
     return await client.send(request, stream=True)
 
 
+def refus_tout_en_pause(eligibles: List[str], modele_chat: str) -> HTTPException:
+    """Tous les services du choix sont en pause : le dire au chat, en francais,
+    avec l'heure du retour, plutot qu'une erreur technique."""
+    attente = min(provider_cooldown_until.get(n, 0.0) for n in eligibles) - time.time()
+    causes = {(quota_state.get(n) or {}).get("cause") for n in eligibles}
+    if causes == {"indisponible"}:
+        code = 503
+        texte = ("Aucun service gratuit branché ne répond pour l’instant (connexion Internet coupée, "
+                 "ou services indisponibles). Nouvel essai dans environ %s.")
+    elif "indisponible" in causes:
+        code = 429
+        texte = ("Les services gratuits branchés sont tous en pause : limite atteinte pour les uns, "
+                 "pas de réponse des autres. Le premier revient dans environ %s.")
+    else:
+        code = 429
+        texte = "Tous les services gratuits branchés ont atteint leur limite. Le premier revient dans environ %s."
+    texte = texte % duree_lisible(attente) + " Rien n’est payé : le Studio attend."
+    if (modele_chat == AUTO_MODEL and provider_allowed("gemini_max")
+            and not provider_on_cooldown("gemini_max")):
+        # Quota compte par modele : quand Flash-Lite est a bout, Max repond encore.
+        texte += " Free AI Max a son propre quota : choisissez-le en haut du chat pour continuer."
+    return HTTPException(status_code=code, detail=texte,
+                         headers={"Retry-After": str(max(1, int(attente)))})
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: Optional[str] = Header(default=None)):
     if not auth_ok(authorization):
@@ -2285,16 +2336,14 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
         if eligibles:
             # Tous en pause : le dire, avec l'heure du retour, plutot que
             # << aucune cle >> -- les cles sont la, c'est le quota qui manque.
-            attente = min(provider_cooldown_until.get(n, 0.0) for n in eligibles) - time.time()
-            raise HTTPException(
-                status_code=429,
-                detail="Tous les services gratuits branches ont atteint leur limite. Le premier "
-                       "revient dans environ %s. Rien n'est paye : le Studio attend." % duree_lisible(attente),
-                headers={"Retry-After": str(max(1, int(attente)))},
-            )
+            raise refus_tout_en_pause(eligibles, modele_chat)
+        # Ce texte s'affiche tel quel dans le chat : il envoie a la page Cles,
+        # le chemin du debutant, et non au fichier .env.
         raise HTTPException(
             status_code=503,
-            detail="No eligible free provider is configured. Add an API key in .env."
+            detail="Aucun service d’IA gratuit n’est branché : il manque une clé. Ouvrez la page Clés "
+                   "du Studio, http://localhost:8010/cles, collez-y une clé Gemini (gratuite), "
+                   "puis reposez la question."
         )
 
     stream = bool(payload.get("stream", False))
@@ -2317,8 +2366,11 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                     corps = json.loads(brut)
                 except ValueError:
                     corps = None
-                apply_rate_limit_cooldown(name, response, corps)
-                if response.status_code == 429 and name == prefere:
+                if apply_rate_limit_cooldown(name, response, corps):
+                    # Toute mise en pause arme l'avis, meme pendant la demande
+                    # d'un autre choix : Flash-Lite qui s'epuise pendant une
+                    # demande Max doit etre annonce a la demande Auto suivante.
+                    # L'avis ne s'affiche que si CE service etait l'attendu.
                     avis_bascule[name] = True
                 body = brut[:800].decode("utf-8", errors="replace")
                 stats[name]["failures"] += 1
@@ -2389,9 +2441,18 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
             stats[name]["last_error"] = str(exc)[:300]
             errors.append(f"{name}: {type(exc).__name__}")
             log.exception("Provider %s raised an error", name)
+            # Coupure reseau, delai depasse : traite comme un 5xx.
+            pause_indisponible(name)
+            avis_bascule[name] = True
 
     await client.aclose()
+    if eligibles and all(provider_on_cooldown(n) for n in eligibles):
+        # Le refus qui vient d'arriver a mis en pause le dernier service libre :
+        # meme reponse que si la pause datait d'avant la demande.
+        raise refus_tout_en_pause(eligibles, modele_chat)
     raise HTTPException(
         status_code=503,
-        detail={"message": "All configured free providers failed.", "attempts": errors}
+        detail="Aucun service gratuit branché n’a pu répondre (%s). La page "
+               "http://localhost:8010/diagnostic dit lequel bloque et pourquoi. Rien n’est payé."
+               % ", ".join(errors)
     )
