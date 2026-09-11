@@ -1,0 +1,12 @@
+# Regles du lint en CI (.github/workflows/validate.yml).
+#
+# Volontairement etroites : ce qui casse a l'execution (nom non defini, import
+# mort, variable jamais utilisee), pas le style. Un fichier au style different
+# n'est pas un bug ; une variable inconnue dans une branche rarement prise, si.
+#
+# Ce fichier fixe aussi les regles en local : sans lui, ruff prendrait la
+# configuration personnelle de chacun et ne dirait pas la meme chose que la CI.
+target-version = "py312"
+
+[lint]
+select = ["E9", "F"]

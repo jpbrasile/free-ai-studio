@@ -56,6 +56,8 @@ Utile surtout pour :
 
 C'est particulièrement utile si votre ordinateur n'a pas de carte graphique puissante.
 
+**À savoir avant de créer le compte :** Modal **exige une carte bancaire**. Il offre 30 $ de calcul par mois. Au-delà, il **facture** jusqu'à une « limite de dépense ». Si vous ne la réglez pas, elle vaut le plafond d'usage moins le crédit : Modal donne l'exemple de 100 $ − 30 $ = 70 $. Avant le premier calcul, réglez cette limite au plus bas sur la page *Usage & Billing* de Modal (<https://modal.com/settings/usage>). Le Studio refuse de lancer une vidéo qui dépasserait son propre plafond (20 $ par mois), mais il ne voit pas votre compte Modal : c'est la limite réglée chez Modal qui vous protège vraiment.
+
 ### Kaggle
 **À quoi ça sert ?**
 À utiliser gratuitement des notebooks avec GPU quand Google/Kaggle en met à disposition.

@@ -84,6 +84,8 @@ KAGGLE_API_TOKEN=votre_token
 
 Le manager crée un kernel privé, suit son état et récupère ses outputs. Le bouton direct Kaggle reste utilisable même lorsque l'orchestration automatique n'est pas configurée.
 
+Ce pilotage suppose **vos** identifiants, sur **votre** machine. Si le Studio semble servir d'autres personnes (`STUDIO_HEBERGE=true`, `WEBUI_AUTH=true`, page ouverte par l'adresse réseau de la machine, ou requête relayée par un proxy), le Sandbox coupe Kaggle automatique. `POST /jobs` avec `provider=kaggle` répond alors 403, le mode `auto` passe directement au handoff Colab, et `GET /etat` indique `kaggle.automatique_permis: false` avec la raison. Détail : `docs/GPU_CLOUD.md`.
+
 ## Colab direct / handoff
 
 Colab reste accessible directement. Si tous les moteurs d'exécution automatique sont indisponibles, le provider `auto` prépare un `.ipynb` que l'utilisateur peut ouvrir dans Colab. Les résultats déposés dans `FREE_AI_OUTPUT_DIR` peuvent ensuite être réimportés dans le registre de ressources.

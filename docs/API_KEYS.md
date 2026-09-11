@@ -65,7 +65,7 @@ N'ajoutez cette clé que si vous souhaitez cette détection automatique. Le proj
 
 Les clés optionnelles ne sont pas demandées parce qu'elles sont « techniques ». Elles ajoutent des capacités concrètes :
 
-- **Hugging Face** : plus de modèles open source.
+- **Hugging Face** : modèles ouverts (poids téléchargeables) et offres gratuites.
 - **Cloudflare Workers AI** : fournisseur de secours avec quota gratuit.
 - **Modal** : machine cloud puissante, parfois avec GPU, utile pour image/vidéo.
 - **Kaggle** : GPU gratuit via notebooks pour les tâches lourdes.

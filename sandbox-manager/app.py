@@ -8,7 +8,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import uuid
@@ -30,7 +29,9 @@ app = FastAPI(title="Free AI Studio Sandbox Manager", version="2.0.0")
 KEY = os.getenv("SANDBOX_MANAGER_KEY", "").strip()
 WORKER_KEY = os.getenv("SANDBOX_WORKER_KEY", "").strip()
 WORKER_URL = os.getenv("SANDBOX_WORKER_URL", "http://sandbox-worker:8000").rstrip("/")
-ROOT = Path("/workspace")
+# /workspace dans le conteneur ; configurable pour charger le service hors
+# conteneur (CI : scripts/verifier-imports.py, tests/).
+ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace"))
 JOBS = ROOT / "jobs"
 ART = ROOT / "artifacts"
 JOBS.mkdir(parents=True, exist_ok=True)
@@ -46,6 +47,43 @@ MAX_UPLOAD = int(os.getenv("SANDBOX_MAX_ARTIFACT_BYTES", str(100 * 1024 * 1024))
 MAX_JOB_CODE = int(os.getenv("SANDBOX_MAX_CODE_BYTES", "500000"))
 MAX_OUTPUT = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "200000"))
 COLAB_API_ENABLED = os.getenv("COLAB_API_ENABLED", "false").lower() == "true"
+
+# --- Kaggle automatique : identifiants personnels, machine personnelle --------
+# run_kaggle pousse du code sur Kaggle avec LES identifiants de la personne qui
+# les a saisis. Sur son ordinateur, pour elle seule, c'est le but. Des qu'un
+# Studio sert d'autres personnes, leurs calculs partiraient sur ce compte-la : le
+# Sandbox coupe alors Kaggle automatique et ne laisse que le lien manuel.
+# Ces signes sont des indices, pas une preuve : une instance exposee par un moyen
+# qui n'en laisse aucun doit etre declaree avec STUDIO_HEBERGE=true.
+STUDIO_HEBERGE = os.getenv("STUDIO_HEBERGE", "false").strip().lower() == "true"
+MULTI_UTILISATEUR = os.getenv("WEBUI_AUTH", "false").strip().lower() == "true"
+HOTES_LOCAUX = {"localhost", "127.0.0.1", "::1"}
+KAGGLE_MANUEL = "https://www.kaggle.com/code"
+
+
+def contexte_partage(request: Optional[Request] = None) -> Optional[str]:
+    """La raison de couper Kaggle automatique, ou None sur un Studio personnel."""
+    if STUDIO_HEBERGE:
+        return "STUDIO_HEBERGE=true : instance declaree hebergee"
+    if MULTI_UTILISATEUR:
+        return "WEBUI_AUTH=true : le Studio a plusieurs comptes"
+    if request is None:
+        return None
+    if request.headers.get("x-forwarded-for") or request.headers.get("forwarded"):
+        return "requete relayee par un proxy"
+    hote = (request.url.hostname or "").strip("[]").lower()
+    if hote not in HOTES_LOCAUX:
+        return "page ouverte par l'adresse %s, pas par localhost" % hote
+    return None
+
+
+def refus_kaggle(raison: str) -> HTTPException:
+    return HTTPException(
+        403,
+        "Kaggle automatique est coupe ici (%s) : il utiliserait les identifiants Kaggle "
+        "personnels du proprietaire de cette machine. Ouvrez Kaggle vous-meme : %s"
+        % (raison, KAGGLE_MANUEL),
+    )
 
 # --- Magasin de secrets ecrit par la page /cles ------------------------------
 # Meme raison que cote routeur de chat : les variables arrivent par le compose au
@@ -76,7 +114,8 @@ SANDBOX_HELP = {
     },
     "kaggle": {
         "titre": "Kaggle — GPU gratuit",
-        "role": "GPU gratuit par tranches horaires, pour les travaux longs. Aucune facturation possible.",
+        "role": "GPU gratuit par tranches horaires, pour les travaux longs. Aucune facturation possible. "
+                "Pilotage automatique reserve a votre machine, avec vos identifiants.",
         "url": "https://www.kaggle.com/settings",
         "repere": "Section « API », bouton « Create New Token » : un fichier kaggle.json se telecharge, contenant username et key.",
         "champs": [
@@ -264,6 +303,14 @@ def kaggle_configured() -> bool:
     return kaggle_enabled() and bool(os.getenv("KAGGLE_USERNAME", "").strip()) and bool(
         os.getenv("KAGGLE_API_TOKEN", "").strip() or os.getenv("KAGGLE_KEY", "").strip()
     )
+
+
+def backend_automatique(kaggle_permis: bool = True) -> str:
+    if modal_configured():
+        return "modal"
+    if kaggle_permis and kaggle_configured():
+        return "kaggle"
+    return "local"
 
 
 # Au demarrage : ce qui a ete saisi lors d'une session precedente redevient actif.
@@ -650,7 +697,7 @@ def prepare_colab_handoff(jid: str, code: str, attempts: list[dict] | None = Non
     write_job(jid, job)
 
 
-def run_auto(jid: str, code: str, gpu: bool, internet: bool):
+def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool = True):
     attempts: list[dict] = []
     job = read_job(jid)
     job.update({"status": "routing", "started_at": time.time(), "fallback_order": ["modal", "local", "kaggle", "colab"]})
@@ -681,14 +728,19 @@ def run_auto(jid: str, code: str, gpu: bool, internet: bool):
     except BackendUnavailable as exc:
         attempts.append({"provider": "local", "result": "unavailable", "detail": str(exc)[:500]})
 
-    if kaggle_configured():
+    if not kaggle_permis:
+        # Studio partage : les identifiants Kaggle presents sont ceux d'une seule
+        # personne. On passe au notebook Colab, que chacun ouvre avec son compte.
+        attempts.append({"provider": "kaggle", "result": "disabled_shared_context"})
+    elif kaggle_configured():
         attempts.append({"provider": "kaggle", "result": "selected"})
         job = read_job(jid)
         job["fallback_attempts"] = attempts
         write_job(jid, job)
         run_kaggle(jid, code, gpu, internet)
         return
-    attempts.append({"provider": "kaggle", "result": "not_configured"})
+    else:
+        attempts.append({"provider": "kaggle", "result": "not_configured"})
 
     attempts.append({"provider": "colab", "result": "handoff"})
     prepare_colab_handoff(jid, code, attempts)
@@ -750,7 +802,8 @@ def secret_source(name: str) -> Optional[str]:
 
 
 @app.get("/cles/etat")
-def cles_etat():
+def cles_etat(request: Request):
+    raison = contexte_partage(request)
     backends = []
     for nom, aide in SANDBOX_HELP.items():
         configure = modal_configured() if nom == "modal" else kaggle_configured()
@@ -775,8 +828,11 @@ def cles_etat():
             # Un secret venu de .env n'appartient pas a l'interface : elle ne
             # propose pas de l'oublier, elle ne saurait pas le remettre.
             "oubliable": any(c["source"] == "interface" for c in champs),
+            # Kaggle automatique coupe : la carte le dit, au lieu d'accepter des
+            # identifiants qui serviraient a d'autres personnes.
+            "coupe": raison if nom == "kaggle" else None,
         })
-    return {"backends": backends, "backend_automatique": "modal" if modal_configured() else ("kaggle" if kaggle_configured() else "local")}
+    return {"backends": backends, "backend_automatique": backend_automatique(raison is None)}
 
 
 @app.post("/cles/tester")
@@ -785,6 +841,12 @@ async def cles_tester(request: Request):
     nom = str(body.get("backend", "")).strip().lower()
     if nom not in SANDBOX_HELP:
         raise HTTPException(400, "Backend inconnu")
+    if nom == "kaggle":
+        raison = contexte_partage(request)
+        if raison:
+            # Refus AVANT tout appel a Kaggle : des identifiants de tiers ne sont
+            # ni essayes ni gardes.
+            raise refus_kaggle(raison)
     valeurs = body.get("valeurs") or {}
     attendus = [c["nom"] for c in SANDBOX_HELP[nom]["champs"]]
     fournis = {k: str(valeurs.get(k, "")).strip() for k in attendus}
@@ -894,6 +956,13 @@ function carte(b){
 
   const sortie = c.querySelector(".resultat");
   const bouton = c.querySelector(".verifier");
+  if(b.coupe){
+    c.querySelector(".role").textContent = "Pilotage automatique coupe ici (" + b.coupe + ") : il utiliserait "
+      + "les identifiants Kaggle personnels du proprietaire de la machine. Ouvrez Kaggle vous-meme : "
+      + "https://www.kaggle.com/code";
+    c.querySelectorAll("input").forEach(i => i.disabled = true);
+    bouton.disabled = true;
+  }
   bouton.addEventListener("click", async () => {
     const valeurs = {};
     let vide = false;
@@ -1110,8 +1179,10 @@ document.getElementById("lancer").addEventListener("click", async () => {
       internet: false
     })});
     if(!r.ok){
+      const refus = await r.json().catch(() => ({}));
       etat.className = "ligne ko";
-      etat.textContent = "Le service a refuse la demande (HTTP " + r.status + ").";
+      etat.textContent = "Le service a refuse la demande (HTTP " + r.status + ")"
+        + (typeof refus.detail === "string" ? " : " + refus.detail : ".");
       return;
     }
     let d = await r.json();
@@ -1145,22 +1216,31 @@ def essai_page():
 
 
 @app.get("/etat")
-def etat():
+def etat(request: Request):
     """Etat reel des backends, sans secret ni authentification, pour que la page
     d'accueil dise ce qui marche au lieu d'annoncer Modal en principal alors
-    qu'il est desactive et sans jeton. Ne rend que des booleens."""
+    qu'il est desactive et sans jeton. Ne rend que des booleens et, pour Kaggle,
+    la raison d'une coupure."""
+    raison = contexte_partage(request)
     return {
         "modal": {"configure": modal_configured(), "autorise": modal_enabled()},
         "local": {"disponible": True},
-        "kaggle": {"configure": kaggle_configured(), "autorise": kaggle_enabled()},
+        "kaggle": {
+            "configure": kaggle_configured(),
+            "autorise": kaggle_enabled(),
+            "automatique_permis": raison is None,
+            "raison": raison,
+            "acces_manuel": KAGGLE_MANUEL,
+        },
         "colab": {"handoff": True},
-        "backend_automatique": "modal" if modal_configured() else ("kaggle" if kaggle_configured() else "local"),
+        "backend_automatique": backend_automatique(raison is None),
     }
 
 
 @app.get("/providers")
-def providers(authorization: Optional[str] = Header(default=None)):
+def providers(request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
+    raison = contexte_partage(request)
     return {
         "default": "auto",
         "automatic_order": ["modal", "local", "kaggle", "colab"],
@@ -1184,8 +1264,9 @@ def providers(authorization: Optional[str] = Header(default=None)):
         },
         "kaggle": {
             "configured": kaggle_configured(),
-            "direct_url": "https://www.kaggle.com/code",
-            "automatic": True,
+            "direct_url": KAGGLE_MANUEL,
+            "automatic": raison is None,
+            "disabled_reason": raison,
         },
         "colab": {
             "direct_url": "https://colab.research.google.com/",
@@ -1199,10 +1280,13 @@ def providers(authorization: Optional[str] = Header(default=None)):
 
 
 @app.post("/jobs")
-def create_job(req: JobRequest, authorization: Optional[str] = Header(default=None)):
+def create_job(req: JobRequest, request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
     if len(req.code.encode()) > MAX_JOB_CODE:
         raise HTTPException(413, "Code too large")
+    raison = contexte_partage(request)
+    if req.provider == "kaggle" and raison:
+        raise refus_kaggle(raison)
     jid = uuid.uuid4().hex
     job = {
         "id": jid,
@@ -1216,7 +1300,8 @@ def create_job(req: JobRequest, authorization: Optional[str] = Header(default=No
     }
     write_job(jid, job)
     if req.provider == "auto":
-        threading.Thread(target=run_auto, args=(jid, req.code, req.gpu, req.internet), daemon=True).start()
+        threading.Thread(target=run_auto, args=(jid, req.code, req.gpu, req.internet),
+                         kwargs={"kaggle_permis": raison is None}, daemon=True).start()
     elif req.provider == "modal":
         threading.Thread(target=run_modal, args=(jid, req.code, req.gpu, req.internet), daemon=True).start()
     elif req.provider == "local":
@@ -1388,14 +1473,17 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
 
 
 @app.get("/video/budget")
-def video_budget(authorization: Optional[str] = Header(default=None)):
+def video_budget(request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
+    raison = contexte_partage(request)
     return {
         "budget": video.budget_lire(),
         "modeles": video.MODELES,
         "durees": video.DUREES,
         "modal_configure": modal_configured(),
         "kaggle_configure": kaggle_configured(),
+        "kaggle_permis": raison is None,
+        "kaggle_raison": raison,
     }
 
 
@@ -1406,6 +1494,10 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
     ou = str(payload.get("ou") or "modal")
     if ou not in ("modal", "kaggle"):
         ou = "modal"
+    if ou == "kaggle":
+        raison = contexte_partage(request)
+        if raison:
+            raise refus_kaggle(raison)
     try:
         plan = video.preparer(payload, pour_modal=(ou == "modal"))
     except ValueError as exc:
@@ -1510,7 +1602,7 @@ def home():
 <div class=grid>
 <div class='card primary'><h2>⚡ Modal <span id=b-modal></span></h2><p>Backend automatique distant. CPU/GPU selon le job; résultats récupérés comme ressources de l’agent.</p><a class=button href='https://modal.com/' target=_blank rel='noopener'>Ouvrir Modal ↗</a></div>
 <div class=card><h2>Local <span id=b-local></span></h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
-<div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré, avec accès utilisateur direct toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
+<div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré — sur votre machine seulement, avec vos identifiants. L’accès direct reste toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
 </div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
 <script>
@@ -1522,7 +1614,9 @@ def home():
  fetch('/etat').then(function(r){return r.json();}).then(function(d){
    document.getElementById('b-modal').innerHTML  = pastille(d.modal.configure, 'actif', d.modal.autorise ? 'jeton manquant' : 'desactive');
    document.getElementById('b-local').innerHTML  = pastille(d.local.disponible, 'actif', 'indisponible');
-   document.getElementById('b-kaggle').innerHTML = pastille(d.kaggle.configure, 'actif', d.kaggle.autorise ? 'identifiants manquants' : 'desactive');
+   document.getElementById('b-kaggle').innerHTML = d.kaggle.automatique_permis
+     ? pastille(d.kaggle.configure, 'actif', d.kaggle.autorise ? 'identifiants manquants' : 'desactive')
+     : pastille(false, '', 'automatique coupe : Studio partage');
    var e = document.getElementById('etat');
    var nom = {modal:'Modal (machine distante)', kaggle:'Kaggle', local:'votre ordinateur, isole dans Docker'}[d.backend_automatique];
    e.style.background = '#e8f6ec'; e.style.borderColor = '#7fb98f';

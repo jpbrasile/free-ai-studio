@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Client local Free AI Studio Sandbox. Lit la clé depuis .env sans l'afficher."""
 from __future__ import annotations
-import argparse, json, mimetypes, os, sys, time, urllib.error, urllib.request, uuid
+import argparse, json, mimetypes, os, time, urllib.error, urllib.request, uuid
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 BASE=os.getenv('FREE_AI_SANDBOX_URL','http://127.0.0.1:8020').rstrip('/')

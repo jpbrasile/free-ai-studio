@@ -17,12 +17,14 @@ Open WebUI
    ↓
 Free AI Auto
    ↓
-1. Gemini → gemini-3.8-flash (Free Tier)
+1. Gemini → gemini-3.5-flash-lite (Free Tier)
    ↓ si indisponible / quota atteint
 2. OpenRouter → openrouter/free
    ↓ si indisponible / quota atteint
 3. Groq → modèle du free plan
 ```
+
+`gemini-3.5-flash-lite` est le modèle par défaut depuis le 11/09/2026 (avant : `gemini-3.8-flash`). C'est la variante Flash-Lite, prévue pour l'usage courant. Le modèle haut de gamme reste accessible sur **choix explicite** : `GEMINI_FREE_MODEL=gemini-3.8-flash` dans `.env`. Les deux ont chacun leur quota gratuit, compté par projet Google et par modèle.
 
 L'ordre est configurable dans `.env` :
 
@@ -128,6 +130,39 @@ Cette clé sert uniquement à lire les informations de crédits. Elle n'est jama
 
 Sans Management Key, Free AI Studio fonctionne normalement ; le niveau de quota est simplement affiché comme inconnu.
 
-### Protection contre les 429
+## Limites gratuites de chaque fournisseur
 
-Lorsqu'un fournisseur renvoie `429 Too Many Requests`, le Free Tier Manager le place temporairement en pause et essaie immédiatement le fournisseur gratuit suivant. Cela évite de répéter inutilement des requêtes sur un fournisseur déjà limité.
+Relevé du **11/09/2026** sur les pages officielles. Ces chiffres changent sans préavis : relisez la source avant de vous y fier.
+
+| Fournisseur | Modèle utilisé | Demandes par jour | Par minute | Remise à zéro | Source |
+|---|---|---|---|---|---|
+| Gemini (Google) | `gemini-3.5-flash-lite` | **non publié** : Google renvoie à AI Studio, où chaque projet voit ses propres limites | non publié | minuit, heure du Pacifique | [rate-limits](https://ai.google.dev/gemini-api/docs/rate-limits) |
+| OpenRouter | `openrouter/free` | 50 ; 1 000 après au moins 10 $ de crédits achetés | 20 | non documentée | [limits](https://openrouter.ai/docs/api-reference/limits) |
+| Groq | `openai/gpt-oss-20b` | 1 000 | 30 | non documentée | [rate-limits](https://console.groq.com/docs/rate-limits) |
+
+Pour Gemini, la page officielle dit seulement que les limites sont comptées **par projet** (pas par clé) et **par modèle**, que le quota journalier repart à minuit heure du Pacifique, et que les valeurs réelles s'affichent dans AI Studio. Le chiffre « 20 par jour pour Flash » de l'audit du 11/09/2026 n'est donc pas vérifiable sur une page publique ; le « 500 par jour » qu'il cite pour Flash-Lite correspond, sur la page des prix, à la ligne « ancrage Google Search », pas aux demandes de chat. Le Studio ne suppose aucun chiffre : il lit celui que Google écrit dans son refus.
+
+**Mesuré le 11/09/2026**, sur un projet Google au palier gratuit : 65 demandes à `gemini-3.5-flash-lite` dans la même journée, dont 40 en rafale (une toutes les 0,8 s environ), **sans aucun refus**. Ce n'est pas la limite, seulement un plancher observé. Elle reste inconnue tant que Google n'a pas refusé.
+
+Si votre `.env` date d'avant le 11/09/2026, il contient peut-être `GEMINI_FREE_MODEL=gemini-3.8-flash` ; cette ligne prime sur le nouveau défaut. Supprimez-la, ou mettez `gemini-3.5-flash-lite`, puis redémarrez.
+
+`gemini-3.5-flash-lite` et `gemini-3.8-flash` sont tous deux gratuits sur le palier gratuit ([pricing](https://ai.google.dev/gemini-api/docs/pricing)) et exposés tels quels par l'API de Google ([models](https://ai.google.dev/gemini-api/docs/models)). Chacun a son propre quota : passer de l'un à l'autre ne rend pas de quota à l'autre.
+
+## Quand une limite est atteinte
+
+Lorsqu'un fournisseur renvoie `429 Too Many Requests`, le Free Tier Manager lit le corps du refus :
+
+- **quota du jour** (Gemini : `quotaId` contenant `PerDay`, ou code `quota_exceeded`) : Gemini est mis en pause **jusqu'à minuit heure du Pacifique**, au lieu d'être réessayé toutes les 30 secondes ;
+- **limite par minute** (`rate_limit_exceeded`, ou tout autre refus) : pause courte, de 5 s à 5 min, d'après le délai indiqué par le fournisseur. Pour OpenRouter et Groq, l'heure de remise à zéro du quota du jour n'est pas documentée : même un refus « du jour » y reçoit une pause courte, puis un nouvel essai.
+
+Il essaie aussitôt le fournisseur gratuit suivant. Le basculement n'est **pas silencieux** :
+
+- la première réponse servie par le secours commence par une ligne en italique : « ℹ️ Gemini (Google) a atteint sa limite gratuite du jour (N demandes) : cette réponse est fournie par OpenRouter. Retour prévu dans environ X h, à minuit heure du Pacifique. » ; elle n'est écrite qu'une fois par pause, et seulement dans une réponse en flux (celles du chat) ;
+- `/studio` affiche un bandeau « Le chat répond en ce moment avec un service de secours » et, pour chaque service : disponible ou en pause, heure de reprise, demandes restantes estimées ;
+- `/diagnostic` ajoute une ligne par service, avec la même information ;
+- `GET /quotas/etat` (sans clé, sans secret) rend l'état brut : `en_pause`, `reprise_a`, `quota_du_jour_atteint`, `limite_annoncee`, `servies_aujourdhui`, `reste_estime`, `secours_en_cours`, `dernier_service` ;
+- les réponses non-flux portent l'en-tête `X-Free-AI-Secours: oui|non`.
+
+Si **tous** les services branchés sont en pause, le chat répond `429` avec l'heure du premier retour, au lieu de « aucune clé configurée ». Rien de payant n'est essayé.
+
+Ce que le Studio **ne sait pas** : le quota restant côté Google avant le premier refus. Il compte les réponses servies depuis minuit (ou depuis son dernier démarrage) ; l'estimation « reste N » n'apparaît qu'une fois que Google a écrit sa limite dans un refus, et seulement pour le même modèle.

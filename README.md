@@ -144,10 +144,10 @@ Open WebUI
     ↓
 Free Tier Manager
     ↓
-OpenRouter gratuit → Groq free plan → Gemini free tier
+Gemini (palier gratuit) → OpenRouter `openrouter/free` → Groq (si activé)
 ```
 
-Le débutant voit principalement **Free AI Auto**. Le manager tente les fournisseurs éligibles et applique les fallbacks.
+Le débutant voit principalement **Free AI Auto**. Le manager tente les fournisseurs éligibles dans cet ordre (`FREE_PROVIDER_ORDER`). Quand le premier a épuisé son quota, **le basculement n’est pas silencieux** : la réponse suivante du chat commence par une ligne qui le dit, et les pages `/studio` et `/diagnostic` affichent le service en pause, la limite annoncée par le fournisseur et l’heure de reprise.
 
 Détails : `docs/FREE_TIER_MANAGER.md`.
 
@@ -257,15 +257,20 @@ Et vérifiez qu'aucun secret n'apparaît.
 
 Les contributions sont bienvenues. Voir `CONTRIBUTING.md`.
 
-Les validations GitHub vérifient notamment :
-- syntaxe Python ;
-- syntaxe Bash ;
-- structure Docker Compose quand Docker Compose est disponible dans le runner.
+Les validations GitHub (`.github/workflows/validate.yml`) vérifient :
+- la compilation de **tous** les fichiers Python suivis par git (découverts, pas listés à la main) ;
+- `ruff check` : erreurs de syntaxe, noms non définis, imports morts (règles `E9` et `F`, `ruff.toml`) ;
+- le chargement réel des trois services FastAPI (`scripts/verifier-imports.py`) ;
+- la syntaxe du JavaScript embarqué dans leurs pages (`scripts/verifier-js.py`, par `node --check`) ;
+- les tests `tests/` : bascule annoncée quand un quota gratuit est atteint, garde Kaggle ;
+- syntaxe Bash, interdits du mode gratuit, structure Docker Compose.
+
+Les mêmes commandes tournent en local : `ruff check .`, `python scripts/verifier-imports.py`, `python -m pytest -q tests`.
 
 ## Limites actuelles
 
 Le dépôt est encore en développement :
-- les workflows Image / Vidéo / Voix ne sont pas tous aussi intégrés que le Chat ;
+- fonctions stabilisées : **Chat, Image, Recherche Web**. Voix, Vidéo, Étudier, Code et Sandbox portent la mention « expérimental » sur `/studio` : elles peuvent changer ou casser d'une version à l'autre ;
 - Colab reste un handoff utilisateur pour l’exécution générique ;
 - l'installation doit encore être testée de bout en bout sur plusieurs machines propres ;
 - les quotas externes ne peuvent pas être garantis par le projet.
@@ -286,7 +291,7 @@ Le test ne consomme aucun crédit IA : il valide Docker Compose, l’état des c
 
 ### Mode gratuit strict
 
-Le routage LLM livré est **Gemini Free Tier d’abord**, puis `openrouter/free`, puis Groq si activé. Gemini utilise `gemini-3.8-flash` par défaut. Le Studio ne peut pas déterminer automatiquement si une clé Google/Groq est rattachée à un niveau gratuit ou payant : pour une garantie ultra-stricte, passez `ALLOW_FREE_TIER_ACCOUNTS=false`, ce qui conserve uniquement les routes explicitement zéro coût comme `openrouter/free`.
+Le routage LLM livré est **Gemini Free Tier d’abord**, puis `openrouter/free`, puis Groq si activé. Gemini utilise `gemini-3.5-flash-lite` par défaut ; le modèle haut de gamme `gemini-3.8-flash` reste accessible sur choix explicite (`GEMINI_FREE_MODEL`), avec son propre quota. Le Studio ne peut pas déterminer automatiquement si une clé Google/Groq est rattachée à un niveau gratuit ou payant : pour une garantie ultra-stricte, passez `ALLOW_FREE_TIER_ACCOUNTS=false`, ce qui conserve uniquement les routes explicitement zéro coût comme `openrouter/free`.
 
 ### Fonctions média
 
@@ -298,7 +303,7 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Fabrication d’image | la même clé, route `/v1/images/generations` du routeur | gratuit |
 | Recherche Web | DuckDuckGo | gratuit, sans compte |
 | Lire à haute voix, dictée | voix du navigateur, Whisper local du conteneur | gratuit, sans clé |
-| **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, offert et renouvelé** |
+| **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
 
 **Pourquoi la vidéo est à part.** Aucun service de fabrication de vidéo n’est gratuit et
 hébergé en septembre 2026. Le Studio fait donc tourner un modèle ouvert sur une carte
@@ -306,17 +311,56 @@ graphique louée. Un seul modèle couvre les trois demandes : décrire une scèn
 image, finir sur une autre, et garder un personnage ressemblant grâce à une image de
 référence. La page `/video` du Sandbox affiche en permanence ce qui a été dépensé dans le
 mois, et **refuse de lancer un clip avant** qu’il fasse dépasser le plafond
-(`VIDEO_BUDGET_USD_PAR_MOIS`, 20 $ par défaut sur les 30 $ offerts).
+(`VIDEO_BUDGET_USD_PAR_MOIS`, 20 $ par défaut).
+
+**Carte bancaire et facturation — relevé du 11/09/2026.** Modal affiche « 30 $ de crédit
+gratuit par mois » pour son offre Starter ([pricing](https://modal.com/pricing)), mais
+**exige un moyen de paiement** pour utiliser la plateforme
+([billing](https://modal.com/docs/guide/billing)). Au-delà du crédit, Modal **facture**,
+jusqu’à la limite de dépense du compte ; par défaut, cette limite vaut la limite d’usage
+moins le crédit ([budgets](https://modal.com/docs/guide/budgets)). Réglez-la au plus bas dans
+<https://modal.com/settings/usage>. Aucune source officielle ne mentionne de palier « sans
+carte » : l’audit du 11/09/2026 citait 5 $ sans carte, ce relevé ne le retrouve pas.
+
+Le Studio **ne lit pas** votre compte Modal. Son plafond de 20 $ ne compte que ses propres
+clips vidéo, pas le reste du Sandbox ni d’autres usages de Modal, et le crédit de 30 $ que
+la page affiche est celui que vous déclarez (`MODAL_CREDIT_MENSUEL_USD`) : la page le dit.
 
 **Ce que coûte un clip, mesuré le 09/09/2026.** Réglage le moins cher (3 s, « Rapide »,
-carte L4) : 832×480, 49 images, **7 minutes d’attente**, **0,096 $**. Le crédit mensuel offert
-paie donc environ 300 clips de cette taille. Le premier lancement d’un modèle prend 1 à
+carte L4) : 832×480, 49 images, **7 minutes d’attente**, **0,096 $**. À ce prix, les 30 $ de
+crédit paieraient 312 clips. Le plafond du Studio en laisse passer **203** : 20 $ divisés par
+0,096 $ en feraient 208, mais un clip n’est lancé que si son pire cas (40 minutes de L4
+sans résultat, 0,53 $) tient encore sous le plafond. Calcul refait le 11/09/2026 avec la
+règle du code (`budget_verifier` dans `sandbox-manager/video.py`). Le premier lancement d’un modèle prend 1 à
 2 minutes de plus, le temps de le télécharger ; ensuite il reste sur un disque persistant.
 Le petit modèle fait des plans presque fixes : la scène est juste, le mouvement est discret.
 
 Attention si vous cherchez « mieux » : les licences de **MiniMax H3** et de **HunyuanVideo**
 excluent l’Union européenne, le Royaume-Uni et la Corée du déploiement local. Wan est sous
-Apache 2.0, sans restriction de territoire.
+Apache 2.0, sans restriction de territoire. La page `/video` affiche la licence et le
+territoire du modèle **à côté du choix de qualité**, là où l’on décide.
+
+### Ce qui est ouvert, ce qui ne l’est pas
+
+Free AI Studio **assemble des paliers gratuits** ; il n’est pas un studio open source. Pour
+chaque fonction, qui fait le travail, et pourriez-vous le faire tourner vous-même ?
+Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
+
+| Fonction | Fournisseur, modèle | Nature | Licence |
+|---|---|---|---|
+| Chat (1er choix) | Google, `gemini-3.5-flash-lite` | API propriétaire, palier gratuit | poids non publiés ; conditions de l’API Gemini |
+| Chat (1er secours) | OpenRouter, `openrouter/free` | API tierce, palier gratuit ; le modèle servi change d’une requête à l’autre, ouvert ou non | celle du modèle routé, variable |
+| Chat (2e secours, si activé) | Groq, `openai/gpt-oss-20b` | modèle ouvert exécuté à distance, par un service propriétaire | Apache 2.0 ([fiche](https://huggingface.co/openai/gpt-oss-20b)) |
+| Lecture d’image | Google, modèle du chat | API propriétaire, palier gratuit | poids non publiés |
+| Fabrication d’image | Google, `gemini-3.1-flash-lite-image` | API propriétaire, palier gratuit | poids non publiés |
+| Recherche Web | DuckDuckGo | service tiers, sans compte | conditions de DuckDuckGo |
+| Lire à haute voix | voix du navigateur | exécuté localement, par le navigateur | celle du navigateur |
+| Dictée | Whisper, dans le conteneur | modèle ouvert exécuté localement | MIT ([licence](https://github.com/openai/whisper/blob/main/LICENSE)) |
+| Vidéo | Wan 2.1 VACE 1,3 B ou 14 B, sur Modal (ou Kaggle) | modèle ouvert exécuté à distance, sur une machine louée | Apache 2.0, aucune restriction de territoire ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B)) |
+
+Seules la dictée et la voix ne dépendent d’aucun tiers. La vidéo et le 2e secours du chat
+reposent sur des modèles ouverts que vous pourriez faire tourner vous-même, avec la carte
+graphique qu’il faut. Tout le reste dépend d’un fournisseur qui peut changer son offre.
 
 ### Mettre à jour
 

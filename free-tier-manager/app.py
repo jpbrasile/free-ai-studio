@@ -5,6 +5,7 @@ import re
 import time
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -58,7 +59,10 @@ PROVIDERS = {
     "gemini": {
         "key_env": "GEMINI_API_KEY",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "model": os.getenv("GEMINI_FREE_MODEL", "gemini-3.8-flash"),
+        # Flash-Lite : la variante prevue pour l'usage courant. Le modele haut de
+        # gamme (gemini-3.8-flash) reste accessible sur choix explicite, par
+        # GEMINI_FREE_MODEL ; il a son propre quota gratuit, compte par modele.
+        "model": os.getenv("GEMINI_FREE_MODEL", "gemini-3.5-flash-lite"),
         "strict_zero": False,
     },
 }
@@ -104,6 +108,48 @@ stats: Dict[str, Dict[str, Any]] = {
     p: {"attempts": 0, "successes": 0, "failures": 0, "last_status": None, "last_error": None}
     for p in PROVIDERS
 }
+
+# --- Quotas gratuits ----------------------------------------------------------
+# Un quota epuise ne doit pas se voir seulement a une reponse differente : la
+# personne doit savoir qu'elle a change de service, pourquoi, et quand le premier
+# revient. Ce qui suit garde de quoi le dire.
+#
+# Limites publiees, relevees le 11/09/2026 sur les pages officielles. Google ne
+# publie plus de chiffres : ils ne se lisent que dans AI Studio, pour le projet de
+# la personne. La seule limite de Gemini que le Studio connaisse est donc celle
+# que Google ecrit dans son refus (voir lire_quota).
+LIMITES_RELEVEES_LE = "2026-09-11"
+LIMITES_PUBLIEES: Dict[str, Dict[str, Any]] = {
+    "gemini": {
+        "par_jour": None,
+        "texte": "non publiée ; visible dans AI Studio, comptée par projet et par modèle, "
+                 "remise à zéro à minuit heure du Pacifique",
+        "source": "https://ai.google.dev/gemini-api/docs/rate-limits",
+    },
+    "openrouter": {
+        "par_jour": 50,
+        "texte": "50 demandes par jour (1 000 après au moins 10 $ de crédits achetés), 20 par minute",
+        "source": "https://openrouter.ai/docs/api-reference/limits",
+    },
+    "groq": {
+        "par_jour": 1000,
+        "texte": "1 000 demandes par jour et 30 par minute pour openai/gpt-oss-20b",
+        "source": "https://console.groq.com/docs/rate-limits",
+    },
+}
+
+quota_state: Dict[str, Dict[str, Any]] = {p: {} for p in PROVIDERS}
+# Derniere limite ecrite par le fournisseur dans un refus du jour : gardee apres
+# la fin de la pause, pour estimer ce qui reste le lendemain.
+limites_annoncees: Dict[str, Dict[str, Any]] = {}
+# Reponses servies depuis minuit, heure du Pacifique. En memoire : un redemarrage
+# du routeur remet ce compte a zero, et la page le dit.
+servies_du_jour: Dict[str, Dict[str, Any]] = {}
+DEMARRE_A = time.time()
+# Vrai quand le service attendu vient d'etre mis en pause et que personne ne l'a
+# encore dit dans le chat.
+avis_bascule: Dict[str, bool] = {"du": False}
+dernier_service: Dict[str, Any] = {}
 
 
 
@@ -399,15 +445,265 @@ def provider_on_cooldown(name: str) -> bool:
     return time.time() < provider_cooldown_until.get(name, 0.0)
 
 
-def apply_rate_limit_cooldown(name: str, response: httpx.Response) -> None:
+def fuseau_pacifique():
+    """Le quota du jour de Gemini repart a minuit, heure du Pacifique.
+
+    L'image Docker porte la base des fuseaux horaires ; un Python sous Windows
+    sans le paquet tzdata ne l'a pas. On retombe alors sur UTC-8, l'heure
+    d'hiver : l'ete, la reprise annoncee a une heure de retard, jamais d'avance."""
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo("America/Los_Angeles")
+    except Exception:
+        return timezone(timedelta(hours=-8))
+
+
+def minuit_pacifique(maintenant: float) -> float:
+    fuseau = fuseau_pacifique()
+    demain = (datetime.fromtimestamp(maintenant, fuseau) + timedelta(days=1)).date()
+    return datetime(demain.year, demain.month, demain.day, tzinfo=fuseau).timestamp()
+
+
+def debut_du_jour_pacifique(maintenant: float) -> float:
+    local = datetime.fromtimestamp(maintenant, fuseau_pacifique())
+    return local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+def jour_pacifique(maintenant: float) -> str:
+    return datetime.fromtimestamp(maintenant, fuseau_pacifique()).strftime("%Y-%m-%d")
+
+
+_JOUR = re.compile(r"per.?day|daily", re.I)
+_LIMITE = re.compile(r"limit:\s*(\d+)", re.I)
+_ATTENTE = re.compile(r"retry in\s*([\d.]+)\s*s", re.I)
+_MODELE = re.compile(r"model:\s*([\w.\-]+)", re.I)
+
+
+def _nombre(texte: Any) -> Optional[float]:
+    try:
+        return float(str(texte).strip().rstrip("s"))
+    except (TypeError, ValueError):
+        return None
+
+
+def lire_quota(corps: Any) -> Dict[str, Any]:
+    """Lit un refus 429 : quota du jour ou de la minute, limite, attente, modele.
+
+    Deux formes existent. La page officielle des erreurs de Gemini ne documente
+    que {"error": {"code": "quota_exceeded" | "rate_limit_exceeded", "message"}}.
+    Les refus reels portent en plus des details google.rpc (QuotaFailure avec
+    quotaId et quotaValue, RetryInfo avec retryDelay), et arrivent parfois dans
+    une LISTE. On cherche donc partout, sans supposer la forme. Ne leve jamais :
+    un refus illisible rend un dictionnaire vide, et le routeur garde alors sa
+    pause courte d'avant."""
+    violations: List[Dict[str, Any]] = []
+    delais: List[str] = []
+    modeles: List[str] = []
+    codes: List[str] = []
+    messages: List[str] = []
+
+    def parcourir(noeud: Any, profondeur: int = 0) -> None:
+        if profondeur > 12:
+            return
+        if isinstance(noeud, list):
+            for element in noeud:
+                parcourir(element, profondeur + 1)
+            return
+        if not isinstance(noeud, dict):
+            return
+        if isinstance(noeud.get("quotaId"), str):
+            violations.append(noeud)
+        for cle, valeur in noeud.items():
+            if isinstance(valeur, str):
+                if cle == "retryDelay":
+                    delais.append(valeur)
+                elif cle == "model":
+                    modeles.append(valeur)
+                elif cle in ("code", "status"):
+                    codes.append(valeur.lower())
+                elif cle == "message":
+                    messages.append(valeur)
+            else:
+                parcourir(valeur, profondeur + 1)
+
+    parcourir(corps)
+    if not (violations or delais or codes or messages):
+        return {}
+    texte = " ".join(messages)
+    du_jour = [v for v in violations if "perday" in str(v.get("quotaId")).lower()]
+    par_jour = bool(du_jour) or "quota_exceeded" in codes or bool(_JOUR.search(texte))
+
+    limite = None
+    for violation in (du_jour if par_jour and du_jour else violations):
+        valeur = _nombre(violation.get("quotaValue"))
+        if valeur is not None:
+            limite = int(valeur)
+            break
+    if limite is None:
+        trouve = _LIMITE.search(texte)
+        if trouve:
+            limite = int(trouve.group(1))
+
+    attente = next((a for a in (_nombre(d) for d in delais) if a is not None), None)
+    if attente is None:
+        trouve = _ATTENTE.search(texte)
+        if trouve:
+            attente = _nombre(trouve.group(1))
+
+    modele = modeles[0] if modeles else None
+    if modele is None:
+        trouve = _MODELE.search(texte)
+        modele = trouve.group(1) if trouve else None
+
+    sortie: Dict[str, Any] = {"par_jour": par_jour}
+    if limite is not None:
+        sortie["limite"] = limite
+    if attente is not None:
+        sortie["attente_s"] = attente
+    if modele:
+        sortie["modele"] = modele
+    return sortie
+
+
+def apply_rate_limit_cooldown(name: str, response: httpx.Response, corps: Any = None) -> None:
     if response.status_code != 429:
         return
-    retry_after = response.headers.get("retry-after")
-    try:
-        seconds = max(5, min(int(float(retry_after)), 300)) if retry_after else 30
-    except Exception:
-        seconds = 30
-    provider_cooldown_until[name] = time.time() + seconds
+    maintenant = time.time()
+    quota = lire_quota(corps)
+    if quota.get("par_jour") and name == "gemini":
+        # Reessayer toutes les 30 s jusqu'a minuit ne ferait que rallonger chaque
+        # reponse d'un refus : la pause court jusqu'a la remise a zero documentee.
+        jusqu_a = minuit_pacifique(maintenant)
+    else:
+        # Ailleurs, l'heure de remise a zero n'est pas documentee : on garde une
+        # pause courte et on reessaie.
+        attente = quota.get("attente_s")
+        if attente is None:
+            attente = _nombre(response.headers.get("retry-after")) or 30.0
+        jusqu_a = maintenant + max(5.0, min(attente, 300.0))
+    provider_cooldown_until[name] = jusqu_a
+    quota_state[name] = {
+        "cause": "quota_du_jour" if quota.get("par_jour") else "limite_par_minute",
+        "depuis": maintenant,
+        "jusqu_a": jusqu_a,
+        "limite": quota.get("limite"),
+    }
+    if quota.get("par_jour") and quota.get("limite"):
+        limites_annoncees[name] = {
+            "limite": quota["limite"],
+            "modele": quota.get("modele") or PROVIDERS[name]["model"],
+            "le": maintenant,
+        }
+
+
+def titre_de(name: str) -> str:
+    return PROVIDER_HELP.get(name, {}).get("titre", name)
+
+
+def duree_lisible(secondes: float) -> str:
+    s = max(0, int(round(secondes)))
+    if s < 90:
+        return "%d s" % s
+    if s < 90 * 60:
+        return "%d min" % round(s / 60)
+    return "%d h" % round(s / 3600)
+
+
+def noter_service(name: str, prefere: Optional[str]) -> bool:
+    """Compte la reponse servie ; rend vrai si elle vient d'un secours."""
+    maintenant = time.time()
+    jour = jour_pacifique(maintenant)
+    compte = servies_du_jour.get(name)
+    if not compte or compte.get("jour") != jour:
+        compte = servies_du_jour[name] = {"jour": jour, "n": 0}
+    compte["n"] += 1
+    if name == prefere:
+        quota_state[name] = {}
+        avis_bascule["du"] = False
+    bascule = prefere is not None and name != prefere
+    dernier_service.update({
+        "fournisseur": name,
+        "titre": titre_de(name),
+        "modele": PROVIDERS[name]["model"],
+        "a": maintenant,
+        "bascule": bascule,
+    })
+    return bascule
+
+
+def texte_avis(prefere: str, servi: str) -> str:
+    q = quota_state.get(prefere) or {}
+    reste = duree_lisible(provider_cooldown_until.get(prefere, 0.0) - time.time())
+    if q.get("cause") == "quota_du_jour":
+        limite = " (%d demandes)" % q["limite"] if q.get("limite") else ""
+        quand = ("Retour prévu dans environ %s, à minuit heure du Pacifique." % reste
+                 if prefere == "gemini" else "Nouvel essai dans %s." % reste)
+        return "_ℹ️ %s a atteint sa limite gratuite du jour%s : cette réponse est fournie par %s. %s_\n\n" % (
+            titre_de(prefere), limite, titre_de(servi), quand)
+    return "_ℹ️ %s est saturé pour l’instant : cette réponse est fournie par %s. Nouvel essai dans %s._\n\n" % (
+        titre_de(prefere), titre_de(servi), reste)
+
+
+def morceau_avis(texte: str) -> bytes:
+    """Un morceau SSE au format OpenAI, place en tete du flux du secours."""
+    morceau = {
+        "id": "free-ai-avis",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": AUTO_MODEL,
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": texte}, "finish_reason": None}],
+    }
+    return ("data: " + json.dumps(morceau, ensure_ascii=False) + "\n\n").encode("utf-8")
+
+
+def etat_quotas() -> Dict[str, Any]:
+    """Ce que /studio et /diagnostic affichent. Aucune cle, aucun secret."""
+    maintenant = time.time()
+    jour = jour_pacifique(maintenant)
+    fiches = []
+    for name in provider_order():
+        q = quota_state.get(name) or {}
+        jusqu_a = provider_cooldown_until.get(name, 0.0)
+        en_pause = maintenant < jusqu_a
+        du_jour = en_pause and q.get("cause") == "quota_du_jour"
+        compte = servies_du_jour.get(name) or {}
+        servies = compte.get("n", 0) if compte.get("jour") == jour else 0
+        annonce = limites_annoncees.get(name) or {}
+        limite = annonce.get("limite") if annonce.get("modele") == PROVIDERS[name]["model"] else None
+        if du_jour:
+            reste: Optional[int] = 0
+        elif limite is not None:
+            reste = max(0, limite - servies)
+        else:
+            reste = None
+        s = stats[name]
+        fiches.append({
+            "nom": name,
+            "titre": titre_de(name),
+            "modele": PROVIDERS[name]["model"],
+            "eligible": provider_allowed(name),
+            "en_pause": en_pause,
+            "reprise_a": jusqu_a if en_pause else None,
+            # Faux quand on sait seulement quand on REESSAIERA, pas quand le
+            # quota repart (fournisseur sans heure de remise a zero documentee).
+            "reprise_connue": en_pause and (not du_jour or name == "gemini"),
+            "quota_du_jour_atteint": du_jour,
+            "limite_annoncee": limite,
+            "servies_aujourdhui": servies,
+            "reste_estime": reste,
+            "limite_publiee": LIMITES_PUBLIEES.get(name, {}),
+            "demandes": {"essais": s["attempts"], "reussites": s["successes"], "echecs": s["failures"]},
+        })
+    eligibles = [f for f in fiches if f["eligible"]]
+    secours = bool(eligibles) and eligibles[0]["en_pause"] and any(not f["en_pause"] for f in eligibles[1:])
+    return {
+        "maintenant": maintenant,
+        "fournisseurs": fiches,
+        "secours_en_cours": secours,
+        "dernier_service": dict(dernier_service) or None,
+        "compte_depuis": max(DEMARRE_A, debut_du_jour_pacifique(maintenant)),
+        "limites_relevees_le": LIMITES_RELEVEES_LE,
+    }
 
 def auth_ok(auth: Optional[str]) -> bool:
     # Refuse protected endpoints when no local key exists instead of falling
@@ -766,6 +1062,11 @@ async def verify_key(name: str, key: str) -> Dict[str, Any]:
     }
 
 
+@app.get("/quotas/etat")
+async def quotas_etat():
+    return etat_quotas()
+
+
 @app.get("/cles/etat")
 async def cles_etat():
     fournisseurs = []
@@ -1049,6 +1350,7 @@ async def diagnostic_etat():
     return {
         "version": version_locale(),
         "fournisseurs_branches": [n for n in PROVIDERS if configured(n)],
+        "quotas": etat_quotas(),
         "liaison": await etat_liaison(),
     }
 
@@ -1134,10 +1436,35 @@ function rendre(d) {
   zone.appendChild(ligne(d.fournisseurs_branches.length > 0, "Au moins un service gratuit est branche",
     d.fournisseurs_branches.length ? d.fournisseurs_branches.join(", ") : "aucune cle enregistree"));
 
+  // Quotas : quel service repond, lequel est en pause, jusqu'a quand.
+  var actifs = ((d.quotas && d.quotas.fournisseurs) || []).filter(function (f) { return f.eligible; });
+  actifs.forEach(function (f) {
+    var officielle = "limite officielle : " + ((f.limite_publiee || {}).texte || "inconnue");
+    var quoi = f.titre + " (" + f.modele + ") disponible";
+    var det = officielle;
+    if (f.en_pause) {
+      quoi = f.titre + " (" + f.modele + ") : "
+           + (f.quota_du_jour_atteint ? "limite gratuite du jour atteinte" : "sature pour l'instant");
+      det = (f.limite_annoncee ? "limite annoncee dans le refus : " + f.limite_annoncee + " demandes ; " : "")
+          + (f.reprise_connue ? "reprise vers " : "nouvel essai vers ")
+          + new Date(f.reprise_a * 1000).toLocaleTimeString("fr-FR") + " ; " + officielle;
+    } else if (f.reste_estime !== null && f.reste_estime !== undefined) {
+      det = "environ " + f.reste_estime + " demande(s) restante(s) aujourd'hui (estimation) ; " + officielle;
+    }
+    zone.appendChild(ligne(!f.en_pause, quoi, det));
+  });
+  var tousEnPause = actifs.length > 0 && actifs.every(function (f) { return f.en_pause; });
+
   var v = document.getElementById("verdict");
-  if (modeles.length && d.fournisseurs_branches.length) {
+  if (modeles.length && d.fournisseurs_branches.length && tousEnPause) {
+    v.className = "verdict mauvais";
+    v.textContent = "Tous les services gratuits branches ont atteint leur limite. Le chat reprendra "
+                  + "de lui-meme, aux heures indiquees ci-dessous. Rien n'est paye.";
+  } else if (modeles.length && d.fournisseurs_branches.length) {
     v.className = "verdict bon";
-    v.textContent = "Tout est en place. Le chat doit proposer un modele.";
+    v.textContent = "Tout est en place. Le chat doit proposer un modele."
+      + (d.quotas && d.quotas.secours_en_cours
+         ? " Il repond en ce moment par un service de secours : le premier a atteint sa limite." : "");
   } else if (!modeles.length && L.session_admin && L.memes_cles === false) {
     v.className = "verdict mauvais";
     v.textContent = "Le chat garde un ancien mot de passe interne. Cliquez Reparer la liaison.";
@@ -1411,27 +1738,32 @@ async def studio_home():
 .etat{padding:14px 16px;border-radius:12px;border:1px solid #bbb;margin:12px 0}
 .etat.pret{background:#e8f6ec;border-color:#7fb98f}
 .etat.pasret{background:#fdf3e3;border-color:#d9ad63}
+.exp{font-size:.7rem;font-weight:600;border:1px solid #c9a227;background:#fff8e1;border-radius:999px;
+ padding:2px 8px;vertical-align:middle;margin-left:4px}
+ul.quotas{margin:6px 0 8px;padding-left:20px} ul.quotas li{margin:5px 0}
 </style></head><body>
 <div class="hero">
 <h1>Free AI Studio</h1>
-<p>Votre studio IA local. Une clé gratuite suffit : le chat, la lecture d’images, la fabrication d’images, la recherche Web et la voix marchent alors sans rien installer d’autre. La vidéo demande en plus un compte Modal, dont le crédit mensuel offert suffit.</p>
+<p>Votre studio IA local. Une clé gratuite suffit : le chat, la lecture d’images, la fabrication d’images, la recherche Web et la voix marchent alors sans rien installer d’autre. La vidéo demande en plus un compte Modal : carte bancaire exigée, 30 $ de calcul offerts par mois, et facturation au-delà tant que vous n’avez pas réglé de limite de dépense chez Modal.</p>
 <div class="etat" id="etat">Vérification de l’état…</div>
 <p class="status">🟢 Gratuit par défaut</p>
 <span class="pill">Pas de dépense automatique</span>
 <span class="pill">Fallback strictement contrôlé</span>
 <span class="pill">Boost volontaire et plafonné</span>
 </div>
+<div class="etat" id="quotas" hidden></div>
 <div class="grid">
 <a class="card" href="/cles"><h2>🔑 Vos clés</h2><p>Première étape : brancher un service gratuit, en trois clics et sans toucher à un fichier.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
-<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix</h2><p>🔊 sous chaque réponse pour l’écouter, 🎙️ dans la barre de saisie pour dicter. Tout se passe sur votre ordinateur, sans clé.</p></a>
-<a class="card" href="http://localhost:8020/video" target="_blank"><h2>🎬 Vidéo</h2><p>Décrivez une scène, ou donnez l’image de départ, celle d’arrivée, et une image de référence pour garder le même personnage. Le calcul tourne sur une machine louée à la minute : la page affiche ce qui reste du crédit offert.</p></a>
-<a class="card" href="/notebooklm"><h2>📚 Étudier</h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
-<a class="card" href="http://localhost:3000/" target="_blank"><h2>💻 Code</h2><p>Demander de l'aide pour coder ; les résultats Sandbox peuvent devenir des ressources de travail de l'agent.</p></a>
-<a class="card" href="http://localhost:8020/" target="_blank"><h2>🧪 Sandbox</h2><p>Local isolé, Kaggle automatisable et Colab direct. Les sorties sont conservées comme artefacts réutilisables.</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter, 🎙️ dans la barre de saisie pour dicter. Tout se passe sur votre ordinateur, sans clé.</p></a>
+<a class="card" href="http://localhost:8020/video" target="_blank"><h2>🎬 Vidéo <span class="exp">expérimental</span></h2><p>Décrivez une scène, ou donnez l’image de départ, celle d’arrivée, et une image de référence pour garder le même personnage. Le calcul tourne sur une machine Modal louée à la minute (Modal exige une carte bancaire). La page affiche la dépense estimée par le Studio, pas votre facture Modal.</p></a>
+<a class="card" href="/notebooklm"><h2>📚 Étudier <span class="exp">expérimental</span></h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>💻 Code <span class="exp">expérimental</span></h2><p>Demander de l'aide pour coder ; les résultats Sandbox peuvent devenir des ressources de travail de l'agent.</p></a>
+<a class="card" href="http://localhost:8020/" target="_blank"><h2>🧪 Sandbox <span class="exp">expérimental</span></h2><p>Local isolé, Kaggle automatisable et Colab direct. Les sorties sont conservées comme artefacts réutilisables.</p></a>
 </div>
+<p class="muted">Chat, Image et Recherche Web sont les fonctions stabilisées. Les cartes marquées « expérimental » peuvent changer ou casser d’une version à l’autre.</p>
 <div class="hero" style="margin-top:18px">
 <h2>🔄 Mise à jour</h2>
 <div class="etat" id="maj">Vérification de la version…</div>
@@ -1447,7 +1779,7 @@ services : ils se coupent une ou deux minutes. Rien n’est envoyé nulle part, 
 <a href="/boost">Voir le Boost et mes limites →</a>
 <p style="margin-top:14px">Quelque chose ne marche pas ? <a href="/diagnostic"><b>🩺 Diagnostic</b></a> —
 la page mesure la chaîne et dit où elle casse, sans terminal.</p>
-<p class="muted">Les noms techniques des fournisseurs sont volontairement masqués dans cette page débutant.</p>
+<p class="muted">Le nom d’un service n’apparaît ici que pour dire lequel répond, et jusqu’à quand.</p>
 </div>
 <script>
 fetch("/cles/etat").then(r => r.json()).then(d => {
@@ -1465,6 +1797,52 @@ fetch("/cles/etat").then(r => r.json()).then(d => {
   e.className = "etat pasret";
   e.textContent = "État non vérifiable : le routeur local ne répond pas.";
 });
+
+// --- Quotas gratuits ---
+function dureeLisible(s){
+  s = Math.max(0, Math.round(s));
+  if(s < 90) return s + " s";
+  if(s < 5400) return Math.round(s / 60) + " min";
+  return Math.round(s / 3600) + " h";
+}
+function heureLocale(t){
+  return new Date(t * 1000).toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit"});
+}
+function quotasAfficher(q){
+  const z = document.getElementById("quotas");
+  const actifs = q.fournisseurs.filter(f => f.eligible);
+  if(!actifs.length){ z.hidden = true; return; }
+  const lignes = actifs.map(f => {
+    let t = "<b>" + f.titre + "</b> <span class='muted'>(" + f.modele + ")</span> : ";
+    if(f.en_pause){
+      t += f.quota_du_jour_atteint
+        ? "limite gratuite du jour atteinte" + (f.limite_annoncee ? " (" + f.limite_annoncee + " demandes)" : "")
+        : "saturé pour l’instant";
+      t += (f.reprise_connue ? ", reprise vers " : ", nouvel essai vers ") + heureLocale(f.reprise_a)
+        + " (dans " + dureeLisible(f.reprise_a - q.maintenant) + ")";
+    } else if(f.reste_estime !== null && f.reste_estime !== undefined){
+      t += "disponible, environ " + f.reste_estime + " demande(s) restante(s) aujourd’hui (estimation)";
+    } else {
+      t += "disponible, " + f.servies_aujourdhui + " réponse(s) servie(s) aujourd’hui";
+    }
+    return "<li>" + t + ".<br><span class='muted'>Limite officielle : "
+      + ((f.limite_publiee || {}).texte || "inconnue") + ".</span></li>";
+  });
+  z.className = q.secours_en_cours ? "etat pasret" : "etat";
+  z.innerHTML = (q.secours_en_cours
+      ? "<b>Le chat répond en ce moment avec un service de secours</b> : le premier a atteint sa limite. Rien n’est payé pour autant."
+      : "<b>Services gratuits</b>")
+    + "<ul class='quotas'>" + lignes.join("") + "</ul>"
+    + "<span class='muted'>Limites relevées le " + q.limites_relevees_le + ". Réponses comptées depuis minuit "
+    + "(heure du Pacifique) ou depuis le dernier démarrage du Studio. Une limite ne s’affiche qu’une fois "
+    + "annoncée par le service lui-même dans un refus.</span>";
+  z.hidden = false;
+}
+function quotasRafraichir(){
+  return fetch("/quotas/etat").then(r => r.json()).then(quotasAfficher).catch(() => {});
+}
+quotasRafraichir();
+setInterval(quotasRafraichir, 30000);
 
 // --- Mise à jour ---
 const majCase = document.getElementById("maj");
@@ -1494,9 +1872,12 @@ function majAfficher(d){
     majCase.textContent = "À jour (" + version + ").";
   } else if(d.a_jour === false){
     majCase.className = "etat pasret";
-    const liste = (d.retard || []).map(c => "• " + c.titre).join("\n");
+    // Barre oblique DOUBLEE dans le source : la page est une chaine Python, qui
+    // ferait d'un retour a la ligne echappe une seule fois un vrai saut de ligne,
+    // au milieu d'une chaine JavaScript. Tout ce script cesserait de marcher.
+    const liste = (d.retard || []).map(c => "• " + c.titre).join("\\n");
     majCase.textContent = "Une version plus récente existe (" + version + ")."
-      + (liste ? "\nCe qui vous manque :\n" + liste : "");
+      + (liste ? "\\nCe qui vous manque :\\n" + liste : "");
     majCase.style.whiteSpace = "pre-line";
   } else if(d.comparaison === "quota_github"){
     majCase.className = "etat";
@@ -1846,11 +2227,25 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                 detail="Paid or direct model selection is blocked. Use 'free-ai-auto'."
             )
 
-    candidates = [name for name in provider_order() if provider_allowed(name) and not provider_on_cooldown(name)]
+    # Le service que la personne attend : le premier de l'ordre qui soit branche.
+    # Toute reponse venue d'un autre est un secours, et se dit.
+    eligibles = [name for name in provider_order() if provider_allowed(name)]
+    prefere = eligibles[0] if eligibles else None
+    candidates = [name for name in eligibles if not provider_on_cooldown(name)]
     if boost_active() and "openrouter" in candidates:
         candidates = ["openrouter"] + [x for x in candidates if x != "openrouter"]
 
     if not candidates:
+        if eligibles:
+            # Tous en pause : le dire, avec l'heure du retour, plutot que
+            # << aucune cle >> -- les cles sont la, c'est le quota qui manque.
+            attente = min(provider_cooldown_until.get(n, 0.0) for n in eligibles) - time.time()
+            raise HTTPException(
+                status_code=429,
+                detail="Tous les services gratuits branches ont atteint leur limite. Le premier "
+                       "revient dans environ %s. Rien n'est paye : le Studio attend." % duree_lisible(attente),
+                headers={"Retry-After": str(max(1, int(attente)))},
+            )
         raise HTTPException(
             status_code=503,
             detail="No eligible free provider is configured. Add an API key in .env."
@@ -1867,9 +2262,19 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
             stats[name]["last_status"] = response.status_code
 
             if response.status_code >= 400:
-                apply_rate_limit_cooldown(name, response)
-                body = (await response.aread())[:800].decode("utf-8", errors="replace")
+                # Le corps est lu EN ENTIER avant d'etre analyse : c'est lui, et
+                # non l'en-tete retry-after, qui dit si le refus vaut pour la
+                # minute ou pour la journee (voir lire_quota).
+                brut = await response.aread()
                 await response.aclose()
+                try:
+                    corps = json.loads(brut)
+                except ValueError:
+                    corps = None
+                apply_rate_limit_cooldown(name, response, corps)
+                if response.status_code == 429 and name == prefere:
+                    avis_bascule["du"] = True
+                body = brut[:800].decode("utf-8", errors="replace")
                 stats[name]["failures"] += 1
                 stats[name]["last_error"] = f"HTTP {response.status_code}: {body[:300]}"
                 errors.append(f"{name}: HTTP {response.status_code}")
@@ -1878,10 +2283,23 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
 
             stats[name]["successes"] += 1
             stats[name]["last_error"] = None
+            bascule = noter_service(name, prefere)
 
             if stream:
-                async def iterator(resp=response, cli=client):
+                media_type = response.headers.get("content-type", "text/event-stream")
+                # Premier message servi par un secours apres la mise en pause du
+                # service attendu : une ligne en tete de la reponse le dit, une
+                # seule fois. En flux SSE seulement : dans une reponse d'un bloc,
+                # l'avis finirait dans un titre de conversation.
+                debut = b""
+                if bascule and avis_bascule["du"] and "text/event-stream" in media_type:
+                    debut = morceau_avis(texte_avis(prefere, name))
+                    avis_bascule["du"] = False
+
+                async def iterator(resp=response, cli=client, debut=debut):
                     try:
+                        if debut:
+                            yield debut
                         # aiter_bytes() defait la compression du fournisseur ; aiter_raw()
                         # rendait les octets gzip TELS QUELS, sous une etiquette
                         # text/event-stream et sans Content-Encoding. Le client recevait
@@ -1894,8 +2312,8 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                         await resp.aclose()
                         await cli.aclose()
 
-                media_type = response.headers.get("content-type", "text/event-stream")
-                return StreamingResponse(iterator(), media_type=media_type)
+                return StreamingResponse(iterator(), media_type=media_type,
+                                         headers={"X-Free-AI-Provider": name})
 
             data = await response.aread()
             media_type = response.headers.get("content-type", "application/json")
@@ -1914,6 +2332,7 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                 status_code=200,
                 headers={
                     "X-Free-AI-Provider": name,
+                    "X-Free-AI-Secours": "oui" if bascule else "non",
                     "X-Free-AI-Mode": "boost" if boost_active() else "free",
                 },
                 media_type=media_type.split(";")[0],

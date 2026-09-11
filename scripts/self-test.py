@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Free AI Studio post-install self-test. No AI provider calls are made."""
 from __future__ import annotations
-import json, os, subprocess, sys, time, urllib.error, urllib.request
+import json, subprocess, sys, time, urllib.error, urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="Free AI Studio Local Sandbox Worker", version="1.0.0", docs_url=None, redoc_url=None)
 KEY = os.getenv("SANDBOX_WORKER_KEY", "").strip()
-ROOT = Path("/workspace/jobs")
+# /workspace dans le conteneur ; configurable pour charger le service hors
+# conteneur (CI : scripts/verifier-imports.py, tests/).
+ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace")) / "jobs"
 ROOT.mkdir(parents=True, exist_ok=True)
 MAX_CODE = int(os.getenv("SANDBOX_MAX_CODE_BYTES", "500000"))
 MAX_OUTPUT = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "200000"))

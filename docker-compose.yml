@@ -61,6 +61,11 @@ services:
       KAGGLE_API_TOKEN: ${KAGGLE_API_TOKEN:-}
       KAGGLE_KEY: ${KAGGLE_KEY:-}
       COLAB_API_ENABLED: ${COLAB_API_ENABLED:-false}
+      # Kaggle automatique n'est permis qu'au proprietaire des identifiants, sur
+      # sa machine. Ces deux reglages le coupent quand le Studio sert d'autres
+      # personnes (voir docs/GPU_CLOUD.md).
+      STUDIO_HEBERGE: ${STUDIO_HEBERGE:-false}
+      WEBUI_AUTH: ${WEBUI_AUTH:-false}
       # Video : seule fonction du Studio qui loue une carte graphique a la
       # minute. Le plafond est un refus AVANT de lancer, pas un constat apres
       # coup ; le compteur du mois vit dans config/video-budget.json.

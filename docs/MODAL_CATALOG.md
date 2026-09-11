@@ -146,7 +146,13 @@ L'assistant de codage peut remplacer les modèles associés à ces profils aprè
 
 ## Règles financières
 
-Le plan Starter affiche actuellement un crédit de calcul gratuit mensuel, mais les ressources GPU restent tarifées à la seconde.
+Vérifié le 11/09/2026 sur les pages officielles de Modal :
+
+- **Tarifs** (<https://modal.com/pricing>) : plan Starter à « $0 + compute / month », avec **« $30 / month free credits »**. Les GPU sont facturés à la seconde.
+- **Carte bancaire obligatoire** (<https://modal.com/docs/guide/billing>) : « you must have a payment method on file in order to use Modal ». Modal ne s'utilise pas sans moyen de paiement enregistré.
+- **Au-delà du crédit, Modal facture** (<https://modal.com/docs/guide/budgets>) : « If you do not set a custom spend limit, Modal uses the cycle's usage limit minus credits. For example, if your usage limit is $100 and you have $30 in credits, the default spend limit is $70. » Autrement dit, sans réglage, **jusqu'à 70 $ peuvent être prélevés** dans cet exemple. Quand la limite est atteinte, « Modal stops workloads that would incur additional out-of-pocket charges ».
+- La limite se règle sur la page **Usage & Billing** (<https://modal.com/settings/usage>). La documentation ne dit pas si 0 $ est accepté : la régler au plus bas que la page permet, et vérifier.
+- Le Studio **ne lit pas** le crédit restant ni la facture chez Modal. Le plafond vidéo (`VIDEO_BUDGET_USD_PAR_MOIS`) est une estimation locale, et le crédit affiché (`MODAL_CREDIT_MENSUEL_USD`) est une **déclaration** de l'utilisateur.
 
 Donc :
 

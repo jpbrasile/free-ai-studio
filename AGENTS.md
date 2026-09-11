@@ -6,7 +6,7 @@ L'utilisateur peut être totalement débutant. Ton rôle est d'installer, config
 
 ## Priorités absolues
 
-1. Lire `README.md`, `docs/INSTALLATION.md`, `docs/ASSISTANT_PERMISSIONS.md` et `.env.example`.
+1. Lire `README.md`, `docs/INSTALLATION.md`, `docs/ASSISTANT_PERMISSIONS.md` et `.env.example`, puis `PLAN.md` : ce qui reste à faire, dans quel ordre, et ce qui est gelé.
 2. Identifier Windows / macOS / Linux.
 3. Vérifier Git, Docker et Docker Compose.
 4. Ne jamais afficher, recopier dans le chat, logger ou committer une clé API.
@@ -154,6 +154,8 @@ Le parcours doit être :
 
 Ne tente pas de transformer Colab/Kaggle en serveur permanent 24/7.
 
+Le provider Kaggle automatique (`run_kaggle` dans `sandbox-manager/app.py`) suppose les identifiants **personnels** de l'utilisateur, sur **sa** machine. **Ne le réutilise pas tel quel si le projet évolue vers une version hébergée ou multi-utilisateur** : il enverrait les calculs de tiers sur le compte Kaggle d'une seule personne. Une garde le coupe déjà dans ces contextes (`contexte_partage()`, voir `docs/GPU_CLOUD.md`). Ne l'affaiblis pas pour faire passer un test ou une démo. La politique d'usage de Kaggle exclut aussi les activités sans rapport avec la science des données : n'envoie pas sur Kaggle un calcul qui n'en relève pas (`docs/GPU_CLOUD.md`).
+
 Les liens sélectionnés sont dans `notebooks/SOTA_LINKS.md`. Avant de les remplacer par un modèle plus récent, vérifie que le nouveau choix est réellement exécutable sur les GPU gratuits visés, pas seulement meilleur sur un benchmark.
 
 ## Modèles et profils
@@ -173,10 +175,19 @@ SEARCH
 
 Les modèles sont affectés à des profils internes afin de pouvoir les remplacer sans changer l'UX.
 
+### Vocabulaire : « gratuit » n'est pas « open source »
+
+Free AI Studio est un **agrégateur de paliers gratuits**, pas un studio open source. Écris :
+- « palier gratuit d'une API propriétaire » pour Gemini, OpenRouter (le routeur), Groq (le service) ;
+- « modèle ouvert » seulement quand les poids sont téléchargeables sous une licence publiée (Wan 2.1, Whisper, gpt-oss) ; précise alors où il tourne, localement ou à distance ;
+- la licence **et** ses restrictions de territoire au point où l'utilisateur choisit le modèle, pas en note de bas de page.
+
+Le tableau de référence est dans `README.md`, section « Ce qui est ouvert, ce qui ne l'est pas ». Toute nouvelle fonction y ajoute sa ligne.
+
 Quand l'utilisateur demande « mets à jour les meilleurs modèles » et que l'accès Web est permis :
 1. consulter d'abord les sources officielles ;
 2. vérifier disponibilité, licence, matériel, API et coût ;
-3. privilégier open source / réellement gratuit ;
+3. privilégier les modèles ouverts ou réellement gratuits ;
 4. comparer avec l'existant ;
 5. migrer seulement si le gain est réel ;
 6. tester ;

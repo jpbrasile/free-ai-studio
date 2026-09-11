@@ -22,7 +22,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
 BUDGET_FICHIER = CONFIG_DIR / "video-budget.json"
@@ -44,8 +44,16 @@ PRIX_GPU_USD_S: Dict[str, float] = {
     "H100": 0.001097,
 }
 
-# Modal offre 30 $ de credits chaque mois. Le plafond par defaut en laisse une
-# part au reste du bac a sable : la video ne doit pas manger le mois a elle seule.
+# Modal affiche 30 $ de credit par mois pour son offre Starter (modal.com/pricing,
+# releve du 11/09/2026). Il exige une carte bancaire, et au-dela du credit il
+# facture jusqu'a la limite de depense du compte (modal.com/docs/guide/budgets).
+# Le Studio ne lit PAS ce compte : CREDIT_OFFERT_USD est une declaration de
+# l'utilisateur, affichee comme telle.
+#
+# Plafond par defaut : 20 $. Il reste sous les 30 $ et laisse 10 $ au reste du
+# bac a sable, que ce compteur ne voit pas. Au prix du 09/09/2026, il paie
+# environ 200 clips << Rapide >> de 3 s par mois (0,096 $ chacun, le dernier
+# n'etant lance que si son pire cas, 0,53 $, tient encore).
 BUDGET_MENSUEL_USD = float(os.getenv("VIDEO_BUDGET_USD_PAR_MOIS", "20"))
 CREDIT_OFFERT_USD = float(os.getenv("MODAL_CREDIT_MENSUEL_USD", "30"))
 
@@ -67,6 +75,7 @@ MODELES = {
         # disque Modal, qui est offert jusqu'a 1 Tio.
         "poids_go": 19,
         "licence": "Apache 2.0",
+        "territoire": "aucune restriction de pays",
         "gpu": os.getenv("VIDEO_GPU_RAPIDE", "L4"),
         "largeur": 832,
         "hauteur": 480,
@@ -80,6 +89,7 @@ MODELES = {
         "parametres": "14 milliards",
         "poids_go": 75,
         "licence": "Apache 2.0",
+        "territoire": "aucune restriction de pays",
         "gpu": os.getenv("VIDEO_GPU_SOIGNE", "A100"),
         "largeur": 1280,
         "hauteur": 720,
@@ -551,13 +561,14 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
     <select id="duree"><option value="3">3 secondes</option><option value="5" selected>5 secondes</option></select>
   </label>
   <label>Qualité
-    <select id="qualite"><option value="rapide" selected>Rapide</option><option value="soigne">Soignée (plus chère)</option></select>
+    <select id="qualite"><option value="rapide" selected>Rapide — Wan 2.1, 1,3 B</option><option value="soigne">Soignée — Wan 2.1, 14 B (plus chère)</option></select>
   </label>
   <label>Où
-    <select id="ou"><option value="modal" selected>Modal — crédit gratuit mensuel</option><option value="kaggle">Kaggle — gratuit, plus lent</option></select>
+    <select id="ou"><option value="modal" selected>Modal — machine louée (carte bancaire exigée)</option><option value="kaggle">Kaggle — gratuit, plus lent</option></select>
   </label>
   <button id="lancer" class="primaire">Fabriquer</button>
 </div>
+<p id="licence" class="avert"></p>
 
 <div class="images">
   <div class="case"><h3>Image de départ</h3>
@@ -583,6 +594,16 @@ const CLE = "__CLE__";
 const ENTETES = {"Authorization":"Bearer "+CLE, "Content-Type":"application/json"};
 const IMAGES = {};
 let minuteur = null;
+let MODELES = null;
+
+// La licence s'affiche LA OU l'on choisit, pas dans une note en bas de page.
+function majLicence(){
+  const m = MODELES && MODELES[document.getElementById("qualite").value];
+  document.getElementById("licence").textContent = m
+    ? ("Modèle " + m.hf + " : licence " + m.licence + ", " + m.territoire + ".")
+    : "";
+}
+document.getElementById("qualite").addEventListener("change", majLicence);
 
 // Les images sont réduites ICI, dans le navigateur : le modèle travaille de
 // toute façon en 480p, et une photo de téléphone de 4 Mo n'apporterait rien
@@ -625,12 +646,15 @@ document.querySelectorAll('input[type=file]').forEach(entree => {
 
 function budgetTexte(b){
   const part = Math.min(100, 100 * b.usd / b.plafond_usd);
-  return "Dépensé ce mois-ci : <b>" + b.usd.toFixed(2) + " $</b> sur un plafond de "
-    + b.plafond_usd.toFixed(2) + " $ (Modal offre " + b.credit_offert_usd.toFixed(0)
-    + " $ par mois, renouvelés). " + b.clips + " clip(s)."
+  return "Dépensé ce mois-ci selon le Studio : <b>" + b.usd.toFixed(2) + " $</b> sur un plafond de "
+    + b.plafond_usd.toFixed(2) + " $. " + b.clips + " clip(s)."
     + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
     + '<span class="avert">Estimation locale d’après les prix relevés le '
-    + b.prix_releve_le + ', pas une facture.</span>';
+    + b.prix_releve_le + ', pas une facture. Le Studio ne lit pas votre compte Modal : le crédit de '
+    + b.credit_offert_usd.toFixed(0) + ' $ par mois est celui que vous avez déclaré '
+    + '(MODAL_CREDIT_MENSUEL_USD), non vérifié chez Modal. Modal exige une carte bancaire et facture '
+    + 'au-delà du crédit, jusqu’à votre limite de dépense : '
+    + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">réglez-la au plus bas chez Modal</a>.</span>';
 }
 
 function rafraichirBudget(){
@@ -638,6 +662,13 @@ function rafraichirBudget(){
     .then(r => r.json())
     .then(d => {
       document.getElementById("banniere").innerHTML = budgetTexte(d.budget);
+      MODELES = d.modeles;
+      majLicence();
+      if(d.kaggle_permis === false){
+        const k = document.querySelector('#ou option[value="kaggle"]');
+        k.disabled = true;
+        k.textContent = "Kaggle — coupé ici : Studio partagé";
+      }
       const p = document.getElementById("pied");
       p.innerHTML = "Modèle : <b>" + d.modeles.rapide.hf + "</b> (" + d.modeles.rapide.licence
         + ", " + d.modeles.rapide.poids_go + " Go). Rien ne part chez un fournisseur d’IA : "
