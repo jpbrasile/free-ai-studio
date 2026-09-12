@@ -68,7 +68,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
    - `backend_automatique` n'annonce plus Kaggle : `run_auto` essaie le worker local avant lui.
    - 3 tests dans `tests/test_kaggle.py`.
 5. **P2 : verrouiller Chat, Recherche et Image** sur une machine vierge, avec une personne qui n'a jamais ouvert un terminal.
-   - Écrire le protocole avant la séance : une liste fixe de tâches (installer, coller la clé, poser une question, chercher sur le Web, fabriquer une image, ouvrir le diagnostic), et pour chacune une case « menée à terme sans aide ». **Écrit le 11/09 : `docs/ESSAI_MACHINE_NEUVE.md`**, un Windows 11 neuf dans une machine virtuelle Hyper-V, avec des points de contrôle. Il demande une session administrateur et une ISO de Windows : c'est l'utilisateur qui le joue. **Pas encore joué.**
+   - Écrire le protocole avant la séance : une liste fixe de tâches (installer, coller la clé, poser une question, chercher sur le Web, fabriquer une image, ouvrir le diagnostic), et pour chacune une case « menée à terme sans aide ». **Écrit : `docs/ESSAI_MACHINE_NEUVE.md`.** Il était prévu le 11/09 pour une machine virtuelle Hyper-V. Le 12/09, l'utilisateur a choisi un autre ordinateur physique : plus d'ISO, de points de contrôle ni de virtualisation imbriquée, et un vrai matériel. En contrepartie, l'ordinateur n'est pas neuf : son état de départ se note avant la séance, et il n'y a qu'un essai « neuf » par machine. C'est l'utilisateur qui le joue. **Pas encore joué.**
    - Indicateur : le pourcentage de tâches menées à terme, à la place de la taille du catalogue.
    - Aucune nouvelle fonction avant un premier chiffre.
 6. **P2 : le registre**, après l'étape 5.
