@@ -40,6 +40,8 @@ Cinq gestes. Aucun terminal, aucun assistant de code.
 1. **Docker Desktop** — <https://www.docker.com/products/docker-desktop/>. Installer,
    redémarrer si on le demande, puis **ouvrir Docker Desktop** et attendre que la baleine
    en bas à gauche soit verte. C'est le seul vrai prérequis : sans lui, rien ne tourne.
+   Il demande Windows 10 22H2 ou Windows 11 23H2 (ou plus récent), en 64 bits : sinon,
+   **Windows Update** d'abord. `demarrer.cmd` le vérifie.
    S'il affiche **« Virtualization support not detected »**, ce n'est pas votre
    installation qui est en cause et ce n'est pas une impasse :
    [docs/DEPANNAGE.md](docs/DEPANNAGE.md) donne les trois causes possibles, dans l'ordre,
@@ -67,7 +69,8 @@ ne démarre pas, il ne se contente pas de dire « ouvrez-le » : il lit l'état 
 virtualisation et nomme la cause — micrologiciel éteint, composants Windows non cochés,
 WSL en panne, ou Docker simplement pas lancé. Puis il crée
 les réglages, fabrique les mots de passe internes au hasard, construit les services, lance
-le veilleur de mise à jour, attend que la page réponde vraiment, et l'ouvre.
+le veilleur de mise à jour, attend que la page **et le chat** répondent vraiment, et ouvre
+la page. Si le chat tourne sans répondre sur le port 3000, il le redémarre.
 
 Le rappeler plus tard ne casse rien : il redémarre, conserve `.env`, et ne relance pas un
 deuxième veilleur.

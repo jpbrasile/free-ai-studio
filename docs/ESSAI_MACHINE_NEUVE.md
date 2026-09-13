@@ -4,8 +4,9 @@ But : mesurer l'indicateur de l'étape 5 du `PLAN.md`, soit le nombre de tâches
 sans aide, sur un autre ordinateur que celui où le Studio est développé.
 
 Écrit le 11/09/2026 pour une machine virtuelle Hyper-V. Adapté le 12/09/2026 à un ordinateur
-physique, décision de l'utilisateur. **Pas encore joué.** Les points de la section 4 ont été
-lus dans les scripts, jamais observés.
+physique, décision de l'utilisateur. **Joué en partie le 13/09/2026** : voir `PLAN.md`,
+étape 5. Les points de la section 4 ont été lus dans les scripts ; l'essai du 13/09 en a vu
+un, le premier démarrage du chat.
 
 Depuis le 13/09/2026, `main` contient le travail de l'audit (`6a934cc`) : le README
 s'applique tel quel, sans choisir de branche.
@@ -16,7 +17,8 @@ il lui faut seulement Internet.
 
 ## Ce qu'il faut
 
-- Windows 10 ou 11, 64 bits.
+- Windows 10 22H2 ou Windows 11 23H2 au moins, 64 bits : c'est l'exigence de Docker Desktop,
+  et `demarrer.cmd` la vérifie.
 - 8 Go de mémoire au moins.
 - De la place sur le disque. Compter 25 Go, une estimation : Docker Desktop, WSL, l'image
   d'Open WebUI (5,1 Go) et les trois services construits sur place.

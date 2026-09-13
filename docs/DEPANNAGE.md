@@ -74,6 +74,13 @@ Puis **redémarrer l'ordinateur**. C'est le geste qu'on saute et qui coûte une
 heure : tant que la machine n'a pas redémarré, la case est cochée et **rien n'a
 changé**. Fermer et rouvrir Docker Desktop ne suffit pas.
 
+Déjà redémarré, les deux cases cochées, et Docker ne démarre toujours pas ?
+L'hyperviseur peut être coupé au démarrage de Windows : certains logiciels
+changent le réglage `hypervisorlaunchtype`. Dans une invite de commandes
+**ouverte en administrateur** : `bcdedit /set hypervisorlaunchtype auto`, puis
+redémarrer. Ce cas n'a pas été rencontré ici : il se déduit de ce que lit
+`demarrer.cmd`, qui ne peut pas lire ce réglage sans droits d'administrateur.
+
 `demarrer.cmd` lit l'état réel de ces deux cases — `Win32_OptionalFeature` est
 lisible **sans élévation**, contrairement à `Get-WindowsOptionalFeature` — et il
 distingue les deux situations que l'on confond toujours : *une case manque* (il
@@ -91,6 +98,16 @@ propose souvent lui-même de le réparer au démarrage ; sinon, le noyau WSL :
 Docker Desktop → **Settings** → **General** → **Use the WSL 2 based engine** doit
 être coché.
 
+### 5. Un Docker Desktop ancien, déjà installé
+
+Mesuré le 13/09/2026 sur un ordinateur d'essai, avec un Docker Desktop de 2023
+(client 23.0.5) : moteur arrêté, `docker info` rendait **le code 0** et une
+sortie vide. `demarrer.cmd` annonçait « Docker tourne », la construction
+échouait plus loin (`error during connect … docker_engine`), et le diagnostic
+de virtualisation ne s'affichait jamais. Corrigé : `demarrer.cmd` exige
+maintenant un numéro de version du moteur. Mettre Docker Desktop à jour reste
+une bonne idée : il le propose lui-même au démarrage.
+
 ---
 
 ## « Le démarrage a échoué » et les erreurs 500
@@ -101,12 +118,14 @@ démarre pas, tout ce qui l'interroge reçoit *500 Internal Server Error*. Ne
 cherchez rien du côté du 500 : réglez le démarrage du moteur (section
 précédente), le 500 disparaît avec lui.
 
-**Si le message vient de la fenêtre noire de `demarrer.cmd`**, c'est autre chose,
-et le plus souvent ce n'est pas votre ordinateur : le magasin d'images de Docker
-répond mal pendant une minute. Relancez `demarrer.cmd`. À partir de la troisième
-fois de suite, ce n'est plus un hasard : le rapport complet s'ouvre tout seul
-dans le Bloc-notes (`%TEMP%\free-ai-studio-demarrage\erreur-demarrage.txt`), il
-est fait pour être montré tel quel.
+**Si le message vient de la fenêtre noire de `demarrer.cmd`**, il lit l'erreur
+de Docker et nomme la cause : moteur arrêté, disque plein, porte prise, ou
+magasin d'images de Docker qui répond mal (erreur 500, 502, « connection
+reset » : relancer suffit le plus souvent). Jusqu'au 13/09/2026, il parlait
+toujours du magasin d'images, y compris pour un moteur arrêté. Dans tous les
+cas, le rapport complet s'ouvre dans le Bloc-notes
+(`%TEMP%\free-ai-studio-demarrage\erreur-demarrage.txt`) : il est fait pour
+être montré tel quel.
 
 ---
 
@@ -153,6 +172,52 @@ vous-même reste.
 2. Docker Desktop → **Volumes** → supprimer `free-ai-studio_open-webui-data` →
    relancer `demarrer.cmd`. Open WebUI repart d'une base neuve. Vous perdez
    l'historique de conversation, rien d'autre.
+
+---
+
+## Le chat ne s'ouvre pas : page vide sur le port 3000
+
+Deux cas, tous deux vus le 13/09/2026.
+
+**Premier démarrage.** Open WebUI met plusieurs minutes à s'ouvrir la première
+fois, bien après la page du Studio. `demarrer.cmd` attend maintenant le chat
+avant d'ouvrir la page, et la page du Studio dit « Le chat démarre encore »
+tant qu'il ne répond pas ; elle se met à jour seule.
+
+**Le relais de Docker coincé.** Le navigateur affiche `ERR_EMPTY_RESPONSE`.
+Mesuré sur l'ordinateur de développement : Open WebUI répondait normalement
+*dans* Docker, mais le relais de Docker Desktop vers le port 3000
+(`com.docker.backend.exe`) acceptait la connexion et ne transmettait rien.
+`docker compose restart open-webui` a suffi : la page a répondu en 0,27 s.
+`demarrer.cmd` fait ce redémarrage lui-même dans ce cas précis. Sinon :
+redémarrer Docker Desktop, puis relancer `demarrer.cmd`.
+
+---
+
+## « Image » rend une réponse en texte
+
+Le réglage Images d'Open WebUI garde **sa propre copie** du mot de passe
+interne du Studio, posée au premier démarrage. Si ce mot de passe change — un
+`.env` refait, ou recopié d'un autre ordinateur —, le chat est réparé mais pas
+les images : le routeur refuse la demande, et le modèle répond en texte.
+Mesuré le 13/09/2026 sur l'ordinateur de développement : clé gardée par le
+réglage Images différente du mot de passe interne, alors que le chat marchait.
+
+**Correctif en place** : comme pour le chat, le routeur vérifie cette copie à
+chaque démarrage, et le bouton **Réparer la liaison** du diagnostic aussi. Il
+ne touche qu'à un réglage qui vise encore le Studio : un autre moteur choisi à
+la main reste. Une clé Gemini collée dans ce champ par erreur est remplacée : le
+routeur ne l'accepterait jamais.
+
+Pour voir ce que le routeur a reçu, depuis le dossier du Studio :
+
+```
+docker logs free-ai-studio-manager 2>&1 | findstr images
+```
+
+`401` : mot de passe refusé. `503` : pas de clé Gemini. `502` : Google a
+refusé. Aucune ligne : Open WebUI n'a jamais appelé le Studio. C'est ce qu'a
+montré l'ordinateur d'essai du 13/09 : là-bas, la cause n'est pas établie.
 
 ---
 

@@ -916,6 +916,46 @@ async def reparer_connexion_webui(client: httpx.AsyncClient, entetes: Dict[str, 
         log.warning("Liaison chat -> routeur non verifiee : %s", exc)
 
 
+async def reparer_images_webui(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
+    """Meme remise d'aplomb que ci-dessus, pour la fabrication d'images.
+
+    Le reglage Images d'Open WebUI garde, lui aussi, sa propre copie du mot de
+    passe interne, posee une seule fois. Quand ce mot de passe change -- .env
+    refait, ou recopie depuis un autre ordinateur --, le chat est repare par
+    reparer_connexion_webui, les images non : le routeur refuse la demande
+    (401) et l'interrupteur << Image >> ne rend qu'un texte. Mesure du
+    13/09/2026 sur l'ordinateur de developpement : cle gardee par le reglage
+    Images differente du mot de passe interne, alors que le chat marchait.
+
+    On ne retouche qu'un reglage qui vise encore NOTRE route (moteur openai,
+    notre adresse) : un autre moteur ou une autre adresse est un choix de
+    l'utilisateur. Une cle Gemini collee dans ce champ, en revanche, est
+    remplacee : le routeur ne l'accepterait jamais.
+    """
+    if not INTERNAL_KEY:
+        return
+    interne = os.getenv("FREE_TIER_MANAGER_INTERNAL_URL",
+                        "http://free-tier-manager:8000/v1")
+    try:
+        r = await client.get(f"{WEBUI_URL}/api/v1/images/config", headers=entetes)
+        r.raise_for_status()
+        cfg = r.json()
+        cfg.pop("status", None)
+        adresse = str(cfg.get("IMAGES_OPENAI_API_BASE_URL") or "").rstrip("/")
+        if cfg.get("IMAGE_GENERATION_ENGINE") != "openai" or adresse != interne.rstrip("/"):
+            return
+        if cfg.get("IMAGES_OPENAI_API_KEY") == INTERNAL_KEY:
+            return
+        cfg["IMAGES_OPENAI_API_KEY"] = INTERNAL_KEY
+        r = await client.post(f"{WEBUI_URL}/api/v1/images/config/update",
+                              headers=entetes, json=cfg)
+        r.raise_for_status()
+        log.info("Liaison images -> routeur remise d'aplomb (la cle gardee par "
+                 "Open WebUI ne correspondait plus).")
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("Liaison images -> routeur non verifiee : %s", exc)
+
+
 ARENA_FAIT = CONFIG_DIR / "open-webui-arena.json"
 
 
@@ -957,6 +997,7 @@ async def masquer_arena(client: httpx.AsyncClient, entetes: Dict[str, str]) -> N
 
 async def poser_reglages_webui() -> None:
     faits: List[str] = []
+    echecs: List[str] = []
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as client:
         # Open WebUI demarre apres nous : on attend, sans jamais bloquer le
         # routeur lui-meme (cette fonction tourne dans une tache de fond).
@@ -983,6 +1024,8 @@ async def poser_reglages_webui() -> None:
         #    le temoin ci-dessous : sans elle, il n'y a aucun modele dans le chat
         #    et tout le reste est sans objet.
         await reparer_connexion_webui(client, entetes)
+        # Meme chose pour la copie du mot de passe que garde le reglage Images.
+        await reparer_images_webui(client, entetes)
         # Avant le temoin, lui aussi : il a son propre temoin (voir masquer_arena).
         await masquer_arena(client, entetes)
 
@@ -1013,6 +1056,7 @@ async def poser_reglages_webui() -> None:
                 faits.append("interrupteurs d'integrations effectifs")
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("Appel d'outils non regle : %s", exc)
+            echecs.append("appel d'outils")
 
         # 2. Exemples de depart en francais, l'interface l'etant deja.
         try:
@@ -1022,6 +1066,7 @@ async def poser_reglages_webui() -> None:
             faits.append("exemples de depart en francais")
         except httpx.HTTPError as exc:
             log.warning("Exemples de depart non poses : %s", exc)
+            echecs.append("exemples de depart")
 
         # 3. Recherche web. DuckDuckGo ne demande ni cle ni compte.
         try:
@@ -1039,6 +1084,7 @@ async def poser_reglages_webui() -> None:
                 faits.append("recherche web (%s)" % web["WEB_SEARCH_ENGINE"])
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("Recherche web non activee : %s", exc)
+            echecs.append("recherche web")
 
         # 4. Fabrication d'images, adressee a NOTRE route /v1/images/generations.
         #    La cle Google reste ainsi au seul endroit ou le debutant la saisit.
@@ -1060,6 +1106,16 @@ async def poser_reglages_webui() -> None:
                 faits.append("fabrication d'images")
         except (httpx.HTTPError, ValueError) as exc:
             log.warning("Fabrication d'images non activee : %s", exc)
+            echecs.append("fabrication d'images")
+
+    # Un reglage a echoue : pas de temoin, tout est retente au prochain
+    # demarrage. Jusqu'au 13/09/2026, le temoin etait pose malgre l'echec, et le
+    # reglage manque ne revenait jamais -- sans << legacy >>, l'interrupteur
+    # Image ne fait rien, sans un mot.
+    if echecs:
+        log.warning("Reglages Open WebUI incomplets (%s) : nouvel essai au prochain "
+                    "demarrage.", ", ".join(echecs))
+        return
 
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1474,7 +1530,9 @@ async def diagnostic_reparer():
         if not jeton:
             raise HTTPException(
                 409, "Le chat demande un compte : reparation impossible depuis cette page.")
-        await reparer_connexion_webui(client, {"Authorization": f"Bearer {jeton}"})
+        entetes = {"Authorization": f"Bearer {jeton}"}
+        await reparer_connexion_webui(client, entetes)
+        await reparer_images_webui(client, entetes)
     return {"fait": True, "liaison": await etat_liaison()}
 
 
@@ -1895,21 +1953,45 @@ la page mesure la chaîne et dit où elle casse, sans terminal.</p>
 <p class="muted">Le nom d’un service n’apparaît ici que pour dire lequel répond, et jusqu’à quand.</p>
 </div>
 <script>
-fetch("/cles/etat").then(r => r.json()).then(d => {
+// --- État du chat, relu toutes les 10 s. Essai du 13/09/2026 : lu une seule
+// fois, il restait faux après une clé collée sur l'autre page, et rien ne
+// disait qu'Open WebUI n'était pas encore ouvert.
+const etatDebut = Date.now();
+function chatJoignable(){
+  // no-cors : la réponse reste illisible, mais la promesse n'aboutit que si le
+  // chat répond vraiment sur le port 3000.
+  const arret = new AbortController();
+  const minuterie = setTimeout(() => arret.abort(), 4000);
+  return fetch("http://localhost:3000/health", {mode: "no-cors", cache: "no-store", signal: arret.signal})
+    .then(() => true, () => false)
+    .finally(() => clearTimeout(minuterie));
+}
+function etatRafraichir(){
   const e = document.getElementById("etat");
-  if (d.chat_pret) {
-    e.className = "etat pret";
-    e.textContent = "Le chat fonctionne : au moins un service gratuit répond.";
-  } else {
+  return Promise.all([fetch("/cles/etat").then(r => r.json()), chatJoignable()]).then(([d, ouvert]) => {
+    const lienCles = '<a href="/cles">Brancher un service gratuit →</a>';
+    if (!ouvert) {
+      e.className = "etat pasret";
+      const long = Date.now() - etatDebut > 5 * 60 * 1000;
+      e.innerHTML = (long
+          ? "Le chat ne répond toujours pas. Relancez <b>demarrer.cmd</b> ; si cela ne suffit pas, "
+            + "redémarrez Docker Desktop, puis relancez demarrer.cmd."
+          : "Le chat démarre encore : au premier démarrage, comptez quelques minutes. Cette case se met à jour seule.")
+        + (d.chat_pret ? "" : " En attendant : " + lienCles);
+    } else if (d.chat_pret) {
+      e.className = "etat pret";
+      e.textContent = "Le chat fonctionne : au moins un service gratuit répond.";
+    } else {
+      e.className = "etat pasret";
+      e.innerHTML = "Le chat est ouvert, mais ne peut pas encore répondre : aucune clé valide. " + lienCles;
+    }
+  }).catch(() => {
     e.className = "etat pasret";
-    e.innerHTML = 'Le chat ne peut pas encore répondre : aucune clé valide. ' +
-                  '<a href="/cles">Brancher un service gratuit →</a>';
-  }
-}).catch(() => {
-  const e = document.getElementById("etat");
-  e.className = "etat pasret";
-  e.textContent = "État non vérifiable : le routeur local ne répond pas.";
-});
+    e.textContent = "État non vérifiable : le routeur local ne répond pas.";
+  });
+}
+etatRafraichir();
+setInterval(etatRafraichir, 10000);
 
 // --- Quotas gratuits ---
 function dureeLisible(s){

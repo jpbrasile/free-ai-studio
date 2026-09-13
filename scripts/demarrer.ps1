@@ -56,7 +56,11 @@ function Executer($programme, $arguments, $etiquette) {
     foreach ($f in @($sortie, $erreur)) {
         if (Test-Path $f) { $texte += (Get-Content $f -ErrorAction SilentlyContinue) }
     }
-    return [pscustomobject]@{ Code = $p.ExitCode; Texte = ($texte -join "`n") }
+    # La sortie standard seule : c'est elle qui porte une reponse (une version,
+    # un etat) ; la sortie d'erreur ne porte que des plaintes.
+    $seule = @()
+    if (Test-Path $sortie) { $seule = @(Get-Content $sortie -ErrorAction SilentlyContinue) }
+    return [pscustomobject]@{ Code = $p.ExitCode; Texte = ($texte -join "`n"); Sortie = ($seule -join "`n") }
 }
 
 Write-Host ""
@@ -73,6 +77,29 @@ if ($v.Major -lt 5) {
 }
 Bon ("Windows PowerShell " + $v)
 
+# Docker Desktop exige Windows 10 22H2 (build 19045) ou Windows 11 23H2 (build
+# 22631), en 64 bits. En dessous, il s'installe mal ou ne demarre pas, avec des
+# messages qui ne parlent jamais de la version de Windows.
+if (-not [Environment]::Is64BitOperatingSystem) {
+    Abandonner "Ce Windows est en 32 bits." `
+        @("Docker Desktop, donc le Studio, demande un Windows 64 bits.") $null
+}
+$build = 0
+try { $build = [int](Get-CimInstance Win32_OperatingSystem).BuildNumber } catch { }
+if ($build -eq 0) {
+    Note "Version de Windows non lue : on continue."
+} elseif ($build -lt 19045 -or ($build -ge 22000 -and $build -lt 22631)) {
+    Souci ("Windows trop ancien pour Docker Desktop (build " + $build + ").")
+    Note  "Il faut Windows 10 22H2 ou Windows 11 23H2, ou plus recent :"
+    Note  "Parametres > Windows Update, tout installer, redemarrer, puis relancer demarrer.cmd."
+} elseif ($build -lt 22000) {
+    Bon ("Windows 10 22H2 (build " + $build + ")")
+    Note "Microsoft ne maintient plus Windows 10 depuis octobre 2025. Docker Desktop y"
+    Note "marche encore (essai du 13/09/2026), sans garantie pour la suite."
+} else {
+    Bon ("Windows 11 (build " + $build + ")")
+}
+
 # --- 2. Docker installe --------------------------------------------------------
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     Abandonner "Docker Desktop n'est pas installe." `
@@ -88,7 +115,14 @@ Bon "Docker Desktop est installe"
 # << installe >> et << en train de tourner >> sont deux choses differentes, et
 # c'est la deuxieme qui manque neuf fois sur dix.
 $info = Executer "docker" @("info", "--format", "{{.ServerVersion}}") "docker-info"
-if ($info.Code -ne 0) {
+# Le code seul ne suffit pas. Essai du 13/09/2026, Docker Desktop de 2023
+# (client 23.0.5) : moteur arrete, << docker info >> rend le code 0, une sortie
+# vide et l'erreur sur l'autre canal. Le script annoncait << Docker tourne >>,
+# la construction echouait plus loin avec un conseil hors sujet, et le
+# diagnostic de virtualisation ci-dessous n'etait jamais montre. Sans numero
+# de version, le moteur ne tourne pas.
+$moteur = $info.Sortie.Trim()
+if ($info.Code -ne 0 -or -not $moteur) {
 
     # Docker refuse de demarrer pour trois raisons tres differentes, qui
     # demandent trois gestes tres differents. Se tromper de raison, c'est
@@ -169,7 +203,13 @@ if ($info.Code -ne 0) {
                   "",
                   "  1. REDEMARRER l'ordinateur (un vrai redemarrage, pas une mise en veille).",
                   "  2. Ouvrir Docker Desktop, attendre la baleine verte.",
-                  "  3. Double-cliquer de nouveau sur demarrer.cmd.") $null
+                  "  3. Double-cliquer de nouveau sur demarrer.cmd.",
+                  "",
+                  "Deja redemarre, et ce message revient ? L'hyperviseur est peut-etre coupe",
+                  "au demarrage de Windows (certains logiciels le font). Touche Windows, taper",
+                  "cmd, clic droit > Executer en tant qu'administrateur, puis taper :",
+                  "  bcdedit /set hypervisorlaunchtype auto",
+                  "et redemarrer. (Ce reglage ne se lit pas sans droits d'administrateur.)") $null
         }
 
         $lignes = @("Le processeur est pret, mais il manque une piece du cote de Windows.",
@@ -223,7 +263,7 @@ if ($info.Code -ne 0) {
           "Pour ne plus y penser : dans Docker Desktop, Settings > General,",
           "cocher << Start Docker Desktop when you sign in >>.") $null
 }
-Bon ("Docker tourne (moteur " + $info.Texte.Trim() + ")")
+Bon ("Docker tourne (moteur " + $moteur + ")")
 
 # --- 4. Les trois portes libres ------------------------------------------------
 # Un autre programme deja assis sur le port 3000 ferait echouer le demarrage
@@ -329,14 +369,41 @@ if ($up.Code -ne 0) {
     Write-Host "Le demarrage a echoue. Les dernieres lignes :" -ForegroundColor Red
     ($up.Texte -split "`n" | Select-Object -Last 25) | ForEach-Object { Write-Host ("   " + $_) }
 
-    $quoiFaire = @("Le plus souvent, ce n'est PAS votre ordinateur : le magasin d'images de",
-                   "Docker repond mal pendant une minute. Une erreur 500, 502 ou",
-                   "<< connection reset >> se resout en relancant demarrer.cmd.",
-                   "",
-                   "  1. Verifiez que la baleine de Docker Desktop est verte.",
-                   "  2. Double-cliquez de nouveau sur demarrer.cmd.",
-                   "  3. Si cela recommence trois fois de suite, ce n'est plus un hasard :",
-                   "     le rapport complet vient de s'ouvrir dans le Bloc-notes.")
+    # Le conseil depend de ce que Docker a ecrit. Essai du 13/09/2026 : moteur
+    # arrete (<< error during connect ... docker_engine >>), et le script parlait
+    # d'un magasin d'images en panne, faisant relancer pour rien.
+    $t = $up.Texte
+    if ($t -match "error during connect|docker_engine|daemon is not running|Cannot connect to the Docker daemon") {
+        $quoiFaire = @("Docker Desktop s'est arrete, ou ne tourne pas vraiment.",
+                       "",
+                       "  1. Ouvrez Docker Desktop et attendez la baleine verte.",
+                       "  2. S'il affiche << Virtualization support not detected >> :",
+                       "     docs\DEPANNAGE.md, dans ce dossier, donne la marche a suivre.",
+                       "  3. Double-cliquez de nouveau sur demarrer.cmd.")
+    } elseif ($t -match "no space left on device") {
+        $quoiFaire = @("Le disque est plein.",
+                       "",
+                       "  Liberez de la place (compter 25 Go pour le Studio), puis relancez demarrer.cmd.",
+                       "  Docker range ses donnees sur C: ; pour les mettre ailleurs :",
+                       "  Docker Desktop > Settings > Resources > Advanced > Disk image location.")
+    } elseif ($t -match "port is already allocated|ports are not available|address already in use") {
+        $quoiFaire = @("Une porte (3000, 8010 ou 8020) a ete prise par un autre programme",
+                       "pendant le demarrage. Fermez-le, puis relancez demarrer.cmd.")
+    } elseif ($t -match "500 Internal Server Error|502 Bad Gateway|503 Service Unavailable|connection reset|TLS handshake timeout|i/o timeout|unexpected EOF|toomanyrequests") {
+        $quoiFaire = @("Le magasin d'images de Docker, sur Internet, repond mal : ce n'est pas",
+                       "votre ordinateur. Cela passe le plus souvent en une minute.",
+                       "",
+                       "  1. Double-cliquez de nouveau sur demarrer.cmd.",
+                       "  2. Si cela recommence trois fois de suite, ce n'est plus un hasard :",
+                       "     montrez le rapport complet, ouvert dans le Bloc-notes.")
+    } else {
+        $quoiFaire = @("La cause n'est pas de celles que ce script reconnait.",
+                       "",
+                       "  1. Verifiez que la baleine de Docker Desktop est verte,",
+                       "     puis double-cliquez de nouveau sur demarrer.cmd.",
+                       "  2. Si cela recommence : montrez le rapport complet, ouvert dans",
+                       "     le Bloc-notes, a quelqu'un qui peut aider.")
+    }
     if ($rapport) {
         $quoiFaire += @("", ("Rapport complet : " + $rapport))
         try { Start-Process "notepad.exe" $rapport | Out-Null } catch { }
@@ -382,6 +449,47 @@ if (-not $pret) {
     Note  "http://127.0.0.1:8010/studio"
 } else {
     Bon "Le Studio repond"
+}
+
+# Le Studio repond bien avant le chat : Open WebUI met plusieurs minutes a
+# s'ouvrir la premiere fois. Ouvrir la page tout de suite, c'etait envoyer vers
+# des liens << Chat >> muets (essai du 13/09/2026).
+function Chat-Repond {
+    try {
+        $r = Invoke-WebRequest -Uri "http://127.0.0.1:3000/health" -UseBasicParsing -TimeoutSec 3
+        return ($r.StatusCode -eq 200)
+    } catch { return $false }
+}
+function Attendre-Chat($secondes) {
+    $fin = (Get-Date).AddSeconds($secondes)
+    while ((Get-Date) -lt $fin) {
+        if (Chat-Repond) { return $true }
+        Start-Sleep -Seconds 3
+    }
+    return $false
+}
+if ($pret) {
+    Note "Ouverture du chat (au premier demarrage : jusqu'a quelques minutes)"
+    $chatPret = Attendre-Chat 300
+    if (-not $chatPret) {
+        # Mesure du 13/09/2026 : Open WebUI se dit en bonne sante DANS Docker, mais
+        # le relais de Docker Desktop vers le port 3000 ne transmet plus rien
+        # (page vide, ERR_EMPTY_RESPONSE). Redemarrer le seul conteneur du chat a
+        # suffi ; ses conversations et reglages restent sur son volume.
+        $sante = Executer "docker" @("inspect", "--format", "{{.State.Health.Status}}", "free-ai-studio-open-webui") "chat-sante"
+        if ($sante.Sortie.Trim() -eq "healthy") {
+            Note "Le chat tourne mais ne repond pas sur le port 3000 : je le redemarre."
+            $relance = Executer "docker" @("compose", "restart", "open-webui") "chat-relance"
+            if ($relance.Code -eq 0) { $chatPret = Attendre-Chat 120 }
+        }
+    }
+    if ($chatPret) {
+        Bon "Le chat repond"
+    } else {
+        Souci "Le chat ne repond pas encore sur http://localhost:3000"
+        Note  "La page du Studio le dira des qu'il sera pret. S'il ne vient pas :"
+        Note  "redemarrez Docker Desktop, puis relancez demarrer.cmd."
+    }
 }
 
 # --- 10. Ce qu'il reste a faire ------------------------------------------------
