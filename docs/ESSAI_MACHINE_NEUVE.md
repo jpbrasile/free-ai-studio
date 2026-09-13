@@ -7,6 +7,9 @@ sans aide, sur un autre ordinateur que celui où le Studio est développé.
 physique, décision de l'utilisateur. **Pas encore joué.** Les points de la section 4 ont été
 lus dans les scripts, jamais observés.
 
+Depuis le 13/09/2026, `main` contient le travail de l'audit (`6a934cc`) : le README
+s'applique tel quel, sans choisir de branche.
+
 Le Studio de ce PC ne sert pas à l'essai. Il n'écoute que `127.0.0.1`, et l'essai porte
 d'abord sur l'installation. Que l'autre ordinateur soit sur le même Wi-Fi n'y change rien :
 il lui faut seulement Internet.
@@ -59,7 +62,8 @@ Toute aide donnée se note, avec les mots employés.
 | 6 | Ouvrir le diagnostic et dire ce qu'il affiche | | | |
 
 Indicateur : le nombre de « oui » sur 6. Le reporter, daté, dans `PLAN.md` (étape 5), avec
-l'état de départ de la section 1.
+l'état de départ de la section 1 et la version testée : la page du Studio l'affiche
+(« version installée … »).
 
 ## 3. Pendant la tâche 1 : Docker Desktop
 
