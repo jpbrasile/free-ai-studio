@@ -1690,9 +1690,10 @@ async def diagnostic_page():
 # Un conteneur ne peut pas se reconstruire lui-meme, et donner a une page web les
 # pleins pouvoirs sur Docker serait une mauvaise affaire pour l'utilisateur. Le
 # bouton depose donc une DEMANDE dans le repertoire partage ; un veilleur qui
-# tourne sous le compte de l'utilisateur (lance par start.ps1) la ramasse et fait
-# le travail avec ses propres identifiants git. Sans veilleur, la page renvoie
-# vers le double-clic sur mettre-a-jour.cmd : le bouton dit toujours quoi faire.
+# tourne sous le compte de l'utilisateur la ramasse et fait le travail avec ses
+# propres identifiants git. demarrer.cmd le lance, et il repart ensuite seul a
+# chaque ouverture de session (scripts/maj-veilleuse.ps1). Sans veilleur, la page
+# renvoie vers le double-clic sur demarrer.cmd : le bouton dit toujours quoi faire.
 
 DEPOT_GIT = Path(os.getenv("DEPOT_GIT_DIR", "/depot/.git"))
 MAJ_DEMANDE = CONFIG_DIR / "maj-demandee.json"
@@ -1878,10 +1879,10 @@ async def maj_lancer():
     if not veilleuse_vivante():
         raise HTTPException(
             503,
-            "Le veilleur de mise a jour n'est pas la. Fermez cette page, ouvrez le "
-            "dossier free-ai-studio et double-cliquez « mettre-a-jour.cmd ». "
-            "Pour que ce bouton marche la prochaine fois, demarrez le Studio avec "
-            "start.ps1 : il lance le veilleur.",
+            "Le veilleur de mise a jour ne tourne pas sur cet ordinateur. Ouvrez le "
+            "dossier free-ai-studio et double-cliquez une fois « demarrer.cmd » : il "
+            "le relance, et le veilleur repartira ensuite tout seul a chaque "
+            "demarrage de Windows. Puis cliquez de nouveau sur « Mettre a jour ».",
         )
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     MAJ_DEMANDE.write_text(

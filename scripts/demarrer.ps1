@@ -415,6 +415,11 @@ Bon "Services demarres"
 # --- 8. Le veilleur de mise a jour ---------------------------------------------
 # Un conteneur ne peut pas se reconstruire lui-meme. Ce petit veilleur tourne
 # sous votre compte : c'est lui qui donne au bouton de la page le pouvoir d'agir.
+# Il tourne sans fenetre (une fenetre reduite se ferme par megarde) et pose
+# lui-meme un raccourci dans le dossier Demarrage, pour repartir a chaque
+# ouverture de session : apres un redemarrage, Docker relance le Studio tout
+# seul, sans passer par ici (essai du 13/09/2026 : bouton inerte sur l'autre
+# ordinateur). Il refuse de tourner en double.
 $veilleuse = Join-Path $Racine "config\maj-veilleuse.json"
 $vivante = $false
 if (Test-Path $veilleuse) {
@@ -426,10 +431,25 @@ if ($vivante) {
 } else {
     $script = Join-Path $PSScriptRoot "maj-veilleuse.ps1"
     if (Test-Path $script) {
+        # Guillemets obligatoires : Start-Process ne les met pas, et un chemin
+        # avec une espace (C:\Users\Jean Dupont\...) coupait l'appel en deux --
+        # le veilleur ne demarrait pas, et la ligne suivante disait le contraire.
+        $depart = (Get-Date).AddSeconds(-1)
         Start-Process -FilePath "powershell" `
-            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script) `
-            -WorkingDirectory $Racine -WindowStyle Minimized | Out-Null
-        Bon "Veilleur de mise a jour lance (fenetre reduite, laissez-la)"
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ('"' + $script + '"')) `
+            -WorkingDirectory $Racine -WindowStyle Hidden | Out-Null
+        # On ne l'annonce qu'une fois son premier signe de vie ecrit.
+        $parti = $false
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Seconds 1
+            if ((Test-Path $veilleuse) -and ((Get-Item $veilleuse).LastWriteTime -ge $depart)) { $parti = $true; break }
+        }
+        if ($parti) {
+            Bon "Veilleur de mise a jour lance, sans fenetre ; il repartira seul avec Windows"
+        } else {
+            Souci "Le veilleur de mise a jour n'a pas demarre."
+            Note  "Le Studio marche ; seul le bouton << Mettre a jour >> renverra vers ce fichier."
+        }
     }
 }
 

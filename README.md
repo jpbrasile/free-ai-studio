@@ -382,6 +382,14 @@ celle du dépôt, puis récupère la dernière et reconstruit les services.
 
 Un conteneur ne peut pas se reconstruire lui-même, et donner à une page web les pleins
 pouvoirs sur Docker serait une mauvaise affaire. Le bouton dépose donc une demande, et un
-petit veilleur qui tourne sous votre compte (lancé par `start.ps1`) fait le travail avec vos
-propres identifiants git. Si le veilleur n’est pas là, le bouton vous dit exactement quoi
-faire : **double-cliquer `mettre-a-jour.cmd`**, à la racine du dossier.
+petit veilleur qui tourne sous votre compte fait le travail avec vos propres identifiants
+git. `demarrer.cmd` le lance, sans fenêtre ; il pose alors un raccourci dans le dossier
+Démarrage de Windows et repart seul à chaque ouverture de session. Vous n’avez rien à
+lancer : cliquer suffit. Il ne tourne jamais en double.
+
+Si le veilleur n’est pas là, le bouton vous dit quoi faire : **double-cliquer une fois
+`demarrer.cmd`**, qui le relance, puis recliquer. `mettre-a-jour.cmd`, à la racine du
+dossier, fait la même mise à jour à la main.
+
+Pour qu’il ne reparte plus avec Windows : touches Windows+R, taper `shell:startup`, et
+supprimer le raccourci « Free AI Studio - mises a jour ».

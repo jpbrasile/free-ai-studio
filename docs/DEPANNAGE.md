@@ -253,6 +253,27 @@ Pour vérifier quelle version est réellement installée, ouvrir
 
 ---
 
+## « Le veilleur n'est pas lancé » à côté du bouton Mettre à jour
+
+Le bouton ne reconstruit rien lui-même : il laisse une demande à un petit veilleur qui
+tourne sous votre compte, sans fenêtre. `demarrer.cmd` le lance ; le veilleur pose alors
+un raccourci « Free AI Studio - mises a jour » dans le dossier Démarrage de Windows, et
+repart seul à chaque ouverture de session.
+
+Si la page dit qu'il n'est pas lancé :
+
+1. Double-cliquer une fois `demarrer.cmd`. Il doit afficher « Veilleur de mise a jour
+   lance ». S'il affiche « n'a pas demarre », passer au point 2.
+2. Touches Windows+R, taper `shell:startup` : le raccourci doit s'y trouver. S'il manque,
+   il a été supprimé, ou un antivirus l'a retiré.
+3. En attendant, `mettre-a-jour.cmd` fait la même mise à jour à la main.
+
+Un Studio installé avant le 14/09/2026 n'a pas encore ce veilleur-là : sa première mise à
+jour passe par `mettre-a-jour.cmd`, puis un `demarrer.cmd` lance le nouveau veilleur, qui
+pose le raccourci. Ensuite, le bouton suffit, même après un redémarrage.
+
+---
+
 ## Le port 3000 est déjà utilisé
 
 `demarrer.cmd` le détecte, nomme le programme qui occupe la porte, et s'arrête

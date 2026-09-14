@@ -91,11 +91,17 @@ dans le BIOS ou l'UEFI. C'est un blocage : il se note comme tel.
   de temps le lien « Chat » reste-t-il sans réponse pendant le premier démarrage d'Open WebUI ?
 - **Menu du chat.** Il doit proposer Free AI Auto et, avec la clé Gemini, Free AI Max, sans
   « Arena Model ».
+- **Bouton « Mettre à jour » après un redémarrage.** Redémarrer l'ordinateur, puis ouvrir
+  la page du Studio : la mention « le veilleur n'est pas lancé » doit être absente. Un
+  antivirus signale-t-il le veilleur, un PowerShell sans fenêtre lancé à l'ouverture de
+  session ?
 
 ## 5. Après
 
 Garder le Studio ou le retirer appartient au propriétaire de l'ordinateur. Pour le retirer :
-désinstaller Docker Desktop (Paramètres, Applications), puis supprimer le dossier du Studio.
+désinstaller Docker Desktop (Paramètres, Applications), supprimer le raccourci « Free AI
+Studio - mises a jour » du dossier Démarrage (touches Windows+R, taper `shell:startup`),
+puis supprimer le dossier du Studio.
 
 Ce que l'essai ne mesure pas : macOS, Linux, les autres versions de Windows ; une seule
 personne sur un seul ordinateur ne fait pas une statistique.

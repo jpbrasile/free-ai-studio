@@ -9,7 +9,23 @@
 # fois par seconde si la page a depose une demande, et c'est lui qui fait le
 # travail. La page ne commande rien ; elle laisse un mot sur la table.
 #
-# Lance automatiquement par start.ps1. Se ferme avec sa fenetre, sans rien casser.
+# Lance sans fenetre par demarrer.cmd (et start.ps1), puis a chaque ouverture de
+# session Windows, par un raccourci qu'il pose lui-meme dans le dossier Demarrage.
+# Le bouton doit agir sans que le debutant pense a rien : decision de
+# l'utilisateur du 14/09/2026. La veille, sur l'autre ordinateur, Docker avait
+# relance le Studio tout seul apres un redemarrage, sans veilleur, et le bouton
+# ne faisait que renvoyer vers un double-clic.
+#
+# Un seul veilleur par dossier du Studio : un second lancement s'arrete aussitot.
+#
+# Pour qu'il ne reparte plus avec Windows : supprimer le raccourci
+# << Free AI Studio - mises a jour >> du dossier Demarrage (touches Windows+R,
+# taper shell:startup).
+
+param(
+    # Dossier Demarrage de Windows. Ne se change que pour les essais.
+    [string]$DossierDemarrage = [Environment]::GetFolderPath('Startup')
+)
 
 $ErrorActionPreference = 'Stop'
 $Racine  = Split-Path -Parent $PSScriptRoot
@@ -20,14 +36,64 @@ $Vivant  = Join-Path $Config 'maj-veilleuse.json'
 
 if (-not (Test-Path $Config)) { New-Item -ItemType Directory -Path $Config | Out-Null }
 
-Write-Host "Veilleur de mise a jour actif. Le bouton « Mettre a jour » de la page Studio fonctionne."
-Write-Host "Fermez cette fenetre pour l'arreter (rien d'autre ne s'arrete)."
+# --- Un seul veilleur par dossier ----------------------------------------------
+# Ouverture de session, demarrer.cmd, start.ps1 : trois portes peuvent le lancer,
+# et deux veilleurs reconstruiraient deux fois pour une seule demande. Le nom du
+# verrou vient du chemin du dossier ; une barre oblique inverse y est interdite,
+# d'ou l'empreinte.
+$sha = [System.Security.Cryptography.SHA1]::Create()
+try {
+    $octets = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Racine.ToLowerInvariant()))
+} finally { $sha.Dispose() }
+$cle = -join ($octets[0..7] | ForEach-Object { $_.ToString('x2') })
+$Verrou = New-Object System.Threading.Mutex($false, ('Local\FreeAIStudio-veilleur-' + $cle))
+$aLaMain = $false
+try { $aLaMain = $Verrou.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $aLaMain = $true }
+if (-not $aLaMain) {
+    Write-Host "Un veilleur tourne deja pour ce dossier : rien a faire."
+    exit 0
+}
+
+# --- Repartir avec Windows -----------------------------------------------------
+# Un raccourci dans le dossier Demarrage de l'utilisateur : ni droits
+# d'administrateur, ni registre, et il se retire comme un fichier. Le chemin du
+# script est entre guillemets : sans eux, un chemin avec une espace
+# (C:\Users\Jean Dupont\...) se coupe en deux et le veilleur ne demarre pas.
+function Poser-Raccourci {
+    if (-not $DossierDemarrage) { return }
+    $lien  = Join-Path $DossierDemarrage 'Free AI Studio - mises a jour.lnk'
+    $cible = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '"'
+    $shell = New-Object -ComObject WScript.Shell
+    if (Test-Path -LiteralPath $lien) {
+        $deja = $shell.CreateShortcut($lien)
+        if ($deja.TargetPath -eq $cible -and $deja.Arguments -eq $arguments) { return }
+    }
+    $r = $shell.CreateShortcut($lien)
+    $r.TargetPath = $cible
+    $r.Arguments = $arguments
+    $r.WorkingDirectory = $Racine
+    $r.WindowStyle = 7
+    $r.Description = 'Free AI Studio : rend le bouton Mettre a jour de la page Studio capable d agir.'
+    $r.Save()
+}
+try { Poser-Raccourci } catch { Write-Warning "Raccourci de demarrage non pose : $($_.Exception.Message)" }
+
+# Empreinte du veilleur lui-meme : si une mise a jour le change, il se relance
+# avec la nouvelle version au lieu de garder l'ancienne en memoire.
+$Empreinte = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+
+Write-Host "Veilleur de mise a jour actif. Le bouton << Mettre a jour >> de la page Studio fonctionne."
 
 while ($true) {
     # Signe de vie : la page s'en sert pour savoir si le bouton peut agir ou
-    # s'il doit renvoyer vers le double-clic.
-    [ordered]@{ vivant = $true; horodate = (Get-Date).ToString('s'); pid = $PID } |
-        ConvertTo-Json | Out-File -FilePath $Vivant -Encoding utf8
+    # s'il doit renvoyer vers le double-clic. Une erreur passagere (fichier tenu
+    # un instant par un autre programme) ne doit pas arreter le veilleur : hors
+    # de ce try, elle le tuait sans un mot.
+    try {
+        [ordered]@{ vivant = $true; horodate = (Get-Date).ToString('s'); pid = $PID } |
+            ConvertTo-Json | Out-File -FilePath $Vivant -Encoding utf8
+    } catch { }
 
     if (Test-Path $Demande) {
         Remove-Item $Demande -Force -ErrorAction SilentlyContinue
@@ -36,6 +102,18 @@ while ($true) {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $Script
         } catch {
             Write-Warning "Mise a jour interrompue : $($_.Exception.Message)"
+        }
+        $nouvelle = $null
+        try { $nouvelle = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash } catch { }
+        if ($nouvelle -and $nouvelle -ne $Empreinte) {
+            Write-Host "Le veilleur lui-meme a change : il se relance avec la nouvelle version."
+            $Verrou.ReleaseMutex()
+            $Verrou.Dispose()
+            Start-Process -FilePath 'powershell' -WindowStyle Hidden -WorkingDirectory $Racine `
+                -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                                '-File', ('"' + $PSCommandPath + '"'),
+                                '-DossierDemarrage', ('"' + $DossierDemarrage + '"')) | Out-Null
+            exit 0
         }
         Write-Host "Retour en veille.`n"
     }
