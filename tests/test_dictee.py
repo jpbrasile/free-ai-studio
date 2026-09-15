@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys
+from types import SimpleNamespace
 
 import httpx
 
@@ -177,16 +179,85 @@ def test_groq_transcrit(routeur, monkeypatch):
     assert str(envoi.url) == "https://api.groq.com/openai/v1/audio/transcriptions"
     assert envoi.headers["Authorization"] == "Bearer groq-factice"
     assert b'name="model"\r\n\r\nwhisper-large-v3\r\n' in envoi.content
-    assert b'name="language"\r\n\r\nfr\r\n' in envoi.content
+    # Aucune langue imposee : Whisper reconnait celle qui est parlee.
+    assert b'name="language"' not in envoi.content
     assert b"ID3 faux mp3" in envoi.content
 
 
-def test_langue_du_studio_si_absente(routeur, monkeypatch):
-    # Second essai d'Open WebUI, sans langue : le francais reste demande.
+def test_langue_d_open_webui_ignoree(routeur, monkeypatch):
+    # Open WebUI envoie toujours << fr >> (son WHISPER_LANGUAGE). Jusqu'au
+    # 15/09/2026, le routeur le suivait : une dictee en anglais revenait
+    # traduite en francais.
     brancher_groq(monkeypatch)
     groq = GroqSimule()
-    dicter(routeur, monkeypatch, groq, champs={"model": "free-ai-dictee"})
-    assert b'name="language"\r\n\r\nfr\r\n' in groq.requetes[0].content
+    dicter(routeur, monkeypatch, groq, champs={"model": "free-ai-dictee", "language": "fr"})
+    assert b'name="language"' not in groq.requetes[0].content
+
+
+def test_langue_d_open_webui_ignoree_sur_l_ordinateur(routeur, monkeypatch):
+    routeur.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    routeur.DICTEE_CHOIX.write_text('{"mode": "local"}', encoding="utf-8")
+    local = WhisperSimule()
+    dicter(routeur, monkeypatch, GroqSimule(), local,
+           champs={"model": "free-ai-dictee", "language": "fr"})
+    assert local.appels == [(b"ID3 faux mp3", None)]
+
+
+def test_langue_forcee_par_le_studio(routeur, monkeypatch):
+    brancher_groq(monkeypatch)
+    monkeypatch.setattr(routeur, "DICTEE_LANGUE", "en")
+    groq = GroqSimule()
+    dicter(routeur, monkeypatch, groq)
+    assert b'name="language"\r\n\r\nen\r\n' in groq.requetes[0].content
+
+
+def test_reglage_de_la_langue(routeur):
+    assert routeur.DICTEE_LANGUE is None
+    assert routeur.langue_de_dictee("auto") is None
+    assert routeur.langue_de_dictee("") is None
+    assert routeur.langue_de_dictee(" FR ") == "fr"
+    assert routeur.DICTEE_LANGUES == ["fr", "en"]
+
+
+def test_whisper_local_reste_dans_les_langues_permises(routeur):
+    permises = ["fr", "en"]
+    assert routeur.langue_retenue("en", [("en", 0.9), ("fr", 0.1)], permises) == "en"
+    # Une dictee courte prise pour du portugais : la plus probable des permises.
+    assert routeur.langue_retenue("pt", [("pt", 0.5), ("en", 0.2), ("fr", 0.3)], permises) == "fr"
+    assert routeur.langue_retenue("pt", None, permises) == "fr"
+
+
+class ModeleWhisperSimule:
+    """Le WhisperModel de faster-whisper 1.2.1 : la langue reconnue, puis le texte."""
+
+    def __init__(self, reconnue, probas):
+        self.reconnue, self.probas = reconnue, probas
+        self.langues = []
+
+    def transcribe(self, audio, beam_size, vad_filter, language):
+        self.langues.append(language)
+        langue = language or self.reconnue
+        info = SimpleNamespace(language=langue,
+                               all_language_probs=None if language else self.probas)
+        return iter([SimpleNamespace(text=f" dit en {langue}")]), info
+
+
+def transcrire_avec(routeur, monkeypatch, modele):
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=None))
+    monkeypatch.setitem(routeur._whisper, "modele", modele)
+    return routeur.transcrire_local(b"ID3 faux mp3", None)
+
+
+def test_whisper_local_garde_l_anglais_reconnu(routeur, monkeypatch):
+    modele = ModeleWhisperSimule("en", [("en", 0.9), ("fr", 0.1)])
+    assert transcrire_avec(routeur, monkeypatch, modele) == "dit en en"
+    assert modele.langues == [None]
+
+
+def test_whisper_local_refait_hors_des_langues_permises(routeur, monkeypatch):
+    modele = ModeleWhisperSimule("pt", [("pt", 0.5), ("fr", 0.3), ("en", 0.2)])
+    assert transcrire_avec(routeur, monkeypatch, modele) == "dit en fr"
+    assert modele.langues == [None, "fr"]
 
 
 def test_groq_refuse_repli_sur_l_ordinateur(routeur, monkeypatch, caplog):
@@ -198,7 +269,7 @@ def test_groq_refuse_repli_sur_l_ordinateur(routeur, monkeypatch, caplog):
     # Aucune erreur pour la personne qui dicte : l'ordinateur a pris le relais.
     assert r.status_code == 200
     assert r.json() == {"text": "texte de l'ordinateur"}
-    assert local.appels == [(b"ID3 faux mp3", "fr")]
+    assert local.appels == [(b"ID3 faux mp3", None)]
     assert "Rate limit reached" in caplog.text
     assert "repli" in caplog.text
     assert "groq-factice" not in caplog.text
@@ -220,7 +291,7 @@ def test_choix_local_la_voix_ne_part_pas(routeur, monkeypatch):
     r = dicter(routeur, monkeypatch, groq, local)
     assert r.status_code == 200
     assert groq.requetes == []
-    assert local.appels == [(b"ID3 faux mp3", "fr")]
+    assert local.appels == [(b"ID3 faux mp3", None)]
 
 
 def test_sans_cle_groq_l_ordinateur(routeur, monkeypatch):

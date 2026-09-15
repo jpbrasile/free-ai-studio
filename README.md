@@ -319,7 +319,7 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Fabrication d’image | la même clé, route `/v1/images/generations` du routeur | gratuit |
 | Recherche Web | DuckDuckGo | gratuit, sans compte |
 | Lire à haute voix (15/09/2026) | voix française « siwis » de Piper, dans le routeur du Studio, sur le processeur ; le texte ne quitte pas le PC | gratuit, sans clé |
-| Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC) | gratuit |
+| Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC). La langue parlée est reconnue toute seule ; sur l’ordinateur, parmi le français et l’anglais (`DICTEE_LANGUES`) | gratuit |
 | **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
 | **Chanson** (15/09/2026 ; essayée en réel sur Kaggle et Modal, pas Colab) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026), 0,52 $ au pire par chanson, 0,08 $ compté pour l’essai du 15/09, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
 

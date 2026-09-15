@@ -1064,7 +1064,33 @@ DICTEE_MODELE = "free-ai-dictee"
 # taux d'erreur annonce par Groq 10,3 % (12 % pour la variante turbo) ; palier
 # gratuit de 20 requetes par minute, 2 000 par jour, 25 Mo par fichier.
 GROQ_DICTEE_MODELE = os.getenv("GROQ_STT_MODEL", "whisper-large-v3")
-DICTEE_LANGUE = os.getenv("WHISPER_LANGUAGE", "fr").strip().lower() or None
+
+
+def langue_de_dictee(valeur: Optional[str]) -> Optional[str]:
+    """<< auto >> ou vide : Whisper reconnait la langue ; sinon le code donne (fr, en...)."""
+    v = (valeur or "").strip().lower()
+    return None if v in ("", "auto") else v
+
+
+# Langue de la dictee. << auto >> par defaut depuis le 15/09/2026, a la demande
+# de l'utilisateur (<< il fonctionne en francais mais plus en anglais :! il
+# traduit >>) : forcee en francais, une dictee en anglais etait TRADUITE en
+# francais par Whisper. Un code (fr, en...) la force de nouveau.
+DICTEE_LANGUE = langue_de_dictee(os.getenv("DICTEE_LANGUE", "auto"))
+# Sur le Whisper de l'ordinateur, la langue reconnue doit etre l'une de celles-ci ;
+# sinon, on retient la plus probable de la liste. Une dictee de quelques mots
+# peut etre prise pour une langue voisine : ce garde-fou evite de la transcrire
+# dans une langue que personne n'a parlee.
+DICTEE_LANGUES = [x.strip().lower() for x in os.getenv("DICTEE_LANGUES", "fr,en").split(",")
+                  if x.strip()] or ["fr"]
+
+
+def langue_retenue(detectee: Optional[str], probas, permises: List[str]) -> str:
+    """La langue reconnue si elle est permise, sinon la plus probable des permises."""
+    if detectee in permises:
+        return detectee
+    classees = [code for code, _ in sorted(probas or [], key=lambda p: -p[1]) if code in permises]
+    return classees[0] if classees else permises[0]
 # Mesure du 15/09/2026, 4 coeurs de l'ordinateur de developpement, sans carte
 # graphique, trois dictees de 4 a 7 s : base 0,5 s et 0,27 Gio ; small 0,7 a
 # 0,9 s et 0,95 Gio ; large-v3-turbo 2,6 a 3 s et 2,6 Gio. small corrige
@@ -1101,8 +1127,16 @@ def transcrire_local(audio: bytes, langue: Optional[str]) -> str:
         if _whisper["modele"] is None:
             _whisper["modele"] = WhisperModel(WHISPER_LOCAL, device="cpu", compute_type="int8",
                                               download_root=WHISPER_DOSSIER)
-        segments, _ = _whisper["modele"].transcribe(io.BytesIO(audio), beam_size=5,
-                                                    vad_filter=WHISPER_SILENCES, language=langue)
+        modele = _whisper["modele"]
+        segments, info = modele.transcribe(io.BytesIO(audio), beam_size=5,
+                                           vad_filter=WHISPER_SILENCES, language=langue)
+        if langue is None:
+            # Le texte ne se calcule qu'en lisant les segments : le second appel
+            # ne refait que la preparation de l'audio.
+            retenue = langue_retenue(info.language, info.all_language_probs, DICTEE_LANGUES)
+            if retenue != info.language:
+                segments, _ = modele.transcribe(io.BytesIO(audio), beam_size=5,
+                                                vad_filter=WHISPER_SILENCES, language=retenue)
         return "".join(s.text for s in segments).strip()
 
 
@@ -2285,7 +2319,7 @@ ul.quotas{margin:6px 0 8px;padding-left:20px} ul.quotas li{margin:5px 0}
 <p class="muted">Chat, Image et Recherche Web sont les fonctions stabilisées. Les cartes marquées « expérimental » peuvent changer ou casser d’une version à l’autre.</p>
 <div class="hero" style="margin-top:18px">
 <h2>🎙️ Dictée</h2>
-<p>Où votre voix est-elle transcrite quand vous dictez dans le chat ?</p>
+<p>Où votre voix est-elle transcrite quand vous dictez dans le chat ? Parlez français ou anglais : la langue est reconnue toute seule.</p>
 <label style="display:block;margin:8px 0;cursor:pointer"><input type="radio" name="dictee" value="groq">
 <b>Groq si possible</b> : plus précis. Votre voix part chez Groq (palier gratuit, avec une clé Groq).
 Sans clé, ou si Groq refuse, votre ordinateur prend le relais, sans message.</label>
@@ -2815,9 +2849,10 @@ async def audio_transcriptions(request: Request, authorization: Optional[str] = 
     audio = await fichier.read()
     if not audio:
         return erreur_dictee(400, "L'enregistrement est vide.")
-    # Open WebUI envoie WHISPER_LANGUAGE ; s'il la retire pour un second essai,
-    # la langue du Studio la remplace : sans elle, Whisper devine.
-    langue = str(formulaire.get("language") or "").strip().lower() or DICTEE_LANGUE
+    # La langue envoyee par Open WebUI est ignoree : c'est son WHISPER_LANGUAGE
+    # (fr), fait pour son propre Whisper, et il forcait le francais sur une
+    # dictee en anglais, que Whisper traduisait. Le Studio decide : DICTEE_LANGUE.
+    langue = DICTEE_LANGUE
 
     # Le journal dit qui a transcrit et pourquoi, jamais ce qui a ete dit.
     if not dictee_groq_possible():

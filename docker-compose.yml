@@ -170,9 +170,11 @@ services:
       ENABLE_EVALUATION_ARENA_MODELS: "false"
       # Dictee (15/09/2026). Whisper << base >>, sans langue, devinait le
       # francais a 55 % et rendait << 3,4,5,5 >>. Le routeur reprend la dictee
-      # (voir aligner_dictee) : Groq si possible, sinon son propre Whisper. La
-      # langue part avec chaque dictee ; les deux autres lignes ne servent que
-      # si quelqu'un remet le Whisper d'Open WebUI dans l'administration.
+      # (voir aligner_dictee) : Groq si possible, sinon son propre Whisper. Le
+      # routeur ignore la langue qu'Open WebUI envoie avec chaque dictee : il
+      # reconnait la langue parlee (DICTEE_LANGUE, 15/09/2026 ; forcee en
+      # francais, une dictee en anglais revenait traduite). Ces trois lignes ne
+      # servent que si quelqu'un remet le Whisper d'Open WebUI dans l'administration.
       WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-fr}
       WHISPER_VAD_FILTER: ${WHISPER_VAD_FILTER:-true}
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
