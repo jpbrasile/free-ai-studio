@@ -545,6 +545,11 @@ def kaggle_ref(jid: str):
     return user, slug, f"{user}/{slug}" if user else ""
 
 
+# Le Studio attend Kaggle un peu plus longtemps que le delai qu'il lui donne, le
+# temps d'une file d'attente : il voit ainsi l'arret decide par Kaggle.
+KAGGLE_MARGE_S = 900
+
+
 def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
                machine_shape: Optional[str] = None, timeout_s: Optional[int] = None):
     """machine_shape et timeout_s ne servent qu'aux chansons ; sans eux, rien ne change."""
@@ -594,18 +599,26 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
         # Sans ce champ, Kaggle choisit la carte lui-meme.
         metadata["machine_shape"] = machine_shape
     (d / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    # Kaggle arrete lui-meme le notebook a ce delai (-t de << kaggle kernels push >>).
+    # Sans lui, un Studio qui abandonnait l'attente laissait le notebook tourner
+    # jusqu'a la limite de Kaggle, sur le quota de l'utilisateur. La CLI 2.2.4 n'a
+    # pas de commande d'annulation, et l'API d'annulation demande un numero de
+    # session qu'aucune reponse de l'envoi ni de l'etat ne donne.
+    limite = int(timeout_s or os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
     try:
         job["status"] = "submitting"
         job["remote_ref"] = ref
         write_job(jid, job)
-        p = subprocess.run(["kaggle", "kernels", "push", "-p", str(d)], capture_output=True, text=True, timeout=90)
+        p = subprocess.run(["kaggle", "kernels", "push", "-p", str(d), "-t", str(limite)],
+                           capture_output=True, text=True, timeout=90)
         if p.returncode:
             raise RuntimeError((p.stderr or p.stdout)[-1000:])
         job = read_job(jid)
         job["status"] = "running"
         job["submit_log"] = (p.stdout or "")[-1000:]
         write_job(jid, job)
-        deadline = time.time() + int(timeout_s or os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
+        pousse = time.time()
+        deadline = pousse + limite + KAGGLE_MARGE_S
         while time.time() < deadline:
             s = subprocess.run(["kaggle", "kernels", "status", ref], capture_output=True, text=True, timeout=30)
             text = ((s.stdout or "") + "\n" + (s.stderr or "")).lower()
@@ -619,10 +632,13 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
             if s.returncode or "cannot access" in text or "not found" in text or "denied" in text:
                 raise RuntimeError(text[-1000:])
             if any(x in text for x in ("error", "cancel", "failed")):
+                if time.time() - pousse >= limite:
+                    raise RuntimeError(f"Délai de {limite} s dépassé : Kaggle a sans doute arrêté "
+                                       f"le notebook lui-même. " + text[-900:])
                 raise RuntimeError(text[-1000:])
             time.sleep(15)
         else:
-            raise TimeoutError("Kaggle job timeout")
+            raise TimeoutError(f"Kaggle job timeout ({limite} s, plus {KAGGLE_MARGE_S} s de file d'attente)")
         od = JOBS / jid / "output"
         od.mkdir(exist_ok=True)
         p = subprocess.run(["kaggle", "kernels", "output", ref, "-p", str(od), "--force"], capture_output=True, text=True, timeout=180)

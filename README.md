@@ -321,7 +321,7 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Lire à haute voix | voix du navigateur | gratuit, sans clé |
 | Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC) | gratuit |
 | **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
-| **Chanson** (15/09/2026, **aucune chanson lancée en réel**) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026), 0,52 $ au pire par chanson, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
+| **Chanson** (15/09/2026 ; essayée en réel sur Kaggle seulement) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026), 0,52 $ au pire par chanson, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
 
 **Pourquoi la vidéo est à part.** Aucun service de fabrication de vidéo n’est gratuit et
 hébergé en septembre 2026. Le Studio fait donc tourner un modèle ouvert sur une carte
@@ -373,8 +373,9 @@ Trois endroits où le lancer :
   de bfloat16. Le script applique alors les correctifs du carnet Kaggle public « YuE2-3B -
   Frontier Full-Song Music Generation » (AIQUEST Academy, Apache 2.0) : float16, attention
   SDPA, intégration en float32, décodage par tuiles. Ce chemin n’est pas celui des auteurs du
-  modèle, et le Studio ne l’a jamais fait tourner. Coupé quand le Studio est partagé, comme la
-  vidéo.
+  modèle. Essayé le 15/09/2026 : deux cartes T4, une minute de chanson en 6 minutes. Kaggle
+  arrête lui-même le notebook au bout de 90 minutes (`CHANSON_KAGGLE_TIMEOUT_SECONDS`). Coupé
+  quand le Studio est partagé, comme la vidéo.
 - **Colab** : le Studio fabrique un carnet avec les paroles ; vous l’importez dans Colab et le
   lancez sur votre compte Google, carte T4 gratuite, avec les mêmes correctifs.
 

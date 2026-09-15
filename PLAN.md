@@ -114,7 +114,10 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
        - FLAC 16 bits, 48 kHz stéréo, 60,0 s, 4,9 Mo ; crête −0,5 dBFS, RMS −16,5 dBFS, aucune des 12 tranches de 5 s muette, aucun écrêtage, aucune valeur non finie ;
        - le lien du lecteur de la page sert le fichier (`audio/flac`), et le lien de téléchargement l'envoie en pièce jointe ;
        - la partition a atteint son plafond T4 de 1 200 jetons et le son la minute demandée : la chanson s'arrête là, sans fin composée.
-     - **Non vérifié** : l'écoute (le niveau prouve qu'il y a du son, pas que la chanson est juste) ; Modal (mes deux lancements ont été refusés par le filtre de permissions) ; Colab ; les durées de 2 et 3 minutes ; l'arrêt du notebook Kaggle quand le Studio abandonne l'attente (le Studio ne l'annule pas).
+     - **Non vérifié** : l'écoute (le niveau prouve qu'il y a du son, pas que la chanson est juste) ; Modal (mes deux lancements ont été refusés par le filtre de permissions) ; Colab ; les durées de 2 et 3 minutes.
+   - **15/09, « kaggle est ok , tu arrète le notebook ».** Chaque notebook Kaggle part désormais avec un délai que Kaggle applique lui-même : `kaggle kernels push -t`, « Limit the run time of a kernel to the given number of seconds » selon l'aide de la CLI 2.2.4. C'est 3 600 s par défaut, 5 400 s pour une chanson. Le Studio attend 15 minutes de plus, puis abandonne.
+     - L'annulation directe n'est pas retenue. La CLI 2.2.4 n'a pas de commande pour ça. L'API (`cancel_kernel_session`, kagglesdk 0.1.37) demande un numéro de session qu'aucune réponse de l'envoi ni de l'état ne donne.
+     - **Non vérifié** : l'arrêt réel par Kaggle à l'échéance ; si l'attente en file compte dans le délai.
 6. **P2 : le registre**, après l'étape 5.
    1. `registry/apps.yaml`, une entrée par application : `id`, `fonction`, `modele`, `licence`, `territoire`, `vram_min_go`, `modes` (`api`, `local`, `modal`, `kaggle`, `colab`), `cout_estime`, `source`, `verifie_le`.
    2. `registry/apps.schema.json` (JSON Schema), validé en CI. Outil candidat : [`check-jsonschema`](https://pypi.org/project/check-jsonschema/) 0.38.0 (09/08/2026), qui existe en ligne de commande et en hook pre-commit. Sa page ne dit pas s'il lit le YAML : à vérifier avant de l'adopter. À défaut, vingt lignes de Python avec `jsonschema` et `pyyaml`.

@@ -159,6 +159,30 @@ def test_kaggle_demande_un_t4_seulement_pour_la_chanson(sandbox, monkeypatch):
         assert sandbox.read_job(jid)["status"] == "failed"
 
 
+def test_kaggle_arrete_le_notebook_a_son_delai(sandbox, monkeypatch):
+    """Kaggle arrete lui-meme le notebook au delai (-t) : plus de notebook laisse en route."""
+    appels = []
+
+    class Refus:
+        returncode = 1
+        stdout = ""
+        stderr = "refus d'essai"
+
+    def faux_run(args, **kwargs):
+        appels.append(list(args))
+        return Refus()
+
+    monkeypatch.setattr(sandbox, "kaggle_configured", lambda: True)
+    monkeypatch.setenv("KAGGLE_USERNAME", "moi")
+    monkeypatch.delenv("KAGGLE_JOB_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(sandbox.subprocess, "run", faux_run)
+    for jid, delai, attendu in (("a" * 32, 5400, "5400"), ("b" * 32, None, "3600")):
+        sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+        sandbox.run_kaggle(jid, "print(1)", True, True, timeout_s=delai)
+        push = [a for a in appels if a[:3] == ["kaggle", "kernels", "push"]][-1]
+        assert push[push.index("-t") + 1] == attendu
+
+
 def test_page_etat_et_jeton(sandbox, ch):
     client = TestClient(sandbox.app, base_url=LOCAL)
     page = client.get("/chanson")
