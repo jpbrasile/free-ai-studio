@@ -7,13 +7,22 @@ import json
 import httpx
 
 EVALUATIONS = "/api/v1/evaluations/config"
+CODE = "/api/v1/configs/code_execution"
+
+
+def reglage_execution(interpreteur=True):
+    """Le formulaire que rend Open WebUI 0.11.3, sans les champs Jupyter."""
+    return {"ENABLE_CODE_EXECUTION": True, "CODE_EXECUTION_ENGINE": "pyodide",
+            "ENABLE_CODE_INTERPRETER": interpreteur, "CODE_INTERPRETER_ENGINE": "pyodide",
+            "CODE_INTERPRETER_PROMPT_TEMPLATE": ""}
 
 
 class OpenWebUISimule:
     """Les seules routes d'Open WebUI que ces tests touchent."""
 
-    def __init__(self, arena=True, panne=False):
+    def __init__(self, arena=True, panne=False, interpreteur=True):
         self.config = {"ENABLE_EVALUATION_ARENA_MODELS": arena, "EVALUATION_ARENA_MODELS": []}
+        self.execution = reglage_execution(interpreteur)
         self.panne = panne
         self.vus = []
 
@@ -27,6 +36,10 @@ class OpenWebUISimule:
             if requete.method == "POST":
                 self.config.update(json.loads(requete.content))
             return httpx.Response(200, json=self.config)
+        if requete.url.path == CODE:
+            if requete.method == "POST":
+                self.execution = json.loads(requete.content)
+            return httpx.Response(200, json=self.execution)
         return httpx.Response(404)
 
 
@@ -78,7 +91,48 @@ def test_installation_existante_recoit_le_reglage(routeur, monkeypatch):
                         lambda **kw: vrai(transport=httpx.MockTransport(webui), **kw))
     asyncio.run(routeur.poser_reglages_webui())
     assert webui.config["ENABLE_EVALUATION_ARENA_MODELS"] is False
-    assert [v for v in webui.vus if v[0] == "POST"] == [("POST", EVALUATIONS)]
+    # Meme chemin pour l'interpreteur de code : c'est celui de ce PC et de
+    # l'autre ordinateur, qui ont tous deux le temoin des reglages.
+    assert webui.execution["ENABLE_CODE_INTERPRETER"] is False
+    assert [v for v in webui.vus if v[0] == "POST"] == [("POST", EVALUATIONS), ("POST", CODE)]
+
+
+# --- L'interpreteur de code, coupe une fois (15/09/2026) ---
+
+def couper(routeur, webui):
+    async def une_fois():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(webui)) as client:
+            await routeur.couper_interpreteur(client, {"Authorization": "Bearer jeton"})
+    asyncio.run(une_fois())
+
+
+def test_interpreteur_coupe_une_fois_puis_laisse(routeur):
+    webui = OpenWebUISimule()
+    couper(routeur, webui)
+    assert webui.execution["ENABLE_CODE_INTERPRETER"] is False
+    # Le bouton << Executer >> d'un bloc de code reste : la personne le declenche.
+    assert webui.execution["ENABLE_CODE_EXECUTION"] is True
+    assert webui.execution["CODE_INTERPRETER_ENGINE"] == "pyodide"
+    assert routeur.INTERPRETEUR_FAIT.exists()
+
+    # Remis par l'utilisateur dans l'administration : le Studio n'y touche plus.
+    webui.execution["ENABLE_CODE_INTERPRETER"] = True
+    webui.vus.clear()
+    couper(routeur, webui)
+    assert webui.vus == []
+    assert webui.execution["ENABLE_CODE_INTERPRETER"] is True
+
+
+def test_interpreteur_deja_coupe_rien_ecrit(routeur):
+    webui = OpenWebUISimule(interpreteur=False)
+    couper(routeur, webui)
+    assert ("POST", CODE) not in webui.vus
+    assert routeur.INTERPRETEUR_FAIT.exists()
+
+
+def test_interpreteur_en_panne_pas_de_temoin(routeur):
+    couper(routeur, OpenWebUISimule(panne=True))
+    assert not routeur.INTERPRETEUR_FAIT.exists()
 
 
 # --- Le reglage Images, repare a chaque demarrage (essai du 13/09/2026) ---
@@ -157,6 +211,7 @@ class OpenWebUIComplet:
         self.modeles = {"DEFAULT_MODEL_PARAMS": {}}
         self.recherche = {"web": {"ENABLE_WEB_SEARCH": True, "WEB_SEARCH_ENGINE": "duckduckgo"}}
         self.images = {"ENABLE_IMAGE_GENERATION": False}
+        self.execution = reglage_execution()
 
     def __call__(self, requete):
         chemin = requete.url.path
@@ -181,6 +236,10 @@ class OpenWebUIComplet:
             return httpx.Response(200, json=self.images)
         if chemin == EVALUATIONS:
             return httpx.Response(200, json={"ENABLE_EVALUATION_ARENA_MODELS": False})
+        if chemin == CODE:
+            if corps is not None:
+                self.execution = corps
+            return httpx.Response(200, json=self.execution)
         return httpx.Response(404)
 
 
@@ -205,6 +264,7 @@ def test_temoin_pose_quand_tout_passe(routeur, monkeypatch):
     assert routeur.REGLAGES_FAITS.exists()
     assert webui.modeles["DEFAULT_MODEL_PARAMS"]["function_calling"] == "legacy"
     assert webui.images["IMAGES_OPENAI_API_KEY"] == "cle-interne-de-test"
+    assert webui.execution["ENABLE_CODE_INTERPRETER"] is False
 
 
 def test_pas_de_temoin_si_un_reglage_echoue(routeur, monkeypatch):

@@ -157,6 +157,10 @@ Free AI Max  : Gemini 3.8 Flash (palier gratuit) → puis la même chaîne qu'Au
 
 Le chat propose deux choix : **Free AI Auto** pour l'usage courant, **Free AI Max** pour les questions difficiles. Max essaie d'abord Gemini 3.8 Flash, qui a son propre quota gratuit (Google le compte par modèle) ; Auto n'y touche jamais. Le manager tente les fournisseurs éligibles dans cet ordre (`FREE_PROVIDER_ORDER`). Quand le premier a épuisé son quota, **le basculement n’est pas silencieux** : la réponse suivante du chat commence par une ligne qui le dit, et les pages `/studio` et `/diagnostic` affichent le service en pause, la limite annoncée par le fournisseur et l’heure de reprise.
 
+**Dessins SVG.** Demandez par exemple « fais-moi un cube en SVG ». Sous la réponse, le dessin s'affiche, suivi d'un lien « Télécharger » qui enregistre le fichier `.svg`. Les 200 derniers dessins sont gardés dans `config/dessins/`.
+
+**Interpréteur de code : coupé par le Studio.** Avec cet interrupteur, Open WebUI demande au modèle d'écrire du Python qu'il exécute dans le navigateur. Les modèles gratuits le pilotent mal : le 14/09/2026, un dessin demandé a fini en bulle vide. Le Studio le coupe une fois, au démarrage. Le bouton « Exécuter » d'un bloc de code reste. Pour le remettre : Panneau d'administration, puis « Exécution de code ».
+
 Détails : `docs/FREE_TIER_MANAGER.md`.
 
 ## GPU pour Image / Vidéo

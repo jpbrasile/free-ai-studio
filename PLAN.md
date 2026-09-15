@@ -28,7 +28,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
 
 ## Règles qui tiennent pendant tout le plan
 
-- **Gel des fonctions.** Aucune nouvelle fonction tant que P0-1 et P0-2 ne sont pas vérifiés **en réel**. Aujourd'hui, ils ne sont vérifiés que hors réseau. Seule exception, levée par l'utilisateur le 11/09/2026 : Free AI Max. Sur les fiches de Google, Flash-Lite est nettement en dessous de 3.8 Flash (Terminal-bench 2.1 : 54,0 % contre 89,4 %), et les deux quotas sont distincts.
+- **Gel des fonctions.** Aucune nouvelle fonction tant que P0-1 et P0-2 ne sont pas vérifiés **en réel**. Aujourd'hui, ils ne sont vérifiés que hors réseau. Seule exception, levée par l'utilisateur le 11/09/2026 : Free AI Max. Sur les fiches de Google, Flash-Lite est nettement en dessous de 3.8 Flash (Terminal-bench 2.1 : 54,0 % contre 89,4 %), et les deux quotas sont distincts. Deuxième exception, levée par l'utilisateur le 15/09/2026 (« fais tout ça ») : les dessins SVG montrés sous la réponse du chat et téléchargeables.
 - P0 avant P1, P1 avant P2.
 - Source officielle d'abord. Si elle contredit l'audit, elle gagne, et l'écart s'écrit ci-dessous.
 - Rien de payant en secours, jamais. `ALLOW_PAID_MODELS=false` ne s'assouplit pas.
@@ -81,6 +81,14 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
      - Vérifié sur ce PC, dans une copie dont le chemin contient une espace, avec un faux `mettre-a-jour.ps1` et un faux dossier Démarrage : 7 contrôles sur 7. L'ancien appel, rejoué, ne démarre pas (code -196608). 40 tests, ruff, JavaScript des pages et imports sans erreur.
      - **Non vérifié** : un vrai redémarrage de Windows ; un antivirus devant un PowerShell sans fenêtre lancé à l'ouverture de session ; le parcours complet sur l'autre ordinateur.
      - Un Studio antérieur au 14/09 fait encore sa première mise à jour par `mettre-a-jour.cmd`, puis un `demarrer.cmd` lance le nouveau veilleur. Ensuite, le bouton suffit.
+   - **15/09 : « fais moi un cube en svg » rendait une bulle vide.** Cause : l'interrupteur « Interpréteur de code » d'Open WebUI. Le modèle a écrit du Python mal fermé (`</code></thought>`), l'exécution a échoué, et la réponse est restée vide. Rejouée au routeur, la demande donne le dessin sans l'interpréteur ; avec son invite, la balise reste ouverte. Décision de l'utilisateur (« fais tout ça ») :
+     - le routeur coupe l'interpréteur une fois (témoin `config/open-webui-interpreteur.json`) ; le bouton « Exécuter » d'un bloc de code reste ;
+     - un refus de fournisseur écrit son motif dans le journal (300 caractères). La 400 de Gemini du 14/09 reste **inexpliquée** : son message était déjà perdu ;
+     - chaque dessin SVG complet d'une réponse est rangé dans `config/dessins/` (200 au plus), montré sous la réponse, avec un lien qui enregistre le `.svg`.
+     - Vérifié sur ce PC, routeur reconstruit. Interpréteur coupé au démarrage (`code_interpreter.enable = false`, `code_execution.enable = true`), puis laissé au redémarrage suivant. Au routeur, « fais moi un cube en svg » est servi par Gemini, le morceau du dessin arrive avant `[DONE]`, le fichier part en `image/svg+xml` avec `sandbox`, et en pièce jointe avec `?telecharger=1`. Dans Open WebUI, la même demande affiche la réponse, le lien « Télécharger » et le panneau d'aperçu.
+     - Défaut trouvé en validant : un dessin en `width="100%"` se chargeait (150 × 150) mais s'affichait en 0 × 0 dans Open WebUI, dont le cadre prend la taille de son contenu. Le routeur lui donne désormais une taille en pixels tirée du `viewBox`. Dans la même page, un dessin en pixels s'affiche (111 × 111, largeur de la colonne). La conversion n'est vérifiée que par les tests : la réponse rejouée après la correction avait déjà sa taille en pixels.
+     - 52 tests, ruff, imports, JavaScript des pages et compose sans erreur. La conversation « Cube en SVG » d'Open WebUI, sur ce PC, vient de cette vérification.
+     - **Non vérifié** : le clic « Télécharger » dans un navigateur (seul l'en-tête de pièce jointe est contrôlé) ; le parcours sur l'autre ordinateur.
 6. **P2 : le registre**, après l'étape 5.
    1. `registry/apps.yaml`, une entrée par application : `id`, `fonction`, `modele`, `licence`, `territoire`, `vram_min_go`, `modes` (`api`, `local`, `modal`, `kaggle`, `colab`), `cout_estime`, `source`, `verifie_le`.
    2. `registry/apps.schema.json` (JSON Schema), validé en CI. Outil candidat : [`check-jsonschema`](https://pypi.org/project/check-jsonschema/) 0.38.0 (09/08/2026), qui existe en ligne de commande et en hook pre-commit. Sa page ne dit pas s'il lit le YAML : à vérifier avant de l'adopter. À défaut, vingt lignes de Python avec `jsonschema` et `pyyaml`.

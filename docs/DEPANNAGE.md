@@ -221,6 +221,33 @@ montré l'ordinateur d'essai du 13/09 : là-bas, la cause n'est pas établie.
 
 ---
 
+## Une bulle vide, ou un dessin qui ne s'affiche pas
+
+Le 14/09/2026, « fais moi un cube en svg » a rendu une bulle vide.
+L'interrupteur « Interpréteur de code » d'Open WebUI était mis : le modèle a
+écrit un programme Python au lieu du dessin, mal fermé, et son exécution a
+échoué sans un mot.
+
+**Correctif en place** : le Studio coupe cet interpréteur une fois, au
+démarrage. Le fichier `config/open-webui-interpreteur.json` dit que c'est
+fait. Si quelqu'un l'a remis depuis le panneau d'administration
+(« Exécution de code »), le Studio le laisse : retirez l'interrupteur sous la
+zone de saisie, puis reposez la question.
+
+Un dessin SVG complet dans la réponse s'affiche ensuite sous celle-ci, avec un
+lien « Télécharger ». L'image vient du Studio, à l'adresse
+`http://localhost:8010/dessins/…` : si elle reste blanche, le routeur est
+arrêté, ou le dessin fait partie des plus anciens, retirés au-delà de 200.
+
+Quand un service refuse une demande, le journal du routeur dit maintenant
+pourquoi, depuis le dossier du Studio :
+
+```
+docker logs free-ai-studio-manager 2>&1 | findstr failed
+```
+
+---
+
 ## Le piège du dossier imbriqué
 
 Quand VS Code demande **où** cloner, il faut désigner le dossier **parent**

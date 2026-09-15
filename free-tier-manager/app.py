@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Response
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("free-tier-manager")
@@ -702,10 +702,11 @@ def texte_avis(prefere: str, servi: str) -> str:
         titre_de(prefere), par, reste)
 
 
-def morceau_avis(texte: str, modele: str = AUTO_MODEL) -> bytes:
-    """Un morceau SSE au format OpenAI, place en tete du flux du secours."""
+def morceau_avis(texte: str, modele: str = AUTO_MODEL, ident: str = "free-ai-avis") -> bytes:
+    """Un morceau SSE au format OpenAI : l'avis en tete du flux du secours, ou
+    les dessins SVG en fin de reponse (voir flux_avec_dessins)."""
     morceau = {
-        "id": "free-ai-avis",
+        "id": ident,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": modele,
@@ -995,6 +996,54 @@ async def masquer_arena(client: httpx.AsyncClient, entetes: Dict[str, str]) -> N
     log.info("%s", etat)
 
 
+INTERPRETEUR_FAIT = CONFIG_DIR / "open-webui-interpreteur.json"
+
+
+async def couper_interpreteur(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
+    """Coupe l'interpreteur de code d'Open WebUI, une seule fois.
+
+    Interrupteur mis, Open WebUI demande au modele d'ecrire du Python entre des
+    balises, puis l'execute dans le navigateur. Les modeles gratuits ferment mal
+    ces balises. Mesure du 15/09/2026 : le 14/09, << fais moi un cube en svg >>
+    a fini en erreur de syntaxe Python puis en bulle vide ; rejouee avec
+    l'invite de l'interpreteur, la demande rend encore une balise jamais
+    fermee ; sans elle, le dessin arrive dans la reponse.
+
+    Le bouton << Executer >> d'un bloc de code reste : c'est la personne qui le
+    declenche. Meme regle que pour Arena : temoin a part, et un reglage remis
+    par l'utilisateur dans l'administration reste."""
+    if INTERPRETEUR_FAIT.exists():
+        return
+    url = f"{WEBUI_URL}/api/v1/configs/code_execution"
+    try:
+        r = await client.get(url, headers=entetes)
+        r.raise_for_status()
+        cfg = r.json()
+        if cfg.get("ENABLE_CODE_INTERPRETER"):
+            cfg["ENABLE_CODE_INTERPRETER"] = False
+            r = await client.post(url, headers=entetes, json=cfg)
+            r.raise_for_status()
+            etat = "Interpreteur de code d'Open WebUI coupe"
+        else:
+            etat = "Interpreteur de code d'Open WebUI deja coupe"
+    except (httpx.HTTPError, ValueError, AttributeError) as exc:
+        # Pas de temoin : nouvel essai au prochain demarrage.
+        log.warning("Interpreteur de code non coupe : %s", exc)
+        return
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        INTERPRETEUR_FAIT.write_text(json.dumps({
+            "pose_le": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "etat": etat,
+            "note": "Tant que ce fichier existe, Free AI Studio ne touche plus a "
+                    "l'interpreteur de code. Pour le remettre : Open WebUI, "
+                    "Panneau d'administration, puis Execution de code.",
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        log.warning("Temoin de l'interpreteur non ecrit (%s) : %s", INTERPRETEUR_FAIT, exc)
+    log.info("%s", etat)
+
+
 async def poser_reglages_webui() -> None:
     faits: List[str] = []
     echecs: List[str] = []
@@ -1028,6 +1077,7 @@ async def poser_reglages_webui() -> None:
         await reparer_images_webui(client, entetes)
         # Avant le temoin, lui aussi : il a son propre temoin (voir masquer_arena).
         await masquer_arena(client, entetes)
+        await couper_interpreteur(client, entetes)
 
         # Les reglages de confort, eux, ne se posent qu'une fois : ce que
         # l'utilisateur y change ensuite lui appartient.
@@ -2427,6 +2477,209 @@ def refus_tout_en_pause(eligibles: List[str], modele_chat: str) -> HTTPException
                          headers={"Retry-After": str(max(1, int(attente)))})
 
 
+# --- Dessins SVG : montres sous la reponse, et telechargeables ---------------
+# Demande du 15/09/2026 : << j'ai demande un svg, il ne m'a fourni ni la
+# visualisation ni le telechargement >>. Open WebUI montre bien le code, et
+# un bouton << Apercu >> ; son panneau n'enregistre qu'un fichier .html. Le
+# routeur voit passer la reponse : il range chaque dessin complet sous
+# config/dessins/ et ajoute, sous la reponse, l'image et un lien qui
+# enregistre le .svg. Le texte du fournisseur, lui, passe tel quel.
+DESSINS_DIR = CONFIG_DIR / "dessins"
+DESSINS_ADRESSE = "http://localhost:8010/dessins/"
+DESSINS_MAX = 200                   # au-dela, les plus anciens partent
+DESSIN_MAX_OCTETS = 1_000_000
+TEXTE_SUIVI_MAX = 4_000_000         # texte lu au passage, par reponse
+SVG_MOTIF = re.compile(r"<svg\b[^>]*>(.*?)</svg\s*>", re.IGNORECASE | re.DOTALL)
+NOM_DESSIN = re.compile(r"[0-9a-f]{16}\.svg")
+TAILLE_AFFICHEE = 320               # cote le plus long, en pixels
+ATTR_TAILLE = re.compile(r"""\s(width|height)\s*=\s*("[^"]*"|'[^']*')""", re.IGNORECASE)
+VIEWBOX = re.compile(r"""\sviewBox\s*=\s*["']\s*([-\d.eE+]+)[\s,]+([-\d.eE+]+)"""
+                     r"""[\s,]+([\d.eE+]+)[\s,]+([\d.eE+]+)\s*["']""", re.IGNORECASE)
+PIXELS = re.compile(r"\d+(\.\d+)?(px)?")
+
+
+def taille_fixe(svg: str) -> str:
+    """Donne au dessin une taille en pixels, tiree de son viewBox.
+
+    Mesure du 15/09/2026 dans Open WebUI 0.11.3 : un cube en width="100%",
+    bien charge par le navigateur (150 x 150), s'affichait en 0 x 0. L'image y
+    est dans un cadre qui prend la taille de son contenu, et un pourcentage de
+    rien vaut rien. Un dessin qui a deja sa taille en pixels, ou pas de
+    viewBox, reste tel quel."""
+    fin = svg.index(">")
+    ouverture = svg[:fin]
+    tailles = {m.group(1).lower(): m.group(2)[1:-1].strip() for m in ATTR_TAILLE.finditer(ouverture)}
+    if all(PIXELS.fullmatch(tailles.get(c, "")) for c in ("width", "height")):
+        return svg
+    vb = VIEWBOX.search(ouverture)
+    if not vb:
+        return svg
+    try:
+        largeur, hauteur = float(vb.group(3)), float(vb.group(4))
+    except ValueError:
+        return svg
+    if largeur <= 0 or hauteur <= 0:
+        return svg
+    k = TAILLE_AFFICHEE / max(largeur, hauteur)
+    ouverture = ATTR_TAILLE.sub("", ouverture).rstrip("/ ")
+    return ouverture + ' width="%d" height="%d"' % (round(largeur * k), round(hauteur * k)) + svg[fin:]
+
+
+def extraire_svg(texte: str) -> List[str]:
+    """Les dessins SVG complets d'une reponse, trois au plus, sans doublon.
+
+    Une balise citee dans une phrase (<< la balise `<svg>` ... `</svg>` >>)
+    n'est pas un dessin : il faut au moins un element dedans, et aucun accent
+    grave. Sans xmlns, une balise <img> n'afficherait rien : il est ajoute."""
+    dessins: List[str] = []
+    for m in SVG_MOTIF.finditer(texte):
+        svg = m.group(0)
+        if "`" in svg or "<" not in m.group(1):
+            continue
+        if len(svg.encode("utf-8")) > DESSIN_MAX_OCTETS:
+            continue
+        if "xmlns=" not in svg[:svg.index(">")]:
+            svg = '<svg xmlns="http://www.w3.org/2000/svg"' + svg[4:]
+        svg = taille_fixe(svg)
+        if svg not in dessins:
+            dessins.append(svg)
+        if len(dessins) == 3:
+            break
+    return dessins
+
+
+def ranger_dessin(svg: str) -> Optional[str]:
+    """Range le dessin sous un nom tire de son contenu, et rend ce nom. Le meme
+    dessin redit dans la conversation garde le meme nom : pas de doublon."""
+    nom = hashlib.sha256(svg.encode("utf-8")).hexdigest()[:16] + ".svg"
+    chemin = DESSINS_DIR / nom
+    try:
+        DESSINS_DIR.mkdir(parents=True, exist_ok=True)
+        if chemin.exists():
+            os.utime(chemin)
+        else:
+            chemin.write_text(svg, encoding="utf-8")
+    except OSError as exc:
+        log.warning("Dessin SVG non range (%s) : %s", DESSINS_DIR, exc)
+        return None
+    try:
+        # Le dessin qu'on vient de ranger est hors du tri : sous Windows, trois
+        # fichiers ecrits dans la meme milliseconde ont la meme date, et le tri
+        # pouvait jeter justement celui que la reponse va montrer.
+        autres = sorted((p for p in DESSINS_DIR.glob("*.svg") if p.name != nom),
+                        key=lambda p: p.stat().st_mtime)
+        for p in autres[:max(0, len(autres) - (DESSINS_MAX - 1))]:
+            p.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return nom
+
+
+def texte_dessins(texte: str) -> str:
+    """Ce qui s'ajoute sous une reponse : chaque dessin montre, et un lien qui
+    l'enregistre. Vide quand la reponse n'en contient aucun."""
+    blocs = []
+    for svg in extraire_svg(texte):
+        nom = ranger_dessin(svg)
+        if not nom:
+            continue
+        adresse = DESSINS_ADRESSE + nom
+        fichier = "dessin-%s.svg" % nom[:6]
+        blocs.append("![%s](%s)\n\n[⬇️ Télécharger %s](%s?telecharger=1)" % (
+            fichier, adresse, fichier, adresse))
+    if not blocs:
+        return ""
+    return "\n\n---\n\n**Le dessin, prêt à enregistrer :**\n\n" + "\n\n".join(blocs) + "\n"
+
+
+def ajouter_dessins(reponse: Any) -> None:
+    """Reponse d'un bloc (sans flux) : meme ajout, dans le texte du message."""
+    try:
+        message = reponse["choices"][0]["message"]
+        contenu = message.get("content")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return
+    if isinstance(contenu, str) and "<svg" in contenu.lower():
+        message["content"] = contenu + texte_dessins(contenu)
+
+
+async def flux_avec_dessins(morceaux, modele: str):
+    """Relaie un flux SSE ligne a ligne, octets inchanges. Si la reponse
+    contenait un dessin SVG complet, un morceau de plus le montre, juste avant
+    << data: [DONE] >> -- ou en toute fin si le fournisseur n'envoie pas ce
+    marqueur."""
+    reste = b""
+    texte: List[str] = []
+    taille = 0
+    ajoute = False
+
+    def fin() -> bytes:
+        nonlocal ajoute
+        ajoute = True
+        ajout = texte_dessins("".join(texte))
+        return morceau_avis(ajout, modele, ident="free-ai-dessin") if ajout else b""
+
+    def lire(ligne: bytes) -> bytes:
+        nonlocal taille
+        nette = ligne.strip()
+        if nette in (b"data: [DONE]", b"data:[DONE]"):
+            return fin() if not ajoute else b""
+        if nette.startswith(b"data:") and taille < TEXTE_SUIVI_MAX:
+            try:
+                j = json.loads(nette[5:])
+            except ValueError:
+                return b""
+            for ch in (j.get("choices") or []) if isinstance(j, dict) else []:
+                delta = ch.get("delta") if isinstance(ch, dict) else None
+                contenu = delta.get("content") if isinstance(delta, dict) else None
+                if isinstance(contenu, str):
+                    texte.append(contenu)
+                    taille += len(contenu)
+        return b""
+
+    async for chunk in morceaux:
+        reste += chunk
+        *lignes, reste = reste.split(b"\n")
+        sortie = []
+        for ligne in lignes:
+            sortie.append(lire(ligne))
+            sortie.append(ligne + b"\n")
+        envoi = b"".join(sortie)
+        if envoi:
+            yield envoi
+    if reste:
+        avant = lire(reste)
+        yield avant + reste
+    if not ajoute:
+        dernier = fin()
+        if dernier:
+            yield dernier
+
+
+@app.get("/dessins/{nom}")
+async def dessin(nom: str, telecharger: int = 0):
+    if not NOM_DESSIN.fullmatch(nom):
+        raise HTTPException(status_code=404, detail="Dessin introuvable.")
+    chemin = DESSINS_DIR / nom
+    if not chemin.is_file():
+        raise HTTPException(status_code=404, detail="Dessin introuvable : les "
+                            "%d plus recents seulement sont gardes." % DESSINS_MAX)
+    entetes = {
+        # Un SVG peut porter du script, et le modele ecrit ce qu'on lui dit --
+        # une page Web lue par la recherche comprise. Ouvert seul dans un
+        # onglet, a l'adresse du routeur, il pourrait appeler /maj/lancer :
+        # << sandbox >> l'en empeche. Dans une balise <img>, le navigateur
+        # n'execute de toute facon aucun script.
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
+                                   "img-src data:; sandbox",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=86400",
+    }
+    if telecharger:
+        entetes["Content-Disposition"] = 'attachment; filename="dessin-%s.svg"' % nom[:6]
+    return Response(content=chemin.read_bytes(), media_type="image/svg+xml", headers=entetes)
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: Optional[str] = Header(default=None)):
     if not auth_ok(authorization):
@@ -2500,7 +2753,12 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                 stats[name]["failures"] += 1
                 stats[name]["last_error"] = f"HTTP {response.status_code}: {body[:300]}"
                 errors.append(f"{name}: HTTP {response.status_code}")
-                log.warning("Provider %s failed with HTTP %s", name, response.status_code)
+                # Le corps dit pourquoi. Dans stats, il ne vit que jusqu'au succes
+                # suivant : le 15/09/2026, la cause d'un 400 de Gemini etait deja
+                # perdue. Il part dans le journal, pas vers le navigateur, comme
+                # pour les images.
+                log.warning("Provider %s failed with HTTP %s : %s", name,
+                            response.status_code, " ".join(body[:300].split()))
                 continue
 
             stats[name]["successes"] += 1
@@ -2518,7 +2776,9 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                     debut = morceau_avis(texte_avis(prefere, name), modele_chat)
                     avis_bascule[prefere] = False
 
-                async def iterator(resp=response, cli=client, debut=debut):
+                sse = "text/event-stream" in media_type
+
+                async def iterator(resp=response, cli=client, debut=debut, sse=sse):
                     try:
                         if debut:
                             yield debut
@@ -2528,7 +2788,10 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                         # donc du binaire illisible : dans Open WebUI, la reponse
                         # s'affichait vide, alors que le titre et les questions de suivi
                         # (appels non streames) arrivaient normalement.
-                        async for chunk in resp.aiter_bytes():
+                        morceaux = resp.aiter_bytes()
+                        if sse:
+                            morceaux = flux_avec_dessins(morceaux, modele_chat)
+                        async for chunk in morceaux:
                             yield chunk
                     finally:
                         await resp.aclose()
@@ -2542,6 +2805,7 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
             await response.aclose()
             await client.aclose()
             parsed = json.loads(data)
+            ajouter_dessins(parsed)
             if name == "openrouter" and boost_active():
                 spent = await record_openrouter_usage(parsed)
                 boost_state["session_spent_usd"] += spent
