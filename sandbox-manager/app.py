@@ -16,9 +16,10 @@ from typing import Dict, Optional
 
 import httpx
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
+import chanson
 import video
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -544,7 +545,9 @@ def kaggle_ref(jid: str):
     return user, slug, f"{user}/{slug}" if user else ""
 
 
-def run_kaggle(jid: str, code: str, gpu: bool, internet: bool):
+def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
+               machine_shape: Optional[str] = None, timeout_s: Optional[int] = None):
+    """machine_shape et timeout_s ne servent qu'aux chansons ; sans eux, rien ne change."""
     job = read_job(jid)
     job.update({"status": "preparing", "provider_effective": "kaggle", "started_at": job.get("started_at", time.time())})
     write_job(jid, job)
@@ -587,6 +590,9 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool):
         "kernel_sources": [],
         "model_sources": [],
     }
+    if machine_shape:
+        # Sans ce champ, Kaggle choisit la carte lui-meme.
+        metadata["machine_shape"] = machine_shape
     (d / "kernel-metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     try:
         job["status"] = "submitting"
@@ -599,7 +605,7 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool):
         job["status"] = "running"
         job["submit_log"] = (p.stdout or "")[-1000:]
         write_job(jid, job)
-        deadline = time.time() + int(os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
+        deadline = time.time() + int(timeout_s or os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
         while time.time() < deadline:
             s = subprocess.run(["kaggle", "kernels", "status", ref], capture_output=True, text=True, timeout=30)
             text = ((s.stdout or "") + "\n" + (s.stderr or "")).lower()
@@ -1598,6 +1604,208 @@ def video_page():
     return HTMLResponse(video.PAGE_HTML.replace("__CLE__", KEY))
 
 
+# --- Chanson ------------------------------------------------------------------
+# Des paroles et un style, chantes par YuE2-3B. Meme principe que la video :
+# Modal compte et refuse avant de lancer ; Kaggle est gratuit et reste coupe en
+# contexte partage ; Colab recoit un carnet que la personne lance elle-meme.
+# Le detail (modele, prix, script envoye au GPU, page) est dans chanson.py.
+
+
+def jeton_chanson(jid: str) -> str:
+    """Laissez-passer pour UN fichier, comme jeton_video : la balise <audio> ne
+    sait pas envoyer d'en-tete, et la cle maitresse ne va jamais dans une adresse."""
+    if not KEY:
+        return ""
+    return hmac.new(KEY.encode(), ("chanson:" + jid).encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def chanson_fichiers(jid: str) -> dict:
+    """Retrouve le son, la partition et le resume parmi les artefacts du travail."""
+    trouve = {}
+    for art in read_job(jid).get("artifacts", []):
+        nom = str(art.get("name", ""))
+        if art.get("skipped") or not art.get("id"):
+            continue
+        for suffixe, cle in (("chanson.flac", "son"), ("partition.abc", "partition"), ("resume.json", "resume")):
+            if nom.endswith(suffixe):
+                trouve[cle] = art
+    return trouve
+
+
+def run_chanson(jid: str, code: str, ou: str):
+    """Lance la chanson, puis encaisse le temps Modal reellement consomme, echec compris."""
+    debut = time.time()
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": debut, "provider_effective": ou})
+    write_job(jid, job)
+    try:
+        if ou == "kaggle":
+            run_kaggle(jid, code, True, True, machine_shape=chanson.KAGGLE_MACHINE,
+                       timeout_s=chanson.KAGGLE_DELAI_S)
+            return
+        donnees = modal_execute(
+            jid, code, True, True,
+            gpu_type=chanson.GPU_MODAL,
+            timeout_s=chanson.DUREE_MAX_S,
+            memory_mb=chanson.MEMOIRE_MB,
+            paquets=chanson.PAQUETS_MODAL,
+            volume=chanson.VOLUME_MODELES,
+        )
+        finish_execution(jid, "modal", donnees)
+    except BackendUnavailable as exc:
+        job = read_job(jid)
+        job.update({"status": "failed", "finished_at": time.time(), "error": str(exc)[:1000]})
+        write_job(jid, job)
+    finally:
+        if ou == "modal":
+            reste = chanson.budget_consommer(chanson.GPU_MODAL, time.time() - debut)
+            job = read_job(jid)
+            job["budget"] = reste
+            write_job(jid, job)
+
+
+async def corps_json(request: Request) -> dict:
+    try:
+        payload = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "Corps JSON attendu.") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Corps JSON attendu.")
+    return payload
+
+
+@app.get("/chanson/etat")
+def chanson_etat(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    raison = contexte_partage(request)
+    return {
+        "budget": chanson.budget_lire(),
+        "modele": chanson.MODELE,
+        "durees": chanson.DUREES,
+        "carte_modal": chanson.GPU_MODAL,
+        "cout_max_modal_usd": round(chanson.prix_seconde(chanson.GPU_MODAL) * chanson.DUREE_MAX_S, 3),
+        "modal_configure": modal_configured(),
+        "kaggle_configure": kaggle_configured(),
+        "kaggle_permis": raison is None,
+        "kaggle_raison": raison,
+    }
+
+
+@app.post("/chanson/creer")
+async def chanson_creer(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    payload = await corps_json(request)
+    ou = str(payload.get("ou") or "modal")
+    if ou not in ("modal", "kaggle"):
+        ou = "modal"
+    if ou == "kaggle":
+        raison = contexte_partage(request)
+        if raison:
+            raise refus_kaggle(raison)
+    try:
+        plan = chanson.preparer(payload, ou)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if ou == "modal":
+        if not modal_configured():
+            raise HTTPException(503, "Modal n'est pas branché. Ouvrez la page « Brancher Modal "
+                                     "ou Kaggle » et collez les deux valeurs du jeton Modal.")
+        try:
+            chanson.budget_verifier(plan["gpu"], chanson.DUREE_MAX_S)
+        except chanson.BudgetDepasse as exc:
+            raise HTTPException(429, str(exc)) from exc
+    elif not kaggle_configured():
+        raise HTTPException(503, "Kaggle n'est pas branché. Ouvrez la page « Brancher Modal "
+                                 "ou Kaggle » et collez votre nom d'utilisateur et votre clé Kaggle.")
+
+    code = chanson.construire_script(plan["demande"])
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid,
+        "provider": ou,
+        "title": "Free AI Studio chanson",
+        "gpu": True,
+        "internet": True,
+        "status": "queued",
+        "created_at": time.time(),
+        "artifacts": [],
+        "chanson": plan["resume_public"],
+    })
+    threading.Thread(target=run_chanson, args=(jid, code, ou), daemon=True).start()
+    return read_job(jid)
+
+
+@app.post("/chanson/colab")
+async def chanson_colab(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le carnet part chez la personne, qui le lance sur SON compte Google : ni
+    identifiant ni credit du proprietaire n'y est engage, d'ou l'absence de garde."""
+    auth(authorization)
+    payload = await corps_json(request)
+    try:
+        plan = chanson.preparer(payload, "colab")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    carnet = chanson.carnet_colab(plan["demande"])
+    return Response(
+        json.dumps(carnet, ensure_ascii=False, indent=1),
+        media_type="application/x-ipynb+json",
+        headers={"Content-Disposition": 'attachment; filename="chanson-colab.ipynb"'},
+    )
+
+
+@app.get("/chanson/jobs/{jid}")
+def chanson_job(jid: str, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    job = read_job(jid)
+    fichiers = chanson_fichiers(jid)
+    sortie = {
+        "id": jid,
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "stdout": job.get("stdout", ""),
+        "stderr": job.get("stderr", ""),
+        "message": job.get("error") or "",
+        "chanson": job.get("chanson"),
+    }
+    if fichiers.get("son"):
+        sortie["son_url"] = f"/chanson/jobs/{jid}/fichier?cle={jeton_chanson(jid)}"
+    try:
+        if fichiers.get("resume"):
+            sortie["resume"] = json.loads((ART / fichiers["resume"]["path"]).read_text(encoding="utf-8"))
+        if fichiers.get("partition"):
+            sortie["partition"] = (ART / fichiers["partition"]["path"]).read_text(encoding="utf-8")[:20000]
+    except (OSError, ValueError):
+        pass
+    return sortie
+
+
+@app.get("/chanson/jobs/{jid}/fichier")
+def chanson_fichier(jid: str, cle: str = Query(default=""),
+                    telecharger: int = Query(default=0), nom: str = Query(default="")):
+    attendu = jeton_chanson(jid)
+    if not attendu or not hmac.compare_digest(cle, attendu):
+        raise HTTPException(401, "Unauthorized")
+    art = chanson_fichiers(jid).get("son")
+    if not art:
+        raise HTTPException(404, "Pas de chanson pour ce travail")
+    chemin = ART / art["path"]
+    if not chemin.exists() or chemin.is_symlink():
+        raise HTTPException(404, "Fichier absent")
+    if not telecharger:
+        return FileResponse(chemin, media_type="audio/flac")
+    propre = clean_name(nom) if nom else ""
+    if propre.lower().endswith(".flac"):
+        propre = propre[:-5]
+    propre = propre.strip("._-")
+    return FileResponse(chemin, media_type="audio/flac", filename=(propre or "chanson") + ".flac")
+
+
+@app.get("/chanson", response_class=HTMLResponse)
+def chanson_page():
+    return HTMLResponse(chanson.PAGE_HTML.replace("__CLE__", KEY))
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse(
@@ -1611,7 +1819,7 @@ def home():
 <div class=card><h2>Local <span id=b-local></span></h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
 <div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré — sur votre machine seulement, avec vos identifiants. L’accès direct reste toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
-</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
+</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/chanson'>🎵 Faire chanter des paroles</a> &nbsp;<a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
 <script>
 (function(){
  var pastille = function(ok, oui, non){

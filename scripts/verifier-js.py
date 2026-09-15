@@ -34,7 +34,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 SCRIPT = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
 PAGES = {
     "free-tier-manager": ["/studio", "/diagnostic", "/cles"],
-    "sandbox-manager": ["/", "/cles", "/video", "/essai"],
+    "sandbox-manager": ["/", "/cles", "/video", "/chanson", "/essai"],
 }
 
 
@@ -68,10 +68,11 @@ def main() -> int:
             sources["%s %s" % (dossier, chemin)] = r.text
         for nom, html in chaines_html(module).items():
             sources["%s %s" % (dossier, nom)] = html
-    video = sys.modules.get("video")
-    if video is not None:
-        for nom, html in chaines_html(video).items():
-            sources["video.py %s" % nom] = html
+    for nom_module in ("video", "chanson"):
+        module = sys.modules.get(nom_module)
+        if module is not None:
+            for nom, html in chaines_html(module).items():
+                sources["%s.py %s" % (nom_module, nom)] = html
 
     vus, echecs = set(), 0
     dossier_js = Path(tempfile.mkdtemp(prefix="free-ai-js-"))

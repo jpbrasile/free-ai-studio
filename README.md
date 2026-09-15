@@ -321,6 +321,7 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Lire à haute voix | voix du navigateur | gratuit, sans clé |
 | Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC) | gratuit |
 | **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
+| **Chanson** (15/09/2026, **aucune chanson lancée en réel**) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026), 0,52 $ au pire par chanson, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
 
 **Pourquoi la vidéo est à part.** Aucun service de fabrication de vidéo n’est gratuit et
 hébergé en septembre 2026. Le Studio fait donc tourner un modèle ouvert sur une carte
@@ -357,6 +358,28 @@ excluent l’Union européenne, le Royaume-Uni et la Corée du déploiement loca
 Apache 2.0, sans restriction de territoire. La page `/video` affiche la licence et le
 territoire du modèle **à côté du choix de qualité**, là où l’on décide.
 
+**La chanson** (page `/chanson` du Sandbox, carte « Chanson » de `/studio`). Des paroles et
+un style : YuE2-3B compose une partition, puis la chante, voix et instruments, jusqu’à
+3 minutes en 48 kHz stéréo. Sa fiche annonce l’anglais et le chinois, pas le français.
+Trois endroits où le lancer :
+- **Modal**, carte L4 : le pipeline officiel, tel quel. Le compteur ajoute cette fois le
+  processeur et la mémoire, que Modal facture en plus de la carte. Une chanson n’est lancée
+  que si son pire cas (30 minutes) tient sous le plafond `CHANSON_BUDGET_USD_PAR_MOIS`
+  (5 $ par défaut, à part des 20 $ de la vidéo) : au pire 9 chansons par mois. Le coût
+  réel d’une chanson n’est pas mesuré.
+- **Kaggle** : une ou deux cartes T4, gratuites. Le pipeline officiel refuse cette carte, faute
+  de bfloat16. Le script applique alors les correctifs du carnet Kaggle public « YuE2-3B -
+  Frontier Full-Song Music Generation » (AIQUEST Academy, Apache 2.0) : float16, attention
+  SDPA, intégration en float32, décodage par tuiles. Ce chemin n’est pas celui des auteurs du
+  modèle, et le Studio ne l’a jamais fait tourner. Coupé quand le Studio est partagé, comme la
+  vidéo.
+- **Colab** : le Studio fabrique un carnet avec les paroles ; vous l’importez dans Colab et le
+  lancez sur votre compte Google, carte T4 gratuite, avec les mêmes correctifs.
+
+La licence CC BY-NC 4.0 des poids est affichée **à côté du choix de l’endroit**. Ce qu’elle
+permet de faire des chansons produites n’est pas tranché par le Studio : pour un usage
+commercial, lisez la [fiche du modèle](https://huggingface.co/m-a-p/YuE2-3B).
+
 ### Ce qui est ouvert, ce qui ne l’est pas
 
 Free AI Studio **assemble des paliers gratuits** ; il n’est pas un studio open source. Pour
@@ -376,8 +399,9 @@ Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 | Dictée « sur cet ordinateur », et repli quand Groq refuse | Whisper `small`, dans le routeur du Studio, sur le processeur | modèle ouvert exécuté localement | MIT ([fiche](https://huggingface.co/Systran/faster-whisper-small), [licence](https://github.com/openai/whisper/blob/main/LICENSE)) |
 | Dictée « Groq si possible », avec une clé Groq | Groq, `whisper-large-v3` | modèle ouvert exécuté à distance, par un service propriétaire ; votre voix part chez Groq | Apache 2.0 ([fiche](https://huggingface.co/openai/whisper-large-v3)) |
 | Vidéo | Wan 2.1 VACE 1,3 B ou 14 B, sur Modal (ou Kaggle) | modèle ouvert exécuté à distance, sur une machine louée | Apache 2.0, aucune restriction de territoire ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B)) |
+| Chanson (15/09/2026) | m-a-p, YuE2-3B et son décodeur YuE2-Vae, sur Modal, Kaggle ou Colab | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | poids : **CC BY-NC 4.0, usage non commercial**, aucune restriction de territoire ; code `yue2_infer` : Apache 2.0 ([fiche](https://huggingface.co/m-a-p/YuE2-3B)). Correctifs T4 repris du carnet Kaggle d’AIQUEST Academy, Apache 2.0 |
 
-Seules la voix, et la dictée « sur cet ordinateur », ne dépendent d’aucun tiers. La vidéo et le 2e secours du chat
+Seules la voix, et la dictée « sur cet ordinateur », ne dépendent d’aucun tiers. La vidéo, la chanson et le 2e secours du chat
 reposent sur des modèles ouverts que vous pourriez faire tourner vous-même, avec la carte
 graphique qu’il faut. Tout le reste dépend d’un fournisseur qui peut changer son offre.
 
