@@ -248,6 +248,37 @@ docker logs free-ai-studio-manager 2>&1 | findstr failed
 
 ---
 
+## La dictée écrit n'importe quoi, ou n'écrit rien
+
+Jusqu'au 15/09/2026, la dictée tournait sur le plus petit Whisper utile, sans
+savoir que vous parliez français : une dictée devenait « 3,4,5,5 ».
+
+**Correctif en place** : la dictée passe par le Studio, qui choisit à chaque
+fois. Sur la page d'accueil du Studio (<http://localhost:8010/studio>), carte
+« Dictée » :
+
+- **Groq si possible** (par défaut) : avec une clé Groq branchée, votre voix
+  part chez Groq (`whisper-large-v3`, palier gratuit). Si Groq refuse (limite
+  du jour, panne, clé retirée), la dictée se fait sur votre ordinateur, sans
+  message d'erreur.
+- **Sur cet ordinateur** : votre voix ne quitte jamais le PC. Whisper `small`,
+  sur le processeur, sans carte graphique.
+
+Le Whisper de l'ordinateur se télécharge une fois, d'avance, au démarrage du
+Studio. Si la toute première dictée locale échoue, vérifiez la connexion, puis
+réessayez. Pour voir qui a transcrit, et pourquoi Groq a été écarté (le
+journal ne garde jamais ce qui a été dit) :
+
+```
+docker logs free-ai-studio-manager 2>&1 | findstr Dictee
+```
+
+Le fichier `config/open-webui-dictee.json` dit que la dictée d'Open WebUI a été
+confiée au Studio. Si quelqu'un choisit un autre moteur dans Open WebUI
+(Panneau d'administration, Audio), le Studio le laisse.
+
+---
+
 ## Le piège du dossier imbriqué
 
 Quand VS Code demande **où** cloner, il faut désigner le dossier **parent**

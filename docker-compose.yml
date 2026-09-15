@@ -112,6 +112,9 @@ services:
       # installe pour le comparer a celui de GitHub. Ni le code, ni .env ne sont
       # exposes, et rien ici ne peut ecrire dans le depot.
       - ./.git:/depot/.git:ro
+      # Le Whisper de la dictee locale (et du repli quand Groq refuse),
+      # telecharge une fois : il survit aux reconstructions du routeur.
+      - whisper-modeles:/modeles
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 15s
@@ -157,12 +160,21 @@ services:
       # Meme regle : lue au tout premier demarrage seulement ; pour une base
       # existante, c'est le routeur qui coupe le reglage (voir masquer_arena).
       ENABLE_EVALUATION_ARENA_MODELS: "false"
+      # Dictee (15/09/2026). Whisper << base >>, sans langue, devinait le
+      # francais a 55 % et rendait << 3,4,5,5 >>. Le routeur reprend la dictee
+      # (voir aligner_dictee) : Groq si possible, sinon son propre Whisper. La
+      # langue part avec chaque dictee ; les deux autres lignes ne servent que
+      # si quelqu'un remet le Whisper d'Open WebUI dans l'administration.
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-fr}
+      WHISPER_VAD_FILTER: ${WHISPER_VAD_FILTER:-true}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
     volumes:
       - open-webui-data:/app/backend/data
 
 volumes:
   open-webui-data:
   sandbox-data:
+  whisper-modeles:
 
 networks:
   sandbox-internal:

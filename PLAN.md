@@ -28,7 +28,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
 
 ## Règles qui tiennent pendant tout le plan
 
-- **Gel des fonctions.** Aucune nouvelle fonction tant que P0-1 et P0-2 ne sont pas vérifiés **en réel**. Aujourd'hui, ils ne sont vérifiés que hors réseau. Seule exception, levée par l'utilisateur le 11/09/2026 : Free AI Max. Sur les fiches de Google, Flash-Lite est nettement en dessous de 3.8 Flash (Terminal-bench 2.1 : 54,0 % contre 89,4 %), et les deux quotas sont distincts. Deuxième exception, levée par l'utilisateur le 15/09/2026 (« fais tout ça ») : les dessins SVG montrés sous la réponse du chat et téléchargeables.
+- **Gel des fonctions.** Aucune nouvelle fonction tant que P0-1 et P0-2 ne sont pas vérifiés **en réel**. Aujourd'hui, ils ne sont vérifiés que hors réseau. Seule exception, levée par l'utilisateur le 11/09/2026 : Free AI Max. Sur les fiches de Google, Flash-Lite est nettement en dessous de 3.8 Flash (Terminal-bench 2.1 : 54,0 % contre 89,4 %), et les deux quotas sont distincts. Deuxième exception, levée par l'utilisateur le 15/09/2026 (« fais tout ça ») : les dessins SVG montrés sous la réponse du chat et téléchargeables. Troisième exception, levée par l'utilisateur le 15/09/2026 (« laisse les deux options local amélioré et groq si dispo ») : la dictée, par Groq quand sa clé est branchée, sinon par un Whisper local plus gros et en français.
 - P0 avant P1, P1 avant P2.
 - Source officielle d'abord. Si elle contredit l'audit, elle gagne, et l'écart s'écrit ci-dessous.
 - Rien de payant en secours, jamais. `ALLOW_PAID_MODELS=false` ne s'assouplit pas.
@@ -89,6 +89,17 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
      - Défaut trouvé en validant : un dessin en `width="100%"` se chargeait (150 × 150) mais s'affichait en 0 × 0 dans Open WebUI, dont le cadre prend la taille de son contenu. Le routeur lui donne désormais une taille en pixels tirée du `viewBox`. Dans la même page, un dessin en pixels s'affiche (111 × 111, largeur de la colonne). La conversion n'est vérifiée que par les tests : la réponse rejouée après la correction avait déjà sa taille en pixels.
      - 52 tests, ruff, imports, JavaScript des pages et compose sans erreur. La conversation « Cube en SVG » d'Open WebUI, sur ce PC, vient de cette vérification.
      - **Non vérifié** : le clic « Télécharger » dans un navigateur (seul l'en-tête de pièce jointe est contrôlé) ; le parcours sur l'autre ordinateur.
+   - **15/09 : « speech to text très mauvais ».** Cause : Open WebUI dictait avec Whisper `base`, sans langue ; il devinait le français à 55 % et une dictée devenait « 3,4,5,5 ». Décision de l'utilisateur (« laisse les deux options local amélioré et groq si dispo », puis « un bouton de sélection : local pour confidentialité et fall back ») :
+     - Open WebUI confie la dictée au routeur, une fois (témoin `config/open-webui-dictee.json`). Un autre moteur choisi ensuite dans l'administration reste en place.
+     - Le routeur choisit à chaque dictée. En mode Groq : `whisper-large-v3` si la clé est branchée ; sinon, ou si Groq refuse, son propre Whisper `small`, en français, sur le processeur, sans message d'erreur.
+     - La carte « Dictée » de `/studio` propose « Groq si possible » ou « Sur cet ordinateur » ; dans ce second cas, la voix ne quitte pas le PC. Le choix est rangé dans `config/dictee.json` et n'accepte que du JSON.
+     - Mesure sur 4 cœurs, trois dictées de 4 à 7 s : `base` 0,5 s ; `small` 0,7 à 0,9 s et 0,95 Gio ; `large-v3-turbo` 2,6 à 3 s et 2,6 Gio. faster-whisper ajoute environ 440 Mo à l'image du routeur.
+     - Vérifié sur ce PC, routeur et Open WebUI reconstruits. Au démarrage, `small` est téléchargé et Open WebUI est basculé vers le routeur. Les trois dictées du cache passent par Open WebUI :
+       - mode Groq : HTTP 200, 0,4 à 0,7 s, « 3 x 5, 15 » ;
+       - mode « sur cet ordinateur » : HTTP 200, 0,7 à 1,7 s, « Trois fois cinq, quinze. ».
+
+       Le journal du routeur dit qui a transcrit chaque dictée. Un choix envoyé sans JSON est refusé (415). La page `/studio` servie contient les deux boutons. 71 tests, ruff, imports, JavaScript des pages et compose sans erreur.
+     - **Non vérifié** : le repli quand Groq refuse, vérifié par les tests seulement ; le clic sur les boutons dans un navigateur ; une dictée au micro ; le parcours sur l'autre ordinateur.
 6. **P2 : le registre**, après l'étape 5.
    1. `registry/apps.yaml`, une entrée par application : `id`, `fonction`, `modele`, `licence`, `territoire`, `vram_min_go`, `modes` (`api`, `local`, `modal`, `kaggle`, `colab`), `cout_estime`, `source`, `verifie_le`.
    2. `registry/apps.schema.json` (JSON Schema), validé en CI. Outil candidat : [`check-jsonschema`](https://pypi.org/project/check-jsonschema/) 0.38.0 (09/08/2026), qui existe en ligne de commande et en hook pre-commit. Sa page ne dit pas s'il lit le YAML : à vérifier avant de l'adopter. À défaut, vingt lignes de Python avec `jsonschema` et `pyyaml`.

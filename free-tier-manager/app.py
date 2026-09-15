@@ -1,7 +1,9 @@
 import asyncio
 import hashlib
+import io
 import os
 import re
+import threading
 import time
 import json
 import logging
@@ -1044,6 +1046,142 @@ async def couper_interpreteur(client: httpx.AsyncClient, entetes: Dict[str, str]
     log.info("%s", etat)
 
 
+# --- La dictee : Groq si possible, sinon le Whisper du routeur ------------------
+# Open WebUI envoie chaque dictee au routeur, qui choisit a chaque fois :
+# - choix "groq" (par defaut) : Groq si sa cle est branchee ; sinon, ou s'il
+#   refuse (limite, panne, cle), le Whisper du routeur, sans message d'erreur ;
+# - choix "local" : jamais Groq, la voix ne quitte pas l'ordinateur.
+# Le choix se fait sur la page d'accueil du Studio (/studio).
+DICTEE_MODES = ("groq", "local")
+DICTEE_CHOIX = CONFIG_DIR / "dictee.json"
+WHISPER_SILENCES = os.getenv("WHISPER_VAD_FILTER", "true").lower() == "true"
+WHISPER_DOSSIER = os.getenv("WHISPER_MODEL_DIR", "/modeles")
+_whisper: Dict[str, Any] = {"modele": None}
+_whisper_verrou = threading.Lock()
+DICTEE_MODELE = "free-ai-dictee"
+# Releve du 15/09/2026 (console.groq.com/docs/speech-to-text et /rate-limits) :
+# taux d'erreur annonce par Groq 10,3 % (12 % pour la variante turbo) ; palier
+# gratuit de 20 requetes par minute, 2 000 par jour, 25 Mo par fichier.
+GROQ_DICTEE_MODELE = os.getenv("GROQ_STT_MODEL", "whisper-large-v3")
+DICTEE_LANGUE = os.getenv("WHISPER_LANGUAGE", "fr").strip().lower() or None
+# Mesure du 15/09/2026, 4 coeurs de l'ordinateur de developpement, sans carte
+# graphique, trois dictees de 4 a 7 s : base 0,5 s et 0,27 Gio ; small 0,7 a
+# 0,9 s et 0,95 Gio ; large-v3-turbo 2,6 a 3 s et 2,6 Gio. small corrige
+# << 3,4,5,5 >> en << 3 x 5, 15 >> ; turbo fait un peu mieux, pour trois fois
+# la memoire d'un portable de debutant.
+WHISPER_LOCAL = os.getenv("WHISPER_MODEL", "small").strip() or "small"
+DICTEE_MAX_OCTETS = 25_000_000
+DICTEE_FAIT = CONFIG_DIR / "open-webui-dictee.json"
+
+
+def dictee_mode() -> str:
+    """Le choix fait sur /studio, sinon DICTEE_MODE du .env, sinon Groq."""
+    try:
+        mode = json.loads(DICTEE_CHOIX.read_text(encoding="utf-8")).get("mode")
+    except (OSError, ValueError, AttributeError):
+        mode = None
+    if mode not in DICTEE_MODES:
+        mode = os.getenv("DICTEE_MODE", "groq").strip().lower()
+    return mode if mode in DICTEE_MODES else "groq"
+
+
+def dictee_groq_possible() -> bool:
+    return dictee_mode() == "groq" and provider_allowed("groq")
+
+
+def transcrire_local(audio: bytes, langue: Optional[str]) -> str:
+    """Le Whisper du routeur, sur le processeur, sans carte graphique.
+
+    Charge a la premiere dictee locale, puis garde en memoire. Un seul calcul a
+    la fois : deux dictees simultanees se partageraient les memes coeurs."""
+    from faster_whisper import WhisperModel  # lourd : importe seulement ici
+
+    with _whisper_verrou:
+        if _whisper["modele"] is None:
+            _whisper["modele"] = WhisperModel(WHISPER_LOCAL, device="cpu", compute_type="int8",
+                                              download_root=WHISPER_DOSSIER)
+        segments, _ = _whisper["modele"].transcribe(io.BytesIO(audio), beam_size=5,
+                                                    vad_filter=WHISPER_SILENCES, language=langue)
+        return "".join(s.text for s in segments).strip()
+
+
+def prechauffer_whisper() -> None:
+    """Telecharge le modele au demarrage, sans le charger en memoire : la
+    premiere dictee locale, ou le premier repli, n'attend pas le telechargement."""
+    try:
+        from faster_whisper.utils import download_model
+        download_model(WHISPER_LOCAL, cache_dir=WHISPER_DOSSIER)
+    except Exception as exc:  # reseau coupe, disque plein, paquet absent
+        log.warning("Whisper local non telecharge d'avance (%s) : %s", WHISPER_LOCAL, exc)
+        return
+    log.info("Whisper local pret (%s)", WHISPER_LOCAL)
+
+
+async def aligner_dictee(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
+    """Confie la dictee d'Open WebUI au routeur, une fois ; ensuite, a chaque
+    demarrage, verifie seulement la cle interne de cette liaison.
+
+    Mesure du 15/09/2026 : la dictee tournait sur le Whisper << base >> d'Open
+    WebUI, sans langue ; il devinait le francais a 55 % et rendait << 3,4,5,5 >>.
+    Le routeur choisit ensuite a chaque dictee (voir /v1/audio/transcriptions).
+
+    La premiere fois, seulement si Open WebUI est encore sur son Whisper
+    d'origine : un autre moteur est un choix de l'administration, qui reste. Le
+    Whisper d'Open WebUI remis apres coup reste aussi (temoin)."""
+    if not INTERNAL_KEY:
+        return
+    interne = os.getenv("FREE_TIER_MANAGER_INTERNAL_URL",
+                        "http://free-tier-manager:8000/v1").rstrip("/")
+    try:
+        r = await client.get(f"{WEBUI_URL}/api/v1/audio/config", headers=entetes)
+        r.raise_for_status()
+        cfg = r.json()
+        stt = dict(cfg["stt"])
+        tts = dict(cfg["tts"])
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Dictee non reglee : %s", exc)
+        return
+
+    moteur = stt.get("ENGINE") or ""
+    notre_route = (moteur == "openai"
+                   and str(stt.get("OPENAI_API_BASE_URL") or "").rstrip("/") == interne)
+    if notre_route:
+        if stt.get("OPENAI_API_KEY") == INTERNAL_KEY:
+            return
+        voulu = dict(stt, OPENAI_API_KEY=INTERNAL_KEY)
+        etat = ("Liaison dictee -> routeur remise d'aplomb (la cle gardee par "
+                "Open WebUI ne correspondait plus)")
+    elif moteur == "" and not DICTEE_FAIT.exists():
+        voulu = dict(stt, ENGINE="openai", OPENAI_API_BASE_URL=interne,
+                     OPENAI_API_KEY=INTERNAL_KEY, OPENAI_API_REQUEST_FORMAT="multipart",
+                     MODEL=DICTEE_MODELE)
+        etat = "Dictee confiee au routeur (Groq si possible, sinon Whisper %s)" % WHISPER_LOCAL
+    else:
+        return
+
+    try:
+        r = await client.post(f"{WEBUI_URL}/api/v1/audio/config/update", headers=entetes,
+                              json={"tts": tts, "stt": voulu})
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        log.warning("Dictee non reglee : %s", exc)
+        return
+    if not DICTEE_FAIT.exists():
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            DICTEE_FAIT.write_text(json.dumps({
+                "pose_le": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "etat": etat,
+                "note": "Tant que ce fichier existe, Free AI Studio ne reprend plus la "
+                        "dictee d'Open WebUI : un autre moteur choisi dans Open WebUI "
+                        "(Panneau d'administration, Audio) reste. Le choix entre Groq "
+                        "et cet ordinateur se fait sur la page d'accueil du Studio.",
+            }, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            log.warning("Temoin de la dictee non ecrit (%s) : %s", DICTEE_FAIT, exc)
+    log.info("%s", etat)
+
+
 async def poser_reglages_webui() -> None:
     faits: List[str] = []
     echecs: List[str] = []
@@ -1078,6 +1216,8 @@ async def poser_reglages_webui() -> None:
         # Avant le temoin, lui aussi : il a son propre temoin (voir masquer_arena).
         await masquer_arena(client, entetes)
         await couper_interpreteur(client, entetes)
+        # A chaque demarrage : une cle Groq a pu arriver ou partir entre-temps.
+        await aligner_dictee(client, entetes)
 
         # Les reglages de confort, eux, ne se posent qu'une fois : ce que
         # l'utilisateur y change ensuite lui appartient.
@@ -1187,6 +1327,8 @@ async def poser_reglages_webui() -> None:
 @app.on_event("startup")
 async def demarrage() -> None:
     asyncio.create_task(poser_reglages_webui())
+    # Dans un fil a part : le telechargement ne bloque pas le routeur.
+    asyncio.create_task(asyncio.to_thread(prechauffer_whisper))
 
 
 @app.get("/health")
@@ -1979,13 +2121,63 @@ ul.quotas{margin:6px 0 8px;padding-left:20px} ul.quotas li{margin:5px 0}
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation. Deux choix en haut du chat : <b>Free AI Auto</b> pour le courant, <b>Free AI Max</b> pour les questions difficiles (modèle plus fort, avec son propre quota).</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
-<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter, 🎙️ dans la barre de saisie pour dicter. Tout se passe sur votre ordinateur, sans clé.</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter, sur votre ordinateur et sans clé. 🎙️ dans la barre de saisie pour dicter : choisissez plus bas où votre voix est transcrite.</p></a>
 <a class="card" href="http://localhost:8020/video" target="_blank"><h2>🎬 Vidéo <span class="exp">expérimental</span></h2><p>Décrivez une scène, ou donnez l’image de départ, celle d’arrivée, et une image de référence pour garder le même personnage. Le calcul tourne sur une machine Modal louée à la minute (Modal exige une carte bancaire). La page affiche la dépense estimée par le Studio, pas votre facture Modal.</p></a>
 <a class="card" href="/notebooklm"><h2>📚 Étudier <span class="exp">expérimental</span></h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💻 Code <span class="exp">expérimental</span></h2><p>Demander de l'aide pour coder ; les résultats Sandbox peuvent devenir des ressources de travail de l'agent.</p></a>
 <a class="card" href="http://localhost:8020/" target="_blank"><h2>🧪 Sandbox <span class="exp">expérimental</span></h2><p>Local isolé, Kaggle automatisable et Colab direct. Les sorties sont conservées comme artefacts réutilisables.</p></a>
 </div>
 <p class="muted">Chat, Image et Recherche Web sont les fonctions stabilisées. Les cartes marquées « expérimental » peuvent changer ou casser d’une version à l’autre.</p>
+<div class="hero" style="margin-top:18px">
+<h2>🎙️ Dictée</h2>
+<p>Où votre voix est-elle transcrite quand vous dictez dans le chat ?</p>
+<label style="display:block;margin:8px 0;cursor:pointer"><input type="radio" name="dictee" value="groq">
+<b>Groq si possible</b> : plus précis. Votre voix part chez Groq (palier gratuit, avec une clé Groq).
+Sans clé, ou si Groq refuse, votre ordinateur prend le relais, sans message.</label>
+<label style="display:block;margin:8px 0;cursor:pointer"><input type="radio" name="dictee" value="local">
+<b>Sur cet ordinateur</b> : confidentiel, votre voix ne quitte jamais le PC. Un peu moins précis ; aucune carte graphique n’est nécessaire.</label>
+<div class="etat" id="dictee">Lecture du choix…</div>
+</div>
+<script>
+// --- Dictée : Groq si possible, ou sur cet ordinateur (15/09/2026) ---
+const dicteeCase = document.getElementById("dictee");
+function dicteeAfficher(d){
+  document.querySelectorAll("input[name=dictee]").forEach(b => { b.checked = (b.value === d.mode); });
+  if(d.mode === "local"){
+    dicteeCase.className = "etat pret";
+    dicteeCase.textContent = "Votre voix reste sur cet ordinateur (Whisper " + d.modele_local + ").";
+  } else if(d.groq_branche){
+    dicteeCase.className = "etat pret";
+    dicteeCase.textContent = "Dictée par Groq (" + d.modele_groq + ") ; s’il refuse, par cet ordinateur (Whisper "
+      + d.modele_local + ").";
+  } else {
+    dicteeCase.className = "etat";
+    dicteeCase.innerHTML = 'Pas de clé Groq : la dictée se fait sur cet ordinateur (Whisper '
+      + d.modele_local + '). <a href="/cles">Brancher Groq →</a>';
+  }
+}
+function dicteeRafraichir(){
+  return fetch("/dictee/etat").then(r => r.json()).then(dicteeAfficher).catch(() => {
+    dicteeCase.className = "etat pasret";
+    dicteeCase.textContent = "Choix non lisible : le routeur local ne répond pas.";
+  });
+}
+document.querySelectorAll("input[name=dictee]").forEach(b => b.addEventListener("change", () => {
+  dicteeCase.className = "etat";
+  dicteeCase.textContent = "Enregistrement du choix…";
+  fetch("/dictee/choix", {method:"POST", headers:{"Content-Type":"application/json"},
+                          body: JSON.stringify({mode: b.value})})
+    .then(r => { if(!r.ok){ throw new Error("HTTP " + r.status); } return r.json(); })
+    .then(dicteeAfficher)
+    .catch(e => {
+      dicteeCase.className = "etat pasret";
+      dicteeCase.textContent = "Choix non enregistré (" + e.message + ").";
+    });
+}));
+dicteeRafraichir();
+setInterval(dicteeRafraichir, 30000);
+</script>
+
 <div class="hero" style="margin-top:18px">
 <h2>🔄 Mise à jour</h2>
 <div class="etat" id="maj">Vérification de la version…</div>
@@ -2416,6 +2608,111 @@ async def images_generations(request: Request, authorization: Optional[str] = He
         )
 
     return JSONResponse({"created": int(time.time()), "data": images})
+
+
+# --- Dicter --------------------------------------------------------------------
+# Avec une cle Groq branchee, Open WebUI envoie chaque dictee ICI (reglage pose
+# par aligner_dictee). Meme principe que l'image : la cle reste sur la page
+# << Vos cles >>, relue a chaque appel. Sans cle Groq, cette route ne sert pas :
+# la dictee tourne dans Open WebUI, sur le Whisper de l'ordinateur.
+
+
+def erreur_dictee(statut: int, message: str) -> JSONResponse:
+    """Le format d'erreur de l'API OpenAI : Open WebUI en affiche le message."""
+    return JSONResponse(status_code=statut, content={"error": {"message": message}})
+
+
+async def dicter_groq(audio: bytes, nom: Optional[str], type_mime: Optional[str],
+                      langue: Optional[str]) -> "tuple[Optional[str], Optional[str]]":
+    """Rend (texte, None) si Groq a transcrit, sinon (None, motif du refus)."""
+    champs = {"model": GROQ_DICTEE_MODELE, "response_format": "json"}
+    if langue:
+        champs["language"] = langue
+    url = PROVIDERS["groq"]["base_url"].rstrip("/") + "/audio/transcriptions"
+    entetes = {"Authorization": f"Bearer {provider_key('groq')}",
+               "User-Agent": "Free-AI-Studio/1.0"}
+    envoi = {"file": (nom or "dictee.mp3", audio, type_mime or "application/octet-stream")}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            r = await client.post(url, headers=entetes, data=champs, files=envoi)
+    except httpx.HTTPError as exc:
+        return None, "Groq injoignable : %s" % exc
+    if r.status_code >= 400:
+        return None, "Groq HTTP %s : %s" % (r.status_code, " ".join(r.text[:300].split()))
+    try:
+        return str(r.json().get("text") or "").strip(), None
+    except (ValueError, AttributeError):
+        return None, "reponse de Groq illisible"
+
+
+@app.post("/v1/audio/transcriptions")
+async def audio_transcriptions(request: Request, authorization: Optional[str] = Header(default=None)):
+    if not auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        formulaire = await request.form()
+    except Exception as exc:  # un corps qui n'est pas un formulaire
+        log.warning("Dictee illisible : %s", exc)
+        return erreur_dictee(400, "La dictee n'a pas ete recue sous une forme lisible.")
+    fichier = formulaire.get("file")
+    if fichier is None or isinstance(fichier, str):
+        return erreur_dictee(400, "Aucun enregistrement n'a ete envoye.")
+    audio = await fichier.read()
+    if not audio:
+        return erreur_dictee(400, "L'enregistrement est vide.")
+    # Open WebUI envoie WHISPER_LANGUAGE ; s'il la retire pour un second essai,
+    # la langue du Studio la remplace : sans elle, Whisper devine.
+    langue = str(formulaire.get("language") or "").strip().lower() or DICTEE_LANGUE
+
+    # Le journal dit qui a transcrit et pourquoi, jamais ce qui a ete dit.
+    if not dictee_groq_possible():
+        motif = "choix : sur cet ordinateur" if dictee_mode() == "local" else "pas de cle Groq"
+    elif len(audio) > DICTEE_MAX_OCTETS:
+        motif = "plus de 25 Mo, la limite gratuite de Groq"
+    else:
+        texte, motif = await dicter_groq(audio, fichier.filename, fichier.content_type, langue)
+        if texte is not None:
+            log.info("Dictee : Groq (%s)", GROQ_DICTEE_MODELE)
+            return JSONResponse({"text": texte})
+        log.warning("Dictee : repli sur le Whisper local (%s)", motif)
+
+    try:
+        texte = await asyncio.to_thread(transcrire_local, audio, langue)
+    except Exception as exc:  # modele absent, audio illisible, memoire
+        log.warning("Dictee locale en echec (%s) : %s", motif, exc)
+        return erreur_dictee(500, "Le Whisper de cet ordinateur n'a pas pu transcrire. Au "
+                                  "premier usage, il se telecharge : verifiez la connexion, "
+                                  "puis reessayez.")
+    log.info("Dictee : Whisper local %s (%s)", WHISPER_LOCAL, motif)
+    return JSONResponse({"text": texte})
+
+
+@app.get("/dictee/etat")
+async def dictee_etat():
+    return {"mode": dictee_mode(), "groq_branche": provider_allowed("groq"),
+            "modele_local": WHISPER_LOCAL, "modele_groq": GROQ_DICTEE_MODELE}
+
+
+@app.post("/dictee/choix")
+async def dictee_choix(request: Request):
+    # JSON exige : un autre site ne peut pas en envoyer sans une verification
+    # prealable du navigateur, que le routeur n'accepte pas. Sans cette garde,
+    # n'importe quelle page ouverte pourrait remettre Groq a la place de
+    # << sur cet ordinateur >>, et la voix partirait sans que personne le sache.
+    if not request.headers.get("content-type", "").startswith("application/json"):
+        raise HTTPException(status_code=415, detail="JSON attendu")
+    try:
+        mode = str((await request.json()).get("mode", "")).strip().lower()
+    except (ValueError, AttributeError):
+        mode = ""
+    if mode not in DICTEE_MODES:
+        raise HTTPException(status_code=400, detail="Choix inconnu : groq ou local")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    DICTEE_CHOIX.write_text(json.dumps({"mode": mode,
+                                        "choisi_le": time.strftime("%Y-%m-%d %H:%M:%S")},
+                                       ensure_ascii=False), encoding="utf-8")
+    log.info("Dictee : choix %s", mode)
+    return await dictee_etat()
 
 
 def clean_payload(payload: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:

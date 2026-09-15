@@ -318,7 +318,8 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Chat, lecture d’image | votre clé Google (Gemini) | gratuit |
 | Fabrication d’image | la même clé, route `/v1/images/generations` du routeur | gratuit |
 | Recherche Web | DuckDuckGo | gratuit, sans compte |
-| Lire à haute voix, dictée | voix du navigateur, Whisper local du conteneur | gratuit, sans clé |
+| Lire à haute voix | voix du navigateur | gratuit, sans clé |
+| Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC) | gratuit |
 | **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
 
 **Pourquoi la vidéo est à part.** Aucun service de fabrication de vidéo n’est gratuit et
@@ -372,10 +373,11 @@ Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 | Fabrication d’image | Google, `gemini-3.1-flash-lite-image` | API propriétaire, palier gratuit | poids non publiés |
 | Recherche Web | DuckDuckGo | service tiers, sans compte | conditions de DuckDuckGo |
 | Lire à haute voix | voix du navigateur | exécuté localement, par le navigateur | celle du navigateur |
-| Dictée | Whisper, dans le conteneur | modèle ouvert exécuté localement | MIT ([licence](https://github.com/openai/whisper/blob/main/LICENSE)) |
+| Dictée « sur cet ordinateur », et repli quand Groq refuse | Whisper `small`, dans le routeur du Studio, sur le processeur | modèle ouvert exécuté localement | MIT ([fiche](https://huggingface.co/Systran/faster-whisper-small), [licence](https://github.com/openai/whisper/blob/main/LICENSE)) |
+| Dictée « Groq si possible », avec une clé Groq | Groq, `whisper-large-v3` | modèle ouvert exécuté à distance, par un service propriétaire ; votre voix part chez Groq | Apache 2.0 ([fiche](https://huggingface.co/openai/whisper-large-v3)) |
 | Vidéo | Wan 2.1 VACE 1,3 B ou 14 B, sur Modal (ou Kaggle) | modèle ouvert exécuté à distance, sur une machine louée | Apache 2.0, aucune restriction de territoire ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B)) |
 
-Seules la dictée et la voix ne dépendent d’aucun tiers. La vidéo et le 2e secours du chat
+Seules la voix, et la dictée « sur cet ordinateur », ne dépendent d’aucun tiers. La vidéo et le 2e secours du chat
 reposent sur des modèles ouverts que vous pourriez faire tourner vous-même, avec la carte
 graphique qu’il faut. Tout le reste dépend d’un fournisseur qui peut changer son offre.
 
