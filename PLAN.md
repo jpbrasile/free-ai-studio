@@ -114,7 +114,13 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
        - FLAC 16 bits, 48 kHz stéréo, 60,0 s, 4,9 Mo ; crête −0,5 dBFS, RMS −16,5 dBFS, aucune des 12 tranches de 5 s muette, aucun écrêtage, aucune valeur non finie ;
        - le lien du lecteur de la page sert le fichier (`audio/flac`), et le lien de téléchargement l'envoie en pièce jointe ;
        - la partition a atteint son plafond T4 de 1 200 jetons et le son la minute demandée : la chanson s'arrête là, sans fin composée.
-     - **Non vérifié** : l'écoute (le niveau prouve qu'il y a du son, pas que la chanson est juste) ; Modal (mes deux lancements ont été refusés par le filtre de permissions) ; Colab ; les durées de 2 et 3 minutes.
+     - Vérifié en réel sur Modal le 15/09, premier lancement (image à construire, 7 Go de modèle à télécharger), chanson lancée par l'utilisateur depuis la page, durée « 1 minute » :
+       - 1 × NVIDIA L4, chemin officiel, bfloat16 ; 283,5 s de bout en bout, dont 135,5 s de script : chargement 66 s, partition 29 s (529 jetons), jetons de son 22 s (1 074), flot 6 s, décodage 8 s ;
+       - FLAC 16 bits, 48 kHz stéréo, 42,96 s, 3,3 Mo ; crête −1,6 dBFS, RMS −19,3 dBFS, aucune des 9 tranches de 5 s muette (−26 à −17 dBFS, −32 sur la dernière), aucun écrêtage ;
+       - 43 s et non 60 : la partition s'est terminée d'elle-même après une intro et un couplet (rien de coupé, `coupee` faux aux deux étapes) ;
+       - compté par le Studio : 0,0818 $ (283,5 s au prix plein carte + processeur + mémoire, attente comprise) ; reste 4,92 $ sur 5 ;
+       - le lien du lecteur sert le fichier (`audio/flac`), le lien de téléchargement l'envoie en pièce jointe.
+     - **Non vérifié** : l'écoute (le niveau prouve qu'il y a du son, pas que la chanson est juste) ; la facture réelle de Modal (seul le compteur du Studio est relu) ; le temps d'un deuxième lancement Modal, image et modèle en cache ; Colab ; les durées de 2 et 3 minutes.
    - **15/09, « kaggle est ok , tu arrète le notebook ».** Chaque notebook Kaggle part désormais avec un délai que Kaggle applique lui-même : `kaggle kernels push -t`, « Limit the run time of a kernel to the given number of seconds » selon l'aide de la CLI 2.2.4. C'est 3 600 s par défaut, 5 400 s pour une chanson. Le Studio attend 15 minutes de plus, puis abandonne.
      - L'annulation directe n'est pas retenue. La CLI 2.2.4 n'a pas de commande pour ça. L'API (`cancel_kernel_session`, kagglesdk 0.1.37) demande un numéro de session qu'aucune réponse de l'envoi ni de l'état ne donne.
      - **Non vérifié** : l'arrêt réel par Kaggle à l'échéance ; si l'attente en file compte dans le délai.

@@ -321,7 +321,7 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Lire à haute voix | voix du navigateur | gratuit, sans clé |
 | Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC) | gratuit |
 | **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
-| **Chanson** (15/09/2026 ; essayée en réel sur Kaggle seulement) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026), 0,52 $ au pire par chanson, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
+| **Chanson** (15/09/2026 ; essayée en réel sur Kaggle et Modal, pas Colab) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026), 0,52 $ au pire par chanson, 0,08 $ compté pour l’essai du 15/09, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
 
 **Pourquoi la vidéo est à part.** Aucun service de fabrication de vidéo n’est gratuit et
 hébergé en septembre 2026. Le Studio fait donc tourner un modèle ouvert sur une carte
@@ -367,8 +367,10 @@ Trois endroits où le lancer :
 - **Modal**, carte L4 : le pipeline officiel, tel quel. Le compteur ajoute cette fois le
   processeur et la mémoire, que Modal facture en plus de la carte. Une chanson n’est lancée
   que si son pire cas (30 minutes) tient sous le plafond `CHANSON_BUDGET_USD_PAR_MOIS`
-  (5 $ par défaut, à part des 20 $ de la vidéo) : au pire 9 chansons par mois. Le coût
-  réel d’une chanson n’est pas mesuré.
+  (5 $ par défaut, à part des 20 $ de la vidéo) : au pire 9 chansons par mois. Essayé le
+  15/09/2026, premier lancement : 43 secondes de chanson en moins de 5 minutes, image et
+  téléchargement du modèle compris, comptées 0,08 $ par le Studio. La facture de Modal
+  elle-même n’a pas été relevée.
 - **Kaggle** : une ou deux cartes T4, gratuites. Le pipeline officiel refuse cette carte, faute
   de bfloat16. Le script applique alors les correctifs du carnet Kaggle public « YuE2-3B -
   Frontier Full-Song Music Generation » (AIQUEST Academy, Apache 2.0) : float16, attention
