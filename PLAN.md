@@ -108,7 +108,13 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
      - Compteur vidéo corrigé au passage : il ne comptait que la carte. Avec 1 cœur et 16 Gio, une seconde de L4 coûte 0,000271 $ et non 0,000222 $, soit 18 % oubliés. Il compte désormais le processeur et la mémoire, comme celui de la chanson ; les chiffres du README (clips, pire cas) sont refaits avec la règle de `budget_verifier`.
      - Quantification : non retenue. La seule que propose le dépôt officiel est fp8, pour les cartes de capacité ≥ 8.9, donc ni le T4 ni l'A10.
      - 81 tests, ruff, imports, JavaScript des pages et compose sans erreur. Ce qui est testé : les demandes bornées, le script et le carnet qui compilent, le refus du plafond, l'encaissement en cas d'échec, la garde Kaggle, `machine_shape` envoyé à Kaggle pour la seule chanson, et le jeton du fichier.
-     - **Non vérifié** : aucune chanson lancée en réel (Modal, Kaggle ou Colab), donc ni le son, ni la durée, ni le coût réel ; les correctifs Turing sur une vraie T4 ; le nombre de cartes que donne `NvidiaTeslaT4` sur Kaggle ; la page dans un navigateur ; les services ne sont pas reconstruits.
+     - Vérifié en réel sur Kaggle le 15/09, services reconstruits, chanson lancée par l'utilisateur depuis la page `/chanson` :
+       - `NvidiaTeslaT4` donne **2 × Tesla T4** ; chemin « correctifs Turing », float16 ;
+       - une minute de chanson en 347 à 377 s de bout en bout (état relu toutes les 30 s), dont 327 s sur la machine : chargement 62 s, partition 77 s, jetons de son 73 s, flot 87 s, décodage 3,5 s ;
+       - FLAC 16 bits, 48 kHz stéréo, 60,0 s, 4,9 Mo ; crête −0,5 dBFS, RMS −16,5 dBFS, aucune des 12 tranches de 5 s muette, aucun écrêtage, aucune valeur non finie ;
+       - le lien du lecteur de la page sert le fichier (`audio/flac`), et le lien de téléchargement l'envoie en pièce jointe ;
+       - la partition a atteint son plafond T4 de 1 200 jetons et le son la minute demandée : la chanson s'arrête là, sans fin composée.
+     - **Non vérifié** : l'écoute (le niveau prouve qu'il y a du son, pas que la chanson est juste) ; Modal (mes deux lancements ont été refusés par le filtre de permissions) ; Colab ; les durées de 2 et 3 minutes ; l'arrêt du notebook Kaggle quand le Studio abandonne l'attente (le Studio ne l'annule pas).
 6. **P2 : le registre**, après l'étape 5.
    1. `registry/apps.yaml`, une entrée par application : `id`, `fonction`, `modele`, `licence`, `territoire`, `vram_min_go`, `modes` (`api`, `local`, `modal`, `kaggle`, `colab`), `cout_estime`, `source`, `verifie_le`.
    2. `registry/apps.schema.json` (JSON Schema), validé en CI. Outil candidat : [`check-jsonschema`](https://pypi.org/project/check-jsonschema/) 0.38.0 (09/08/2026), qui existe en ligne de commande et en hook pre-commit. Sa page ne dit pas s'il lit le YAML : à vérifier avant de l'adopter. À défaut, vingt lignes de Python avec `jsonschema` et `pyyaml`.
