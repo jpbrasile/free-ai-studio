@@ -345,10 +345,12 @@ clips vidéo, pas le reste du Sandbox ni d’autres usages de Modal, et le créd
 la page affiche est celui que vous déclarez (`MODAL_CREDIT_MENSUEL_USD`) : la page le dit.
 
 **Ce que coûte un clip, mesuré le 09/09/2026.** Réglage le moins cher (3 s, « Rapide »,
-carte L4) : 832×480, 49 images, **7 minutes d’attente**, **0,096 $**. À ce prix, les 30 $ de
-crédit paieraient 312 clips. Le plafond du Studio en laisse passer **203** : 20 $ divisés par
-0,096 $ en feraient 208, mais un clip n’est lancé que si son pire cas (40 minutes de L4
-sans résultat, 0,53 $) tient encore sous le plafond. Calcul refait le 11/09/2026 avec la
+carte L4) : 832×480, 49 images, **7 minutes d’attente**. Le premier chiffre publié,
+0,096 $, est le prix de la carte seule pendant 432 s. Modal facture aussi le processeur et la
+mémoire ; le compteur les ajoute depuis le 15/09/2026, et la même durée compte alors
+**0,117 $**. À ce prix, les 30 $ de crédit paieraient 256 clips. Le plafond du Studio en
+laisse passer **166** : un clip n’est lancé que si son pire cas (40 minutes de L4 sans
+résultat, 0,65 $) tient encore sous le plafond. Calcul refait le 15/09/2026 avec la
 règle du code (`budget_verifier` dans `sandbox-manager/video.py`). Le premier lancement d’un modèle prend 1 à
 2 minutes de plus, le temps de le télécharger ; ensuite il reste sur un disque persistant.
 Le petit modèle fait des plans presque fixes : la scène est juste, le mouvement est discret.

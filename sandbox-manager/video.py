@@ -43,6 +43,11 @@ PRIX_GPU_USD_S: Dict[str, float] = {
     "A100-80GB": 0.000694,
     "H100": 0.001097,
 }
+# Modal facture aussi, a la seconde, le processeur et la memoire demandes
+# (modal.com/pricing, releve du 15/09/2026). Jusqu'au 15/09, le compteur ne
+# comptait que la carte : un clip L4 avec 16 Gio etait sous-compte de 18 %.
+PRIX_CPU_USD_S = 0.0000131       # par coeur physique et par seconde
+PRIX_MEMOIRE_USD_S = 0.00000222  # par Gio et par seconde
 
 # Modal affiche 30 $ de credit par mois pour son offre Starter (modal.com/pricing,
 # releve du 11/09/2026). Il exige une carte bancaire, et au-dela du credit il
@@ -51,9 +56,9 @@ PRIX_GPU_USD_S: Dict[str, float] = {
 # l'utilisateur, affichee comme telle.
 #
 # Plafond par defaut : 20 $. Il reste sous les 30 $ et laisse 10 $ au reste du
-# bac a sable, que ce compteur ne voit pas. Au prix du 09/09/2026, il paie
-# environ 200 clips << Rapide >> de 3 s par mois (0,096 $ chacun, le dernier
-# n'etant lance que si son pire cas, 0,53 $, tient encore).
+# bac a sable, que ce compteur ne voit pas. Il paie 166 clips << Rapide >> de
+# 3 s par mois (0,117 $ chacun, processeur et memoire compris, le dernier
+# n'etant lance que si son pire cas, 0,65 $, tient encore).
 BUDGET_MENSUEL_USD = float(os.getenv("VIDEO_BUDGET_USD_PAR_MOIS", "20"))
 CREDIT_OFFERT_USD = float(os.getenv("MODAL_CREDIT_MENSUEL_USD", "30"))
 
@@ -156,12 +161,16 @@ def budget_ecrire(secondes: float, usd: float, clips: int) -> None:
 
 
 def prix_seconde(gpu: str) -> float:
-    """Prix de la carte, ou le plus cher connu si le nom est inconnu.
+    """Carte + processeur + memoire demandee, par seconde.
 
-    Se tromper vers le haut est le bon sens du refus : on prefere refuser un clip
-    de trop que d'en laisser passer un qui creuse la facture.
+    Une carte inconnue est comptee au prix de la plus chere connue. Se tromper
+    vers le haut est le bon sens du refus : on prefere refuser un clip de trop
+    que d'en laisser passer un qui creuse la facture.
     """
-    return PRIX_GPU_USD_S.get(gpu.upper(), max(PRIX_GPU_USD_S.values()))
+    carte = PRIX_GPU_USD_S.get(gpu.upper(), max(PRIX_GPU_USD_S.values()))
+    coeurs = float(os.getenv("MODAL_CPU", "1.0"))
+    memoire_gio = int(os.getenv("VIDEO_MEMORY_MB", "16384")) / 1024
+    return carte + PRIX_CPU_USD_S * coeurs + PRIX_MEMOIRE_USD_S * memoire_gio
 
 
 def budget_verifier(gpu: str, duree_max_s: int) -> dict:

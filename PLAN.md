@@ -105,6 +105,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
      - Un seul script distant. Il choisit le chemin d'après la carte : officiel quand elle calcule en bfloat16 (capacité ≥ 8.0), sinon les correctifs Turing du carnet d'AIQUEST Academy (Apache 2.0), repris et attribués.
      - Le script lit le modèle et la roue `yue2_infer` 0.1.5 à des révisions épinglées. Chaque fonction qu'il remplace a été relue dans la roue 0.1.5.
      - Compteur Modal à part, 5 $/mois : carte, processeur et mémoire, prix relevés le 15/09 sur modal.com/pricing. Refus avant de lancer si le pire cas (1 800 s de L4, 0,52 $) dépasse.
+     - Compteur vidéo corrigé au passage : il ne comptait que la carte. Avec 1 cœur et 16 Gio, une seconde de L4 coûte 0,000271 $ et non 0,000222 $, soit 18 % oubliés. Il compte désormais le processeur et la mémoire, comme celui de la chanson ; les chiffres du README (clips, pire cas) sont refaits avec la règle de `budget_verifier`.
      - Quantification : non retenue. La seule que propose le dépôt officiel est fp8, pour les cartes de capacité ≥ 8.9, donc ni le T4 ni l'A10.
      - 81 tests, ruff, imports, JavaScript des pages et compose sans erreur. Ce qui est testé : les demandes bornées, le script et le carnet qui compilent, le refus du plafond, l'encaissement en cas d'échec, la garde Kaggle, `machine_shape` envoyé à Kaggle pour la seule chanson, et le jeton du fichier.
      - **Non vérifié** : aucune chanson lancée en réel (Modal, Kaggle ou Colab), donc ni le son, ni la durée, ni le coût réel ; les correctifs Turing sur une vraie T4 ; le nombre de cartes que donne `NvidiaTeslaT4` sur Kaggle ; la page dans un navigateur ; les services ne sont pas reconstruits.
@@ -151,7 +152,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
   - crédit « déclaré (`MODAL_CREDIT_MENSUEL_USD`), non vérifié chez Modal » ;
   - lien vers le réglage de la limite de dépense ;
   - option « Modal — machine louée (carte bancaire exigée) ».
-- **Clips** : au coût mesuré le 09/09 (0,096 $), 30 $ paieraient 312 clips. Le plafond de 20 $ en laisse passer **203**, parce que chaque clip doit encore tenir son pire cas (0,53 $). Ces nombres sont calculés en appliquant la règle de `budget_verifier`, pas estimés.
+- **Clips** : 0,096 $ au 09/09, mais c'était la carte seule ; avec le processeur et la mémoire (correction du 15/09), le même clip compte 0,117 $. 30 $ paieraient 256 clips. Le plafond de 20 $ en laisse passer **166**, parce que chaque clip doit encore tenir son pire cas (0,65 $). Ces nombres sont calculés en appliquant la règle de `budget_verifier`, pas estimés.
 
 ### P0-3 — Ce qui est ouvert, ce qui ne l'est pas
 

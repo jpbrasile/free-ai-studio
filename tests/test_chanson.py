@@ -79,6 +79,13 @@ def test_prix_compte_la_memoire(ch, monkeypatch):
     assert ch.prix_seconde("X9") > ch.prix_seconde("L40S") - 1e-12
 
 
+def test_compteur_video_compte_aussi_cpu_memoire(sandbox, monkeypatch):
+    """Jusqu'au 15/09, la video ne comptait que la carte : 18 % de moins en L4."""
+    monkeypatch.setenv("MODAL_CPU", "1.0")
+    monkeypatch.setenv("VIDEO_MEMORY_MB", "16384")
+    assert sandbox.video.prix_seconde("L4") == pytest.approx(0.000222 + 0.0000131 + 0.00000222 * 16)
+
+
 def test_plafond_refuse_avant_de_lancer(sandbox, ch, monkeypatch):
     lances = []
     monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
