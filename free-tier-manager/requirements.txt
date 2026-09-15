@@ -7,3 +7,7 @@ python-multipart==0.0.32
 # que celle d'Open WebUI 0.11.3, mesuree le 15/09/2026. Environ 440 Mo installes
 # avec ses dependances (mesure du 15/09 dans python:3.12-slim).
 faster-whisper==1.2.1
+# La voix francaise du bouton << lire a haute voix >>, sur le processeur
+# (15/09/2026). GPL-3.0-or-later ; embarque espeak-ng. Roue de 34 Mo ; son
+# onnxruntime est deja la, apporte par faster-whisper.
+piper-tts==1.8.0

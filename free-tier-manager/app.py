@@ -7,6 +7,7 @@ import threading
 import time
 import json
 import logging
+import wave
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1182,6 +1183,156 @@ async def aligner_dictee(client: httpx.AsyncClient, entetes: Dict[str, str]) -> 
     log.info("%s", etat)
 
 
+# --- Lire a haute voix : une voix francaise, sur cet ordinateur ------------------
+# Jusqu'au 15/09/2026, le 🔊 du chat prenait la voix du navigateur. Open WebUI ne
+# lui donne pas la langue du texte (releve dans son code, version 0.11.3) : le
+# navigateur prenait sa voix par defaut, anglaise, et lisait le francais avec
+# l'accent anglais. Le routeur lit desormais lui-meme, avec Piper et une voix
+# francaise, sur le processeur : sans cle, et le texte ne quitte pas l'ordinateur.
+# Essai du 15/09/2026 dans un conteneur python:3.12-slim jetable, 4 coeurs :
+# chargement 1,7 s ; 7,2 s de parole calculees en 0,6 s ; 313 Mo de memoire.
+VOIX_NOM = "fr_FR-siwis-medium"
+VOIX_MODELE = "free-ai-voix"
+# Depot rhasspy/piper-voices a une revision fixe, et empreinte SHA-256 du modele
+# relevee sur Hugging Face le 15/09/2026 : le fichier ne change pas sous nos pieds.
+VOIX_REVISION = "1162a9173d0ce503555aed757976b7a9912eae4c"
+VOIX_URL = ("https://huggingface.co/rhasspy/piper-voices/resolve/%s/fr/fr_FR/siwis/medium/"
+            % VOIX_REVISION)
+VOIX_SHA256 = "641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99"
+VOIX_DOSSIER = Path(os.getenv("VOIX_DIR", "/modeles/piper"))
+VOIX_MAX_CARACTERES = 10_000
+VOIX_FAIT = CONFIG_DIR / "open-webui-voix.json"
+_voix: Dict[str, Any] = {"modele": None}
+_voix_verrou = threading.Lock()
+
+
+def _telecharger(url: str, cible: Path, sha256: Optional[str] = None) -> None:
+    """A cote puis renomme : un telechargement coupe ne laisse jamais un fichier
+    a moitie ecrit a la place de la voix."""
+    partiel = cible.with_name(cible.name + ".partiel")
+    empreinte = hashlib.sha256()
+    try:
+        with httpx.Client(follow_redirects=True,
+                          timeout=httpx.Timeout(60.0, connect=15.0)) as client:
+            with client.stream("GET", url) as r:
+                r.raise_for_status()
+                with open(partiel, "wb") as f:
+                    for bout in r.iter_bytes(1 << 20):
+                        empreinte.update(bout)
+                        f.write(bout)
+        if sha256 and empreinte.hexdigest() != sha256:
+            raise RuntimeError("voix telechargee abimee : empreinte differente de celle relevee")
+        partiel.replace(cible)
+    finally:
+        partiel.unlink(missing_ok=True)
+
+
+def telecharger_voix() -> Path:
+    """La voix, telechargee une fois (63 Mo) ; rend le chemin du modele."""
+    VOIX_DOSSIER.mkdir(parents=True, exist_ok=True)
+    modele = VOIX_DOSSIER / f"{VOIX_NOM}.onnx"
+    reglages = VOIX_DOSSIER / f"{VOIX_NOM}.onnx.json"
+    if not reglages.exists():
+        _telecharger(VOIX_URL + reglages.name, reglages)
+    if not modele.exists():
+        _telecharger(VOIX_URL + modele.name, modele, VOIX_SHA256)
+    return modele
+
+
+def prechauffer_voix() -> None:
+    """Telecharge la voix au demarrage : le premier 🔊 n'attend pas les 63 Mo."""
+    try:
+        telecharger_voix()
+    except Exception as exc:  # reseau coupe, disque plein
+        log.warning("Voix francaise non telechargee d'avance (%s) : %s", VOIX_NOM, exc)
+        return
+    log.info("Voix francaise prete (%s)", VOIX_NOM)
+
+
+def texte_a_lire(texte: str) -> str:
+    """Retire ce qu'on ne veut pas entendre : blocs de code, liens, signes de
+    mise en forme du chat (sinon la voix lit << asterisque >>)."""
+    texte = re.sub(r"```.*?```", " ", texte, flags=re.S)
+    texte = re.sub(r"https?://\S+", " ", texte)
+    texte = re.sub(r"[*_#`>|~]+", " ", texte)
+    return " ".join(texte.split())
+
+
+def lire_local(texte: str, vitesse: float) -> bytes:
+    """Rend un WAV 16 bits mono. Un calcul a la fois : deux lectures simultanees
+    se partageraient les memes coeurs."""
+    from piper import PiperVoice, SynthesisConfig  # lourd : importe seulement ici
+
+    with _voix_verrou:
+        if _voix["modele"] is None:
+            _voix["modele"] = PiperVoice.load(str(telecharger_voix()))
+        tampon = io.BytesIO()
+        with wave.open(tampon, "wb") as w:
+            _voix["modele"].synthesize_wav(texte, w,
+                                           syn_config=SynthesisConfig(length_scale=1.0 / vitesse))
+        return tampon.getvalue()
+
+
+async def aligner_voix(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
+    """Confie le 🔊 d'Open WebUI au routeur, une fois ; ensuite, a chaque
+    demarrage, verifie seulement la cle interne de cette liaison.
+
+    Memes regles que la dictee : seulement si Open WebUI lit encore avec la voix
+    du navigateur ; un autre moteur est un choix de l'administration, qui reste,
+    et la voix du navigateur remise apres coup reste aussi (temoin)."""
+    if not INTERNAL_KEY:
+        return
+    interne = os.getenv("FREE_TIER_MANAGER_INTERNAL_URL",
+                        "http://free-tier-manager:8000/v1").rstrip("/")
+    try:
+        r = await client.get(f"{WEBUI_URL}/api/v1/audio/config", headers=entetes)
+        r.raise_for_status()
+        cfg = r.json()
+        stt = dict(cfg["stt"])
+        tts = dict(cfg["tts"])
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        log.warning("Lecture a haute voix non reglee : %s", exc)
+        return
+
+    moteur = tts.get("ENGINE") or ""
+    notre_route = (moteur == "openai"
+                   and str(tts.get("OPENAI_API_BASE_URL") or "").rstrip("/") == interne)
+    if notre_route:
+        if tts.get("OPENAI_API_KEY") == INTERNAL_KEY:
+            return
+        voulu = dict(tts, OPENAI_API_KEY=INTERNAL_KEY)
+        etat = ("Liaison lecture a haute voix -> routeur remise d'aplomb (la cle "
+                "gardee par Open WebUI ne correspondait plus)")
+    elif moteur == "" and not VOIX_FAIT.exists():
+        voulu = dict(tts, ENGINE="openai", OPENAI_API_BASE_URL=interne,
+                     OPENAI_API_KEY=INTERNAL_KEY, MODEL=VOIX_MODELE, VOICE=VOIX_NOM)
+        etat = "Lecture a haute voix confiee au routeur (Piper, %s)" % VOIX_NOM
+    else:
+        return
+
+    try:
+        r = await client.post(f"{WEBUI_URL}/api/v1/audio/config/update", headers=entetes,
+                              json={"tts": voulu, "stt": stt})
+        r.raise_for_status()
+    except httpx.HTTPError as exc:
+        log.warning("Lecture a haute voix non reglee : %s", exc)
+        return
+    if not VOIX_FAIT.exists():
+        try:
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            VOIX_FAIT.write_text(json.dumps({
+                "pose_le": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "etat": etat,
+                "note": "Tant que ce fichier existe, Free AI Studio ne reprend plus la "
+                        "lecture a haute voix d'Open WebUI : la voix du navigateur, ou "
+                        "un autre moteur, choisis dans Open WebUI (Panneau "
+                        "d'administration, Audio) restent.",
+            }, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as exc:
+            log.warning("Temoin de la lecture a haute voix non ecrit (%s) : %s", VOIX_FAIT, exc)
+    log.info("%s", etat)
+
+
 async def poser_reglages_webui() -> None:
     faits: List[str] = []
     echecs: List[str] = []
@@ -1218,6 +1369,8 @@ async def poser_reglages_webui() -> None:
         await couper_interpreteur(client, entetes)
         # A chaque demarrage : une cle Groq a pu arriver ou partir entre-temps.
         await aligner_dictee(client, entetes)
+        # Apres la dictee : elle relit les reglages audio que la dictee vient d'ecrire.
+        await aligner_voix(client, entetes)
 
         # Les reglages de confort, eux, ne se posent qu'une fois : ce que
         # l'utilisateur y change ensuite lui appartient.
@@ -1329,6 +1482,7 @@ async def demarrage() -> None:
     asyncio.create_task(poser_reglages_webui())
     # Dans un fil a part : le telechargement ne bloque pas le routeur.
     asyncio.create_task(asyncio.to_thread(prechauffer_whisper))
+    asyncio.create_task(asyncio.to_thread(prechauffer_voix))
 
 
 @app.get("/health")
@@ -2121,7 +2275,7 @@ ul.quotas{margin:6px 0 8px;padding-left:20px} ul.quotas li{margin:5px 0}
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation. Deux choix en haut du chat : <b>Free AI Auto</b> pour le courant, <b>Free AI Max</b> pour les questions difficiles (modèle plus fort, avec son propre quota).</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
-<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter, sur votre ordinateur et sans clé. 🎙️ dans la barre de saisie pour dicter : choisissez plus bas où votre voix est transcrite.</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter, avec une voix française qui tourne sur votre ordinateur, sans clé : le texte ne quitte pas le PC. 🎙️ dans la barre de saisie pour dicter : choisissez plus bas où votre voix est transcrite.</p><p class="muted">Voix : Piper (GPL-3.0), voix « siwis » entraînée sur la base SIWIS de l’université d’Édimbourg (CC BY 4.0).</p></a>
 <a class="card" href="http://localhost:8020/video" target="_blank"><h2>🎬 Vidéo <span class="exp">expérimental</span></h2><p>Décrivez une scène, ou donnez l’image de départ, celle d’arrivée, et une image de référence pour garder le même personnage. Le calcul tourne sur une machine Modal louée à la minute (Modal exige une carte bancaire). La page affiche la dépense estimée par le Studio, pas votre facture Modal.</p></a>
 <a class="card" href="http://localhost:8020/chanson" target="_blank"><h2>🎵 Chanson <span class="exp">expérimental</span></h2><p>Écrivez des paroles et un style : le modèle ouvert YuE2 compose la mélodie et la chante, jusqu’à 3 minutes. Sur Modal (loué, carte bancaire), Kaggle ou Colab (gratuits, plus lents). Licence non commerciale ; chante en anglais et en chinois.</p></a>
 <a class="card" href="/notebooklm"><h2>📚 Étudier <span class="exp">expérimental</span></h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
@@ -2714,6 +2868,38 @@ async def dictee_choix(request: Request):
                                        ensure_ascii=False), encoding="utf-8")
     log.info("Dictee : choix %s", mode)
     return await dictee_etat()
+
+
+# --- Lire a haute voix ----------------------------------------------------------
+# Open WebUI envoie ICI chaque phrase a lire (reglage pose par aligner_voix), au
+# format de l'API OpenAI. Le son part en WAV ; Open WebUI le convertit en MP3.
+
+@app.post("/v1/audio/speech")
+async def audio_speech(request: Request, authorization: Optional[str] = Header(default=None)):
+    if not auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        corps = await request.json()
+        texte = texte_a_lire(str(corps.get("input") or ""))
+        vitesse = float(corps.get("speed") or 1.0)
+    except (ValueError, AttributeError, TypeError):
+        return erreur_dictee(400, "La demande de lecture n'est pas lisible.")
+    if not texte:
+        return erreur_dictee(400, "Rien a lire.")
+    if len(texte) > VOIX_MAX_CARACTERES:
+        return erreur_dictee(400, "Texte trop long pour une lecture : %d caracteres au plus."
+                             % VOIX_MAX_CARACTERES)
+    vitesse = min(max(vitesse, 0.5), 2.0)
+    try:
+        audio = await asyncio.to_thread(lire_local, texte, vitesse)
+    except Exception as exc:  # voix absente, paquet absent, memoire
+        log.warning("Lecture a haute voix en echec : %s", exc)
+        return erreur_dictee(500, "La voix de cet ordinateur n'a pas pu lire. Au premier "
+                                  "usage, elle se telecharge : verifiez la connexion, puis "
+                                  "reessayez.")
+    # Le journal dit combien, jamais quoi.
+    log.info("Lecture a haute voix : Piper %s, %d caracteres", VOIX_NOM, len(texte))
+    return Response(content=audio, media_type="audio/wav")
 
 
 def clean_payload(payload: Dict[str, Any], upstream_model: str) -> Dict[str, Any]:

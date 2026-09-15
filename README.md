@@ -318,7 +318,7 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Chat, lecture d’image | votre clé Google (Gemini) | gratuit |
 | Fabrication d’image | la même clé, route `/v1/images/generations` du routeur | gratuit |
 | Recherche Web | DuckDuckGo | gratuit, sans compte |
-| Lire à haute voix | voix du navigateur | gratuit, sans clé |
+| Lire à haute voix (15/09/2026) | voix française « siwis » de Piper, dans le routeur du Studio, sur le processeur ; le texte ne quitte pas le PC | gratuit, sans clé |
 | Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC) | gratuit |
 | **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
 | **Chanson** (15/09/2026 ; essayée en réel sur Kaggle et Modal, pas Colab) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026), 0,52 $ au pire par chanson, 0,08 $ compté pour l’essai du 15/09, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
@@ -400,7 +400,7 @@ Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 | Lecture d’image | Google, modèle du chat | API propriétaire, palier gratuit | poids non publiés |
 | Fabrication d’image | Google, `gemini-3.1-flash-lite-image` | API propriétaire, palier gratuit | poids non publiés |
 | Recherche Web | DuckDuckGo | service tiers, sans compte | conditions de DuckDuckGo |
-| Lire à haute voix | voix du navigateur | exécuté localement, par le navigateur | celle du navigateur |
+| Lire à haute voix (15/09/2026) | Piper 1.8.0 et la voix `fr_FR-siwis-medium`, dans le routeur du Studio, sur le processeur | modèle ouvert exécuté localement | Piper : GPL-3.0-or-later ([code](https://github.com/OHF-Voice/piper1-gpl)). Voix : entraînée sur « The SIWIS French Speech Synthesis Database » (J. Yamagishi, P.-E. Honnet, P. Garner, A. Lazaridis, université d’Édimbourg, 2017, [doi:10.7488/ds/1705](https://doi.org/10.7488/ds/1705)), **CC BY 4.0** : usage commercial permis, en citant la source ([fiche de la voix](https://huggingface.co/rhasspy/piper-voices/blob/main/fr/fr_FR/siwis/medium/MODEL_CARD)) |
 | Dictée « sur cet ordinateur », et repli quand Groq refuse | Whisper `small`, dans le routeur du Studio, sur le processeur | modèle ouvert exécuté localement | MIT ([fiche](https://huggingface.co/Systran/faster-whisper-small), [licence](https://github.com/openai/whisper/blob/main/LICENSE)) |
 | Dictée « Groq si possible », avec une clé Groq | Groq, `whisper-large-v3` | modèle ouvert exécuté à distance, par un service propriétaire ; votre voix part chez Groq | Apache 2.0 ([fiche](https://huggingface.co/openai/whisper-large-v3)) |
 | Vidéo | Wan 2.1 VACE 1,3 B ou 14 B, sur Modal (ou Kaggle) | modèle ouvert exécuté à distance, sur une machine louée | Apache 2.0, aucune restriction de territoire ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B)) |
