@@ -1217,7 +1217,7 @@ async def aligner_dictee(client: httpx.AsyncClient, entetes: Dict[str, str]) -> 
     log.info("%s", etat)
 
 
-# --- Lire a haute voix : une voix francaise, sur cet ordinateur ------------------
+# --- Lire a haute voix : une voix par langue, sur cet ordinateur -----------------
 # Jusqu'au 15/09/2026, le 🔊 du chat prenait la voix du navigateur. Open WebUI ne
 # lui donne pas la langue du texte (releve dans son code, version 0.11.3) : le
 # navigateur prenait sa voix par defaut, anglaise, et lisait le francais avec
@@ -1225,19 +1225,48 @@ async def aligner_dictee(client: httpx.AsyncClient, entetes: Dict[str, str]) -> 
 # francaise, sur le processeur : sans cle, et le texte ne quitte pas l'ordinateur.
 # Essai du 15/09/2026 dans un conteneur python:3.12-slim jetable, 4 coeurs :
 # chargement 1,7 s ; 7,2 s de parole calculees en 0,6 s ; 313 Mo de memoire.
-VOIX_NOM = "fr_FR-siwis-medium"
 VOIX_MODELE = "free-ai-voix"
-# Depot rhasspy/piper-voices a une revision fixe, et empreinte SHA-256 du modele
-# relevee sur Hugging Face le 15/09/2026 : le fichier ne change pas sous nos pieds.
+# Depot rhasspy/piper-voices a une revision fixe, et empreintes SHA-256 relevees
+# sur Hugging Face : les fichiers ne changent pas sous nos pieds.
 VOIX_REVISION = "1162a9173d0ce503555aed757976b7a9912eae4c"
-VOIX_URL = ("https://huggingface.co/rhasspy/piper-voices/resolve/%s/fr/fr_FR/siwis/medium/"
-            % VOIX_REVISION)
-VOIX_SHA256 = "641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99"
+DEPOT_VOIX = "https://huggingface.co/rhasspy/piper-voices/resolve/%s/" % VOIX_REVISION
+# Une voix par langue. Les deux sonnent a 22 050 Hz, en mono 16 bits : deux
+# morceaux se collent donc bout a bout dans un seul son (voir coller_wav).
+VOIX = {
+    # Base SIWIS (Universite d'Edimbourg), CC BY 4.0. Relevee le 15/09/2026.
+    "fr": {"nom": "fr_FR-siwis-medium", "dossier": "fr/fr_FR/siwis/medium/",
+           "sha256": "641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99",
+           "octets": 63_201_294},
+    # Enregistrements LibriVox, domaine public, entrainee de zero. Relevee le
+    # 16/09/2026. Les autres voix anglaises de Piper sont soit dans le domaine
+    # de la licence Blizzard (lessac), soit non commerciales (hfc_female).
+    "en": {"nom": "en_US-norman-medium", "dossier": "en/en_US/norman/medium/",
+           "sha256": "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71",
+           "octets": 63_531_379},
+}
+VOIX_DEFAUT = "fr"
+VOIX_NOM = VOIX[VOIX_DEFAUT]["nom"]  # la voix annoncee a Open WebUI
 VOIX_DOSSIER = Path(os.getenv("VOIX_DIR", "/modeles/piper"))
 VOIX_MAX_CARACTERES = 10_000
 VOIX_FAIT = CONFIG_DIR / "open-webui-voix.json"
-_voix: Dict[str, Any] = {"modele": None}
+_voix: Dict[str, Any] = {}
 _voix_verrou = threading.Lock()
+
+# Mots les plus courants de chaque langue : ils suffisent a trancher une phrase
+# entiere, sans rien installer de plus. Une phrase sans aucun de ces mots garde
+# la langue de la phrase precedente.
+MOTS_FR = {"le", "la", "les", "un", "une", "des", "du", "de", "et", "est", "sont", "que",
+           "qui", "pour", "avec", "dans", "vous", "nous", "je", "tu", "il", "elle", "on",
+           "ce", "cette", "ces", "mais", "pas", "plus", "tout", "comme", "sur", "au", "aux",
+           "par", "son", "sa", "ses", "leur", "peut", "faire", "fait", "bien", "aussi",
+           "encore", "alors", "donc", "votre", "notre", "merci", "oui", "non", "ici"}
+MOTS_EN = {"the", "an", "of", "and", "is", "are", "was", "were", "that", "which", "for",
+           "with", "in", "you", "we", "he", "she", "it", "this", "these", "those", "but",
+           "not", "more", "all", "like", "to", "by", "his", "her", "their", "can", "do",
+           "does", "did", "well", "also", "still", "so", "your", "our", "thanks", "what",
+           "how", "there", "here", "about", "from", "have", "has", "will", "would"}
+ACCENTS = re.compile(r"[àâäçéèêëîïôöùûüœ]")
+PHRASE = re.compile(r"[^.!?…]+[.!?…]*\s*")
 
 
 def _telecharger(url: str, cible: Path, sha256: Optional[str] = None) -> None:
@@ -1261,26 +1290,29 @@ def _telecharger(url: str, cible: Path, sha256: Optional[str] = None) -> None:
         partiel.unlink(missing_ok=True)
 
 
-def telecharger_voix() -> Path:
-    """La voix, telechargee une fois (63 Mo) ; rend le chemin du modele."""
+def telecharger_voix(langue: str = VOIX_DEFAUT) -> Path:
+    """La voix d'une langue, telechargee une fois (63 Mo) ; rend son chemin."""
+    voix = VOIX[langue]
+    url = DEPOT_VOIX + voix["dossier"]
     VOIX_DOSSIER.mkdir(parents=True, exist_ok=True)
-    modele = VOIX_DOSSIER / f"{VOIX_NOM}.onnx"
-    reglages = VOIX_DOSSIER / f"{VOIX_NOM}.onnx.json"
+    modele = VOIX_DOSSIER / ("%s.onnx" % voix["nom"])
+    reglages = VOIX_DOSSIER / ("%s.onnx.json" % voix["nom"])
     if not reglages.exists():
-        _telecharger(VOIX_URL + reglages.name, reglages)
+        _telecharger(url + reglages.name, reglages)
     if not modele.exists():
-        _telecharger(VOIX_URL + modele.name, modele, VOIX_SHA256)
+        _telecharger(url + modele.name, modele, voix["sha256"])
     return modele
 
 
 def prechauffer_voix() -> None:
-    """Telecharge la voix au demarrage : le premier 🔊 n'attend pas les 63 Mo."""
-    try:
-        telecharger_voix()
-    except Exception as exc:  # reseau coupe, disque plein
-        log.warning("Voix francaise non telechargee d'avance (%s) : %s", VOIX_NOM, exc)
-        return
-    log.info("Voix francaise prete (%s)", VOIX_NOM)
+    """Telecharge les voix au demarrage : le premier 🔊 n'attend pas les 63 Mo."""
+    for langue, voix in VOIX.items():
+        try:
+            telecharger_voix(langue)
+        except Exception as exc:  # reseau coupe, disque plein
+            log.warning("Voix non telechargee d'avance (%s) : %s", voix["nom"], exc)
+            continue
+        log.info("Voix prete (%s)", voix["nom"])
 
 
 def texte_a_lire(texte: str) -> str:
@@ -1292,19 +1324,71 @@ def texte_a_lire(texte: str) -> str:
     return " ".join(texte.split())
 
 
+def langue_du_texte(texte: str, defaut: str = VOIX_DEFAUT) -> str:
+    """Francais ou anglais ? Par les mots les plus courants, et les accents."""
+    mots = re.findall(r"[a-zà-öø-ÿ']+", texte.lower())
+    francais = sum(1 for m in mots if m in MOTS_FR) + bool(ACCENTS.search(texte.lower()))
+    anglais = sum(1 for m in mots if m in MOTS_EN)
+    if francais > anglais:
+        return "fr"
+    if anglais > francais:
+        return "en"
+    return defaut
+
+
+def decouper_par_langue(texte: str, defaut: str = VOIX_DEFAUT) -> List[Any]:
+    """Coupe en phrases, donne une langue a chacune, puis recolle les phrases
+    voisines de meme langue : une seule voix chargee par bloc."""
+    morceaux: List[Any] = []
+    courant = defaut
+    for phrase in PHRASE.findall(texte):
+        if not phrase.strip():
+            continue
+        courant = langue_du_texte(phrase, courant)
+        if morceaux and morceaux[-1][0] == courant:
+            morceaux[-1] = (courant, morceaux[-1][1] + phrase)
+        else:
+            morceaux.append((courant, phrase))
+    return morceaux or [(defaut, texte)]
+
+
+def coller_wav(sons: List[bytes]) -> bytes:
+    """Un seul WAV a partir de plusieurs. Les voix ont le meme format (22 050 Hz,
+    mono, 16 bits) : les echantillons se suivent sans conversion."""
+    if len(sons) == 1:
+        return sons[0]
+    tampon = io.BytesIO()
+    sortie = None
+    try:
+        for son in sons:
+            with wave.open(io.BytesIO(son), "rb") as lu:
+                if sortie is None:
+                    sortie = wave.open(tampon, "wb")
+                    sortie.setparams(lu.getparams())
+                sortie.writeframes(lu.readframes(lu.getnframes()))
+    finally:
+        if sortie is not None:
+            sortie.close()
+    return tampon.getvalue()
+
+
 def lire_local(texte: str, vitesse: float) -> bytes:
-    """Rend un WAV 16 bits mono. Un calcul a la fois : deux lectures simultanees
-    se partageraient les memes coeurs."""
+    """Rend un WAV 16 bits mono, chaque phrase lue par la voix de sa langue.
+    Un calcul a la fois : deux lectures simultanees se partageraient les memes
+    coeurs."""
     from piper import PiperVoice, SynthesisConfig  # lourd : importe seulement ici
 
+    reglages = SynthesisConfig(length_scale=1.0 / vitesse)
+    sons = []
     with _voix_verrou:
-        if _voix["modele"] is None:
-            _voix["modele"] = PiperVoice.load(str(telecharger_voix()))
-        tampon = io.BytesIO()
-        with wave.open(tampon, "wb") as w:
-            _voix["modele"].synthesize_wav(texte, w,
-                                           syn_config=SynthesisConfig(length_scale=1.0 / vitesse))
-        return tampon.getvalue()
+        for langue, morceau in decouper_par_langue(texte):
+            if _voix.get(langue) is None:
+                _voix[langue] = PiperVoice.load(str(telecharger_voix(langue)))
+            tampon = io.BytesIO()
+            with wave.open(tampon, "wb") as w:
+                _voix[langue].synthesize_wav(morceau, w, syn_config=reglages)
+            sons.append(tampon.getvalue())
+    return coller_wav(sons)
 
 
 async def aligner_voix(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
@@ -2353,7 +2437,7 @@ ul.quotas{margin:6px 0 8px;padding-left:20px} ul.quotas li{margin:5px 0}
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation. Deux choix en haut du chat : <b>Free AI Auto</b> pour le courant, <b>Free AI Max</b> pour les questions difficiles (modèle plus fort, avec son propre quota).</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
 <a class="card" href="http://localhost:3000/" target="_blank"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
-<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter, avec une voix française qui tourne sur votre ordinateur, sans clé : le texte ne quitte pas le PC. 🎙️ dans la barre de saisie pour dicter : choisissez plus bas où votre voix est transcrite.</p><p class="muted">Voix : Piper (GPL-3.0), voix « siwis » entraînée sur la base SIWIS de l’université d’Édimbourg (CC BY 4.0).</p></a>
+<a class="card" href="http://localhost:3000/" target="_blank"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter : une voix française et une voix anglaise tournent sur votre ordinateur, sans clé, et la langue est reconnue phrase par phrase. Le texte ne quitte pas le PC. 🎙️ dans la barre de saisie pour dicter, en français comme en anglais : choisissez plus bas où votre voix est transcrite.</p><p class="muted">Voix : Piper (GPL-3.0) ; « siwis » entraînée sur la base SIWIS de l’université d’Édimbourg (CC BY 4.0), « norman » sur des enregistrements LibriVox (domaine public).</p></a>
 <a class="card" href="http://localhost:8020/video" target="_blank"><h2>🎬 Vidéo <span class="exp">expérimental</span></h2><p>Décrivez une scène, ou donnez l’image de départ, celle d’arrivée, et une image de référence pour garder le même personnage. Le calcul tourne sur une machine Modal louée à la minute (Modal exige une carte bancaire). La page affiche la dépense estimée par le Studio, pas votre facture Modal.</p></a>
 <a class="card" href="http://localhost:8020/chanson" target="_blank"><h2>🎵 Chanson <span class="exp">expérimental</span></h2><p>Écrivez des paroles et un style : le modèle ouvert YuE2 compose la mélodie et la chante, jusqu’à 3 minutes. Sur Modal (loué, carte bancaire), Kaggle ou Colab (gratuits, plus lents). Licence non commerciale ; chante en anglais et en chinois.</p></a>
 <a class="card" href="/notebooklm"><h2>📚 Étudier <span class="exp">expérimental</span></h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
@@ -2975,8 +3059,9 @@ async def audio_speech(request: Request, authorization: Optional[str] = Header(d
         return erreur_dictee(500, "La voix de cet ordinateur n'a pas pu lire. Au premier "
                                   "usage, elle se telecharge : verifiez la connexion, puis "
                                   "reessayez.")
-    # Le journal dit combien, jamais quoi.
-    log.info("Lecture a haute voix : Piper %s, %d caracteres", VOIX_NOM, len(texte))
+    # Le journal dit combien et dans quelle langue, jamais quoi.
+    langues = ",".join(dict.fromkeys(langue for langue, _ in decouper_par_langue(texte)))
+    log.info("Lecture a haute voix : Piper (%s), %d caracteres", langues, len(texte))
     return Response(content=audio, media_type="audio/wav")
 
 

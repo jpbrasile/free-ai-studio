@@ -1,5 +1,6 @@
-"""Lire a haute voix (15/09/2026) : le routeur lit avec Piper et une voix
-francaise ; Open WebUI lui confie son 🔊 une fois. Ni Piper ni reseau ici."""
+"""Lire a haute voix (15/09/2026, deux langues le 16/09) : le routeur lit avec
+Piper, une voix par langue, choisie phrase par phrase ; Open WebUI lui confie
+son 🔊 une fois. Ni Piper ni reseau ici."""
 from __future__ import annotations
 
 import asyncio
@@ -229,10 +230,56 @@ def test_voix_abimee_refusee(routeur, monkeypatch, tmp_path):
 def test_voix_telechargee_une_fois_a_la_revision_fixe(routeur, monkeypatch, tmp_path):
     contenu = b"voix factice"
     monkeypatch.setattr(routeur, "VOIX_DOSSIER", tmp_path)
-    monkeypatch.setattr(routeur, "VOIX_SHA256", hashlib.sha256(contenu).hexdigest())
+    monkeypatch.setitem(routeur.VOIX["fr"], "sha256", hashlib.sha256(contenu).hexdigest())
     demandes = brancher_hugging_face(routeur, monkeypatch, contenu)
     assert routeur.telecharger_voix() == tmp_path / "fr_FR-siwis-medium.onnx"
     assert len(demandes) == 2
     assert all(routeur.VOIX_REVISION in d for d in demandes)
     routeur.telecharger_voix()
     assert len(demandes) == 2
+
+
+def test_voix_anglaise_telechargee_a_part(routeur, monkeypatch, tmp_path):
+    contenu = b"voix factice"
+    monkeypatch.setattr(routeur, "VOIX_DOSSIER", tmp_path)
+    monkeypatch.setitem(routeur.VOIX["en"], "sha256", hashlib.sha256(contenu).hexdigest())
+    demandes = brancher_hugging_face(routeur, monkeypatch, contenu)
+    assert routeur.telecharger_voix("en") == tmp_path / "en_US-norman-medium.onnx"
+    assert all("en/en_US/norman/medium" in d for d in demandes)
+    assert all(routeur.VOIX_REVISION in d for d in demandes)
+
+
+# --- Une voix par langue (16/09/2026) ---
+# Avant : la voix francaise lisait l'anglais, avec l'accent francais.
+
+def test_langue_reconnue(routeur):
+    assert routeur.langue_du_texte("Bonjour, je lis une phrase en français.") == "fr"
+    assert routeur.langue_du_texte("This is a sentence that you can read.") == "en"
+    # Sans aucun indice, la langue de la phrase precedente continue.
+    assert routeur.langue_du_texte("Python 3.12", "en") == "en"
+    assert routeur.langue_du_texte("Python 3.12", "fr") == "fr"
+
+
+def test_phrases_melangees_donnent_deux_voix(routeur):
+    texte = "Voici la reponse. This is the English part. Merci de votre patience."
+    morceaux = routeur.decouper_par_langue(texte)
+    assert [langue for langue, _ in morceaux] == ["fr", "en", "fr"]
+    # Rien n'est perdu en chemin : tout le texte est lu, une fois.
+    assert "".join(m for _, m in morceaux).strip() == texte
+
+
+def test_phrases_voisines_de_meme_langue_collees(routeur):
+    morceaux = routeur.decouper_par_langue("The cat is here. It can read. Bonjour a vous.")
+    assert [langue for langue, _ in morceaux] == ["en", "fr"]
+
+
+def test_sons_colles_bout_a_bout(routeur):
+    colle = routeur.coller_wav([petit_wav(), petit_wav()])
+    with wave.open(io.BytesIO(colle), "rb") as lu:
+        assert lu.getnframes() == 440
+        assert (lu.getframerate(), lu.getnchannels(), lu.getsampwidth()) == (22050, 1, 2)
+
+
+def test_un_seul_son_rendu_tel_quel(routeur):
+    son = petit_wav()
+    assert routeur.coller_wav([son]) is son
