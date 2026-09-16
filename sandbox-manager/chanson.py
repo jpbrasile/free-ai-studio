@@ -713,10 +713,16 @@ function reelAfficher(d){
   }
   const m = d.montants || {};
   const bouts = [];
-  if(m.depense !== undefined) bouts.push('facturé <b>' + montantTexte(m.depense) + '</b>');
-  if(m.usage !== undefined) bouts.push('usage ' + montantTexte(m.usage));
-  if(m.credits !== undefined) bouts.push('crédits appliqués ' + montantTexte(m.credits));
-  if(m.credits_restants !== undefined) bouts.push('crédits restants ' + montantTexte(m.credits_restants));
+  if(m.facture !== undefined) bouts.push('facturé <b>' + montantTexte(m.facture) + '</b>');
+  if(m.mesure !== undefined) bouts.push('mesuré ' + montantTexte(m.mesure));
+  const detail = [];
+  if(m.calcul !== undefined) detail.push('calcul ' + montantTexte(m.calcul));
+  if(m.stockage !== undefined) detail.push('stockage ' + montantTexte(m.stockage));
+  if(detail.length) bouts.push('dont ' + detail.join(' et '));
+  const deduits = [];
+  if(m.credits !== undefined) deduits.push('crédits ' + montantTexte(m.credits));
+  if(m.stockage_offert !== undefined) deduits.push('stockage offert ' + montantTexte(m.stockage_offert));
+  if(deduits.length) bouts.push('déduits : ' + deduits.join(', '));
   let texte;
   if(bouts.length){
     texte = 'Chez Modal, pour tout l’espace de travail ce mois-ci : ' + bouts.join(', ')

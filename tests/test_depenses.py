@@ -7,13 +7,31 @@ le fait que la route qui rend ces montants est authentifiee.
 """
 from __future__ import annotations
 
-import json
 import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
 
 CLE = {"Authorization": "Bearer cle-sandbox-de-test"}
+
+# Reponse RELEVEE le 16/09/2026 sur l'espace de travail, copiee telle quelle.
+# Une maquette inventee aurait valide les noms de champs que le module devinait
+# -- et ils etaient faux. Ce qui suit est ce que Modal envoie vraiment.
+REPONSE_DU_16_09 = """{
+  "metered_cost": "1.08346824",
+  "billed_cost": "0E-8",
+  "adjustments": {
+    "reservation_adjustment": "-0E-8",
+    "plan_cost": "0E-8",
+    "credits": "-0.70000000",
+    "free_storage": "-0.38346824"
+  },
+  "metered_cost_breakdown": {
+    "llm_tokens": "0E-8",
+    "deployed_apps": "0.70356317",
+    "volumes": "0.38346824"
+  }
+}"""
 
 
 @pytest.fixture
@@ -47,18 +65,19 @@ def test_montants_reconnus_puis_caches(dep, monkeypatch):
 
     def faux(cmd, **kw):
         appels.append(cmd)
-        return _fin(out=json.dumps({
-            "cycle": "2026-09",
-            "totals": {"total_spend": 0.0, "total_usage": 0.73, "credits_applied": -0.73},
-        }))
+        return _fin(out=REPONSE_DU_16_09)
 
     monkeypatch.setattr(dep.subprocess, "run", faux)
 
     etat = dep.etat()
     assert etat["disponible"] is True
-    assert etat["montants"]["depense"] == 0.0
-    assert etat["montants"]["usage"] == 0.73
-    assert etat["montants"]["credits"] == -0.73
+    montants = etat["montants"]
+    assert montants["facture"] == 0.0            # rien n'est paye : les credits couvrent
+    assert montants["mesure"] == 1.08346824
+    assert montants["calcul"] == 0.70356317      # sous metered_cost_breakdown
+    assert montants["stockage"] == 0.38346824    # compte, puis offert ci-dessous
+    assert montants["credits"] == -0.7           # sous adjustments
+    assert montants["stockage_offert"] == -0.38346824
     assert "--json" in appels[0]
 
     # Un chiffre de facturation ne bouge pas a la seconde, et chaque appel cree

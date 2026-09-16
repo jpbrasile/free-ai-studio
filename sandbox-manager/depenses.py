@@ -44,15 +44,26 @@ MAX_BRUT = 4000
 _VERROU = threading.Lock()
 _CACHE: dict = {}
 
-# Noms de champs a reconnaitre, normalises (minuscules, sans separateur). La
-# forme exacte du JSON de `modal billing summary` n'est pas documentee dans
-# l'aide de la CLI : plutot que de parier sur un nom, on en accepte plusieurs
-# et on rend la sortie brute quand aucun ne repond.
+# Noms de champs, normalises (minuscules, sans separateur). Ils ne sont pas
+# documentes dans l'aide de la CLI : ceux-ci ont ete RELEVES le 16/09/2026 sur
+# une vraie reponse de l'espace de travail, pas devines. La premiere version de
+# ce fichier les devinait, et se trompait sur cinq des six.
+#
+# Reponse du 16/09/2026, telle quelle :
+#   metered_cost 1.08346824, billed_cost 0E-8
+#   adjustments           : credits -0.70000000, free_storage -0.38346824
+#   metered_cost_breakdown: deployed_apps 0.70356317, volumes 0.38346824
+#
+# Modal previent que son modele de facturation evolue. Si un nom change, la
+# liste des montants se vide et la sortie brute reste affichee : on ne devine
+# pas, on montre.
 _CHAMPS = {
-    "depense": ("totalspend", "spend", "amountdue", "due", "total"),
-    "usage": ("totalusage", "usage", "compute", "computeusage"),
-    "credits": ("creditsapplied", "credits", "creditapplied"),
-    "credits_restants": ("creditsremaining", "remainingcredits", "balance", "creditbalance"),
+    "facture": ("billedcost",),
+    "mesure": ("meteredcost",),
+    "calcul": ("deployedapps",),
+    "stockage": ("volumes",),
+    "credits": ("credits",),
+    "stockage_offert": ("freestorage",),
 }
 
 
