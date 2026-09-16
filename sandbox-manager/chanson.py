@@ -548,6 +548,10 @@ def carnet_colab(demande: dict) -> dict:
         "1. Menu **Exécution › Modifier le type d’exécution** : choisissez **GPU T4**, puis Enregistrer.\n"
         "2. Menu **Exécution › Tout exécuter**. Comptez l’installation, puis environ 7 Go de "
         "téléchargement, puis le calcul ; durée non mesurée par le Studio.\n"
+        "   > ⚠ **Essayé le 16/09 sur Colab gratuit : la session est morte faute de mémoire "
+        "vive** (~12,7 Go, et une seule carte, ce qui oblige à garer le modèle en mémoire "
+        "entre les étapes). Sur Kaggle, deux cartes T4 et ~30 Go, la même chanson passe. Ce "
+        "carnet n’a de chance que sur une session à mémoire élevée.\n"
         "3. La chanson se joue sous la dernière cellule et se télécharge (`chanson.flac`).\n\n"
         "Modèle [YuE2-3B](%s) de m-a-p : poids sous licence **%s**, %s. Il chante en %s. "
         "Sur la carte T4, le pipeline officiel refuse de démarrer : le script applique des "
@@ -677,10 +681,13 @@ function majOu(){
       + " $ par chanson (carte, processeur et 24 Gio de mémoire, jusqu’au délai maximal) ; "
       + "le prix réel dépend de la durée du calcul.",
     kaggle: "Carte T4 gratuite, sur votre compte Kaggle. Le pipeline officiel refuse cette carte : "
-      + "le Studio applique des correctifs non officiels, jamais essayés par lui. Tout se "
+      + "le Studio applique des correctifs non officiels, essayés avec succès le 15/09. Tout se "
       + "retélécharge à chaque chanson (environ 7 Go).",
     colab: "Le Studio fabrique un carnet avec vos paroles ; vous l’ouvrez dans Colab, sur votre "
-      + "compte Google, carte T4 gratuite. Mêmes correctifs non officiels que Kaggle."
+      + "compte Google, carte T4 gratuite. Mêmes correctifs non officiels que Kaggle. "
+      + "⚠ Essayé le 16/09 sur l’offre gratuite : la session meurt faute de mémoire vive "
+      + "(~12,7 Go et une seule carte, quand Kaggle donne deux cartes et ~30 Go). Une session "
+      + "à mémoire élevée n’a pas été essayée. Pour du gratuit qui marche, prenez Kaggle."
   }[ou];
   document.getElementById("ou-texte").textContent = texte || "";
   document.getElementById("lancer").textContent = ou === "colab" ? "Préparer le carnet Colab" : "Chanter";
