@@ -169,6 +169,57 @@ def test_sans_bascule_aucun_avis(routeur, monkeypatch):
     assert client.get("/quotas/etat").json()["secours_en_cours"] is False
 
 
+# --- L'etat par CHOIX du chat (16/09/2026) ---
+# Les pages raisonnaient par service : avec la seule cle Gemini, Auto a bout et
+# Max libre, /studio et /diagnostic disaient encore << tout est en place >>.
+
+def choix_de(etat, modele):
+    return next(c for c in etat["choix"] if c["modele"] == modele)
+
+
+def test_les_deux_choix_repondent(routeur):
+    etat = TestClient(routeur.app).get("/quotas/etat").json()
+    auto = choix_de(etat, "free-ai-auto")
+    assert (auto["pret"], auto["sert"], auto["secours"]) == (True, "gemini", False)
+    assert choix_de(etat, "free-ai-max")["sert"] == "gemini_max"
+
+
+def test_auto_a_bout_max_libre(routeur, monkeypatch):
+    # Une seule cle Gemini : Auto n'a plus personne, Max repond encore.
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    monkeypatch.setattr(routeur, "open_upstream", FauxAmont(REFUS_JOUR))
+    client = TestClient(routeur.app)
+    demander(client)
+
+    etat = client.get("/quotas/etat").json()
+    auto = choix_de(etat, "free-ai-auto")
+    assert auto["pret"] is False
+    assert abs(auto["reprise_a"] - routeur.minuit_pacifique(time.time())) < 5
+    max_du_chat = choix_de(etat, "free-ai-max")
+    assert (max_du_chat["pret"], max_du_chat["sert"]) == (True, "gemini_max")
+
+
+def test_secours_dit_par_choix(routeur, monkeypatch):
+    # Gemini en pause, OpenRouter prend le relais : Auto repond, en secours.
+    monkeypatch.setattr(routeur, "open_upstream", FauxAmont(REFUS_JOUR))
+    client = TestClient(routeur.app)
+    demander(client)
+
+    auto = choix_de(client.get("/quotas/etat").json(), "free-ai-auto")
+    assert (auto["pret"], auto["sert"], auto["secours"]) == (True, "openrouter", True)
+
+
+def test_les_deux_choix_a_bout(routeur, monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    monkeypatch.setattr(routeur, "open_upstream",
+                        FauxAmont(REFUS_JOUR, refuse=("gemini", "gemini_max")))
+    client = TestClient(routeur.app)
+    demander(client)
+    demander(client, "free-ai-max")
+
+    assert [c["pret"] for c in client.get("/quotas/etat").json()["choix"]] == [False, False]
+
+
 def modeles_proposes(client):
     return [m["id"] for m in client.get("/v1/models", headers=CLE).json()["data"]]
 

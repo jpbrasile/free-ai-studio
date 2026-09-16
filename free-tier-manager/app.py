@@ -759,14 +759,39 @@ def etat_quotas() -> Dict[str, Any]:
         })
     par_nom = {f["nom"]: f for f in fiches}
 
+    def chaine_eligible(modele: str) -> List[Dict[str, Any]]:
+        return [par_nom[n] for n in chaine_de(modele) if n in par_nom and par_nom[n]["eligible"]]
+
     def secours(modele: str) -> bool:
         # Secours : le premier service de CE choix est en pause, un suivant repond.
-        el = [par_nom[n] for n in chaine_de(modele) if n in par_nom and par_nom[n]["eligible"]]
+        el = chaine_eligible(modele)
         return bool(el) and el[0]["en_pause"] and any(not f["en_pause"] for f in el[1:])
+
+    def etat_du_choix(modele: str, titre: str) -> Dict[str, Any]:
+        """Ce que voit quelqu'un qui choisit CE modele en haut du chat.
+
+        Les pages raisonnaient par service : elles annonçaient << tout est en
+        place >> des qu'un service repondait, meme quand le choix affiche dans
+        le chat, lui, ne repondait plus (16/09/2026)."""
+        el = chaine_eligible(modele)
+        libre = next((f for f in el if not f["en_pause"]), None)
+        attentes = [f["reprise_a"] for f in el if f["en_pause"] and f["reprise_a"]]
+        return {
+            "modele": modele,
+            "titre": titre,
+            "pret": libre is not None,
+            "sert": libre["nom"] if libre else None,
+            "titre_du_service": libre["titre"] if libre else None,
+            "secours": secours(modele),
+            "sans_service": not el,
+            "reprise_a": min(attentes) if attentes and libre is None else None,
+        }
 
     return {
         "maintenant": maintenant,
         "fournisseurs": fiches,
+        "choix": [etat_du_choix(AUTO_MODEL, "Free AI Auto"),
+                  etat_du_choix(MAX_MODEL, "Free AI Max")],
         "secours_en_cours": secours(AUTO_MODEL),
         "secours_max_en_cours": secours(MAX_MODEL),
         "dernier_service": dict(dernier_service) or None,
@@ -2121,13 +2146,39 @@ function rendre(d) {
     }
     zone.appendChild(ligne(!f.en_pause, quoi, det));
   });
-  var tousEnPause = actifs.length > 0 && actifs.every(function (f) { return f.en_pause; });
+  // Une ligne par CHOIX du chat (16/09/2026). Avant, la page ne parlait que des
+  // services : avec la seule cle Gemini, Auto a bout et Max libre, elle disait
+  // encore << tout est en place >> alors que le choix affiche ne repondait plus.
+  var choix = ((d.quotas && d.quotas.choix) || []).filter(function (c) { return !c.sans_service; });
+  choix.forEach(function (c) {
+    var quoi = c.pret
+      ? c.titre + " repond (" + (c.titre_du_service || c.sert) + ")"
+      : c.titre + " n'a plus de service libre";
+    var det = c.pret
+      ? (c.secours ? "par un service de secours : le premier de sa liste a atteint sa limite"
+                   : "son service habituel repond")
+      : (c.reprise_a ? "reprise prevue vers "
+                       + new Date(c.reprise_a * 1000).toLocaleTimeString("fr-FR")
+                     : "aucune heure de reprise annoncee");
+    zone.appendChild(ligne(c.pret, quoi, det));
+  });
+  var prets = choix.filter(function (c) { return c.pret; });
+  var bloques = choix.filter(function (c) { return !c.pret; });
+  var tousEnPause = choix.length
+    ? prets.length === 0
+    : actifs.length > 0 && actifs.every(function (f) { return f.en_pause; });
 
   var v = document.getElementById("verdict");
   if (modeles.length && d.fournisseurs_branches.length && tousEnPause) {
     v.className = "verdict mauvais";
     v.textContent = "Tous les services gratuits branches ont atteint leur limite. Le chat reprendra "
                   + "de lui-meme, aux heures indiquees ci-dessous. Rien n'est paye.";
+  } else if (modeles.length && d.fournisseurs_branches.length && bloques.length) {
+    v.className = "verdict mauvais";
+    v.textContent = bloques.map(function (c) { return c.titre; }).join(" et ")
+                  + " n'a plus de service libre. En haut du chat, choisissez "
+                  + prets.map(function (c) { return c.titre; }).join(" ou ")
+                  + " : ce choix-la repond. Rien n'est paye.";
   } else if (modeles.length && d.fournisseurs_branches.length) {
     v.className = "verdict bon";
     v.textContent = "Tout est en place. Le chat doit proposer un modele."
@@ -2583,10 +2634,27 @@ function quotasAfficher(q){
     return "<li>" + t + ".<br><span class='muted'>Limite officielle : "
       + ((f.limite_publiee || {}).texte || "inconnue") + ".</span></li>";
   });
-  z.className = q.secours_en_cours ? "etat pasret" : "etat";
-  z.innerHTML = (q.secours_en_cours
-      ? "<b>Le chat répond en ce moment avec un service de secours</b> : le premier a atteint sa limite. Rien n’est payé pour autant."
-      : "<b>Services gratuits</b>")
+  // Le titre parle du CHOIX fait en haut du chat, pas seulement des services
+  // (16/09/2026) : Auto à bout et Max libre, la page disait « tout va bien ».
+  var choix = (q.choix || []).filter(function (c) { return !c.sans_service; });
+  var prets = choix.filter(function (c) { return c.pret; });
+  var bloques = choix.filter(function (c) { return !c.pret; });
+  var titre;
+  if (choix.length && !prets.length) {
+    titre = "<b>Les deux choix du chat ont atteint leur limite</b> : le chat reprendra de lui-même,"
+          + " aux heures indiquées ci-dessous. Rien n’est payé.";
+  } else if (bloques.length) {
+    titre = "<b>" + bloques.map(function (c) { return c.titre; }).join(" et ")
+          + " n’a plus de service libre</b> : en haut du chat, choisissez "
+          + prets.map(function (c) { return c.titre; }).join(" ou ") + ". Rien n’est payé.";
+  } else if (q.secours_en_cours) {
+    titre = "<b>Le chat répond en ce moment avec un service de secours</b> : le premier a atteint sa limite. Rien n’est payé pour autant.";
+  } else {
+    titre = "<b>Services gratuits</b>";
+  }
+  var ennui = q.secours_en_cours || bloques.length > 0;
+  z.className = ennui ? "etat pasret" : "etat";
+  z.innerHTML = titre
     + "<ul class='quotas'>" + lignes.join("") + "</ul>"
     + "<span class='muted'>Limites relevées le " + q.limites_relevees_le + ". Réponses comptées depuis minuit "
     + "(heure du Pacifique) ou depuis le dernier démarrage du Studio. Une limite ne s’affiche qu’une fois "
