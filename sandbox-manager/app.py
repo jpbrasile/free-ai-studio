@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 import chanson
+import depenses
 import video
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -1291,6 +1292,26 @@ def etat(request: Request):
         "colab": {"handoff": True},
         "backend_automatique": backend_automatique(),
     }
+
+
+@app.get("/depenses/etat")
+def depenses_etat(
+    forcer: bool = False,
+    cycle: str = "this month",
+    authorization: Optional[str] = Header(default=None),
+):
+    """Ce que Modal facture vraiment, demande a Modal.
+
+    Authentifiee, contrairement a /etat : celle-ci ne rend pas des booleens mais
+    des montants d'un compte. Separee de /chanson/etat a dessein : le bandeau du
+    budget doit paraitre tout de suite, sans attendre un aller-retour reseau qui
+    peut prendre des secondes ou echouer. La page appelle donc cette route
+    ensuite, et se contente de l'estimation locale si elle ne repond pas.
+
+    Ne remplace aucun garde-fou : budget_verifier() continue de refuser avant de
+    lancer, hors ligne, sur l'estimation locale."""
+    auth(authorization)
+    return depenses.etat(cycle=cycle, forcer=forcer)
 
 
 @app.get("/providers")

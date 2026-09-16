@@ -619,6 +619,7 @@ audio{width:100%;margin-top:12px}
 la chante, voix et instruments, jusqu’à trois minutes.</p>
 
 <div id="banniere" class="banniere">Vérification en cours…</div>
+<div id="reel" class="avert"></div>
 
 <label class="titre" for="style">Style</label>
 <input id="style" class="large" maxlength="600"
@@ -697,6 +698,50 @@ function budgetTexte(b){
     + 'chez Modal, qui exige une carte bancaire et facture au-delà : '
     + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">réglez votre '
     + 'limite de dépense au plus bas</a>. Kaggle et Colab ne coûtent rien.</span>';
+}
+
+function montantTexte(v){
+  return (typeof v === 'number') ? v.toFixed(2) + ' $' : String(v);
+}
+
+function reelAfficher(d){
+  const zone = document.getElementById('reel');
+  if(!d || !d.disponible){
+    const pourquoi = (d && d.raison) ? d.raison : 'le service n’a pas répondu.';
+    zone.textContent = 'Chiffre réel de Modal : non obtenu — ' + pourquoi;
+    return;
+  }
+  const m = d.montants || {};
+  const bouts = [];
+  if(m.depense !== undefined) bouts.push('facturé <b>' + montantTexte(m.depense) + '</b>');
+  if(m.usage !== undefined) bouts.push('usage ' + montantTexte(m.usage));
+  if(m.credits !== undefined) bouts.push('crédits appliqués ' + montantTexte(m.credits));
+  if(m.credits_restants !== undefined) bouts.push('crédits restants ' + montantTexte(m.credits_restants));
+  let texte;
+  if(bouts.length){
+    texte = 'Chez Modal, pour tout l’espace de travail ce mois-ci : ' + bouts.join(', ')
+      + '. Relevé le ' + d.releve_le + '. Ce compte-là fait foi, et il couvre aussi la vidéo '
+      + 'et les essais du bac à sable, que le compteur ci-dessus ne voit pas.';
+  } else {
+    texte = 'Modal a répondu, mais le Studio n’a reconnu aucun montant. '
+      + (d.raison || '') + ' Relevé le ' + d.releve_le + '.';
+  }
+  if(d.brut){
+    texte += '<details><summary>Voir la réponse de Modal</summary><pre id="brutModal"></pre></details>';
+  }
+  zone.innerHTML = texte;
+  if(d.brut){ document.getElementById('brutModal').textContent = d.brut; }
+}
+
+function reelCharger(){
+  const zone = document.getElementById('reel');
+  zone.textContent = 'Chiffre réel de Modal : demandé…';
+  return fetch('/depenses/etat', {headers:{'Authorization':'Bearer '+CLE}})
+    .then(r => r.json())
+    .then(reelAfficher)
+    .catch(() => {
+      zone.textContent = 'Chiffre réel de Modal : non obtenu — le service Sandbox ne répond pas.';
+    });
 }
 
 function rafraichir(){
@@ -866,5 +911,6 @@ document.getElementById("lancer").addEventListener("click", () => {
 });
 
 rafraichir();
+reelCharger();
 </script>
 </body></html>"""
