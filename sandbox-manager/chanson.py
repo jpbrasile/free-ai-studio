@@ -5,14 +5,18 @@ parametres, qui compose une partition puis la chante, voix et instruments, en
 48 kHz stereo. Ses poids sont sous licence CC BY-NC 4.0 : usage non commercial.
 La page le dit a l'endroit ou l'on choisit, pas dans une note en bas de page.
 
-Trois endroits ou le faire tourner, comme la video :
+Deux endroits ou le faire tourner :
 - Modal, carte L4 louee a la seconde : le pipeline officiel, tel quel. Il a son
   propre compteur et son propre plafond, et refuse AVANT de lancer.
 - Kaggle, T4 gratuit : le pipeline officiel refuse cette carte (pas de bfloat16).
   Le script applique alors les correctifs d'un carnet Kaggle public (voir plus
   bas). Coupe des que le Studio sert d'autres personnes, comme partout ailleurs.
-- Colab, T4 gratuit : le Studio fabrique un carnet, la personne le lance
-  elle-meme sur son compte Google.
+
+Colab a ete retire du choix le 16/09/2026, POUR LA CHANSON SEULEMENT : essaye en
+reel, la session gratuite meurt faute de memoire vive (~12,7 Go, et une seule
+carte, quand Kaggle en donne deux et ~30 Go). Le carnet Colab du bac a sable,
+lui, reste en service : c'est une autre fonction, et elle sert. La route
+/chanson/colab et carnet_colab() restent cote serveur, sans entree dans la page.
 
 Un seul script part sur la machine distante, quel que soit l'endroit : il choisit
 son chemin d'apres la carte qu'il trouve.
@@ -169,7 +173,7 @@ def budget_verifier(gpu: str, duree_max_s: int) -> dict:
             f"Plafond du mois atteint pour les chansons. Déjà dépensé ce mois-ci : "
             f"{etat['usd']:.2f} $ sur {BUDGET_MENSUEL_USD:.2f} $. Une chanson peut "
             f"coûter jusqu'à {pire:.2f} $ sur Modal, donc elle n'est pas lancée. "
-            f"Kaggle et Colab restent possibles, gratuitement. Le compteur repart "
+            f"Kaggle reste possible, gratuitement. Le compteur repart "
             f"tout seul le 1er du mois prochain."
         )
     etat["cout_max_usd"] = round(pire, 3)
@@ -651,7 +655,6 @@ annoncé : essayez, sans garantie.</p>
     <select id="ou">
       <option value="modal" selected>Modal — machine louée (carte bancaire exigée)</option>
       <option value="kaggle">Kaggle — gratuit, plus lent</option>
-      <option value="colab">Colab — gratuit, vous le lancez vous-même</option>
     </select>
   </label>
   <button id="lancer" class="primaire">Chanter</button>
@@ -682,15 +685,10 @@ function majOu(){
       + "le prix réel dépend de la durée du calcul.",
     kaggle: "Carte T4 gratuite, sur votre compte Kaggle. Le pipeline officiel refuse cette carte : "
       + "le Studio applique des correctifs non officiels, essayés avec succès le 15/09. Tout se "
-      + "retélécharge à chaque chanson (environ 7 Go).",
-    colab: "Le Studio fabrique un carnet avec vos paroles ; vous l’ouvrez dans Colab, sur votre "
-      + "compte Google, carte T4 gratuite. Mêmes correctifs non officiels que Kaggle. "
-      + "⚠ Essayé le 16/09 sur l’offre gratuite : la session meurt faute de mémoire vive "
-      + "(~12,7 Go et une seule carte, quand Kaggle donne deux cartes et ~30 Go). Une session "
-      + "à mémoire élevée n’a pas été essayée. Pour du gratuit qui marche, prenez Kaggle."
+      + "retélécharge à chaque chanson (environ 7 Go)."
   }[ou];
   document.getElementById("ou-texte").textContent = texte || "";
-  document.getElementById("lancer").textContent = ou === "colab" ? "Préparer le carnet Colab" : "Chanter";
+  document.getElementById("lancer").textContent = "Chanter";
 }
 document.getElementById("ou").addEventListener("change", majOu);
 
@@ -704,7 +702,7 @@ function budgetTexte(b){
     + b.credit_offert_usd.toFixed(0) + ' $ par mois est celui que vous avez déclaré, non vérifié '
     + 'chez Modal, qui exige une carte bancaire et facture au-delà : '
     + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">réglez votre '
-    + 'limite de dépense au plus bas</a>. Kaggle et Colab ne coûtent rien.</span>';
+    + 'limite de dépense au plus bas</a>. Kaggle ne coûte rien.</span>';
 }
 
 function montantTexte(v){
@@ -869,27 +867,6 @@ function suivre(id){
   }, 5000);
 }
 
-function preparerColab(corps){
-  const etat = document.getElementById("etat");
-  return fetch("/chanson/colab", {method:"POST", headers:ENTETES, body:JSON.stringify(corps)})
-    .then(async r => {
-      if(!r.ok){ const d = await r.json().catch(() => ({})); throw new Error(d.detail || ("HTTP " + r.status)); }
-      return r.blob();
-    })
-    .then(b => {
-      const nom = nomDeFichier(".ipynb");
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(b); a.download = nom;
-      document.body.appendChild(a); a.click(); a.remove();
-      etat.innerHTML = '<span class="ok">✔ Carnet téléchargé</span> (' + nom + ")";
-      document.getElementById("resultat").innerHTML = "<ol>"
-        + '<li>Ouvrez <a href="https://colab.research.google.com/" target="_blank" rel="noopener">Colab</a>, '
-        + "menu <b>Fichier › Importer un notebook</b>, et choisissez ce fichier.</li>"
-        + "<li>Menu <b>Exécution › Modifier le type d’exécution</b> : <b>GPU T4</b>.</li>"
-        + "<li>Menu <b>Exécution › Tout exécuter</b>. La chanson se joue et se télécharge à la fin.</li></ol>";
-    });
-}
-
 document.getElementById("lancer").addEventListener("click", () => {
   const bouton = document.getElementById("lancer");
   const etat = document.getElementById("etat");
@@ -904,12 +881,6 @@ document.getElementById("lancer").addEventListener("click", () => {
   etat.textContent = "Envoi…";
   document.getElementById("resultat").innerHTML = "";
   afficherJournal("");
-  if(ou === "colab"){
-    preparerColab(corps)
-      .catch(e => { etat.innerHTML = '<span class="ko">✖ ' + echapper(e.message) + "</span>"; })
-      .finally(() => { bouton.disabled = false; });
-    return;
-  }
   fetch("/chanson/creer", {method:"POST", headers:ENTETES, body:JSON.stringify(corps)})
     .then(async r => {
       const d = await r.json().catch(() => ({}));

@@ -95,7 +95,7 @@ def test_plafond_refuse_avant_de_lancer(sandbox, ch, monkeypatch):
     client = TestClient(sandbox.app, base_url=LOCAL)
     r = client.post("/chanson/creer", headers=CLE, json={"style": "pop", "paroles": PAROLES})
     assert r.status_code == 429
-    assert "Kaggle et Colab" in r.json()["detail"]
+    assert "Kaggle reste possible" in r.json()["detail"]
     assert lances == []
 
     ch.budget_ecrire(0, 0, 0)
