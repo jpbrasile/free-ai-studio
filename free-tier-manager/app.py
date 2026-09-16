@@ -1638,8 +1638,37 @@ async def cles_etat():
     }
 
 
+REFUS_AUTRE_SITE = ("Cette demande ne vient pas d'une page du Studio : refusee. "
+                    "Ouvrez la page du Studio et recommencez.")
+
+
+def exiger_page_du_studio(request) -> None:
+    """Un bouton du Studio, pas une page d'un autre site (16/09/2026).
+
+    Le Studio ecoute sur cet ordinateur, sans mot de passe : n'importe quel
+    site ouvert dans le meme navigateur pouvait lui envoyer une demande, sans
+    meme lire la reponse. Cela suffisait pour effacer une cle ou lancer une
+    mise a jour. Le navigateur dit lui-meme d'ou vient la demande, et une page
+    ne peut pas mentir sur ces deux en-tetes."""
+    venue_de = request.headers.get("sec-fetch-site", "").strip().lower()
+    if venue_de and venue_de not in ("same-origin", "none"):
+        raise HTTPException(status_code=403, detail=REFUS_AUTRE_SITE)
+    origine = request.headers.get("origin", "").strip()
+    if origine and origine.split("//", 1)[-1] != request.headers.get("host", ""):
+        raise HTTPException(status_code=403, detail=REFUS_AUTRE_SITE)
+
+
+def exiger_json(request) -> None:
+    """JSON exige : un autre site ne peut pas en envoyer sans une verification
+    prealable du navigateur, que le routeur n'accepte pas."""
+    if not request.headers.get("content-type", "").startswith("application/json"):
+        raise HTTPException(status_code=415, detail="JSON attendu")
+
+
 @app.post("/cles/tester")
 async def cles_tester(request: Request):
+    exiger_page_du_studio(request)
+    exiger_json(request)
     body = await request.json()
     name = str(body.get("fournisseur", "")).strip().lower()
     key = str(body.get("cle", "")).strip()
@@ -1672,6 +1701,8 @@ async def cles_tester(request: Request):
 
 @app.post("/cles/oublier")
 async def cles_oublier(request: Request):
+    exiger_page_du_studio(request)
+    exiger_json(request)
     body = await request.json()
     name = str(body.get("fournisseur", "")).strip().lower()
     if name not in PROVIDERS:
@@ -1904,7 +1935,9 @@ async def diagnostic_etat():
 
 
 @app.post("/diagnostic/reparer")
-async def diagnostic_reparer():
+async def diagnostic_reparer(request: Request):
+    exiger_page_du_studio(request)
+    exiger_json(request)
     async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
         jeton = await webui_jeton(client)
         if not jeton:
@@ -2041,7 +2074,8 @@ function mesurer() {
 document.getElementById("relancer").onclick = mesurer;
 document.getElementById("reparer").onclick = function () {
   document.getElementById("mot").textContent = "Reparation en cours...";
-  fetch("/diagnostic/reparer", { method: "POST" }).then(function (r) { return r.json(); })
+  fetch("/diagnostic/reparer", { method: "POST", headers: {"Content-Type": "application/json"} })
+    .then(function (r) { return r.json(); })
     .then(function (d) {
       document.getElementById("mot").textContent = "Repare. Rechargez l'onglet du chat.";
       if (d.liaison) { rendre({ version: null, fournisseurs_branches: [], liaison: d.liaison }); }
@@ -2080,6 +2114,8 @@ MAJ_DEMANDE = CONFIG_DIR / "maj-demandee.json"
 MAJ_ETAT = CONFIG_DIR / "maj-etat.json"
 MAJ_VEILLEUSE = CONFIG_DIR / "maj-veilleuse.json"
 VEILLEUSE_FRAICHE_S = 30
+# Tolerance quand le fichier porte une date a venir : voir veilleuse_vivante.
+VEILLEUSE_AVANCE_S = 120
 
 
 def version_locale() -> Optional[str]:
@@ -2151,7 +2187,13 @@ def veilleuse_vivante() -> bool:
         age = time.time() - MAJ_VEILLEUSE.stat().st_mtime
     except OSError:
         return False
-    return 0 <= age < VEILLEUSE_FRAICHE_S
+    # Une date A VENIR reste un signe de vie (16/09/2026). Le veilleur ecrit
+    # depuis Windows et ce conteneur lit l'heure de Docker : les deux horloges
+    # s'ecartent, surtout apres une mise en veille de l'ordinateur. Refuser tout
+    # age negatif faisait repondre << le veilleur ne tourne pas >> a une seconde
+    # d'ecart, et le bouton << Mettre a jour >> renvoyait le debutant vers
+    # demarrer.cmd pour rien.
+    return -VEILLEUSE_AVANCE_S < age < VEILLEUSE_FRAICHE_S
 
 
 # La page se rafraichit toutes les cinq secondes pour suivre une mise a jour en
@@ -2255,7 +2297,9 @@ async def maj_etat():
 
 
 @app.post("/maj/lancer")
-async def maj_lancer():
+async def maj_lancer(request: Request):
+    exiger_page_du_studio(request)
+    exiger_json(request)
     if not veilleuse_vivante():
         raise HTTPException(
             503,
@@ -2537,7 +2581,7 @@ majBouton.addEventListener("click", () => {
   majBouton.disabled = true;
   majCase.className = "etat";
   majCase.textContent = "Demande envoyée…";
-  fetch("/maj/lancer", {method:"POST"}).then(async r => {
+  fetch("/maj/lancer", {method:"POST", headers:{"Content-Type":"application/json"}}).then(async r => {
     const d = await r.json().catch(() => ({}));
     if(!r.ok){ throw new Error(d.detail || ("HTTP " + r.status)); }
     majEnCours = true;
@@ -2885,12 +2929,11 @@ async def dictee_etat():
 
 @app.post("/dictee/choix")
 async def dictee_choix(request: Request):
-    # JSON exige : un autre site ne peut pas en envoyer sans une verification
-    # prealable du navigateur, que le routeur n'accepte pas. Sans cette garde,
-    # n'importe quelle page ouverte pourrait remettre Groq a la place de
-    # << sur cet ordinateur >>, et la voix partirait sans que personne le sache.
-    if not request.headers.get("content-type", "").startswith("application/json"):
-        raise HTTPException(status_code=415, detail="JSON attendu")
+    # Sans ces gardes, n'importe quelle page ouverte pourrait remettre Groq a
+    # la place de << sur cet ordinateur >>, et la voix partirait sans que
+    # personne le sache.
+    exiger_page_du_studio(request)
+    exiger_json(request)
     try:
         mode = str((await request.json()).get("mode", "")).strip().lower()
     except (ValueError, AttributeError):

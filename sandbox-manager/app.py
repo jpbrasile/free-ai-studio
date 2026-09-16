@@ -144,6 +144,32 @@ def auth(value: Optional[str]):
         raise HTTPException(401, "Unauthorized")
 
 
+REFUS_AUTRE_SITE = ("Cette demande ne vient pas d'une page du Studio : refusee. "
+                    "Ouvrez la page du Studio et recommencez.")
+
+
+def exiger_page_du_studio(request) -> None:
+    """Un bouton des pages du Sandbox, pas une page d'un autre site (16/09/2026).
+
+    Les routes des cles n'ont pas de mot de passe : elles servent les pages
+    ouvertes sur cet ordinateur. Sans cette garde, un site visite pouvait
+    effacer les identifiants Modal ou Kaggle. Le navigateur dit d'ou vient la
+    demande, et une page ne peut pas mentir sur ces deux en-tetes."""
+    venue_de = request.headers.get("sec-fetch-site", "").strip().lower()
+    if venue_de and venue_de not in ("same-origin", "none"):
+        raise HTTPException(403, REFUS_AUTRE_SITE)
+    origine = request.headers.get("origin", "").strip()
+    if origine and origine.split("//", 1)[-1] != request.headers.get("host", ""):
+        raise HTTPException(403, REFUS_AUTRE_SITE)
+
+
+def exiger_json(request) -> None:
+    """JSON exige : un autre site ne peut pas en envoyer sans une verification
+    prealable du navigateur, que le Sandbox n'accepte pas."""
+    if not request.headers.get("content-type", "").startswith("application/json"):
+        raise HTTPException(415, "JSON attendu")
+
+
 def clean_name(name: str) -> str:
     name = Path(name).name
     return re.sub(r"[^A-Za-z0-9._-]+", "_", name)[:180] or "artifact.bin"
@@ -863,6 +889,8 @@ def cles_etat(request: Request):
 
 @app.post("/cles/tester")
 async def cles_tester(request: Request):
+    exiger_page_du_studio(request)
+    exiger_json(request)
     body = await request.json()
     nom = str(body.get("backend", "")).strip().lower()
     if nom not in SANDBOX_HELP:
@@ -902,6 +930,8 @@ async def cles_tester(request: Request):
 
 @app.post("/cles/oublier")
 async def cles_oublier(request: Request):
+    exiger_page_du_studio(request)
+    exiger_json(request)
     body = await request.json()
     nom = str(body.get("backend", "")).strip().lower()
     if nom not in SANDBOX_HELP:
