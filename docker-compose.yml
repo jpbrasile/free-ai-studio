@@ -41,6 +41,12 @@ services:
       SANDBOX_MANAGER_KEY: ${SANDBOX_MANAGER_KEY}
       SANDBOX_WORKER_KEY: ${SANDBOX_WORKER_KEY}
       SANDBOX_WORKER_URL: http://sandbox-worker:8000
+      # La cle du ROUTEUR, pour une seule chose : faire transcrire un dialogue
+      # rendu (/v1/audio/alignement) afin d'en retirer la parole que le modele a
+      # ajoutee de lui-meme. Le Sandbox n'a pas de Whisper et n'en aura pas : le
+      # routeur en porte deja un, avec son volume de modeles. Sans cette ligne le
+      # nettoyage se contente de ne pas avoir lieu -- il ne casse aucun rendu.
+      FREE_TIER_MANAGER_KEY: ${FREE_TIER_MANAGER_KEY:-}
       SANDBOX_TIMEOUT_SECONDS: ${SANDBOX_TIMEOUT_SECONDS:-120}
       SANDBOX_MAX_CODE_BYTES: ${SANDBOX_MAX_CODE_BYTES:-500000}
       SANDBOX_MAX_ARTIFACT_BYTES: ${SANDBOX_MAX_ARTIFACT_BYTES:-104857600}
@@ -90,12 +96,16 @@ services:
       # et aucun des trois compteurs ne voit les deux autres : ils peuvent donc
       # atteindre leur plafond le meme mois. Seule la limite de depense reglee
       # chez Modal arrete reellement la facture.
-      # Modal SEULEMENT : pas de variable Kaggle ici, ce modele n'a jamais tourne
-      # sur une carte T4 et la route refuse de proposer un endroit non verifie.
+      # Kaggle ouvert le 17/09/2026, apres deux mesures reelles sur une T4 :
+      # 12,13 Go sur 14,56 pour 9,5 s d'audio, 12,95 Go pour 147,5 s. Le
+      # commentaire precedent disait << ce modele n'a jamais tourne sur une carte
+      # T4 >> ; c'etait vrai le matin, ca ne l'est plus.
       DIALOGUE_BUDGET_USD_PAR_MOIS: ${DIALOGUE_BUDGET_USD_PAR_MOIS:-5}
       DIALOGUE_TIMEOUT_SECONDS: ${DIALOGUE_TIMEOUT_SECONDS:-1800}
       DIALOGUE_GPU: ${DIALOGUE_GPU:-L4}
       DIALOGUE_MEMORY_MB: ${DIALOGUE_MEMORY_MB:-24576}
+      DIALOGUE_KAGGLE_MACHINE: ${DIALOGUE_KAGGLE_MACHINE:-NvidiaTeslaT4}
+      DIALOGUE_KAGGLE_TIMEOUT_SECONDS: ${DIALOGUE_KAGGLE_TIMEOUT_SECONDS:-3600}
     ports:
       - "127.0.0.1:8020:8000"
     networks:

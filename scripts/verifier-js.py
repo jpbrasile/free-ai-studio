@@ -34,7 +34,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 SCRIPT = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S | re.I)
 PAGES = {
     "free-tier-manager": ["/studio", "/diagnostic", "/cles"],
-    "sandbox-manager": ["/", "/cles", "/video", "/chanson", "/essai"],
+    # /dialogue manquait ici depuis la creation de la route : sa page porte du
+    # JavaScript et n'avait jamais ete passee a node --check. Le verificateur
+    # annoncait donc << 0 en echec >> sans l'avoir regardee.
+    "sandbox-manager": ["/", "/cles", "/video", "/chanson", "/dialogue", "/essai"],
 }
 
 
@@ -68,7 +71,7 @@ def main() -> int:
             sources["%s %s" % (dossier, chemin)] = r.text
         for nom, html in chaines_html(module).items():
             sources["%s %s" % (dossier, nom)] = html
-    for nom_module in ("video", "chanson"):
+    for nom_module in ("video", "chanson", "dialogue"):
         module = sys.modules.get(nom_module)
         if module is not None:
             for nom, html in chaines_html(module).items():

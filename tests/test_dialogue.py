@@ -19,6 +19,10 @@ from fastapi.testclient import TestClient
 
 CLE = {"Authorization": "Bearer cle-sandbox-de-test"}
 LOCAL = "http://127.0.0.1:8020"
+# Une adresse qui n'est PAS localhost : c'est ce qui declenche la garde de
+# contexte partage. Meme valeur que dans test_chanson.py, pour que les deux
+# suites parlent du meme cas.
+RESEAU = "http://192.168.1.20:8020"
 DIALOGUE = "[S1]Tu as vu ça ?\n[S2]Non, raconte.\n[S1]Deux voix, un seul fichier."
 
 
@@ -250,7 +254,7 @@ def test_les_commandes_partent_vraiment_a_modal(sandbox, di, monkeypatch):
     monkeypatch.setattr(sandbox, "modal_execute", espion)
     jid = "d" * 32
     sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
-    sandbox.run_dialogue(jid, "print(1)")
+    sandbox.run_dialogue(jid, "print(1)", "modal")
     assert recu.get("commandes") == di.COMMANDES_MODAL, (
         "les commandes d'installation n'arrivent pas jusqu'a Modal : l'image se "
         "construirait sans le code, et l'echec n'apparaitrait que sur la carte."
@@ -266,6 +270,55 @@ def test_script_est_du_python_valide(di):
     compile(script, "dialogue_job.py", "exec")
     # Le mode compte : gen_type="dialogue" est ce qui choisit llm_posttrain.pt.
     assert 'gen_type="dialogue"' in script
+
+
+def test_le_script_kaggle_met_le_depot_sur_le_chemin_d_import(di):
+    """DEFAUT REEL du 17/09/2026, paye par un travail Kaggle mort a 83 s.
+
+    Le script clonait le depot des auteurs, l'installait par << pip install -e >>
+    -- code de retour 0, pas une plainte -- puis importait fireredtts2 et mourait
+    sur ModuleNotFoundError, les 12,6 Go de poids deja telecharges.
+
+    CAUSE, reproduite hors Kaggle AVANT d'etre corrigee, sur un paquet d'essai de
+    la meme forme : une installation editable ne prend pas effet dans le
+    processus qui la lance. Elle ne copie rien -- elle depose un .pth dans
+    site-packages -- et un .pth n'est lu qu'au DEMARRAGE de l'interpreteur. Meme
+    paquet, meme pip, meme machine : processus courant -> ModuleNotFoundError,
+    processus neuf -> succes.
+
+    Sur Modal la panne est structurellement impossible : l'installation a lieu a
+    la construction de l'image, le rendu demarre apres, dans un interpreteur
+    neuf. Sur Kaggle, installer et importer sont le meme processus. Le meme code
+    marche donc d'un cote et meurt de l'autre, ce qui est exactement le genre
+    d'ecart qu'un test unique sur le chemin paye ne verra jamais.
+
+    CE QUE CE TEST NE PEUT PAS FAIRE : executer cette branche. Il n'y a ici ni
+    /kaggle/working, ni carte, ni depot clone. Il garde ce qui reste gardable --
+    que le correctif soit dans le script livre.
+    """
+    script = di.construire_script(di.preparer({"texte": DIALOGUE})["demande"])
+
+    # SUR LE CODE, PAS SUR LA PROSE. Le commentaire qui explique ce correctif
+    # cite << sys.path >> plusieurs fois : une recherche de texte passerait au
+    # vert sur le seul commentaire, correctif retire. La lecon a deja ete payee
+    # par le test voisin sur torchaudio ; on ne la repaie pas.
+    code_seul = ast.unparse(ast.parse(script))
+    assert "sys.path.insert(0, depot)" in code_seul, (
+        "le depot clone n'est plus ajoute au chemin d'import. Sur Kaggle, "
+        "l'installation editable qui precede ne prend pas effet dans ce "
+        "processus : le travail mourra sur ModuleNotFoundError, apres avoir "
+        "telecharge 12,6 Go de poids et occupe une carte pour rien."
+    )
+    assert "importlib.invalidate_caches()" in code_seul, (
+        "le cache d'importation n'est plus invalide alors que le depot vient "
+        "d'etre clone, c'est-a-dire apres le demarrage de l'interpreteur."
+    )
+    importes = {a.name for n in ast.walk(ast.parse(script))
+                if isinstance(n, ast.Import) for a in n.names}
+    assert "importlib" in importes, (
+        "importlib n'est pas importe : le correctif ci-dessus leverait un "
+        "NameError, et on aurait echange une panne contre une autre."
+    )
 
 
 def test_le_script_ecrit_le_wav_sans_torchaudio(di):
@@ -403,7 +456,7 @@ def test_echec_modal_encaisse_quand_meme(sandbox, di, monkeypatch):
     monkeypatch.setattr(sandbox, "modal_execute", en_panne)
     jid = "c" * 32
     sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
-    sandbox.run_dialogue(jid, "print(1)")
+    sandbox.run_dialogue(jid, "print(1)", "modal")
     job = sandbox.read_job(jid)
     assert job["status"] == "failed"
     assert di.budget_lire()["dialogues"] == 1
@@ -545,15 +598,247 @@ def test_la_page_distingue_un_arret_d_une_panne(sandbox, di):
     )
 
 
-def test_la_page_ne_propose_aucun_endroit_non_verifie(sandbox, di):
-    """/chanson offre Kaggle et Colab parce que son chemin T4 a ete essaye en
-    vrai le 15/09. Ici rien n'a jamais tourne nulle part : proposer un endroit
-    gratuit non verifie reviendrait a vendre un essai dont personne ne connait
-    le resultat."""
+def test_la_page_propose_kaggle_mesure_et_refuse_toujours_colab(sandbox, di):
+    """Kaggle est offert depuis le 17/09/2026, et SEULEMENT parce qu'il a tourne.
+
+    Ce test en remplace un qui interdisait Kaggle ici. Son motif n'a pas ete
+    desserre pour faire passer une demonstration : il a CESSE D'EXISTER. Sa
+    docstring disait << rien n'a jamais tourne nulle part >> ; deux mesures du
+    17/09 l'ont dementi -- 12,13 Go sur 14,56 pour 9,5 s d'audio, puis 12,95 Go
+    pour 147,5 s, en float32 sur une Tesla T4.
+
+    COLAB RESTE INTERDIT, et c'est la moitie du test qui ne bouge pas : la
+    mesure du 16/09 montre qu'il manque de memoire VIVE (~12,7 Go) pour des
+    poids de 12,6 Go. Un endroit se propose quand il a tourne, pas quand il est
+    plausible.
+    """
     page = TestClient(sandbox.app, base_url=LOCAL).get("/dialogue").text
+    assert '"kaggle"' in page, (
+        "Kaggle a tourne en vrai deux fois : la page doit pouvoir le proposer."
+    )
+    assert 'value="colab"' not in page, (
+        "Colab n'a jamais tourne ici, et la mesure du 16/09 dit qu'il ne le peut pas."
+    )
     assert "/dialogue/colab" not in page
-    assert '"kaggle"' not in page, (
-        "la page propose un endroit sur lequel ce modele n'a jamais tourne."
+    # La borne mesuree et le verrou du Studio partage doivent vivre DANS la page,
+    # la ou l'on choisit -- pas seulement cote serveur.
+    assert "kaggle_max_caracteres" in page, (
+        "la page doit dire jusqu'ou Kaggle a ete mesure, a l'endroit du choix."
+    )
+    assert "kaggle_permis" in page, (
+        "la page doit griser Kaggle quand le Studio est partage."
+    )
+
+
+def test_kaggle_refuse_ce_qui_depasse_ce_qui_a_tourne(di):
+    """La borne Kaggle est un RELEVE, pas un reglage de confort.
+
+    2 725 caracteres, 35 repliques, 147,5 s d'audio : c'est exactement ce qui a
+    tourne, pour un pic de 12,95 Go sur 14,56. Au-dela, personne n'a jamais
+    essaye -- l'extrapolation donnerait ~13,2 Go et tiendrait sans doute, mais
+    c'est en prenant une extrapolation pour un fait qu'un faux verdict a ete
+    publie le matin du 17/09. Le meme texte passe sur Modal, dont la carte a
+    24 Go.
+    """
+    texte = "[S1]" + "la " * 1200
+    assert di.KAGGLE_MAX_CARACTERES < len(texte) <= di.MAX_CARACTERES
+    with pytest.raises(ValueError) as exc:
+        di.preparer({"texte": texte}, "kaggle")
+    message = str(exc.value)
+    assert "Kaggle" in message
+    assert "Modal" in message, "un refus doit dire ou aller, pas seulement non."
+    # Le meme texte, sur Modal : accepte. La borne est propre a l'endroit.
+    di.preparer({"texte": texte}, "modal")
+
+
+def test_le_choix_de_l_endroit_change_ce_qui_part(di):
+    """Modal : image construite et poids en cache. Kaggle : tout dans le script.
+
+    Une constante juste qui ne voyage pas ne sert a rien : ce test regarde la
+    demande REELLEMENT construite, pas les constantes du module.
+    """
+    modal = di.preparer({"texte": DIALOGUE}, "modal")["demande"]
+    kaggle = di.preparer({"texte": DIALOGUE}, "kaggle")["demande"]
+    assert modal["cache"] == di.CACHE_MODAL and modal["installer"] is False
+    assert kaggle["cache"] == "" and kaggle["installer"] is True
+    # Sur Kaggle on GARDE leur PyTorch : il est compile pour leur carte, et le
+    # remplacer casserait CUDA. Meme regle que pour la chanson.
+    assert "torch" not in kaggle["paquets"]
+    assert "torchaudio" not in kaggle["paquets"]
+    assert "torchao==0.17.0" in kaggle["paquets"], (
+        "l'epingle qui evite la panne nf4tensor doit voyager jusqu'a Kaggle."
+    )
+
+
+def test_un_endroit_inconnu_est_refuse_et_non_devine(sandbox, di):
+    """Une faute de frappe ne doit pas demarrer une machine PAYANTE.
+
+    /chanson ramene un << ou >> inconnu a << modal >> en silence. Ici on refuse :
+    qui ecrit << kagle >> demandait le gratuit, et lui louer une carte a la
+    seconde serait une facture que personne n'a voulue. Le refus coute une
+    phrase ; la supposition coute de l'argent.
+    """
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    r = client.post("/dialogue/creer", headers=CLE,
+                    json={"texte": DIALOGUE, "ou": "kagle"})
+    assert r.status_code == 400
+    assert "kagle" in r.json()["detail"], "le message doit montrer la faute de frappe."
+
+
+def test_kaggle_est_coupe_quand_le_studio_est_partage(sandbox, di):
+    """LA GARDE D'AGENTS.md, ET ELLE NE SE DESSERRE JAMAIS.
+
+    Kaggle automatique se sert des identifiants PERSONNELS du proprietaire de
+    cette machine. Des que le Studio est ouvert autrement que par localhost --
+    donc potentiellement pour quelqu'un d'autre -- il doit etre coupe, et la
+    page doit le dire d'avance plutot que de laisser cliquer sur un refus.
+
+    Ce test existe deja pour /chanson (test_chanson.py). Ouvrir Kaggle au
+    dialogue sans l'ecrire ici aurait laisse la route neuve sans le garde que
+    l'ancienne possede : c'est exactement la forme de trou que terminer_en_echec
+    documente -- corriger la copie qui a mordu et laisser le piege arme sur les
+    autres.
+    """
+    partage = TestClient(sandbox.app, base_url=RESEAU)
+    r = partage.post("/dialogue/creer", headers=CLE,
+                     json={"texte": DIALOGUE, "ou": "kaggle"})
+    assert r.status_code == 403, "Kaggle automatique doit etre refuse hors de localhost."
+    assert partage.get("/dialogue/etat", headers=CLE).json()["kaggle_permis"] is False
+
+    # Sur un Studio personnel, rien n'est coupe : la garde vise le partage, pas
+    # Kaggle en soi.
+    perso = TestClient(sandbox.app, base_url=LOCAL)
+    assert perso.get("/dialogue/etat", headers=CLE).json()["kaggle_permis"] is True
+
+
+# --- Le nettoyage du rendu ----------------------------------------------------
+#
+# Ces tests gardent DEUX corrections payees chacune par un essai rate et une
+# livraison refusee le 17/09/2026. Ce ne sont pas des preferences de style :
+# sans elles, le nettoyage DETRUIT de la parole voulue.
+
+def _wav_avec_creux(chemin, taux=24000, secondes=3.0, creux=()):
+    """Un WAV carre, fort partout sauf dans les intervalles donnes.
+
+    Du signal, pas du silence : une coupe qui tombe dans du silence ne prouve
+    rien. Les creux donnent au recalage de vraies vallees ou couper, comme la
+    parole en offre entre deux mots.
+    """
+    import array
+    import wave
+
+    def fort(i):
+        t = i / float(taux)
+        return 0 if any(a <= t <= b for a, b in creux) else 8000
+
+    x = array.array("h", [fort(i) * (1 if (i // 60) % 2 else -1)
+                          for i in range(int(taux * secondes))])
+    with wave.open(str(chemin), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(taux)
+        f.writeframes(x.tobytes())
+    return chemin
+
+
+def test_le_nettoyage_retire_ce_qui_n_a_pas_ete_demande(sandbox, tmp_path):
+    """Un cas fabrique, entierement connu d'avance : un mot en trop, et lui seul."""
+    nd = sandbox.nettoyage_dialogue
+
+    source = _wav_avec_creux(tmp_path / "dialogue.wav", creux=((1.53, 1.60), (2.18, 2.25)))
+    cible = tmp_path / "dialogue-nettoye.wav"
+    mots = [
+        {"mot": "Bonjour", "debut": 0.0, "fin": 0.5},
+        {"mot": "le", "debut": 0.5, "fin": 1.0},
+        {"mot": "monde", "debut": 1.0, "fin": 1.5},
+        # Jamais envoye : c'est l'intrusion.
+        {"mot": "whatever", "debut": 1.65, "fin": 2.20},
+    ]
+    rapport = nd.nettoyer(str(source), str(cible), ["[S1]Bonjour le monde"], mots)
+    assert rapport["coupes"] == 1
+    assert 0.4 < rapport["secondes_retirees"] < 0.9
+    assert rapport["duree_apres_s"] < rapport["duree_avant_s"]
+    # Le fichier reste un WAV lisible, au meme format que l'original.
+    import wave
+    with wave.open(str(cible), "rb") as f:
+        assert f.getframerate() == 24000 and f.getnchannels() == 1 and f.getsampwidth() == 2
+
+
+def test_le_nettoyage_ne_coupe_pas_un_nombre_reellement_prononce(sandbox, tmp_path):
+    """PREMIERE GARDE, payee par un essai rate : << 10 cm >> vs << dix centimetres >>.
+
+    Whisper ecrit les nombres en chiffres ; le texte envoye les ecrivait en
+    lettres. Le SON est identique, seule la convention d'ecriture differe. Sans
+    conversion, l'alignement au caractere declare << 10 >> etranger -- les
+    lettres << 10 >> ne figurent pas dans << dixcentimetres >> -- et la
+    reparation retire un mot REELLEMENT prononce. C'est arrive : << dix >>,
+    << quarante >> et << quinze >> coupes, environ 1,3 s de parole voulue. Le
+    fichier n'a pas ete livre.
+    """
+    nd = sandbox.nettoyage_dialogue
+
+    assert nd.convertir("10") == "dix"
+    assert nd.convertir("40") == "quarante"
+    assert nd.convertir("15") == "quinze"
+    assert nd.convertir("cm") == "centimetres"
+
+    source = _wav_avec_creux(tmp_path / "dialogue.wav", secondes=2.0)
+    cible = tmp_path / "dialogue-nettoye.wav"
+    mots = [
+        {"mot": "Il", "debut": 0.0, "fin": 0.3},
+        {"mot": "fait", "debut": 0.3, "fin": 0.6},
+        {"mot": "10", "debut": 0.6, "fin": 0.9},
+        {"mot": "cm", "debut": 0.9, "fin": 1.2},
+    ]
+    rapport = nd.nettoyer(str(source), str(cible), ["[S1]Il fait dix centimètres"], mots)
+    assert rapport["coupes"] == 0, (
+        "un nombre ecrit en chiffres par Whisper mais bel et bien prononce a ete coupe."
+    )
+
+
+def test_aucune_unite_d_une_seule_lettre(sandbox):
+    """SECONDE GARDE, volontairement redondante avec la premiere.
+
+    Premiere correction : la cle 's' -> 'secondes' a transforme le << s' >> de
+    << elles s'etalent >> en mot etranger, et une coupe de 125 ms entamait le
+    mot. La cle 'h' tendait le meme piege (<< m'a dit >>, << l'eau >>). En
+    francais, une lettre seule est presque toujours une elision.
+
+    Les cles d'une lettre ont ete retirees ET le module refuse desormais toute
+    coupe d'un fragment d'une seule lettre. Si une table fautive revenait un
+    jour, la seconde garde tiendrait quand meme -- c'est sa raison d'etre.
+    """
+    nd = sandbox.nettoyage_dialogue
+
+    for cle in nd.UNITES:
+        assert len(cle) > 1, (
+            "une cle d'une seule lettre percute les elisions francaises (s', m', l', d')."
+        )
+
+
+def test_la_page_dit_ce_qu_elle_a_retire_et_garde_l_original(sandbox):
+    """DEFAUT REEL du 17/09, trouve en lancant un vrai dialogue, pas par un test.
+
+    Le serveur renvoyait correctement << son_original_url >> et << nettoyage >>
+    -- verifie sur l'API vivante -- mais afficherDialogue() n'utilisait que
+    << son_url >>. La page a donc retire 4,67 s sur 65,12 s SANS L'ECRIRE, alors
+    que ses propres reserves promettent que << le fichier d'origine reste
+    telechargeable : rien n'est coupe en douce >>.
+
+    Rien ne l'avait vu : node --check validait la page, la suite passait au
+    complet. Aucun controle ne reliait la promesse affichee au code qui
+    l'honore. C'est ce lien que ce test garde.
+    """
+    page = sandbox.dialogue.PAGE_HTML
+    assert "son_original_url" in page, (
+        "la page ne propose pas l'original : la promesse de ses reserves est fausse a l'ecran."
+    )
+    assert "blocNettoyage" in page, (
+        "la page n'affiche pas ce que le nettoyage a retire."
+    )
+    assert "n’a pas eu lieu" in page, (
+        "le cas ou le nettoyage a echoue doit se dire aussi, sinon un rendu non verifie "
+        "passe pour un rendu verifie."
     )
 
 

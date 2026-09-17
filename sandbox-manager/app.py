@@ -22,6 +22,12 @@ from pydantic import BaseModel, Field
 import chanson
 import depenses
 import dialogue
+# Nettoyage du rendu de /dialogue. Au niveau du module, PAS au moment de
+# l'appel : le Dockerfile prend tout le dossier (COPY *.py), donc un module
+# absent serait une erreur de livraison, pas un alea d'execution -- et elle doit
+# tomber bruyamment au demarrage plutot que degrader en silence un nettoyage
+# annonce comme systematique. Bibliotheque standard seulement, rien a installer.
+import nettoyage_dialogue
 import video
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -634,6 +640,50 @@ def kaggle_ref(jid: str):
 KAGGLE_MARGE_S = 900
 
 
+def journal_kaggle(jid: str, ref: str) -> str:
+    """Rapatrie le journal d'execution du noyau, pour un travail Kaggle en echec.
+
+    DEFAUT REEL du 17/09/2026. Le chemin Kaggle du dialogue est mort sur
+    << kernelworkerstatus.error >> -- et c'etait TOUT ce que le Studio savait en
+    dire. Une phrase d'etat, pas une ligne de ce qui s'est passe sur la machine.
+    Le chemin Modal, lui, remonte un vrai journal ; le chemin gratuit ne
+    remontait rien, alors que Kaggle garde ce journal et que la CLI sait le
+    rendre. Il a fallu aller le chercher a la main pour y trouver, en clair, un
+    ModuleNotFoundError survenu 83 s apres le demarrage.
+
+    Un echec qu'on ne peut pas lire est un echec qu'on ne peut pas reparer, et
+    c'est pire encore pour un debutant : il ne lui reste qu'a relancer au hasard,
+    sur son quota.
+
+    Rien ici ne peut aggraver la panne. Toute erreur de rapatriement est avalee
+    et rendue comme texte ; le message d'echec reste celui de l'appelant.
+    """
+    try:
+        d = JOBS / jid / "journal-kaggle"
+        d.mkdir(parents=True, exist_ok=True)
+        # La CLI n'a pas d'option << journal seul >> : elle descend tout le
+        # dossier de travail, depot clone compris. D'ou le delai genereux, et
+        # d'ou le fait que ceci ne tourne QUE sur un echec, jamais en routine.
+        subprocess.run(["kaggle", "kernels", "output", ref, "-p", str(d), "--force"],
+                       capture_output=True, text=True, timeout=180)
+        fichiers = sorted(d.glob("*.log"))
+        if not fichiers:
+            return ""
+        brut = fichiers[0].read_text(encoding="utf-8", errors="replace")
+        # Le journal est une liste JSON d'evenements {stream_name, time, data}.
+        # Le livrer tel quel serait tendre le probleme sans la reponse : on le
+        # remet a plat, dans l'ordre, et on garde la FIN -- une trace d'erreur
+        # se lit par le bas.
+        try:
+            lignes = [str(ev.get("data", "")).rstrip("\n") for ev in json.loads(brut)]
+            plat = "\n".join(x for x in lignes if x)
+        except Exception:
+            plat = brut
+        return plat[-4000:]
+    except Exception as exc:
+        return f"(journal Kaggle non recupere : {type(exc).__name__})"
+
+
 def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
                machine_shape: Optional[str] = None, timeout_s: Optional[int] = None):
     """machine_shape et timeout_s ne servent qu'aux chansons ; sans eux, rien ne change."""
@@ -741,6 +791,21 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
         job.update({"status": "succeeded", "finished_at": time.time(), "artifacts": arts})
         write_job(jid, job)
     except Exception as exc:
+        # Le journal AVANT terminer_en_echec : celle-ci relit la fiche sur le
+        # disque et ne remplace que le statut, l'heure et le message. Ce qui est
+        # ecrit ici lui survit donc.
+        #
+        # PAS sur un arret demande : le noyau tourne encore, il n'y a pas de
+        # journal final a prendre, et faire patienter jusqu'a 180 s quelqu'un
+        # qui vient d'appuyer sur << Arret >> serait lui repondre par une
+        # attente. Un bouton d'arret doit s'arreter.
+        fiche = read_job(jid)
+        if fiche.get("remote_ref") and not fiche.get("arret_demande"):
+            texte = journal_kaggle(jid, fiche["remote_ref"])
+            if texte:
+                fiche = read_job(jid)
+                fiche["journal_kaggle"] = texte
+                write_job(jid, fiche)
         terminer_en_echec(jid, f"{type(exc).__name__}: {str(exc)[:1000]}")
 
 
@@ -2084,47 +2149,158 @@ def dialogue_fichiers(jid: str) -> dict:
         nom = str(art.get("name", ""))
         if art.get("skipped") or not art.get("id"):
             continue
-        for suffixe, cle in (("dialogue.wav", "son"), ("resume.json", "resume")):
+        # << dialogue-nettoye.wav >> ne finit PAS par << dialogue.wav >> : les
+        # deux cles ne peuvent pas se marcher dessus, et l'original reste
+        # atteignable apres le nettoyage. C'est voulu : rien n'est coupe en
+        # douce, la personne doit pouvoir reecouter ce que le modele a rendu.
+        for suffixe, cle in (("dialogue.wav", "son"),
+                             ("dialogue-nettoye.wav", "son_nettoye"),
+                             ("resume.json", "resume")):
             if nom.endswith(suffixe):
                 trouve[cle] = art
     return trouve
 
 
-def run_dialogue(jid: str, code: str):
-    """Lance le dialogue, puis encaisse le temps Modal reellement consomme.
+ROUTEUR_INTERNE = os.getenv("SANDBOX_ROUTEUR_URL", "http://free-tier-manager:8000")
+# La transcription d'un dialogue de 147 s a pris 63 s sur le processeur (mesure
+# du 17/09/2026). Le delai couvre largement cela, plus le telechargement du
+# modele d'alignement a la toute premiere demande.
+NETTOYAGE_DELAI_S = int(os.getenv("DIALOGUE_NETTOYAGE_TIMEOUT_SECONDS", "900"))
+
+
+def nettoyer_dialogue(jid: str) -> None:
+    """Retire du rendu la parole que personne n'a demandee. NE CASSE JAMAIS LE TRAVAIL.
+
+    POURQUOI CE NETTOYAGE EXISTE. FireRedTTS-2 insere, en fin de replique, des
+    bouts de parole absents du texte -- dont de l'ANGLAIS. Mesure du 17/09/2026
+    sur 147,5 s : << I see. Enthusie, be impressed. >>, << What a >>, << tch. >>,
+    << Voooh >>, << sans. >>. Cinq intrusions, sur un fond de 96,5 % de mots
+    corrects. Elles sont INVISIBLES a toute mesure de signal (voisees, clarte
+    0,92, pleine echelle) : seule la comparaison au texte envoye les designe.
+
+    POURQUOI ICI, ET PAS AILLEURS. Modal passe par finish_execution, Kaggle
+    ecrit la fiche en direct : les deux ne convergent pas cote ecriture. Cette
+    fonction est appelee depuis run_dialogue, qui est le seul endroit que les
+    deux chemins traversent. Cote lecture, ce serait pire : dialogue_fichiers
+    sert un GET que la page interroge toutes les 5 s, et une transcription de
+    60 s y serait un delai d'attente depasse, pas une fonctionnalite.
+
+    POURQUOI RIEN NE PEUT ECHOUER ICI. Le rendu est deja fait, et sur Modal il
+    est deja paye. Un routeur injoignable, une cle absente, un Whisper en panne
+    ne doivent PAS transformer un travail reussi en echec : l'original reste,
+    le travail reste << succeeded >>, et la fiche dit pourquoi le nettoyage n'a
+    pas eu lieu. Un post-traitement qui peut casser un rendu paye serait une
+    regression, pas une fonctionnalite.
+    """
+    def noter(motif: str) -> None:
+        travail = read_job(jid)
+        travail["nettoyage"] = {"fait": False, "motif": motif}
+        write_job(jid, travail)
+
+    try:
+        job = read_job(jid)
+        repliques = job.get("dialogue_repliques") or []
+        if not repliques:
+            noter("le texte envoyé n'a pas été conservé pour ce travail")
+            return
+        art = dialogue_fichiers(jid).get("son")
+        if not art:
+            noter("aucun fichier audio à nettoyer")
+            return
+        source = ART / art["path"]
+        if not source.exists() or source.is_symlink():
+            noter("le fichier audio est introuvable")
+            return
+
+        cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
+        if not cle:
+            noter("le routeur n'est pas joignable : la clé interne manque dans ce service")
+            return
+
+        with httpx.Client(timeout=NETTOYAGE_DELAI_S) as client:
+            reponse = client.post(
+                ROUTEUR_INTERNE + "/v1/audio/alignement",
+                headers={"Authorization": "Bearer " + cle},
+                files={"file": (source.name, source.read_bytes(), "audio/wav")},
+            )
+            reponse.raise_for_status()
+            mots = reponse.json().get("mots") or []
+        if not mots:
+            noter("la transcription n'a rendu aucun mot")
+            return
+
+        cible = JOBS / jid / "dialogue-nettoye.wav"
+        cible.parent.mkdir(parents=True, exist_ok=True)
+        rapport = nettoyage_dialogue.nettoyer(str(source), str(cible), repliques, mots)
+        rapport["fait"] = True
+        if rapport.get("coupes"):
+            ajout = add_artifact(jid, cible, "nettoyage")
+            job = read_job(jid)
+            job["artifacts"] = list(job.get("artifacts") or []) + [ajout]
+        else:
+            job = read_job(jid)
+        job["nettoyage"] = rapport
+        write_job(jid, job)
+        log.info("Nettoyage du dialogue %s : %d coupe(s), %.2f s retirees",
+                 jid, rapport.get("coupes", 0), rapport.get("secondes_retirees", 0.0))
+    except Exception as exc:  # noqa: BLE001 - rien ne doit remonter jusqu'au travail
+        log.warning("Nettoyage du dialogue %s impossible : %s", jid, exc)
+        try:
+            noter("%s: %s" % (type(exc).__name__, str(exc)[:200]))
+        except Exception:  # la fiche elle-meme est illisible : on n'insiste pas
+            pass
+
+
+def run_dialogue(jid: str, code: str, ou: str):
+    """Lance le dialogue, encaisse le temps Modal consomme, puis nettoie le rendu.
 
     Le finally encaisse meme en cas d'echec : une machine qui tombe a quand meme
     tourne, et le premier lancement telecharge environ 12,6 Go au tarif de la
-    carte, puisque le compteur facture le temps d'horloge.
+    carte, puisque le compteur facture le temps d'horloge. Sur Kaggle il n'y a
+    rien a encaisser -- c'est gratuit, et le compteur du mois ne suit que Modal.
+
+    Le nettoyage vient APRES le finally, donc son temps de calcul n'entre pas
+    dans la facture Modal : il tourne sur le processeur de cette machine-ci.
     """
     debut = time.time()
     job = read_job(jid)
-    job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
+    job.update({"status": "running", "started_at": debut, "provider_effective": ou})
     write_job(jid, job)
     try:
-        donnees = modal_execute(
-            jid, code, True, True,
-            gpu_type=dialogue.GPU_MODAL,
-            timeout_s=dialogue.DUREE_MAX_S,
-            memory_mb=dialogue.MEMOIRE_MB,
-            paquets=dialogue.PAQUETS_MODAL,
-            apt=dialogue.APT_MODAL,
-            commandes=dialogue.COMMANDES_MODAL,
-            volume=dialogue.VOLUME_MODELES,
-        )
-        finish_execution(jid, "modal", donnees)
+        if ou == "kaggle":
+            run_kaggle(jid, code, True, True, machine_shape=dialogue.KAGGLE_MACHINE,
+                       timeout_s=dialogue.KAGGLE_DELAI_S)
+        else:
+            donnees = modal_execute(
+                jid, code, True, True,
+                gpu_type=dialogue.GPU_MODAL,
+                timeout_s=dialogue.DUREE_MAX_S,
+                memory_mb=dialogue.MEMOIRE_MB,
+                paquets=dialogue.PAQUETS_MODAL,
+                apt=dialogue.APT_MODAL,
+                commandes=dialogue.COMMANDES_MODAL,
+                volume=dialogue.VOLUME_MODELES,
+            )
+            finish_execution(jid, "modal", donnees)
     except BackendUnavailable as exc:
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
-        reste = dialogue.budget_consommer(dialogue.GPU_MODAL, time.time() - debut)
-        job = read_job(jid)
-        job["budget"] = reste
-        write_job(jid, job)
+        if ou == "modal":
+            reste = dialogue.budget_consommer(dialogue.GPU_MODAL, time.time() - debut)
+            job = read_job(jid)
+            job["budget"] = reste
+            write_job(jid, job)
+    if read_job(jid).get("status") == "succeeded":
+        nettoyer_dialogue(jid)
 
 
 @app.get("/dialogue/etat")
-def dialogue_etat(authorization: Optional[str] = Header(default=None)):
+def dialogue_etat(request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
+    # La page doit savoir d'avance si Kaggle est coupe ici, pour griser l'option
+    # plutot que de laisser cliquer sur un refus. Le verrou qui compte reste
+    # celui du serveur, dans /dialogue/creer.
+    raison = contexte_partage(request)
     return {
         "budget": dialogue.budget_lire(),
         # MODELE porte la licence ET la reserve des auteurs : les deux doivent
@@ -2135,7 +2311,11 @@ def dialogue_etat(authorization: Optional[str] = Header(default=None)):
             dialogue.prix_seconde(dialogue.GPU_MODAL) * dialogue.DUREE_MAX_S, 3),
         "locuteurs_max": dialogue.LOCUTEURS_MAX,
         "max_caracteres": dialogue.MAX_CARACTERES,
+        "kaggle_max_caracteres": dialogue.KAGGLE_MAX_CARACTERES,
         "modal_configure": modal_configured(),
+        "kaggle_configure": kaggle_configured(),
+        "kaggle_permis": raison is None,
+        "kaggle_raison": raison,
     }
 
 
@@ -2143,26 +2323,46 @@ def dialogue_etat(authorization: Optional[str] = Header(default=None)):
 async def dialogue_creer(request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
     payload = await corps_json(request)
+    ou = str(payload.get("ou") or "modal")
+    # ON REFUSE, ON NE DEVINE PAS. /chanson ramene un << ou >> inconnu a
+    # << modal >> sans le dire : ici, une faute de frappe (<< kagle >>)
+    # demarrerait une machine PAYANTE alors que la personne demandait la
+    # gratuite. Le cout d'un refus est une phrase ; celui d'une supposition est
+    # une facture que personne n'a voulue.
+    if ou not in ("modal", "kaggle"):
+        raise HTTPException(400, "Endroit inconnu : « %s ». Choisissez « modal » (machine "
+                                 "louée) ou « kaggle » (gratuit)." % ou[:40])
+    # LA GARDE DE CONTEXTE PARTAGE PASSE AVANT TOUT LE RESTE. Kaggle automatique
+    # se sert des identifiants PERSONNELS du proprietaire de cette machine : des
+    # que le Studio sert quelqu'un d'autre, il est coupe. Voir AGENTS.md.
+    if ou == "kaggle":
+        raison = contexte_partage(request)
+        if raison:
+            raise refus_kaggle(raison)
     # preparer() AVANT toute autre verification : un dialogue mal balise se
     # refuse meme quand Modal n'est pas branche, et surtout sans rien payer.
     try:
-        plan = dialogue.preparer(payload)
+        plan = dialogue.preparer(payload, ou)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
-    if not modal_configured():
-        raise HTTPException(503, "Modal n'est pas branché. Ouvrez la page « Brancher Modal "
-                                 "ou Kaggle » et collez les deux valeurs du jeton Modal.")
-    try:
-        dialogue.budget_verifier(plan["gpu"], dialogue.DUREE_MAX_S)
-    except dialogue.BudgetDepasse as exc:
-        raise HTTPException(429, str(exc)) from exc
+    if ou == "modal":
+        if not modal_configured():
+            raise HTTPException(503, "Modal n'est pas branché. Ouvrez la page « Brancher Modal "
+                                     "ou Kaggle » et collez les deux valeurs du jeton Modal.")
+        try:
+            dialogue.budget_verifier(plan["gpu"], dialogue.DUREE_MAX_S)
+        except dialogue.BudgetDepasse as exc:
+            raise HTTPException(429, str(exc)) from exc
+    elif not kaggle_configured():
+        raise HTTPException(503, "Kaggle n'est pas branché. Ouvrez la page « Brancher Modal "
+                                 "ou Kaggle » et collez votre nom d'utilisateur et votre clé Kaggle.")
 
     code = dialogue.construire_script(plan["demande"])
     jid = uuid.uuid4().hex
     write_job(jid, {
         "id": jid,
-        "provider": "modal",
+        "provider": ou,
         "title": "Free AI Studio dialogue",
         "gpu": True,
         "internet": True,
@@ -2170,8 +2370,13 @@ async def dialogue_creer(request: Request, authorization: Optional[str] = Header
         "created_at": time.time(),
         "artifacts": [],
         "dialogue": plan["resume_public"],
+        # LA VERITE TERRAIN DU NETTOYAGE. Sans le texte reellement envoye, il
+        # est impossible de dire ce que le modele a AJOUTE : resume.json n'en
+        # garde que le NOMBRE de repliques, ce qui ne sert a rien ici. Ce champ
+        # reste dans la fiche interne et n'est pas publie par /dialogue/jobs.
+        "dialogue_repliques": list(plan["demande"]["repliques"]),
     })
-    threading.Thread(target=run_dialogue, args=(jid, code), daemon=True).start()
+    threading.Thread(target=run_dialogue, args=(jid, code, ou), daemon=True).start()
     return read_job(jid)
 
 
@@ -2186,12 +2391,26 @@ def dialogue_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "created_at": job.get("created_at"),
         "stdout": job.get("stdout", ""),
         "stderr": job.get("stderr", ""),
+        # Le journal du noyau Kaggle, quand il y en a un. Le 17/09/2026, sur le
+        # premier echec du chemin gratuit, stdout ET stderr etaient vides : la
+        # page n'avait donc rien a montrer, alors que Kaggle gardait la trace
+        # complete de la panne et que la CLI savait la rendre. Voir
+        # journal_kaggle(), qui ne tourne que sur un echec.
+        "journal_kaggle": job.get("journal_kaggle", ""),
         "message": job.get("error") or "",
         "arret_detail": job.get("arret_detail") or "",
         "dialogue": job.get("dialogue"),
     }
     if fichiers.get("son"):
-        sortie["son_url"] = f"/dialogue/jobs/{jid}/fichier?cle={jeton_dialogue(jid)}"
+        jeton = jeton_dialogue(jid)
+        sortie["son_url"] = f"/dialogue/jobs/{jid}/fichier?cle={jeton}"
+        # Le nettoyage ne fait jamais disparaitre l'original : la page propose
+        # les deux, et c'est ce qui rend la coupe acceptable. Une suppression
+        # silencieuse serait invendable, meme si elle ameliore le son.
+        if fichiers.get("son_nettoye"):
+            sortie["son_original_url"] = (
+                f"/dialogue/jobs/{jid}/fichier?cle={jeton}&version=origine")
+    sortie["nettoyage"] = job.get("nettoyage")
     try:
         if fichiers.get("resume"):
             sortie["resume"] = json.loads(
@@ -2203,11 +2422,16 @@ def dialogue_job(jid: str, authorization: Optional[str] = Header(default=None)):
 
 @app.get("/dialogue/jobs/{jid}/fichier")
 def dialogue_fichier(jid: str, cle: str = Query(default=""),
-                     telecharger: int = Query(default=0), nom: str = Query(default="")):
+                     telecharger: int = Query(default=0), nom: str = Query(default=""),
+                     version: str = Query(default="")):
     attendu = jeton_dialogue(jid)
     if not attendu or not hmac.compare_digest(cle, attendu):
         raise HTTPException(401, "Unauthorized")
-    art = dialogue_fichiers(jid).get("son")
+    fichiers = dialogue_fichiers(jid)
+    # Par defaut la version nettoyee, quand elle existe ; << version=origine >>
+    # rend ce que le modele a produit, intact. Les deux restent servies.
+    art = fichiers.get("son") if version == "origine" else (
+        fichiers.get("son_nettoye") or fichiers.get("son"))
     if not art:
         raise HTTPException(404, "Pas de dialogue pour ce travail")
     chemin = ART / art["path"]

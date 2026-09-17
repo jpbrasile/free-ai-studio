@@ -1084,6 +1084,19 @@ WHISPER_SILENCES = os.getenv("WHISPER_VAD_FILTER", "true").lower() == "true"
 WHISPER_DOSSIER = os.getenv("WHISPER_MODEL_DIR", "/modeles")
 _whisper: Dict[str, Any] = {"modele": None}
 _whisper_verrou = threading.Lock()
+# Alignement mot a mot (/v1/audio/alignement), pour le nettoyage du dialogue.
+# MODELE ET VERROU A PART, et les deux separations comptent :
+#   - meme emplacement = le medium evincerait le small de la dictee a chaque
+#     nettoyage, et la dictee redeviendrait lente sans que personne comprenne ;
+#   - meme verrou = une dictee interactive attendrait derriere un alignement de
+#     60 s. Les deux se disputeront le processeur ; une dictee ralentie vaut
+#     mieux qu'une dictee bloquee.
+# << medium >> est le choix de l'utilisateur, 17/09/2026 (<< medium, comme la
+# reparation validee >>) : c'est le modele avec lequel les cinq intrusions ont
+# ete trouvees et la reparation approuvee a l'oreille.
+WHISPER_ALIGNEMENT = os.getenv("ALIGNEMENT_WHISPER_MODEL", "medium").strip() or "medium"
+_whisper_align: Dict[str, Any] = {"modele": None}
+_whisper_align_verrou = threading.Lock()
 DICTEE_MODELE = "free-ai-dictee"
 # Releve du 15/09/2026 (console.groq.com/docs/speech-to-text et /rate-limits) :
 # taux d'erreur annonce par Groq 10,3 % (12 % pour la variante turbo) ; palier
@@ -1175,6 +1188,59 @@ def prechauffer_whisper() -> None:
         log.warning("Whisper local non telecharge d'avance (%s) : %s", WHISPER_LOCAL, exc)
         return
     log.info("Whisper local pret (%s)", WHISPER_LOCAL)
+
+
+def transcrire_alignement(audio: bytes, langue: Optional[str]) -> Dict[str, Any]:
+    """Transcrit MOT A MOT, avec l'instant de chaque mot.
+
+    Sert le nettoyage du dialogue a deux voix : comparer ce qui a ete ENTENDU
+    au texte ENVOYE, et retirer ce que le modele a ajoute de lui-meme.
+
+    TROIS REGLAGES QUI NE SONT PAS DES PREFERENCES. Chacun a ete paye par un
+    essai rate le 17/09/2026, et les inverser rendrait cette route inutile sans
+    qu'aucune erreur ne s'affiche :
+
+      vad_filter=False -- le filtre de detection de voix SUPPRIME les passages
+      faibles entre deux repliques, c'est-a-dire exactement ceux qu'on examine.
+      Actif, il efface la preuve avant qu'on la regarde.
+
+      condition_on_previous_text=False -- sinon Whisper se sert du contexte pour
+      rendre un texte plausible : il REPARE ce qu'il entend, et l'intrusion
+      disparait du rapport.
+
+      word_timestamps=True -- sans les instants, on saurait qu'il y a une
+      intrusion sans savoir ou couper.
+
+    RESERVE, a dire a qui lira le resultat : Whisper SOUS-ESTIME. Entraine a
+    produire du langage bien forme, il rend un charabia par le mot reel le plus
+    proche. Ce qui ressort est un plancher, pas un compte.
+    """
+    from faster_whisper import WhisperModel  # lourd : importe seulement ici
+
+    with _whisper_align_verrou:
+        if _whisper_align["modele"] is None:
+            # Telecharge a la PREMIERE demande, pas au demarrage. Ce modele pese
+            # plus lourd que celui de la dictee, et la plupart des installations
+            # ne s'en serviront jamais : le prechauffer couterait ce poids a
+            # tout le monde pour une fonction que peu utilisent.
+            _whisper_align["modele"] = WhisperModel(
+                WHISPER_ALIGNEMENT, device="cpu", compute_type="int8",
+                download_root=WHISPER_DOSSIER)
+        modele = _whisper_align["modele"]
+        segments, info = modele.transcribe(
+            io.BytesIO(audio), language=langue, beam_size=5, temperature=0.0,
+            word_timestamps=True, vad_filter=False,
+            condition_on_previous_text=False)
+        mots: List[Dict[str, Any]] = []
+        for segment in segments:
+            for mot in (segment.words or []):
+                texte = str(mot.word).strip()
+                if texte:
+                    mots.append({"mot": texte,
+                                 "debut": round(float(mot.start), 3),
+                                 "fin": round(float(mot.end), 3)})
+    return {"modele": WHISPER_ALIGNEMENT, "langue": info.language,
+            "duree": round(float(info.duration), 2), "mots": mots}
 
 
 async def aligner_dictee(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
@@ -3071,6 +3137,50 @@ async def audio_transcriptions(request: Request, authorization: Optional[str] = 
                                   "puis reessayez.")
     log.info("Dictee : Whisper local %s (%s)", WHISPER_LOCAL, motif)
     return JSONResponse({"text": texte})
+
+
+@app.post("/v1/audio/alignement")
+async def audio_alignement(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Transcription MOT A MOT, pour aligner un audio sur le texte qui l'a produit.
+
+    Route DISTINCTE de /v1/audio/transcriptions, et la separation est voulue :
+    celle-ci rend des instants, celle-la une phrase. La dictee est interactive,
+    elle garde son modele << small >> et son contrat {"text": ...} ; y greffer
+    l'alignement l'aurait ralentie pour tout le monde.
+
+    JAMAIS Groq. Le service est local par construction : la voix ne sort pas de
+    l'ordinateur, et Groq ne rendrait de toute facon pas les reglages qui font
+    l'interet de cette route (voir transcrire_alignement).
+
+    Appelee par le Sandbox (/dialogue) avec la cle interne, sur le reseau du
+    compose. Rien n'est garde : ni l'audio, ni le texte.
+    """
+    if not auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        formulaire = await request.form()
+    except Exception as exc:  # un corps qui n'est pas un formulaire
+        log.warning("Alignement illisible : %s", exc)
+        raise HTTPException(400, "Envoyez l'audio dans un formulaire, champ « file ».") from exc
+    fichier = formulaire.get("file")
+    if fichier is None or isinstance(fichier, str):
+        raise HTTPException(400, "Aucun fichier audio n'a ete envoye.")
+    audio = await fichier.read()
+    if not audio:
+        raise HTTPException(400, "Le fichier audio est vide.")
+    langue = langue_de_dictee(formulaire.get("langue"))
+
+    try:
+        resultat = await asyncio.to_thread(transcrire_alignement, audio, langue)
+    except Exception as exc:  # modele absent, audio illisible, memoire
+        log.warning("Alignement en echec (%s) : %s", WHISPER_ALIGNEMENT, exc)
+        raise HTTPException(
+            503, "Le Whisper d'alignement n'a pas pu transcrire. Au premier usage il se "
+                 "telecharge : verifiez la connexion, puis reessayez.") from exc
+    # Le journal dit combien de mots, jamais lesquels.
+    log.info("Alignement : %s, %d mots pour %.1f s", WHISPER_ALIGNEMENT,
+             len(resultat["mots"]), resultat["duree"])
+    return JSONResponse(resultat)
 
 
 @app.get("/dictee/etat")

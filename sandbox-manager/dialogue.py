@@ -5,11 +5,29 @@ audio ou les voix se repondent. Ce n'est PAS la synthese vocale du routeur
 (/v1/audio/speech, Piper, une voix par langue, sur processeur) : ici le modele
 fabrique une conversation, pas une lecture.
 
-UN SEUL ENDROIT : Modal. /chanson offre aussi Kaggle et Colab parce que son
-chemin sur carte T4 a ete essaye en vrai, le 15/09. Pour ce modele-ci, rien n'a
-jamais tourne nulle part : proposer un endroit gratuit non verifie reviendrait a
-vendre un essai dont personne ne connait le resultat. Modal seul, et la page le
-dit.
+DEUX ENDROITS, ET CHACUN A TOURNE EN VRAI : Modal et Kaggle. Cette page n'a
+longtemps propose que Modal, parce que rien n'avait jamais tourne ailleurs. Ce
+motif a cesse d'exister le 17/09/2026, par deux mesures et non par un
+raisonnement : sur UNE Tesla T4 de Kaggle, pic de 12,13 Go sur 14,56 pour 9,5 s
+d'audio, puis 12,95 Go pour 147,5 s -- 1,61 Go de marge, en float32, sans
+bfloat16. Le << non >> ecrit le matin meme partait des 14 Go annonces par les
+auteurs, pris pour une mesure alors que le vrai cout etait 12,13.
+
+COLAB RESTE REFUSE, et pas par prudence vague : la mesure du 16/09 est deja
+payee par ce projet (chanson.py:678). Colab gratuit est mort faute de MEMOIRE
+VIVE (~12,7 Go, une seule carte) avec une chanson de 7 Go ; ce modele-ci pese
+12,6 Go de poids, qui transitent par la RAM au chargement.
+
+CE QUE KAGGLE COUTE, ET QU'IL FAUT DIRE : x3,35 le temps reel (494 s de calcul
+pour 148 s d'audio), soit de l'ordre de douze minutes d'attente de bout en bout
+pour trois minutes de dialogue, telechargement des poids compris. C'est gratuit,
+pas rapide.
+
+LA BORNE EST CELLE DE LA MESURE, PAS CELLE DE L'ANNONCE. 147,5 s ne sont pas les
+180 s annoncees par les auteurs : le maximum reel n'a jamais ete atteint. La
+route refuse donc sur Kaggle au-dela de ce qui a REELLEMENT tourne, plutot que
+d'extrapoler -- c'est en prenant une extrapolation pour un fait que le faux
+<< non >> du matin a ete ecrit.
 
 CE QUI N'EST PAS MESURE, ET QUI COMPTE :
 - Le francais. Le modele l'annonce parmi sept langues ; AUCUN banc d'essai
@@ -75,6 +93,24 @@ MEMOIRE_MB = int(os.getenv("DIALOGUE_MEMORY_MB", "24576"))
 # surveiller chez Modal.
 VOLUME_MODELES = os.getenv("VIDEO_MODAL_VOLUME", "free-ai-studio-modeles")
 CACHE_MODAL = "/modeles/hf"
+
+# --- Kaggle, ouvert le 17/09/2026 apres deux mesures reelles ------------------
+# Kaggle choisit la carte d'apres machine_shape. Les deux essais ont tourne sur
+# une Tesla T4 ; le script n'a besoin que d'une seule carte, la seconde ne sert a
+# rien ici (FireRedTTS2 est construit avec device="cuda", donc la carte 0 seule).
+KAGGLE_MACHINE = os.getenv("DIALOGUE_KAGGLE_MACHINE", "NvidiaTeslaT4")
+# Mesure du 17/09 : 720,4 s de bout en bout pour le dialogue le plus long
+# (installation 23,4 s, poids 86 s, chargement 107,8 s, rendu 494,1 s). Le delai
+# laisse une marge large -- Kaggle coupe lui-meme a l'echeance, et un notebook
+# coupe trop tot serait un quota perdu pour rien.
+KAGGLE_DELAI_S = int(os.getenv("DIALOGUE_KAGGLE_TIMEOUT_SECONDS", "3600"))
+# LA BORNE EST UN RELEVE, PAS UN REGLAGE. 2 725 caracteres, 35 repliques,
+# 147,5 s d'audio : c'est exactement ce qui a tourne, pour un pic de 12,95 Go sur
+# 14,56. Au-dela, personne ne sait -- l'extrapolation donnerait ~13,2 Go et
+# tiendrait sans doute, mais << sans doute >> n'est pas une mesure, et c'est ce
+# raccourci qui a produit un faux verdict le matin meme. Sur Modal, ou la carte a
+# 24 Go, MAX_CARACTERES reste seul en vigueur.
+KAGGLE_MAX_CARACTERES = 2725
 
 MODELE = {
     "hf": "FireRedTeam/FireRedTTS2",
@@ -246,6 +282,15 @@ PAQUETS_MODAL = (
 # liste fait foi, et c'est la leur -- en maintenir une seconde a cote invitait
 # la derive qui a coute les deux lancements du 17/09.
 
+# SUR KAGGLE, torch ET torchaudio SONT RETIRES DE LA LISTE. Leur image porte
+# torch 2.10.0+cu128, compile pour leur carte ; le remplacer casserait CUDA. Meme
+# regle que pour la chanson (chanson.py:268), et elle est MESUREE ici : le
+# 17/09, torchao 0.17.0 et torchtune 0.6.1 se sont poses sur LEUR torch sans le
+# remplacer (garde explicite relisant la version apres coup, cuda: True), et
+# transformers 5.0.0 n'a pas gene, alors que l'amont n'a pas ete ecrit pour cette
+# version majeure. Leur image porte torchao 0.10.0, d'ou l'epingle qui compte.
+PAQUETS_KAGGLE = tuple(p for p in PAQUETS_MODAL if p not in ("torch", "torchaudio"))
+
 # LA PROCEDURE DES AUTEURS, EXECUTEE TELLE QUELLE.
 #
 # Elle tourne APRES les paquets ci-dessus, et cet ordre est le correctif. Il est
@@ -366,11 +411,18 @@ class BudgetDepasse(RuntimeError):
 _SCRIPT = r'''# -*- coding: utf-8 -*-
 """Rend un dialogue a plusieurs voix avec FireRedTTS-2. Genere par Free AI Studio.
 
-Rien ne s'installe ici : tout est dans l'image Modal, construite une fois puis
-mise en cache. Seuls les poids se telechargent, et seulement ceux du mode
+SUR MODAL, rien ne s'installe ici : tout est dans l'image, construite une fois
+puis mise en cache. Seuls les poids se telechargent, et seulement ceux du mode
 dialogue.
+
+SUR KAGGLE, il n'y a pas d'image a nous : les bibliotheques et le code des
+auteurs s'installent au debut de CE script, a chaque fois. Leur PyTorch est
+garde tel quel -- il est compile pour leur carte.
 """
-import base64, json, os, sys, time
+# importlib sert a invalidate_caches(), plus bas, apres l'ajout du depot a
+# sys.path. Bibliotheque standard : rien a installer, sur aucune des deux
+# machines.
+import base64, importlib, json, os, subprocess, sys, time
 
 DEBUT = time.time()
 D = json.loads(base64.b64decode("__DEMANDE__").decode("utf-8"))
@@ -384,6 +436,68 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 AVERTISSEMENTS = []
 TEMPS = {}
+
+
+def installer(*args):
+    # sys.executable, JAMAIS le pip du PATH. Sur Kaggle ce sont deux
+    # interpreteurs differents : le 17/09/2026, un << pip install -e . >> nu a
+    # reussi, pose le paquet dans un autre site-packages, et le travail est mort
+    # 89 s plus tard sur ModuleNotFoundError: No module named 'fireredtts2'.
+    # Un quota a ete perdu pour redecouvrir un correctif qui dormait deja dans
+    # le fichier voisin (chanson.py).
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", *args])
+
+
+if D.get("installer"):
+    # Kaggle : leur PyTorch est garde, il est compile pour leur carte.
+    t0 = time.time()
+    print("Installation des bibliotheques ...", flush=True)
+    # NOS EPINGLES D'ABORD. Le requirements.txt de l'amont demande torchao et
+    # torchtune SANS version ; une contrainte nue est satisfaite par n'importe
+    # quelle version deja posee, et pip ne met a niveau que sur -U. Dans l'autre
+    # ordre, la commande officielle remonterait torchao en silence et rejouerait
+    # la panne ModuleNotFoundError: No module named 'torchao.dtypes.nf4tensor'.
+    installer(*D["paquets"])
+    depot = "/kaggle/working/FireRedTTS2"
+    if not os.path.isdir(depot):
+        subprocess.check_call(["git", "clone", D["code"] + ".git", depot])
+    if D.get("code_revision"):
+        subprocess.check_call(["git", "-C", depot, "checkout", D["code_revision"]])
+    # Leur procedure, telle quelle. << pip install -e . >> et non
+    # << pip install . >> : leur setup.py se reduit a find_packages(), et
+    # fireredtts2/utils/ n'a pas d'__init__.py -- une installation par copie
+    # livrerait un paquet AMPUTE de spliter.py. En mode editable, l'arborescence
+    # source reste en place et le dossier s'importe quand meme.
+    installer("-e", depot)
+    installer("-r", os.path.join(depot, "requirements.txt"))
+    # ET POURTANT CELA NE SUFFIT PAS ICI. Mesure du 17/09/2026, reproduite hors
+    # Kaggle AVANT d'etre corrigee, sur un paquet d'essai de la meme forme :
+    # une installation editable ne prend pas effet dans le processus qui la
+    # lance. Elle ne copie rien -- elle depose un __editable__*.pth et un
+    # finder dans site-packages -- et un .pth n'est lu qu'au DEMARRAGE de
+    # l'interpreteur. Meme paquet, meme pip, meme machine : import dans le
+    # processus courant -> ModuleNotFoundError ; import dans un processus neuf
+    # -> succes.
+    #
+    # Sur Modal la question ne se pose pas : l'installation a lieu a la
+    # construction de l'image, et le rendu demarre APRES, dans un interpreteur
+    # neuf. Sur Kaggle, installer et importer sont le meme processus. C'est
+    # toute la difference entre un chemin qui marche et un chemin mort a 83 s
+    # sur << No module named 'fireredtts2' >>, poids de 12,6 Go deja payes.
+    #
+    # Le premier correctif, le 17/09 au matin, avait accuse le pip du PATH et
+    # impose sys.executable. Il n'a rien change a cette panne : elle est revenue
+    # a l'identique, parce que ce n'etait pas la cause. Il est garde -- il reste
+    # juste par ailleurs -- mais on cesse de lui attribuer cette correction-ci.
+    #
+    # Le remede tient au chemin d'import, pas a pip, et il conserve exactement
+    # ce que l'editable apportait : l'arborescence source reste en place, donc
+    # fireredtts2/utils/ sans __init__.py s'importe quand meme. Les deux ont ete
+    # verifies dans la reproduction.
+    sys.path.insert(0, depot)
+    importlib.invalidate_caches()
+    TEMPS["installation"] = round(time.time() - t0, 1)
+    print("Bibliotheques pretes en %.0f s" % TEMPS["installation"], flush=True)
 
 import torch
 
@@ -514,12 +628,13 @@ def construire_script(demande: dict) -> str:
     return _SCRIPT.replace("__DEMANDE__", charge)
 
 
-def preparer(payload: dict) -> dict:
+def preparer(payload: dict, ou: str = "modal") -> dict:
     """Traduit ce que la page a envoye en une demande complete et bornee.
 
     Refuse AVANT de lancer tout ce qui ferait echouer le travail une fois la
     carte payee : ligne sans balise, balise hors des quatre locuteurs, replique
-    vide, texte trop long.
+    vide, texte trop long -- et, sur Kaggle, un dialogue plus long que celui qui
+    y a reellement tourne.
     """
     texte = str(payload.get("texte") or "").replace("\r\n", "\n").strip()
     if not texte:
@@ -530,6 +645,19 @@ def preparer(payload: dict) -> dict:
         raise ValueError(
             f"Dialogue trop long ({len(texte)} caractères, {MAX_CARACTERES} au plus). "
             f"Le modèle ne tient que trois minutes.")
+    # LA BORNE KAGGLE EST CELLE DE LA MESURE. Le seul dialogue long qui y ait
+    # tourne faisait 2 725 caracteres, pour un pic de 12,95 Go sur 14,56 -- il
+    # restait 1,61 Go. Au-dela, personne ne sait : refuser coute une phrase, un
+    # depassement de memoire coute douze minutes d'attente et un quota.
+    if ou == "kaggle" and len(texte) > KAGGLE_MAX_CARACTERES:
+        raise ValueError(
+            f"Sur Kaggle, ce dialogue est trop long ({len(texte)} caractères, "
+            f"{KAGGLE_MAX_CARACTERES} au plus). Ce n'est pas une limite du modèle mais celle "
+            f"de ce qui a été mesuré : la carte T4 gratuite a rendu 147,5 s d'audio en "
+            f"laissant 1,61 Go de marge, et au-delà personne n'a jamais essayé. Le Studio "
+            f"refuse plutôt que de vous faire attendre douze minutes un rendu dont personne "
+            f"ne connaît le résultat. Raccourcissez, ou choisissez Modal, dont la carte a "
+            f"24 Go.")
 
     repliques = []
     locuteurs = []
@@ -563,19 +691,28 @@ def preparer(payload: dict) -> dict:
             f"Dialogue trop découpé ({len(repliques)} répliques, {MAX_REPLIQUES} au plus).")
 
     distincts = sorted(set(locuteurs))
+    pour_modal = ou == "modal"
     demande = {
         "modele": MODELE["hf"],
         "revision": MODELE["revision"],
+        "code": MODELE["code"],
         "code_revision": MODELE["code_revision"],
         "fichiers": list(FICHIERS_MODELE),
         "poids_go": MODELE["poids_go"],
         "echantillonnage": MODELE["echantillonnage"],
         "repliques": repliques,
         "locuteurs": distincts,
-        "cache": CACHE_MODAL,
+        # Modal : bibliotheques dans l'image, poids sur le disque persistant.
+        # Kaggle : rien n'est garde d'une fois sur l'autre, tout s'installe et se
+        # retelecharge dans le script.
+        "cache": CACHE_MODAL if pour_modal else "",
+        "installer": not pour_modal,
+        "paquets": [] if pour_modal else list(PAQUETS_KAGGLE),
     }
+    carte = {"modal": GPU_MODAL + " (Modal)", "kaggle": "T4 (Kaggle)"}.get(ou, ou)
     return {
         "gpu": GPU_MODAL,
+        "ou": ou,
         "demande": demande,
         "resume_public": {
             "modele": MODELE["hf"],
@@ -584,7 +721,7 @@ def preparer(payload: dict) -> dict:
             "licence": MODELE["licence"] + " — " + MODELE["restriction"]
                        + " ; " + MODELE["reserve_auteurs"],
             "territoire": MODELE["territoire"],
-            "carte": GPU_MODAL + " (Modal)",
+            "carte": carte,
             "repliques": len(repliques),
             "locuteurs": distincts,
             "caracteres": len(texte),
@@ -647,9 +784,15 @@ les voix se répondent, façon podcast. Jusqu’à trois minutes et quatre locut
 <span id="note-texte" class="avert"></span></p>
 
 <div class="ligne">
+  <label>Où
+    <select id="ou">
+      <option value="modal" selected>Modal — machine louée (carte bancaire exigée)</option>
+      <option value="kaggle">Kaggle — gratuit, bien plus lent</option>
+    </select>
+  </label>
   <button id="lancer" class="primaire">Faire parler</button>
-  <span class="avert">Sur Modal uniquement — voir plus bas pourquoi.</span>
 </div>
+<p id="ou-texte" class="avert"></p>
 <p id="licence" class="licence"></p>
 <p id="reserves" class="avert"></p>
 
@@ -685,6 +828,27 @@ document.getElementById("modele-texte").addEventListener("click", () => {
   note.textContent = "";
   champ.focus();
 });
+
+// Ce que chaque endroit implique, dit LA OU L'ON CHOISIT -- pas en note de bas
+// de page. Les deux ont tourne en vrai le 17/09 ; ce qui les separe est le prix
+// et l'attente, et les deux chiffres sont des releves.
+function majOu(){
+  const ou = document.getElementById("ou").value;
+  const texte = {
+    modal: "Carte " + (ETAT ? ETAT.carte_modal : "L4") + " louée à la seconde. Relevé du "
+      + "17/09 : environ 0,03 $ et 105 s pour un dialogue, une fois les poids en cache. "
+      + "Au pire " + (ETAT ? ETAT.cout_max_modal_usd.toFixed(2) : "?") + " $ si le calcul "
+      + "va jusqu’au délai maximal.",
+    kaggle: "Carte T4 gratuite, sur votre compte Kaggle. Mesuré le 17/09 : 12,95 Go de "
+      + "mémoire utilisés sur 14,56 pour 147,5 s d’audio — il restait 1,61 Go. C’est gratuit "
+      + "mais lent : environ <b>3,3 fois le temps réel</b>, soit une douzaine de minutes "
+      + "d’attente pour trois minutes de dialogue, téléchargement des poids compris. Le texte "
+      + "est limité à " + (ETAT ? ETAT.kaggle_max_caracteres : "2725") + " caractères, "
+      + "c’est-à-dire à ce qui y a réellement tourné."
+  }[ou];
+  document.getElementById("ou-texte").innerHTML = texte || "";
+}
+document.getElementById("ou").addEventListener("change", majOu);
 
 function budgetTexte(b){
   const part = Math.min(100, 100 * b.usd / b.plafond_usd);
@@ -728,9 +892,15 @@ function rafraichir(){
         + "tous portent sur le mandarin et l’anglais. Personne n’a encore écouté ce que ça donne.",
         "Le coût n’est pas annoncé parce qu’il n’a jamais été mesuré pour ce modèle. Le seul "
         + "repère du Studio est la chanson, à 0,044 $ pour deux minutes sur la même carte.",
-        "Modal uniquement : le chemin gratuit de la chanson (carte T4 de Kaggle) a été essayé "
-        + "en vrai, celui-ci ne l’a jamais été. Proposer un endroit non vérifié reviendrait à "
-        + "vous vendre un essai dont personne ne connaît le résultat."
+        "<b>Le nettoyage est systématique.</b> Ce modèle insère parfois de la parole que "
+        + "personne n’a demandée, y compris en anglais — mesuré le 17/09 : cinq intrusions "
+        + "en 147,5 s, toutes en fin de réplique. Le Studio transcrit le rendu, le compare "
+        + "au texte envoyé et retire ce qui a été ajouté. <b>Le fichier d’origine reste "
+        + "téléchargeable</b> : rien n’est coupé en douce. La transcription sous-estime, "
+        + "donc ce qui est retiré est un plancher, pas un compte.",
+        "Colab n’est pas proposé : la mesure du 16/09 a montré qu’il manque de mémoire vive "
+        + "(environ 12,7 Go) pour des poids de 12,6 Go. C’est un échec dont la cause est "
+        + "connue d’avance."
       ];
       if(!m.code_revision){
         reserves.push("Les <b>poids</b> sont épinglés à une révision précise, mais le "
@@ -739,6 +909,16 @@ function rafraichir(){
           + "l’identique.");
       }
       document.getElementById("reserves").innerHTML = "· " + reserves.join("<br>· ");
+      // Kaggle automatique se sert des identifiants PERSONNELS du proprietaire
+      // de cette machine. Des que le Studio sert quelqu'un d'autre, le serveur
+      // refuse ; la page le dit d'avance plutot que de laisser cliquer pour
+      // rien. Le verrou qui compte est celui du serveur, pas celui-ci.
+      if(d.kaggle_permis === false){
+        const k = document.querySelector('#ou option[value="kaggle"]');
+        k.disabled = true;
+        k.textContent = "Kaggle — coupé ici : Studio partagé";
+      }
+      majOu();
       document.getElementById("pied").innerHTML = "Rien ne part chez un fournisseur d’IA : le "
         + "modèle tourne sur une machine que vous louez."
         + '<br><a href="/">Retour au Sandbox</a> &nbsp; <a href="/cles">Brancher Modal ou Kaggle</a>';
@@ -776,6 +956,36 @@ function nomDeFichier(){
   return jour + "-" + heure + "-" + (mots || "dialogue") + ".wav";
 }
 
+// CE QUI A ETE RETIRE SE DIT. Defaut reel du 17/09, trouve en lancant un vrai
+// dialogue : le serveur envoyait bien le rapport, la page le jetait. Elle a
+// coupe 4,67 s sur 65,12 s sans l’ecrire nulle part, alors que ses propres
+// reserves promettent que le fichier d’origine reste telechargeable. Les trois
+// cas comptent, y compris celui ou le nettoyage n’a PAS eu lieu : le taire
+// laisserait croire qu’un rendu a ete verifie alors qu’il ne l’a pas ete.
+function blocNettoyage(n){
+  if(!n) return "";
+  if(n.fait === false){
+    return '<p class="avert"><b>Le nettoyage n’a pas eu lieu</b> — ' + echapper(n.motif || "raison inconnue")
+      + '. Le dialogue est livré tel que le modèle l’a produit.</p>';
+  }
+  const coupes = n.coupes || 0;
+  if(!coupes){
+    return '<p class="avert"><b>Nettoyage : rien à retirer.</b> Le rendu correspond au texte envoyé. '
+      + 'La transcription sous-estime, donc c’est un plancher, pas une garantie.</p>';
+  }
+  const details = n.details || [];
+  const morceaux = details.filter(d => d.millisecondes)
+    .map(d => '« ' + echapper(d.texte) + ' » à ' + d.debut + ' s (' + d.millisecondes + ' ms)');
+  const gardes = details.filter(d => d.garde).length;
+  let t = '<p class="avert"><b>Nettoyage : ' + coupes + ' passage(s) retiré(s)</b>, '
+    + n.secondes_retirees + ' s en tout — de ' + n.duree_avant_s + ' s à ' + n.duree_apres_s + ' s.';
+  if(morceaux.length) t += '<br>' + morceaux.join('<br>');
+  if(gardes) t += '<br>' + gardes + ' passage(s) épargné(s) par les gardes : une élision ou un '
+    + 'nombre réellement prononcé ne se coupe pas.';
+  t += '<br>La transcription sous-estime : ce qui a été retiré est un plancher, pas un compte.</p>';
+  return t;
+}
+
 function afficherDialogue(j){
   const r = j.resume || {};
   const nom = nomDeFichier();
@@ -783,6 +993,17 @@ function afficherDialogue(j){
   let html = '<audio id="lecteur" controls src="' + j.son_url + '"></audio>'
     + '<div class="ligne"><a class="bouton" href="' + lien + '" download="' + nom + '">⬇️ Télécharger le dialogue</a>'
     + '<span class="avert">Fichier WAV, ' + (r.echantillonnage || 24000) / 1000 + ' kHz.</span></div>';
+  // Nom DIFFERENT pour l’original : deux fichiers de meme nom se recouvrent
+  // dans le dossier de telechargement, et la comparaison a l’oreille -- seul
+  // juge reel de ce nettoyage -- deviendrait impossible.
+  if(j.son_original_url){
+    const nomOrigine = nom.slice(0, -4) + "-origine.wav";
+    const lienOrigine = j.son_original_url + "&telecharger=1&nom=" + encodeURIComponent(nomOrigine);
+    html += '<div class="ligne"><a class="bouton" href="' + lienOrigine + '" download="' + nomOrigine
+      + '">⬇️ Télécharger l’original, avant nettoyage</a>'
+      + '<span class="avert">Le son joué ci-dessus est la version nettoyée.</span></div>';
+  }
+  html += blocNettoyage(j.nettoyage);
   const notes = [];
   if(r.locuteurs) notes.push("Locuteurs entendus : " + r.locuteurs.map(n => "[S" + n + "]").join(", ")
     + " sur " + r.repliques + " réplique(s).");
@@ -814,7 +1035,12 @@ function suivre(id){
         clearInterval(minuteur); minuteur = null;
         cacherArret();
         document.getElementById("lancer").disabled = false;
-        afficherJournal([j.stdout, j.stderr].filter(Boolean).join("\n"));
+        // Le journal du noyau Kaggle s’ajoute aux deux autres. Le 17/09/2026,
+        // sur le premier echec du chemin gratuit, stdout et stderr etaient
+        // vides tous les deux : « Voir le détail technique » s’ouvrait sur du
+        // vide, et il ne restait au debutant qu’a relancer au hasard, sur son
+        // quota, sans rien savoir de ce qui avait casse.
+        afficherJournal([j.stdout, j.stderr, j.journal_kaggle].filter(Boolean).join("\n"));
         rafraichir();
         if(j.son_url){
           const r = j.resume || {};
@@ -838,7 +1064,8 @@ function suivre(id){
 document.getElementById("lancer").addEventListener("click", () => {
   const bouton = document.getElementById("lancer");
   const etat = document.getElementById("etat");
-  const corps = {texte: document.getElementById("texte").value};
+  const corps = {texte: document.getElementById("texte").value,
+                 ou: document.getElementById("ou").value};
   bouton.disabled = true;
   etat.textContent = "Envoi…";
   document.getElementById("resultat").innerHTML = "";
