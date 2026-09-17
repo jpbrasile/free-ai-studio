@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 import chanson
 import depenses
+import dialogue
 import video
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -2036,6 +2037,176 @@ def chanson_abcjs():
     return FileResponse(chemin, media_type="application/javascript")
 
 
+# --- Dialogue -----------------------------------------------------------------
+# Un script a plusieurs voix, rendu facon podcast par FireRedTTS-2. Meme
+# principe que la chanson pour le compteur, le laissez-passer et l'arret
+# d'urgence -- MAIS UN SEUL ENDROIT : Modal. Le chemin gratuit de la chanson
+# (carte T4 de Kaggle) a ete essaye en vrai le 15/09 ; celui-ci ne l'a jamais
+# ete nulle part, et proposer un endroit non verifie reviendrait a vendre un
+# essai dont personne ne connait le resultat.
+# Le detail (modele, licence, prix, script envoye au GPU, page) est dans
+# dialogue.py.
+
+
+def jeton_dialogue(jid: str) -> str:
+    """Laissez-passer pour UN fichier, comme jeton_chanson : la balise <audio>
+    ne sait pas envoyer d'en-tete, et la cle maitresse ne va jamais dans une
+    adresse. Le prefixe differe de celui de la chanson, sinon un jeton obtenu
+    sur une route ouvrirait le fichier de l'autre."""
+    if not KEY:
+        return ""
+    return hmac.new(KEY.encode(), ("dialogue:" + jid).encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def dialogue_fichiers(jid: str) -> dict:
+    """Retrouve le son et le resume parmi les artefacts du travail."""
+    trouve = {}
+    for art in read_job(jid).get("artifacts", []):
+        nom = str(art.get("name", ""))
+        if art.get("skipped") or not art.get("id"):
+            continue
+        for suffixe, cle in (("dialogue.wav", "son"), ("resume.json", "resume")):
+            if nom.endswith(suffixe):
+                trouve[cle] = art
+    return trouve
+
+
+def run_dialogue(jid: str, code: str):
+    """Lance le dialogue, puis encaisse le temps Modal reellement consomme.
+
+    Le finally encaisse meme en cas d'echec : une machine qui tombe a quand meme
+    tourne, et le premier lancement telecharge environ 12,6 Go au tarif de la
+    carte, puisque le compteur facture le temps d'horloge.
+    """
+    debut = time.time()
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
+    write_job(jid, job)
+    try:
+        donnees = modal_execute(
+            jid, code, True, True,
+            gpu_type=dialogue.GPU_MODAL,
+            timeout_s=dialogue.DUREE_MAX_S,
+            memory_mb=dialogue.MEMOIRE_MB,
+            paquets=dialogue.PAQUETS_MODAL,
+            apt=dialogue.APT_MODAL,
+            volume=dialogue.VOLUME_MODELES,
+        )
+        finish_execution(jid, "modal", donnees)
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        reste = dialogue.budget_consommer(dialogue.GPU_MODAL, time.time() - debut)
+        job = read_job(jid)
+        job["budget"] = reste
+        write_job(jid, job)
+
+
+@app.get("/dialogue/etat")
+def dialogue_etat(authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    return {
+        "budget": dialogue.budget_lire(),
+        # MODELE porte la licence ET la reserve des auteurs : les deux doivent
+        # arriver jusqu'a la page, qui les affiche la ou le modele se choisit.
+        "modele": dialogue.MODELE,
+        "carte_modal": dialogue.GPU_MODAL,
+        "cout_max_modal_usd": round(
+            dialogue.prix_seconde(dialogue.GPU_MODAL) * dialogue.DUREE_MAX_S, 3),
+        "locuteurs_max": dialogue.LOCUTEURS_MAX,
+        "max_caracteres": dialogue.MAX_CARACTERES,
+        "modal_configure": modal_configured(),
+    }
+
+
+@app.post("/dialogue/creer")
+async def dialogue_creer(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    payload = await corps_json(request)
+    # preparer() AVANT toute autre verification : un dialogue mal balise se
+    # refuse meme quand Modal n'est pas branche, et surtout sans rien payer.
+    try:
+        plan = dialogue.preparer(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    if not modal_configured():
+        raise HTTPException(503, "Modal n'est pas branché. Ouvrez la page « Brancher Modal "
+                                 "ou Kaggle » et collez les deux valeurs du jeton Modal.")
+    try:
+        dialogue.budget_verifier(plan["gpu"], dialogue.DUREE_MAX_S)
+    except dialogue.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+
+    code = dialogue.construire_script(plan["demande"])
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid,
+        "provider": "modal",
+        "title": "Free AI Studio dialogue",
+        "gpu": True,
+        "internet": True,
+        "status": "queued",
+        "created_at": time.time(),
+        "artifacts": [],
+        "dialogue": plan["resume_public"],
+    })
+    threading.Thread(target=run_dialogue, args=(jid, code), daemon=True).start()
+    return read_job(jid)
+
+
+@app.get("/dialogue/jobs/{jid}")
+def dialogue_job(jid: str, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    job = read_job(jid)
+    fichiers = dialogue_fichiers(jid)
+    sortie = {
+        "id": jid,
+        "status": job.get("status"),
+        "created_at": job.get("created_at"),
+        "stdout": job.get("stdout", ""),
+        "stderr": job.get("stderr", ""),
+        "message": job.get("error") or "",
+        "arret_detail": job.get("arret_detail") or "",
+        "dialogue": job.get("dialogue"),
+    }
+    if fichiers.get("son"):
+        sortie["son_url"] = f"/dialogue/jobs/{jid}/fichier?cle={jeton_dialogue(jid)}"
+    try:
+        if fichiers.get("resume"):
+            sortie["resume"] = json.loads(
+                (ART / fichiers["resume"]["path"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    return sortie
+
+
+@app.get("/dialogue/jobs/{jid}/fichier")
+def dialogue_fichier(jid: str, cle: str = Query(default=""),
+                     telecharger: int = Query(default=0), nom: str = Query(default="")):
+    attendu = jeton_dialogue(jid)
+    if not attendu or not hmac.compare_digest(cle, attendu):
+        raise HTTPException(401, "Unauthorized")
+    art = dialogue_fichiers(jid).get("son")
+    if not art:
+        raise HTTPException(404, "Pas de dialogue pour ce travail")
+    chemin = ART / art["path"]
+    if not chemin.exists() or chemin.is_symlink():
+        raise HTTPException(404, "Fichier absent")
+    if not telecharger:
+        return FileResponse(chemin, media_type="audio/wav")
+    propre = clean_name(nom) if nom else ""
+    if propre.lower().endswith(".wav"):
+        propre = propre[:-4]
+    propre = propre.strip("._-")
+    return FileResponse(chemin, media_type="audio/wav", filename=(propre or "dialogue") + ".wav")
+
+
+@app.get("/dialogue", response_class=HTMLResponse)
+def dialogue_page():
+    return HTMLResponse(dialogue.PAGE_HTML.replace("__CLE__", KEY))
+
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     return HTMLResponse(
@@ -2049,7 +2220,7 @@ def home():
 <div class=card><h2>Local <span id=b-local></span></h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
 <div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré — sur votre machine seulement, avec vos identifiants. L’accès direct reste toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
-</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/chanson'>🎵 Faire chanter des paroles</a> &nbsp;<a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
+</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/chanson'>🎵 Faire chanter des paroles</a> &nbsp; <a class=button href='/dialogue'>🎙️ Faire parler deux voix</a> &nbsp;<a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
 <script>
 (function(){
  var pastille = function(ok, oui, non){

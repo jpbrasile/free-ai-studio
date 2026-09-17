@@ -84,6 +84,18 @@ services:
       CHANSON_MEMORY_MB: ${CHANSON_MEMORY_MB:-24576}
       CHANSON_KAGGLE_MACHINE: ${CHANSON_KAGGLE_MACHINE:-NvidiaTeslaT4}
       CHANSON_KAGGLE_TIMEOUT_SECONDS: ${CHANSON_KAGGLE_TIMEOUT_SECONDS:-5400}
+      # Dialogue a plusieurs voix (FireRedTTS-2, 17/09/2026) : troisieme plafond
+      # Modal, a part des deux autres, compteur dans config/dialogue-budget.json.
+      # 5 + 20 + 5 = EXACTEMENT le credit declare dans MODAL_CREDIT_MENSUEL_USD,
+      # et aucun des trois compteurs ne voit les deux autres : ils peuvent donc
+      # atteindre leur plafond le meme mois. Seule la limite de depense reglee
+      # chez Modal arrete reellement la facture.
+      # Modal SEULEMENT : pas de variable Kaggle ici, ce modele n'a jamais tourne
+      # sur une carte T4 et la route refuse de proposer un endroit non verifie.
+      DIALOGUE_BUDGET_USD_PAR_MOIS: ${DIALOGUE_BUDGET_USD_PAR_MOIS:-5}
+      DIALOGUE_TIMEOUT_SECONDS: ${DIALOGUE_TIMEOUT_SECONDS:-1800}
+      DIALOGUE_GPU: ${DIALOGUE_GPU:-L4}
+      DIALOGUE_MEMORY_MB: ${DIALOGUE_MEMORY_MB:-24576}
     ports:
       - "127.0.0.1:8020:8000"
     networks:
