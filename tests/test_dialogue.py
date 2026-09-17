@@ -11,6 +11,7 @@ la qualite du son.
 """
 from __future__ import annotations
 
+import ast
 import time
 
 import pytest
@@ -265,6 +266,55 @@ def test_script_est_du_python_valide(di):
     compile(script, "dialogue_job.py", "exec")
     # Le mode compte : gen_type="dialogue" est ce qui choisit llm_posttrain.pt.
     assert 'gen_type="dialogue"' in script
+
+
+def test_le_script_ecrit_le_wav_sans_torchaudio(di):
+    """TROISIEME PANNE DU 17/09/2026, et la plus couteuse en information.
+
+    Le premier rendu reel du projet a abouti : le modele a charge (80 s) et
+    generate_dialogue a rendu (28 s, 5 pas). La parole EXISTAIT en memoire. Elle
+    a ete perdue a la derniere ligne :
+
+        ImportError: TorchCodec is required for save_with_torchcodec.
+
+    torchaudio.save() ne sait plus ecrire seul depuis sa migration vers
+    TorchCodec, absent de l'image -- et qui reclamerait en prime FFmpeg. Les
+    auteurs ne voient pas ce defaut : leur torchaudio==2.7.1 ecrivait encore
+    lui-meme.
+
+    Le correctif RETIRE une dependance au lieu d'en ajouter une : le module wave
+    de la bibliotheque standard ecrit un WAV PCM 16 bits sans rien installer.
+    Installer torchcodec aurait ete un troisieme pari sur une dependance apres
+    deux qui ont coute une carte chacun.
+
+    Le bloc est en outre exerce hors ligne par une sonde qui le DECOUPE dans
+    _SCRIPT et l'execute sur un vrai tenseur (bornage, entrelacement, relecture).
+    """
+    script = di.construire_script(di.preparer({"texte": DIALOGUE})["demande"])
+
+    # DEFAUT DE CE TEST LUI-MEME, corrige aussitot. Sa premiere version cherchait
+    # « torchaudio.save » dans le script entier -- et tombait, parce que le
+    # COMMENTAIRE du bloc cite precisement cet appel pour expliquer pourquoi il a
+    # disparu. Le garde confondait la prose et le code, et declarait rouge un
+    # script correct. On compare donc du CODE : ast.unparse regenere la source
+    # sans le moindre commentaire.
+    code_seul = ast.unparse(ast.parse(script))
+    assert "torchaudio" not in code_seul, (
+        "torchaudio est de retour dans le CODE du script : sa fonction save "
+        "delegue a TorchCodec, absent de l'image, et l'echec arrive APRES la "
+        "synthese -- carte payee, parole jetee."
+    )
+    assert "wave.open" in code_seul, "plus rien n'ecrit le fichier."
+    assert "clamp(-1.0, 1.0)" in code_seul, (
+        "le bornage a disparu : un echantillon au-dela de 1.0 deborde l'entier "
+        "signe et repasse par zero. Aucun chiffre du resume ne le montrerait, "
+        "mais ca s'entend comme un claquement."
+    )
+    # Les marqueurs, eux, VIVENT dans les commentaires : ils sont le contrat avec
+    # la sonde hors ligne, qui decoupe le bloc entre eux. Ils se cherchent donc
+    # dans le script brut, pas dans le code regenere.
+    assert "# --- DEBUT ecriture du WAV" in script
+    assert "# --- FIN ecriture du WAV" in script
 
 
 # --- Le compteur de depense ---------------------------------------------------

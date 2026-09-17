@@ -434,12 +434,50 @@ t0 = time.time()
 son = moteur.generate_dialogue(text_list=list(D["repliques"]))
 TEMPS["rendu"] = round(time.time() - t0, 1)
 
-import torchaudio
+# --- DEBUT ecriture du WAV (bloc exerce hors ligne par une sonde) -------------
+# torchaudio.save() NE SAIT PLUS ECRIRE SEUL. Depuis sa migration vers
+# TorchCodec il delegue, et TorchCodec n'est pas installe -- il reclamerait en
+# prime les bibliotheques FFmpeg dans l'image. Le PREMIER rendu reel du projet
+# a ete perdu ici meme, le 17/09/2026 : 80 s de chargement, 28 s de synthese,
+# la parole existait en memoire, et rien ne savait l'ecrire.
+#     ImportError: TorchCodec is required for save_with_torchcodec.
+# Les auteurs ne voient pas ce defaut : leur torchaudio==2.7.1 ecrivait encore
+# lui-meme.
+#
+# Ajouter torchcodec serait un TROISIEME pari sur une dependance, apres deux qui
+# ont coute une carte chacun. Le module wave de la bibliotheque standard ecrit
+# un WAV PCM 16 bits sans rien installer : on RETIRE une dependance au lieu d'en
+# ajouter une. torchaudio reste dans l'image -- fireredtts2 s'en sert en
+# interne -- on cesse seulement de lui demander d'ecrire.
+#
+# Forme relevee dans fireredtts2.py A LA REVISION EPINGLEE, pas supposee :
+# generate_dialogue fait torch.cat([...], dim=1) puis .cpu() et rend un
+# torch.Tensor (1, echantillons) float32, deja sur le processeur.
+import wave
+
+onde = son.detach().to("cpu", torch.float32)
+if onde.dim() == 1:
+    onde = onde.unsqueeze(0)
+canaux = int(onde.shape[0])
+echantillons = int(onde.shape[-1])
+
+# Borner AVANT de convertir. Sans clamp, un echantillon au-dela de 1.0 deborde
+# l'entier signe et repasse par zero : ca ne se voit dans aucun chiffre du
+# resume, et ca s'entend comme un claquement.
+entiers = (onde.clamp(-1.0, 1.0) * 32767.0).round().to(torch.int16)
+# wave attend les canaux ENTRELACES, echantillon par echantillon : (C, N) doit
+# donc etre transpose en (N, C) avant d'etre aplati. Sans quoi un futur rendu
+# stereo donnerait un canal joue apres l'autre.
+octets = entiers.t().contiguous().numpy().tobytes()
 
 chemin = os.path.join(SORTIE, "dialogue.wav")
-torchaudio.save(chemin, son, D["echantillonnage"])
+with wave.open(chemin, "wb") as fichier_wav:
+    fichier_wav.setnchannels(canaux)
+    fichier_wav.setsampwidth(2)
+    fichier_wav.setframerate(int(D["echantillonnage"]))
+    fichier_wav.writeframes(octets)
+# --- FIN ecriture du WAV ------------------------------------------------------
 
-echantillons = int(son.shape[-1])
 secondes_audio = round(echantillons / float(D["echantillonnage"]), 1)
 print("Dialogue rendu : %.1f s d'audio en %.0f s de calcul" % (secondes_audio, TEMPS["rendu"]), flush=True)
 
