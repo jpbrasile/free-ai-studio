@@ -28,15 +28,26 @@ CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
 BUDGET_FICHIER = CONFIG_DIR / "video-budget.json"
 _VERROU = threading.Lock()
 
-# Prix Modal a la seconde, releves sur https://modal.com/pricing le 09/09/2026.
+# Prix Modal a la seconde, releves sur https://modal.com/pricing.
 # Ils servent a COMPTER, pas a facturer : Modal facture, nous ne faisons
 # qu'estimer pour pouvoir refuser avant de depasser. Un prix qui change chez
 # Modal sans changer ici rend l'estimation fausse : c'est pourquoi la page
 # affiche la date du releve.
-PRIX_RELEVE_LE = "2026-09-09"
+#
+# RELUS LE 17/09/2026, les SEPT cartes et le couple processeur/memoire :
+# INCHANGES. Cette date valait 09/09 alors que chanson.py affichait 15/09 --
+# deux tables des memes prix, relues separement, sans que rien ne signale
+# l'ecart. test_les_deux_tables_de_prix_ne_divergent_pas garde ce flanc.
+PRIX_RELEVE_LE = "2026-09-17"
 PRIX_GPU_USD_S: Dict[str, float] = {
     "T4": 0.000164,
     "L4": 0.000222,
+    # Modal publie cette carte sous le nom << A10 >> (verifie le 17/09/2026) ;
+    # << A10G >> est le nom AWS, garde ici parce qu'il a pu etre configure.
+    # Sans les deux, prix_seconde() retombe sur la carte la plus chere : un A10
+    # compte comme un H100, soit 3,6 fois trop. Le repli protege du sous-compte,
+    # pas d'un nom mal orthographie.
+    "A10": 0.000306,
     "A10G": 0.000306,
     "L40S": 0.000542,
     "A100": 0.000583,

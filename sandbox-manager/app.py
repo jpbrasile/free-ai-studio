@@ -652,6 +652,14 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
             job = read_job(jid)
             job["remote_status_raw"] = text[-800:]
             write_job(jid, job)
+            # Arret d'urgence demande depuis la page : on cesse d'attendre. On
+            # n'annule RIEN chez Kaggle -- il n'existe pas de commande pour ca --
+            # et le message le dit, pour que personne ne croie le quota libere.
+            if job.get("arret_demande"):
+                raise RuntimeError(
+                    "Arrêt demandé depuis le Studio : le Studio a cessé d'attendre. "
+                    "Kaggle n'a pas d'annulation, le notebook s'arrête de lui-même "
+                    f"à l'échéance de {limite} s qu'il a reçue.")
             if "complete" in text:
                 break
             # Un statut illisible n'est pas un statut << en cours >>. Sans cette ligne,
@@ -1420,6 +1428,104 @@ def colab_notebook(jid: str, authorization: Optional[str] = Header(default=None)
     return FileResponse(p, media_type="application/x-ipynb+json", filename=p.name)
 
 
+def arreter_modal(jid: str) -> dict:
+    """Termine les Sandbox Modal etiquetees par ce travail. Rend un constat.
+
+    POURQUOI PAR ETIQUETTE, ET NON PAR remote_ref. modal_execute pose
+    tags={"free-ai-studio-job": jid} a la CREATION de la machine, alors que
+    remote_ref n'est ecrit dans la fiche qu'a la FIN. Le 17/09/2026, un fil est
+    reste bloque 2335 s sans jamais atteindre son finally : la fiche n'avait
+    donc aucun remote_ref -- et c'est exactement le cas ou l'on veut arreter.
+    L'etiquette, elle, existe des la premiere seconde.
+
+    La signature Sandbox.list(*, app_id, tags, client) a ete relevee sur le SDK
+    installe (1.5.5) avant d'ecrire ceci : le filtrage par etiquette existe
+    reellement, il n'est pas suppose.
+
+    Aucune cle n'est manipulee : apply_stored_secrets() pose les jetons dans
+    l'environnement du processus, comme pour depenses.py.
+    """
+    try:
+        import modal
+    except Exception as exc:  # noqa: BLE001
+        return {"arretees": 0, "detail": f"SDK Modal indisponible : {type(exc).__name__}."}
+    apply_stored_secrets()
+    if not modal_configured():
+        return {"arretees": 0, "detail": "Modal n'est pas branché ici : rien à arrêter."}
+    nom = os.getenv("MODAL_APP_NAME", "free-ai-studio-sandbox").strip() or "free-ai-studio-sandbox"
+    try:
+        app_id = modal.App.lookup(nom, create_if_missing=False).app_id
+        boites = list(modal.Sandbox.list(app_id=app_id, tags={"free-ai-studio-job": jid}))
+    except Exception as exc:  # noqa: BLE001
+        return {"arretees": 0, "detail": f"Modal n'a pas répondu ({type(exc).__name__}) : "
+                                         "la machine n'a peut-être pas été arrêtée."}
+    if not boites:
+        return {"arretees": 0,
+                "detail": "Aucune machine ne porte l'étiquette de ce travail chez Modal : "
+                          "elle est déjà partie, rien n'est plus facturé."}
+    arretees = 0
+    for boite in boites:
+        try:
+            if boite.poll() is None:
+                boite.terminate()
+                arretees += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return {"arretees": arretees,
+            "detail": f"{arretees} machine(s) arrêtée(s) chez Modal."}
+
+
+@app.post("/jobs/{jid}/arreter")
+def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
+    """Arret d'urgence d'un travail en cours.
+
+    NE JAMAIS PROMETTRE PLUS QUE CE QUI EST FAIT. Le geste n'est pas le meme
+    selon le fournisseur, et la reponse le dit mot pour mot :
+
+    - Modal : la machine est reellement terminee (par etiquette). La facturation
+      s'arrete.
+    - Kaggle : il n'existe AUCUNE annulation. La CLI 2.2.4 n'a pas de commande
+      pour ca, et l'API (cancel_kernel_session) reclame un numero de session
+      qu'aucune reponse de l'envoi ni de l'etat ne donne (constat du 15/09,
+      PLAN.md). Le Studio cesse donc d'attendre, et Kaggle arrete le notebook
+      lui-meme a l'echeance du -t qu'il a recu. Le quota court jusque-la.
+    - Local / Colab : rien a arreter a distance.
+
+    ET DANS TOUS LES CAS, ON ECRIT LA FIN. C'est la lecon du 17/09 : un fil
+    coince n'ecrit jamais son etat terminal, et la fiche reste << running >>
+    pour toujours -- l'interface montre alors un travail qui n'existe plus.
+    """
+    auth(authorization)
+    job = read_job(jid)
+    statut = job.get("status")
+    if statut not in ("queued", "running", "preparing", "submitting"):
+        return {"id": jid, "status": statut, "deja_termine": True,
+                "detail": "Ce travail est déjà terminé : rien n'a été arrêté."}
+
+    fournisseur = (job.get("provider_effective") or job.get("provider") or "").strip()
+    if fournisseur == "modal":
+        constat = arreter_modal(jid)
+    elif fournisseur == "kaggle":
+        constat = {"arretees": 0,
+                   "detail": "Kaggle n'a pas d'annulation : le Studio cesse d'attendre, "
+                             "mais le notebook tourne jusqu'à l'échéance que Kaggle applique "
+                             "lui-même, et votre quota court jusque-là."}
+    else:
+        constat = {"arretees": 0,
+                   "detail": f"Rien à arrêter à distance pour « {fournisseur or 'inconnu'} »."}
+
+    job = read_job(jid)
+    job.update({
+        "status": "cancelled",
+        "finished_at": time.time(),
+        "arret_demande": True,
+        "error": "Arrêt demandé depuis le Studio. " + constat["detail"],
+    })
+    write_job(jid, job)
+    return {"id": jid, "status": "cancelled", "deja_termine": False,
+            "arretees": constat["arretees"], "detail": constat["detail"]}
+
+
 @app.post("/jobs/{jid}/artifacts")
 async def upload_job_artifact(jid: str, file: UploadFile = File(...), authorization: Optional[str] = Header(default=None)):
     auth(authorization)
@@ -1748,6 +1854,9 @@ def chanson_etat(request: Request, authorization: Optional[str] = Header(default
     return {
         "budget": chanson.budget_lire(),
         "modele": chanson.MODELE,
+        # La LoRA est un CHOIX offert a la personne : sa licence doit voyager
+        # avec l'option pour s'afficher la ou l'on choisit, pas en note de pied.
+        "lora": chanson.LORA,
         "durees": chanson.DUREES,
         "carte_modal": chanson.GPU_MODAL,
         "cout_max_modal_usd": round(chanson.prix_seconde(chanson.GPU_MODAL) * chanson.DUREE_MAX_S, 3),
@@ -1871,6 +1980,23 @@ def chanson_fichier(jid: str, cle: str = Query(default=""),
 @app.get("/chanson", response_class=HTMLResponse)
 def chanson_page():
     return HTMLResponse(chanson.PAGE_HTML.replace("__CLE__", KEY))
+
+
+# abcjs 6.7.0 (MIT) : la bibliotheque qui dessine les portees sur /chanson.
+# SERVIE PAR LE SERVICE, JAMAIS PAR UN CDN : le Studio doit marcher sans acces
+# reseau, et une page qui depend d'un hebergeur tiers casse le jour ou il bouge.
+# Aucun jeton exige, et c'est voulu : une balise <script src> ne peut pas porter
+# d'en-tete Authorization. C'est du code public, au meme titre que la page
+# /chanson elle-meme qui est deja servie sans jeton.
+@app.get("/chanson/abcjs.js")
+def chanson_abcjs():
+    chemin = Path(__file__).with_name("abcjs-basic-min.js")
+    if not chemin.is_file():
+        # Arrive si le Dockerfile n'a pas copie le fichier. On le dit au lieu de
+        # servir du vide : une page muette ferait chercher l'erreur ailleurs.
+        raise HTTPException(status_code=404,
+                            detail="abcjs-basic-min.js absent de l'image")
+    return FileResponse(chemin, media_type="application/javascript")
 
 
 @app.get("/", response_class=HTMLResponse)

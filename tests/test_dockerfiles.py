@@ -88,3 +88,34 @@ def test_aucun_module_fantome(service):
         f"{service} : le Dockerfile copie des fichiers absents du dossier "
         f"({', '.join(fantomes)}). La construction de l'image echouera."
     )
+
+
+def test_le_sandbox_emporte_la_bibliotheque_des_portees():
+    """Un actif qui n'est PAS un .py, donc invisible pour les gardes ci-dessus.
+
+    La page /chanson dessine les partitions avec abcjs, servi par le service
+    lui-meme (route /chanson/abcjs.js). Les gardes precedents ne suivent que les
+    modules Python : si la ligne COPY de ce fichier disparait, rien n'echoue au
+    demarrage -- pas de ModuleNotFoundError, pas de test rouge. La route rend un
+    404 et la page cesse simplement de dessiner, en silence. Le meme angle mort
+    que le 16/09, sur un fichier d'une autre extension.
+    """
+    dossier = RACINE / "sandbox-manager"
+    fichier = "abcjs-basic-min.js"
+
+    assert (dossier / fichier).is_file(), (
+        f"{fichier} est absent de {dossier.name} : la construction de l'image "
+        f"echouera sur son COPY."
+    )
+
+    copies: set[str] = set()
+    for ligne in (dossier / "Dockerfile").read_text(encoding="utf-8").splitlines():
+        propre = ligne.strip()
+        if propre.upper().startswith("COPY "):
+            copies.update(propre.split()[1:-1])
+
+    assert fichier in copies, (
+        f"{fichier} est sur le disque mais n'est pas copie dans l'image. La page "
+        f"/chanson servira un 404 silencieux et n'affichera plus aucune portee, "
+        f"sans qu'aucun autre test ne s'en apercoive."
+    )
