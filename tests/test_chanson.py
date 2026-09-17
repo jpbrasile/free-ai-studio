@@ -336,6 +336,253 @@ def test_la_page_offre_un_arret_durgence_hors_du_bloc_reecrit(sandbox, ch):
     assert "/arreter" in page, "la page ne sait pas appeler la route d'arret"
 
 
+def test_l_exemple_grise_est_reutilisable_comme_modele(sandbox, ch):
+    """Un exemple en grise disparait au premier caractere : il ne sert qu'une fois.
+
+    Demande de l'utilisateur, 17/09 : « tu as mis un exemple en grise qui
+    pourrait servir de template plutot que de disparaitre ». Un bouton le depose
+    dans le champ, ou il devient modifiable.
+    """
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/chanson").text
+
+    assert 'id="modele-paroles"' in page, "aucun moyen de reprendre l'exemple de paroles"
+    assert 'id="modele-style"' in page, "aucun moyen de reprendre l'exemple de style"
+
+    # Le texte depose vient de la constante capturee au chargement, JAMAIS de
+    # .placeholder : sous LoRA le placeholder devient « Ignore ici... », et
+    # deposer cette phrase comme paroles n'aurait aucun sens.
+    assert 'deposerExemple("paroles", PAROLES_ORIGINE' in page, (
+        "le bouton ne depose pas l'exemple d'origine : sous LoRA il collerait "
+        "le texte « Ignoré ici… » dans les paroles."
+    )
+    assert 'deposerExemple("style", exempleStyle()' in page, (
+        "le bouton depose un exemple fixe : il collerait l'exemple chante alors "
+        "que la version instrumentale est choisie."
+    )
+
+
+def test_la_version_instrumentale_a_son_propre_exemple_de_style(sandbox, ch):
+    """L'exemple chante reclame une « warm female voice » : absurde sans voix.
+
+    Demande de l'utilisateur, 17/09 : « et tu pourrais mettre un exemple plus
+    complet pour lora ». Quand les paroles sont eteintes, le style est la SEULE
+    entree qui reste : il merite l'exemple le plus riche, pas le plus pauvre.
+    """
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/chanson").text
+
+    assert "const STYLE_LORA" in page, "la version instrumentale n'a pas d'exemple propre"
+    debut = page.index("const STYLE_LORA")
+    exemple = page[debut:page.index(";", debut)].lower()
+
+    assert "instrumental" in exemple and "no vocals" in exemple, (
+        "l'exemple de la version instrumentale ne dit pas qu'il est instrumental."
+    )
+    assert "voice" not in exemple, (
+        "l'exemple de la version instrumentale reclame une voix."
+    )
+    assert 'getElementById("style").placeholder = STYLE_LORA' in page, (
+        "choisir la version instrumentale laisse a l'ecran l'exemple chante."
+    )
+
+
+def test_les_notes_se_surlignent_sur_le_son_reellement_rendu(sandbox, ch):
+    """Demande de l'utilisateur, 17/09 : « pourrais-je avoir un highlight style
+    caraoke sur les note de musique qd elles sont jouees ».
+
+    Le minutage vient de la partition -- setTiming(0, 0) garde le Q:1/4=96 que le
+    modele ecrit lui-meme en tete de ses ABC -- mais l'HORLOGE est celle du FLAC
+    rendu : audio.currentTime. La valeur de retour de renderAbc etait JETEE ;
+    c'est elle qui porte le minutage et les noeuds SVG, sans elle il n'y a
+    strictement rien a surligner.
+    """
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/chanson").text
+
+    assert 'id="lecteur"' in page, "le lecteur n'a pas d'identifiant : introuvable"
+    assert "function suivreAuSon" in page, "aucun suivi des notes pendant la lecture"
+    assert "const objets = lib.renderAbc(" in page, (
+        "la valeur de retour de renderAbc est jetee : ni minutage ni noeuds SVG."
+    )
+    assert "setTiming(0, 0)" in page, (
+        "le tempo que le modele a ecrit dans sa partition est ignore."
+    )
+    assert "audio.currentTime" in page, (
+        "le surlignage n'est pas mene par l'horloge du son reellement rendu."
+    )
+    # Defaut mesure le 17/09 : requestAnimationFrame ne tourne pas dans un
+    # onglet en arriere-plan, le curseur restait fige sur la premiere note
+    # pendant 8,9 s de lecture reelle. « timeupdate » est emis onglet cache.
+    assert '"timeupdate"' in page, (
+        "le surlignage gele des que l'onglet passe en arriere-plan."
+    )
+
+
+def test_le_surlignage_n_ajoute_aucune_source_sonore(sandbox, ch):
+    """La page ne doit avoir qu'UN seul son : le FLAC rendu par le modele.
+
+    abcjs sait jouer une partition en MIDI. Un bouton de lecture ferait entendre
+    autre chose que ce qui a ete genere -- deux sons differents pour une meme
+    partition. La regle est ecrite en tete de la page depuis le debut ; elle
+    n'etait tenue que par ce commentaire, ce test la tient maintenant pour de
+    bon, le surlignage passant tout pres de la franchir.
+    """
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/chanson").text
+
+    # Le commentaire qui ENONCE la regle contient lui-meme « <audio controls> ».
+    # Compte sans le retirer, ce garde echouait sur sa propre documentation --
+    # troisieme fois que ce piege se presente ici : un motif qui decrit une regle
+    # ressemble a une violation de cette regle. On compte le balisage servi, pas
+    # la prose qui l'explique.
+    corps = page
+    while "<!--" in corps:
+        debut = corps.index("<!--")
+        fin = corps.find("-->", debut)
+        if fin < 0:
+            break
+        corps = corps[:debut] + corps[fin + 3:]
+
+    assert corps.count("<audio") == 1, "la page a plus d'une source sonore"
+    for interdit in ("CreateSynth", "synthController", "MidiBuffer", "playMidi"):
+        assert interdit not in page, (
+            "la page fabrique un second son avec " + interdit + "."
+        )
+
+
+def test_la_page_dit_ce_que_le_surlignage_suit_vraiment(sandbox, ch):
+    """Un curseur qui pretend suivre la voix alors qu'il suit le papier ment.
+
+    Rien ne garantit que le modele ait chante au tempo qu'il a note. La partition
+    est recalee sur la duree reelle du son, ce qui la rend juste aux deux bouts
+    sans rien prouver au milieu -- et AUCUNE ECOUTE n'a jamais ete faite sur ce
+    projet. La page doit le dire a l'utilisateur, pas le taire.
+    """
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/chanson").text
+
+    assert 'id="note-surlignage"' in page, (
+        "la page n'a nulle part ou dire ce qu'elle surligne."
+    )
+    assert "partition écrite" in page, (
+        "la page ne dit pas que le surlignage suit la partition, pas la voix."
+    )
+    assert "recalée sur les" in page, (
+        "la page ne dit pas que la partition est recalee sur la duree du son."
+    )
+    assert "oreille" in page, (
+        "la page laisse croire que la synchronisation a ete verifiee a l'oreille."
+    )
+    assert "grossier" in page, (
+        "rien n'avertit l'utilisateur quand la partition et le chant divergent."
+    )
+
+
+def test_le_modele_n_ecrase_jamais_ce_qui_est_deja_ecrit(sandbox, ch):
+    """Ecraser le texte de l'utilisateur d'un clic serait pire que pas de bouton.
+
+    Et le bouton doit suivre le champ : la LoRA eteint les paroles, il ne faut
+    pas les ressusciter par la bande.
+    """
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/chanson").text
+    debut = page.index("function deposerExemple")
+    corps = page[debut:page.index("document.getElementById(\"modele-style\")", debut)]
+
+    assert "champ.value.trim()" in corps, (
+        "rien n'empeche le bouton d'effacer un texte deja saisi."
+    )
+    assert "champ.disabled" in corps, (
+        "le bouton remplit meme un champ desactive par la LoRA."
+    )
+    assert 'getElementById("modele-paroles").disabled = true' in page, (
+        "le bouton reste actif alors que la LoRA a eteint les paroles."
+    )
+
+
+def test_un_arret_voulu_n_est_pas_repeint_en_panne(sandbox, ch):
+    """Le fil de travail ne doit PAS repeindre un arret voulu en panne.
+
+    Defaut reel, 17/09, au tout premier essai du bouton : la page a affiche en
+    rouge « Modal unavailable: NotFoundError ... This Sandbox has already shut
+    down ». C'etait la PREUVE QUE L'ARRET AVAIT REUSSI -- la machine n'existait
+    plus parce qu'on venait de la terminer -- presentee comme un plantage, et en
+    anglais. La route ecrivait « cancelled », le fil ecrasait avec « failed »
+    une seconde plus tard, et le compte-rendu partait avec.
+    """
+    brut = ("Modal unavailable: NotFoundError: Modal Sandbox with container ID "
+            "ta-01M2QATMZG93ADCY41F3CGB6ZS not found. This means this Sandbox "
+            "has already shut down.")
+
+    sandbox.write_job("arrete", {"id": "arrete", "status": "running",
+                                 "arret_demande": True,
+                                 "arret_detail": "1 machine(s) arrêtée(s) chez Modal."})
+    sandbox.terminer_en_echec("arrete", brut)
+    fiche = sandbox.read_job("arrete")
+
+    assert fiche["status"] == "cancelled", (
+        "un arret demande est repeint en « failed » : l'utilisateur ne peut plus "
+        "distinguer son propre arret d'une panne du service."
+    )
+    assert "demande" in fiche["error"], fiche["error"]
+    assert brut in fiche.get("erreur_technique", ""), (
+        "l'erreur brute doit rester consultable, mais hors du message montre."
+    )
+    assert fiche["arret_detail"] == "1 machine(s) arrêtée(s) chez Modal.", (
+        "le compte-rendu de la route a ete detruit : on ne peut plus dire si le "
+        "bouton a reellement termine une machine."
+    )
+
+    # L'AUTRE SENS, tout aussi important : une vraie panne garde son message,
+    # mot pour mot. Un correctif qui adoucirait aussi les pannes reelles
+    # cacherait les defauts au lieu d'en cacher un seul.
+    sandbox.write_job("casse", {"id": "casse", "status": "running"})
+    sandbox.terminer_en_echec("casse", brut)
+    casse = sandbox.read_job("casse")
+    assert casse["status"] == "failed"
+    assert casse["error"] == brut
+
+
+def test_aucun_chemin_n_ecrit_un_echec_a_la_main(sandbox, ch):
+    """Les memes trois lignes etaient recopiees dans CINQ chemins d'execution.
+
+    local, modal, kaggle, video, chanson. Corriger la seule qui avait mordu
+    aurait laisse le piege arme sur les quatre autres, et le prochain
+    fournisseur ajoute l'aurait recopie a son tour.
+
+    Le motif cherche existe forcement une fois : dans terminer_en_echec()
+    lui-meme. On exige donc UNE occurrence, et a l'interieur de cette
+    fonction -- un test qui exigerait zero echouerait sur le correctif.
+    """
+    with open(sandbox.__file__, encoding="utf-8") as f:
+        source = f.read()
+    motif = '"status": "failed", "finished_at"'
+
+    assert "def terminer_en_echec" in source, "le garde partage a disparu"
+    assert source.count(motif) == 1, (
+        f"{source.count(motif)} chemins ecrivent l'echec a la main ; il n'en "
+        f"faut qu'un, dans terminer_en_echec(), sinon un arret voulu sera "
+        f"repeint en panne."
+    )
+    debut = source.index("def terminer_en_echec")
+    fin = source.index("\ndef ", debut + 1)
+    assert motif in source[debut:fin], (
+        "l'unique ecriture d'echec n'est pas dans terminer_en_echec()."
+    )
+
+
+def test_la_page_distingue_un_arret_d_une_panne(sandbox, ch):
+    """Un arret voulu ne doit pas s'afficher en rouge sous le mot « Échec »."""
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/chanson").text
+
+    assert 'j.status === "cancelled"' in page, (
+        "la page ne sait pas reconnaitre un travail arrete : il retombe dans la "
+        "branche d'echec."
+    )
+    assert page.index('j.status === "cancelled"') < page.index("✖ Échec"), (
+        "la branche d'arret doit etre examinee AVANT celle d'echec, sinon un "
+        "arret voulu s'affiche quand meme en panne."
+    )
+    assert "arret_detail" in page, (
+        "la page n'affiche pas ce que l'arret a reellement fait."
+    )
+
+
 def test_la_route_darret_refuse_un_travail_inconnu(sandbox, ch):
     client = TestClient(sandbox.app, base_url=LOCAL)
     assert client.post("/jobs/inexistant/arreter", headers=CLE).status_code == 404

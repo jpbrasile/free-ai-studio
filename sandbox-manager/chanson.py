@@ -741,6 +741,8 @@ audio{width:100%;margin-top:12px}
 .ok{color:#1d6b32}.ko{color:#9b2116}
 button.danger{background:#9b2116;color:#fff;border-color:#9b2116;cursor:pointer}
 .avert{font-size:.86rem;opacity:.75}
+button.discret{font:inherit;font-size:.86rem;padding:5px 10px;border-radius:8px;
+ border:1px solid #666;background:#fff;color:#222;cursor:pointer;margin-right:8px}
 .licence{padding:10px 14px;border-radius:12px;border:1px solid #d9ad63;background:#fdf6e8;font-size:.9rem}
 .jauge{height:9px;border-radius:999px;background:#e6e6e6;overflow:hidden;margin:6px 0 2px}
 .jauge span{display:block;height:100%;background:#5b8c5a}
@@ -748,13 +750,17 @@ button.danger{background:#9b2116;color:#fff;border-color:#9b2116;cursor:pointer}
 .portee{background:#fff;border:1px solid #ddd;border-radius:12px;padding:8px 4px;
  margin:8px 0;overflow-x:auto}
 .portee svg{max-width:100%}
+.portee svg g.surligne, .portee svg g.surligne path{fill:#9b2116}
 </style>
 <!-- abcjs 6.7.0 (MIT) : dessine la partition en vraies portees. Servie par le
      service lui-meme (route /chanson/abcjs.js), jamais par un CDN : le Studio
      doit marcher sans acces reseau. PAS DE LECTEUR : la page montre plus bas le
      son vraiment rendu par le modele, dans <audio controls>. Un bouton de
      lecture MIDI ferait entendre autre chose que ce qui a ete genere -- deux
-     sons differents pour une meme partition, c'est pire que pas de bouton. -->
+     sons differents pour une meme partition, c'est pire que pas de bouton.
+     Le surlignage ajoute le 17/09 ne rompt PAS cette regle : il ne produit
+     aucun son, il est mene par l'horloge du FLAC lui-meme (audio.currentTime).
+     La seule source sonore de la page reste le fichier rendu par le modele. -->
 <script src="/chanson/abcjs.js"></script>
 </head><body>
 <h1>🎵 Faire chanter des paroles</h1>
@@ -769,6 +775,8 @@ la chante, voix et instruments, jusqu’à trois minutes.</p>
  placeholder="English, acoustic folk, warm female voice, fingerpicked guitar, soft cello, 92 BPM">
 <p class="avert">En anglais de préférence, en commençant par la langue chantée : genre,
 instruments, voix, tempo.</p>
+<p><button type="button" id="modele-style" class="discret">Utiliser cet exemple</button>
+<span id="note-style" class="avert"></span></p>
 
 <label class="titre" for="paroles">Paroles</label>
 <textarea id="paroles" maxlength="4000" placeholder="[Verse]
@@ -781,6 +789,8 @@ Every morning brings you here"></textarea>
 <code>[Bridge]</code>… Sans aucune, le Studio met tout dans un seul couplet.
 <b>Le modèle chante en anglais et en chinois</b> selon sa fiche ; le français n’y est pas
 annoncé : essayez, sans garantie.</p>
+<p><button type="button" id="modele-paroles" class="discret">Utiliser cet exemple</button>
+<span id="note-paroles" class="avert"></span></p>
 
 <div class="ligne">
   <label>Version
@@ -837,6 +847,55 @@ function majOu(){
 document.getElementById("ou").addEventListener("change", majOu);
 
 const PAROLES_ORIGINE = document.getElementById("paroles").placeholder;
+const STYLE_ORIGINE = document.getElementById("style").placeholder;
+
+// L'exemple de style d'origine reclame une << warm female voice >>, ce qui n'a
+// aucun sens pour la version instrumentale : choisir la LoRA laissait donc a
+// l'ecran un exemple demandant une voix. Celui-ci est propre a l'instrumental,
+// et plus complet : instruments, EVOLUTION de l'arrangement, tempo, tonalite,
+// climat. Le style est la seule entree qui reste quand les paroles sont
+// eteintes -- il merite l'exemple le plus riche, pas le plus pauvre.
+const STYLE_LORA = "Instrumental, no vocals, cinematic neo-classical: fingerpicked "
+  + "nylon guitar lead, warm cello counter-melody, soft brushed drums entering at the "
+  + "second section, analog pad underneath, 88 BPM, D minor, calm and wistful";
+
+// Le bouton depose l'exemple QUI S'APPLIQUE : deposer l'exemple chante alors
+// que la version instrumentale est choisie serait un contresens.
+function exempleStyle(){ return estLora() ? STYLE_LORA : STYLE_ORIGINE; }
+
+// L'exemple en grise disparaissait au premier caractere : il ne servait qu'une
+// fois, et il fallait ensuite le retaper de memoire. Ces boutons le DEPOSENT
+// dans le champ, ou il devient modifiable -- un modele de depart, plus une
+// simple illustration.
+//
+// Trois regles, chacune pour un degat precis :
+//  - on n'ecrase JAMAIS un texte deja saisi. Effacer le travail de
+//    l'utilisateur d'un seul clic serait pire que l'absence du bouton ; on le
+//    dit, et on ne touche a rien.
+//  - on lit la constante capturee au chargement, JAMAIS .placeholder : sous
+//    LoRA, majModele() remplace le placeholder par << Ignore ici... >>, et
+//    deposer cette phrase-la comme paroles n'aurait aucun sens.
+//  - on ne remplit pas un champ desactive : la LoRA eteint les paroles, le
+//    bouton ne doit pas les ressusciter par la bande.
+function deposerExemple(champId, texte, noteId){
+  const champ = document.getElementById(champId);
+  const note = document.getElementById(noteId);
+  if(champ.disabled){ return; }
+  if(champ.value.trim()){
+    note.textContent = "Le champ n’est pas vide : je n’efface pas ce que vous avez écrit.";
+    return;
+  }
+  champ.value = texte;
+  note.textContent = "";
+  champ.focus();
+}
+
+document.getElementById("modele-style").addEventListener("click", () => {
+  deposerExemple("style", exempleStyle(), "note-style");
+});
+document.getElementById("modele-paroles").addEventListener("click", () => {
+  deposerExemple("paroles", PAROLES_ORIGINE, "note-paroles");
+});
 
 function estLora(){ return document.getElementById("modele").value === "lora"; }
 function majBouton(){
@@ -855,6 +914,9 @@ function majModele(){
     zone.textContent = "";
     paroles.disabled = false;
     paroles.placeholder = PAROLES_ORIGINE;
+    document.getElementById("modele-paroles").disabled = false;
+    document.getElementById("note-paroles").textContent = "";
+    document.getElementById("style").placeholder = STYLE_ORIGINE;
     // Ne jamais rouvrir Kaggle si c'est le Studio partage qui l'a ferme.
     if(kaggle && !(ETAT && ETAT.kaggle_permis === false)){ kaggle.disabled = false; }
     majBouton();
@@ -874,6 +936,13 @@ function majModele(){
     : "Version instrumentale : licence et détails non chargés, le service ne répond pas.";
   paroles.disabled = true;
   paroles.placeholder = "Ignoré ici : cette version est annoncée instrumentale par son auteur.";
+  // Le bouton suit le champ. Un bouton vivant au-dessus d'un champ eteint
+  // promet une action qui n'arrivera pas.
+  document.getElementById("modele-paroles").disabled = true;
+  document.getElementById("note-paroles").textContent = "";
+  // Le style devient la SEULE entree : il lui faut l'exemple instrumental, et
+  // surtout pas celui qui reclame une voix.
+  document.getElementById("style").placeholder = STYLE_LORA;
   if(kaggle){
     kaggle.disabled = true;
     if(document.getElementById("ou").value === "kaggle"){
@@ -1016,7 +1085,7 @@ function afficherChanson(j){
   const r = j.resume || {};
   const nom = nomDeFichier(".flac");
   const lien = j.son_url + "&telecharger=1&nom=" + encodeURIComponent(nom);
-  let html = '<audio controls src="' + j.son_url + '"></audio>'
+  let html = '<audio id="lecteur" controls src="' + j.son_url + '"></audio>'
     + '<div class="ligne"><a class="bouton" href="' + lien + '" download="' + nom + '">⬇️ Télécharger la chanson</a>'
     + '<span class="avert">Fichier FLAC, sans perte, 48 kHz stéréo.</span></div>';
   const notes = [];
@@ -1034,19 +1103,20 @@ function afficherChanson(j){
   if(j.partition){
     html += '<details open><summary>Voir la partition composée</summary>'
       + '<div id="portee" class="portee"></div>'
+      + '<p id="note-surlignage" class="avert"></p>'
       + '<details><summary>La même en notation ABC (texte)</summary><pre>'
       + echapper(j.partition) + '</pre></details></details>';
   }
   document.getElementById("resultat").innerHTML = html;
   // Le dessin vient APRES l'insertion : avant, le div n'existe pas encore.
-  if(j.partition) dessinerPortee(j.partition);
+  if(j.partition) dessinerPortee(j.partition, (j.resume || {}).secondes_audio || 0);
 }
 
 // Dessine la partition en vraies portees. Ne casse jamais la page : si la
 // bibliotheque n'a pas pu se charger, ou si cet ABC-la ne lui plait pas, on le
 // DIT, et la notation texte reste lisible juste en dessous. Un echec muet
 // ferait chercher la panne ailleurs.
-function dessinerPortee(abc){
+function dessinerPortee(abc, secondesAudio){
   const cible = document.getElementById("portee");
   if(!cible) return;
   const lib = (typeof ABCJS !== "undefined") ? ABCJS
@@ -1057,12 +1127,123 @@ function dessinerPortee(abc){
     return;
   }
   try {
-    lib.renderAbc(cible, abc, {responsive:"resize"});
+    // La valeur de retour etait JETEE. C'est elle qui porte le minutage des
+    // notes et les noeuds SVG a colorer : sans elle, aucun surlignage possible.
+    const objets = lib.renderAbc(cible, abc, {responsive:"resize"});
+    suivreAuSon(objets && objets[0], secondesAudio);
   } catch(e) {
     cible.innerHTML = '<p class="avert">Cette partition n’a pas pu être dessinée : '
       + echapper(String((e && e.message) || e))
       + '. La notation ABC reste lisible ci-dessous.</p>';
   }
+}
+
+// Surligne la note en cours, facon karaoke. Demande de l'utilisateur le 17/09 :
+// « pourrais-je avoir un highlight style caraoke sur les notes de musique qd
+// elles sont jouees ».
+//
+// CE QUE CA SUIT, ET CE QUE CA NE SUIT PAS. La page joue le FLAC rendu par le
+// modele ; la portee montre la partition qu'il a ECRITE. Rien ne garantit qu'il
+// ait chante au tempo qu'il a note. On recale donc lineairement la partition sur
+// la duree REELLE du son : le reperage devient exact aux deux bouts et l'erreur
+// au milieu reste bornee, au lieu de s'accumuler comme au tempo brut. Le rapport
+// est affiche ; loin de 1, la page dit elle-meme que le repere est grossier.
+// AUCUNE ECOUTE n'a jamais valide ce reglage sur ce projet -- la page le dit
+// aussi, plutot que de laisser croire a une synchronisation verifiee.
+function suivreAuSon(visuel, secondesAudio){
+  const note = document.getElementById("note-surlignage");
+  const audio = document.getElementById("lecteur");
+  if(!visuel || !audio || !note) return;
+  let evenements = [];
+  let totalPartition = 0;
+  try {
+    // setTiming(0, 0) : le 0 veut dire « garde le tempo ecrit dans la partition »,
+    // le Q:1/4=96 que le modele pose lui-meme en tete de ses ABC.
+    visuel.setTiming(0, 0);
+    totalPartition = visuel.getTotalTime() || 0;
+    evenements = (visuel.noteTimings || [])
+      .filter(t => t.elements && t.elements.length)
+      .map(t => ({ms: t.milliseconds, noeuds: [].concat.apply([], t.elements)}));
+  } catch(e){
+    note.textContent = "Les notes de cette partition n’ont pas pu être repérées dans le temps : "
+      + String((e && e.message) || e) + ". La chanson s’écoute normalement.";
+    return;
+  }
+  if(!evenements.length || !(totalPartition > 0)){
+    note.textContent = "Cette partition ne contient aucune note repérable dans le temps : "
+      + "il n’y a rien à surligner.";
+    return;
+  }
+
+  function dureeSon(){
+    // audio.duration est la seule mesure vraie, mais elle n'arrive qu'avec
+    // l'en-tete du fichier ; d'ici la, on se rabat sur le compte du serveur.
+    const d = audio.duration;
+    return (isFinite(d) && d > 0) ? d : (secondesAudio > 0 ? secondesAudio : 0);
+  }
+  let courant = -1;
+  function eteindre(){
+    if(courant >= 0){
+      evenements[courant].noeuds.forEach(n => n.classList.remove("surligne"));
+    }
+    courant = -1;
+  }
+  function placer(){
+    const son = dureeSon();
+    if(!(son > 0)) return;
+    const ms = audio.currentTime * (totalPartition / son) * 1000;
+    let i = 0;
+    while(i + 1 < evenements.length && evenements[i + 1].ms <= ms){ i++; }
+    if(i === courant) return;
+    eteindre();
+    courant = i;
+    evenements[i].noeuds.forEach(n => n.classList.add("surligne"));
+  }
+  let anim = null;
+  function boucle(){
+    // Un nouveau lancement remplace tout le bloc resultat : le lecteur d'avant
+    // est detache mais reste « en train de jouer » pour le navigateur. Sans ce
+    // garde, sa boucle tournerait sans fin sur des noeuds plus affiches.
+    if(audio.paused || audio.ended || !document.body.contains(audio)){ anim = null; return; }
+    placer();
+    anim = requestAnimationFrame(boucle);
+  }
+  audio.addEventListener("play", () => { if(anim === null){ anim = requestAnimationFrame(boucle); } });
+  audio.addEventListener("pause", () => { if(anim !== null){ cancelAnimationFrame(anim); anim = null; } });
+  audio.addEventListener("ended", () => {
+    if(anim !== null){ cancelAnimationFrame(anim); anim = null; }
+    eteindre();
+  });
+  audio.addEventListener("seeked", placer);
+  audio.addEventListener("loadedmetadata", annoncer);
+  // requestAnimationFrame NE S'EXECUTE PAS dans un onglet en arriere-plan :
+  // constate le 17/09, le curseur restait fige sur la premiere note pendant
+  // 8,9 s de lecture reelle. « timeupdate » est emis meme onglet cache (environ
+  // 4 fois par seconde) : il rattrape le retard, la boucle fluide reprenant la
+  // main des que l'onglet redevient visible. Sans lui, revenir sur l'onglet
+  // ferait sauter le curseur au lieu de le faire avancer.
+  audio.addEventListener("timeupdate", placer);
+
+  function annoncer(){
+    const son = dureeSon();
+    if(!(son > 0)){
+      note.textContent = "Le surlignage suit la partition écrite ; la durée réelle du son "
+        + "n’est pas encore connue.";
+      return;
+    }
+    const ecart = Math.round(Math.abs(totalPartition / son - 1) * 100);
+    let texte = "Le surlignage suit la partition écrite (" + totalPartition.toFixed(1)
+      + " s au tempo que le modèle a noté), recalée sur les " + son.toFixed(1)
+      + " s réellement chantées.";
+    if(ecart >= 15){
+      texte += " L’écart entre les deux est de " + ecart + " % : le modèle n’a pas chanté "
+        + "au tempo qu’il avait écrit, le repère est donc grossier.";
+    }
+    texte += " Personne n’a vérifié à l’oreille que la note surlignée est bien celle "
+      + "qu’on entend.";
+    note.textContent = texte;
+  }
+  annoncer();
 }
 
 function suivre(id){
@@ -1088,6 +1269,14 @@ function suivre(id){
           etat.innerHTML = '<span class="ok">✔ Chanson prête</span> — '
             + (r.secondes_audio ? r.secondes_audio + " s de chanson, " + r.secondes_calcul + " s de calcul" : "");
           afficherChanson(j);
+        } else if(j.status === "cancelled"){
+          // Un arret VOULU n'est pas une panne. Le 17/09, le premier essai du
+          // bouton a affiche en rouge « Modal unavailable: NotFoundError ...
+          // already shut down » : c'etait la preuve que l'arret avait REUSSI,
+          // presentee comme une panne, et en anglais. L'utilisateur ne pouvait
+          // pas distinguer son propre arret d'un plantage du service.
+          etat.innerHTML = '<span class="avert">⛔ Arrêté à votre demande.</span> '
+            + echapper(j.arret_detail || "");
         } else {
           etat.innerHTML = '<span class="ko">✖ Échec</span> — ' + echapper(j.message || "voir le détail technique.");
         }

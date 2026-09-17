@@ -534,6 +534,47 @@ def finish_execution(jid: str, effective_provider: str, data: dict, attempts: li
     write_job(jid, job)
 
 
+def terminer_en_echec(jid: str, message: str) -> None:
+    """Ecrit la fin d'un travail qui s'est mal passe -- SANS ecraser un arret voulu.
+
+    Le 17/09/2026, le tout premier essai du bouton d'arret a affiche ceci, en
+    rouge, sous le mot << Echec >> :
+
+        Modal unavailable: NotFoundError: Modal Sandbox with container ID
+        ta-... not found. This means this Sandbox has already shut down.
+
+    C'etait pourtant la preuve que l'arret avait REUSSI : la machine n'existait
+    plus parce qu'on venait de la terminer. Le fil de travail, qui ne savait
+    rien de l'arret, ecrasait une seconde plus tard le << cancelled >> pose par
+    la route -- et avec lui le compte-rendu (combien de machines arretees).
+    Resultat : impossible pour l'utilisateur de distinguer son propre arret d'un
+    plantage du service, et impossible pour moi de dire ce que le bouton avait
+    fait. Un bouton dont on ne peut pas verifier l'effet ne vaut guere mieux
+    qu'un bouton qui ment.
+
+    Fonction PARTAGEE par tous les chemins d'execution. Il en existait cinq
+    copies de trois lignes, une par fournisseur : corriger la seule qui avait
+    mordu aurait laisse le piege arme sur les quatre autres.
+
+    Le message d'echec est passe tel quel par l'appelant, et non reconstruit
+    ici : chaque chemin formate deja le sien, et une panne ordinaire doit
+    continuer de s'afficher mot pour mot comme avant ce correctif.
+    """
+    job = read_job(jid)
+    if job.get("arret_demande"):
+        job.update({
+            "status": "cancelled",
+            "finished_at": time.time(),
+            # L'erreur brute est conservee, mais dans un champ technique : elle
+            # explique le COMMENT, elle ne doit pas etre le message montre.
+            "erreur_technique": message[:1000],
+            "error": "Arrêté à votre demande.",
+        })
+    else:
+        job.update({"status": "failed", "finished_at": time.time(), "error": message[:1000]})
+    write_job(jid, job)
+
+
 def run_local(jid: str, code: str):
     job = read_job(jid)
     job.update({"status": "running", "started_at": time.time(), "provider_effective": "local"})
@@ -541,9 +582,7 @@ def run_local(jid: str, code: str):
     try:
         finish_execution(jid, "local", local_execute(jid, code))
     except BackendUnavailable as exc:
-        job = read_job(jid)
-        job.update({"status": "failed", "finished_at": time.time(), "error": str(exc)[:1000]})
-        write_job(jid, job)
+        terminer_en_echec(jid, str(exc)[:1000])
 
 
 def run_modal(jid: str, code: str, gpu: bool, internet: bool):
@@ -561,9 +600,7 @@ def run_modal(jid: str, code: str, gpu: bool, internet: bool):
     try:
         finish_execution(jid, "modal", modal_execute(jid, code, gpu, internet))
     except BackendUnavailable as exc:
-        job = read_job(jid)
-        job.update({"status": "failed", "finished_at": time.time(), "error": str(exc)[:1000]})
-        write_job(jid, job)
+        terminer_en_echec(jid, str(exc)[:1000])
 
 
 def kaggle_ref(jid: str):
@@ -684,9 +721,7 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
         job.update({"status": "succeeded", "finished_at": time.time(), "artifacts": arts})
         write_job(jid, job)
     except Exception as exc:
-        job = read_job(jid)
-        job.update({"status": "failed", "finished_at": time.time(), "error": f"{type(exc).__name__}: {str(exc)[:1000]}"})
-        write_job(jid, job)
+        terminer_en_echec(jid, f"{type(exc).__name__}: {str(exc)[:1000]}")
 
 
 def make_colab_bundle(jid: str, code: str) -> Path:
@@ -1519,6 +1554,11 @@ def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "status": "cancelled",
         "finished_at": time.time(),
         "arret_demande": True,
+        # arret_detail vit dans une cle QUE PERSONNE D'AUTRE N'ECRIT. La fin de
+        # travail reecrit status et error ; le 17/09 elle a ainsi detruit le
+        # compte-rendu de cette route, et je n'ai plus pu dire si le bouton
+        # avait termine une machine ou si elle etait morte seule.
+        "arret_detail": constat["detail"],
         "error": "Arrêt demandé depuis le Studio. " + constat["detail"],
     })
     write_job(jid, job)
@@ -1647,9 +1687,7 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
         )
         finish_execution(jid, "modal", donnees)
     except BackendUnavailable as exc:
-        job = read_job(jid)
-        job.update({"status": "failed", "finished_at": time.time(), "error": str(exc)[:1000]})
-        write_job(jid, job)
+        terminer_en_echec(jid, str(exc)[:1000])
     finally:
         if ou == "modal":
             reste = video.budget_consommer(gpu_type, time.time() - debut)
@@ -1826,9 +1864,7 @@ def run_chanson(jid: str, code: str, ou: str):
         )
         finish_execution(jid, "modal", donnees)
     except BackendUnavailable as exc:
-        job = read_job(jid)
-        job.update({"status": "failed", "finished_at": time.time(), "error": str(exc)[:1000]})
-        write_job(jid, job)
+        terminer_en_echec(jid, str(exc)[:1000])
     finally:
         if ou == "modal":
             reste = chanson.budget_consommer(chanson.GPU_MODAL, time.time() - debut)
@@ -1942,6 +1978,7 @@ def chanson_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "stdout": job.get("stdout", ""),
         "stderr": job.get("stderr", ""),
         "message": job.get("error") or "",
+        "arret_detail": job.get("arret_detail") or "",
         "chanson": job.get("chanson"),
     }
     if fichiers.get("son"):
