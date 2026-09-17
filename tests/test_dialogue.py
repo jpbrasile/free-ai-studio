@@ -842,6 +842,136 @@ def test_la_page_dit_ce_qu_elle_a_retire_et_garde_l_original(sandbox):
     )
 
 
+def test_un_point_d_interrogation_n_est_pas_annonce_comme_une_elision(sandbox, tmp_path):
+    """DEFAUT REEL du rendu Kaggle du 17/09, laisse ouvert ce soir-la puis corrige.
+
+    Whisper rend parfois un << mot >> qui n'est QUE de la ponctuation : un
+    << ? >> seul, horodate comme le reste. normaliser() le vide de ses
+    caracteres, il ne peut donc s'apparier a rien, et l'alignement le declare
+    intrus. La garde des fragments l'attrapait : le SON etait sauve -- bon
+    resultat -- mais la page l'annoncait comme << une elision ou un nombre
+    reellement prononce >>. Sur ce rendu, 8 passages epargnes, TOUS des << ? >>.
+
+    Le fichier etait juste et le motif affiche etait faux : c'est precisement ce
+    qu'un test doit tenir, parce que rien dans le son ne le trahit.
+    """
+    nd = sandbox.nettoyage_dialogue
+
+    source = _wav_avec_creux(tmp_path / "dialogue.wav", secondes=2.0)
+    cible = tmp_path / "dialogue-nettoye.wav"
+    mots = [
+        {"mot": "Tu", "debut": 0.0, "fin": 0.3},
+        {"mot": "as", "debut": 0.3, "fin": 0.6},
+        {"mot": "vu", "debut": 0.6, "fin": 0.9},
+        # Ce que Whisper ajoute de lui-meme : de la ponctuation, pas un mot.
+        {"mot": "?", "debut": 0.9, "fin": 1.0},
+    ]
+    rapport = nd.nettoyer(str(source), str(cible), ["[S1]Tu as vu"], mots)
+
+    assert rapport["coupes"] == 0, (
+        "de la ponctuation ne se coupe pas : il n'y a pas de parole dessous."
+    )
+    motifs = [d["garde"] for d in rapport["details"] if d.get("garde")]
+    assert motifs == ["ponctuation, pas de la parole"], (
+        "la ponctuation est epargnee sous un autre motif : la garde a raison, la "
+        "raison rendue est fausse. Motifs rendus : %r" % (motifs,)
+    )
+
+
+def test_la_page_n_invente_pas_le_motif_d_un_passage_epargne(sandbox):
+    """La page rapporte le motif porte par le rapport, elle n'en fabrique pas un.
+
+    Sa version precedente annoncait << une elision ou un nombre reellement
+    prononce >> pour TOUT passage epargne, quel que soit le motif reel range
+    dans details[].garde. Une phrase en dur ne peut pas etre vraie pour trois
+    gardes differentes : elle en decrivait deux et mentait sur la troisieme.
+    """
+    page = sandbox.dialogue.PAGE_HTML
+    assert "nombre réellement prononcé ne se coupe pas" not in page, (
+        "le motif en dur est de retour : il redeviendra faux des que le module "
+        "epargnera un passage pour une autre raison."
+    )
+    assert "parMotif[d.garde]" in page, (
+        "la page n'affiche plus le motif que le rapport lui donne."
+    )
+
+
+def test_le_script_normalise_l_onde_au_lieu_de_l_ecreter(di):
+    """Le clamp seul ne deborde pas -- il APLATIT, et c'est un defaut a nous.
+
+    Mesure sur le rendu de 147 s du 17/09 : 753 echantillons colles a la pleine
+    echelle. Le modele rend des flottants qui passent 1.0, ce qui est normal ;
+    c'est a l'ecriture de faire tenir l'echelle, en divisant par la crete plutot
+    qu'en rabotant ce qui depasse.
+
+    Le bornage RESTE, et il n'est pas decoratif : une valeur non finie ne se
+    normalise pas, la condition l'ecarte, et le clamp garde le dernier mot.
+    """
+    script = di.construire_script(di.preparer({"texte": DIALOGUE})["demande"])
+    code_seul = ast.unparse(ast.parse(script))
+
+    assert "onde.abs().max()" in code_seul, (
+        "plus rien ne mesure la crete : le clamp ecretera de nouveau en silence."
+    )
+    assert "onde / crete" in code_seul, (
+        "la crete est mesuree mais l'onde n'est pas normalisee -- une mesure qui "
+        "ne sert a rien est pire que pas de mesure, elle rassure."
+    )
+    assert "clamp(-1.0, 1.0)" in code_seul, (
+        "le bornage a disparu : la normalisation ne rattrape ni nan ni inf."
+    )
+
+
+def test_le_bloc_d_ecriture_du_wav_tient_sur_un_vrai_tenseur(di, tmp_path):
+    """SONDE HORS LIGNE : le bloc est DECOUPE du script et execute pour de vrai.
+
+    Les deux tests precedents lisent du code. Celui-ci le FAIT TOURNER sur un
+    tenseur qui depasse 1.0 -- le cas meme ou le clamp seul aplatissait -- et
+    relit le fichier ecrit. C'est la seule facon de voir le resultat sans payer
+    une carte : ce bloc ne tourne ailleurs que sur Modal ou Kaggle.
+
+    SAUTE LA OU torch EST ABSENT, donc en CI, qui n'installe que les
+    dependances des services. Ce test protege la machine de developpement, pas
+    le runner -- le dire plutot que laisser croire le contraire.
+    """
+    torch = pytest.importorskip(
+        "torch", reason="torch n'est pas une dependance des services ; ce bloc ne "
+                        "tourne que sur le GPU distant.")
+    import array
+    import os
+    import wave
+
+    script = di.construire_script(di.preparer({"texte": DIALOGUE})["demande"])
+    debut = script.index("# --- DEBUT ecriture du WAV")
+    fin = script.index("# --- FIN ecriture du WAV")
+    bloc = script[debut:fin]
+
+    # Une rampe qui sort des bornes des DEUX cotes. Avec le clamp seul, tout ce
+    # qui depasse devient plat ; avec la normalisation, seules les deux vraies
+    # cretes touchent la pleine echelle.
+    n = 480
+    espace = {"torch": torch, "os": os, "son": torch.linspace(-1.4, 1.4, n).unsqueeze(0),
+              "SORTIE": str(tmp_path), "D": {"echantillonnage": 24000}}
+    exec(compile(bloc, "<bloc-wav>", "exec"), espace)  # noqa: S102
+
+    with wave.open(os.path.join(str(tmp_path), "dialogue.wav"), "rb") as f:
+        assert (f.getnchannels(), f.getsampwidth(), f.getframerate()) == (1, 2, 24000)
+        brut = f.readframes(f.getnframes())
+    x = array.array("h")
+    x.frombytes(brut)
+
+    assert len(x) == n, "le bloc n'a pas ecrit tous les echantillons."
+    colles = sum(1 for v in x if v >= 32767 or v <= -32767)
+    assert colles == 2, (
+        "%d echantillons a la pleine echelle. Deux sont attendus -- les cretes "
+        "reelles de la rampe, qui touchent l'echelle sans etre rabotees. Au-dela, "
+        "le bloc ecrete : c'est le defaut de 753 echantillons du 17/09." % colles
+    )
+    # La forme est conservee : une rampe reste une rampe, seul le niveau change.
+    assert x[0] == -32767 and x[-1] == 32767
+    assert abs(x[n // 2]) < 100, "le milieu de la rampe devrait rester proche de zero."
+
+
 def test_torchao_reste_epingle_avant_la_disparition_de_nf4tensor(di):
     """Panne reelle du 17/09, au tout premier lancement, APRES le telechargement.
 

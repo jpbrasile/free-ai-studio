@@ -321,14 +321,33 @@ def reperer(repliques, mots, x, taux, canaux) -> list:
         # vers >>.
         voisinage = set(attendus[max(0, a1 - 6):a1 + 6])
         if all(entendus[i] in voisinage for i in range(b1, b2)):
-            details.append({"texte": texte, "garde": "deja dans le contexte attendu"})
+            # Ces motifs sont LUS PAR L'UTILISATEUR depuis que la page affiche
+            # celui du rapport au lieu d'en inventer un : ils s'ecrivent donc en
+            # francais accentue, a la difference des commentaires de ce fichier.
+            details.append({"texte": texte, "garde": "déjà dans le contexte attendu"})
             continue
 
-        # GARDE DES FRAGMENTS, independante de la precedente et VOLONTAIREMENT
+        # GARDE DE LA PONCTUATION. Whisper rend parfois un << mot >> qui n'est
+        # QUE de la ponctuation -- un << ? >> seul, horodate comme le reste.
+        # normaliser() le vide de ses caracteres, il ne peut donc s'apparier a
+        # rien et l'alignement le declare intrus. Ce n'est pas de la parole :
+        # rien a couper, et rien a expliquer par une elision.
+        # Cas reel, rendu Kaggle du 17/09 : 8 passages epargnes, TOUS des
+        # << ? >>. Ils tombaient dans la garde des fragments ci-dessous, qui
+        # sauvait le son -- bon resultat -- mais les faisait annoncer comme des
+        # elisions. Le fichier etait juste, le motif affiche etait faux.
+        # Ces jetons ne sont PAS retires de `entendus` : leurs indices sont ceux
+        # de `mots`, et decaler l'un sans l'autre deplacerait les horodatages.
+        if all(not entendus[i] for i in range(b1, b2)):
+            details.append({"texte": texte, "garde": "ponctuation, pas de la parole"})
+            continue
+
+        # GARDE DES FRAGMENTS, independante des precedentes et VOLONTAIREMENT
         # redondante. Un intrus reduit a une seule lettre est une elision mal
         # decoupee (s', m', l', d', j', c', n', t'), jamais un mot etranger qui
         # vaille une coupe. Si une table fautive etait reintroduite un jour,
-        # cette garde tiendrait quand meme -- c'est sa raison d'etre.
+        # cette garde tiendrait quand meme -- c'est sa raison d'etre. Elle
+        # rattrape aussi la ponctuation, que la garde precedente nomme mieux.
         if sum(len(entendus[i]) for i in range(b1, b2)) <= 1:
             details.append({"texte": texte, "garde": "fragment d'une seule lettre"})
             continue
@@ -341,7 +360,7 @@ def reperer(repliques, mots, x, taux, canaux) -> list:
         c0 = min(max(c0, t0 - MARGE_RECALAGE_S), t0 + GARDE_S)
         c1 = max(min(c1, t1 + MARGE_RECALAGE_S), t1 - GARDE_S)
         if c1 - c0 < COUPE_MIN_S:
-            details.append({"texte": texte, "garde": "trop court apres recalage"})
+            details.append({"texte": texte, "garde": "trop court après recalage"})
             continue
         spans.append((c0, c1))
         details.append({"texte": texte, "debut": round(c0, 3), "fin": round(c1, 3),

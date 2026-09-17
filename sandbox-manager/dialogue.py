@@ -575,9 +575,22 @@ if onde.dim() == 1:
 canaux = int(onde.shape[0])
 echantillons = int(onde.shape[-1])
 
-# Borner AVANT de convertir. Sans clamp, un echantillon au-dela de 1.0 deborde
-# l'entier signe et repasse par zero : ca ne se voit dans aucun chiffre du
-# resume, et ca s'entend comme un claquement.
+# NORMALISER AVANT DE BORNER. Le clamp seul ne deborde pas, mais il APLATIT :
+# tout ce qui depasse 1.0 devient exactement 1.0, et une crete ecretee n'est
+# plus la forme d'onde que le modele a produite. Mesure sur le rendu de 147 s du
+# 17/09 : 753 echantillons colles a la pleine echelle. C'est un defaut de CE
+# fichier, pas du modele -- lui rendait des valeurs au-dela de 1.0, ce qui est
+# normal pour un float, et c'est a l'ecriture de faire tenir l'echelle.
+# Diviser par la crete CONSERVE la forme : le rapport entre les echantillons ne
+# bouge pas, seul le niveau global baisse, ce qui ne s'entend pas.
+# Le clamp reste derriere, et ce n'est pas une precaution decorative : une
+# valeur non finie (nan, inf) ne se normalise pas -- nan > 1.0 est faux, et
+# diviser par inf viderait le fichier -- donc la condition les ecarte toutes
+# deux et le bornage garde le dernier mot.
+crete = float(onde.abs().max()) if echantillons else 0.0
+if 1.0 < crete < float("inf"):
+    onde = onde / crete
+    print("Crete a %.3f : onde normalisee, aucun echantillon ecrete." % crete, flush=True)
 entiers = (onde.clamp(-1.0, 1.0) * 32767.0).round().to(torch.int16)
 # wave attend les canaux ENTRELACES, echantillon par echantillon : (C, N) doit
 # donc etre transpose en (N, C) avant d'etre aplati. Sans quoi un futur rendu
@@ -976,12 +989,25 @@ function blocNettoyage(n){
   const details = n.details || [];
   const morceaux = details.filter(d => d.millisecondes)
     .map(d => '« ' + echapper(d.texte) + ' » à ' + d.debut + ' s (' + d.millisecondes + ' ms)');
-  const gardes = details.filter(d => d.garde).length;
+  const gardes = details.filter(d => d.garde);
   let t = '<p class="avert"><b>Nettoyage : ' + coupes + ' passage(s) retiré(s)</b>, '
     + n.secondes_retirees + ' s en tout — de ' + n.duree_avant_s + ' s à ' + n.duree_apres_s + ' s.';
   if(morceaux.length) t += '<br>' + morceaux.join('<br>');
-  if(gardes) t += '<br>' + gardes + ' passage(s) épargné(s) par les gardes : une élision ou un '
-    + 'nombre réellement prononcé ne se coupe pas.';
+  // Le motif vient du rapport, jamais d'ici. La version precedente annoncait
+  // « une élision ou un nombre réellement prononcé » pour TOUT passage epargne :
+  // sur le rendu Kaggle du 17/09, les 8 epargnes etaient des « ? », donc de la
+  // ponctuation. La garde avait raison, la phrase mentait sur sa raison.
+  if(gardes.length){
+    const parMotif = {};
+    gardes.forEach(d => { parMotif[d.garde] = (parMotif[d.garde] || 0) + 1; });
+    // Le compte par motif n'a de sens qu'a partir de deux motifs : « 8 passages
+    // épargnés : 8 × ponctuation » se lit deux fois pour rien.
+    const plusieurs = Object.keys(parMotif).length > 1;
+    const motifs = Object.keys(parMotif).sort()
+      .map(m => (plusieurs ? parMotif[m] + ' × ' : '') + echapper(m));
+    t += '<br>' + gardes.length + ' passage(s) épargné(s) par les gardes : '
+      + motifs.join(', ') + '.';
+  }
   t += '<br>La transcription sous-estime : ce qui a été retiré est un plancher, pas un compte.</p>';
   return t;
 }
