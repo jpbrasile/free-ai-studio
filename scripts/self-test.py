@@ -24,13 +24,31 @@ def check(label, ok, detail=''):
     print(f'[{mark}] {label}' + (f' — {detail}' if detail else ''))
     return ok
 
+# Une reponse est bornee pour ne pas avaler la memoire sur une page qui
+# deraille. Mais une troncature SILENCIEUSE est pire que pas de borne : le
+# 18/09/2026, /jobs a franchi les 200 000 octets d'alors (203 262 octets, 67
+# travaux). json.loads tombait sur << Unterminated string >>, et le controle qui
+# suivait -- la cle du Sandbox ne doit PAS figurer dans l'adresse d'une video --
+# n'etait plus execute du tout. Un auto-test rouge pour une raison fausse, et
+# une verification de securite eteinte sans que rien ne le dise.
+# La borne est donc relevee ET la troncature se declare.
+LIMITE_LECTURE = 2_000_000
+
+def _lire(reponse):
+    corps = reponse.read(LIMITE_LECTURE + 1)
+    if len(corps) > LIMITE_LECTURE:
+        raise RuntimeError(
+            f'reponse tronquee a {LIMITE_LECTURE} octets : ce controle n\'a PAS '
+            'eu lieu. Relever LIMITE_LECTURE dans scripts/self-test.py.')
+    return corps
+
 def get(url, headers=None, timeout=6):
     req=urllib.request.Request(url, headers=headers or {})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, r.read(200000)
+            return r.status, _lire(r)
     except urllib.error.HTTPError as e:
-        return e.code, e.read(200000)
+        return e.code, _lire(e)
 
 print('== Free AI Studio : auto-test ==')
 all_ok=True
