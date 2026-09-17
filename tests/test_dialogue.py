@@ -116,7 +116,8 @@ def test_torchtune_part_bien_dans_l_image(di):
     transformeurs. Sans torchtune dans l'image, le travail meurt a l'import,
     apres le telechargement des poids -- c'est-a-dire une fois paye.
     """
-    assert "torchtune" in di.PAQUETS_MODAL, (
+    noms = {p.split("==")[0] for p in di.PAQUETS_MODAL}
+    assert "torchtune" in noms, (
         "torchtune manque : fireredtts2/llm/modules.py en a besoin pour construire "
         "les transformeurs, et l'echec arriverait apres le telechargement des poids."
     )
@@ -378,4 +379,46 @@ def test_la_page_ne_propose_aucun_endroit_non_verifie(sandbox, di):
     assert "/dialogue/colab" not in page
     assert '"kaggle"' not in page, (
         "la page propose un endroit sur lequel ce modele n'a jamais tourne."
+    )
+
+
+def test_torchao_reste_epingle_avant_la_disparition_de_nf4tensor(di):
+    """Panne reelle du 17/09, au tout premier lancement, APRES le telechargement.
+
+    L'image s'etait construite (torch, torchtune, torchao, transformers
+    s'installent bien sur Python 3.12), les 14 fichiers de poids etaient la en
+    66 s, et le travail est mort a l'import :
+
+        ModuleNotFoundError: No module named 'torchao.dtypes.nf4tensor'
+
+    leve depuis torchtune/modules/common_utils.py. Noter l'endroit : PAS
+    << No module named 'torchao' >>. torchao etait bien installe -- c'est le
+    chemin du sous-module qui n'existait plus.
+
+    pytorch/ao 60b42ac6 (13/04/2026, << Move NF4Tensor to
+    quantization.quantize_.workflows >>) a deplace le fichier vers
+    torchao/quantization/quantize_/workflows/nf4/nf4_tensor.py et, dit le commit
+    lui-meme, << after this commit torchao/dtypes/ is now empty >>.
+
+    Pourquoi pip ne pouvait pas s'en sortir seul : le pyproject.toml de torchtune
+    ne declare NI torch NI torchao, alors qu'il importe les deux. Aucune
+    contrainte a resoudre, donc la derniere version. L'epinglage ne peut venir
+    que de nous.
+
+    Frontiere relevee par sondage des tags publies : present en v0.15.0, v0.16.0
+    et v0.17.0, ABSENT en v0.18.0. Desepingler ces deux lignes rejoue la panne a
+    l'identique -- et elle ne se montre qu'apres avoir paye un telechargement de
+    poids au tarif de la carte.
+    """
+    epingles = dict(p.split("==") for p in di.PAQUETS_MODAL if "==" in p)
+
+    assert epingles.get("torchao") == "0.17.0", (
+        "torchao n'est plus epingle a 0.17.0 : au-dela, torchao.dtypes.nf4tensor "
+        "n'existe plus et torchtune meurt a l'import, apres le telechargement des "
+        "poids, c'est-a-dire une fois paye."
+    )
+    assert epingles.get("torchtune") == "0.6.1", (
+        "torchtune n'est plus epingle : il ne declare aucune contrainte sur "
+        "torchao, donc une version future peut changer l'import et rejouer la "
+        "meme panne sans que rien ne l'annonce."
     )

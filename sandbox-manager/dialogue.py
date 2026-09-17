@@ -141,24 +141,57 @@ FICHIERS_MODELE = (
 # fait que re-exporter), avait conclu l'inverse ; descendre d'un fichier a
 # renverse la conclusion.
 #
-# torchao n'est importe NULLE PART dans ce qui a ete lu. Il reste ici parce
-# qu'il figure au requirements.txt de l'amont et que torchtune peut l'appeler
-# en interne : l'ajouter coute des secondes de processeur a la construction,
-# l'omettre couterait un travail GPU mort a l'import.
+# torchao EST necessaire, et le premier lancement l'a prouve. Il n'apparait dans
+# aucun import de fireredtts2 : il etait garde par pari, parce qu'il figure au
+# requirements.txt de l'amont et que torchtune pouvait l'appeler en interne.
+# C'est exactement ce qui arrive -- torchtune/modules/common_utils.py fait
+# << from torchao.dtypes.nf4tensor import NF4Tensor >>. Le pari etait bon.
 #
 # Ecartes : gradio, optuna, tensorboard -- interface de demonstration et
 # outillage de developpement, rien que l'inference appelle.
 #
-# AUCUNE VERSION N'EST EPINGLEE, et c'est un defaut ASSUME plutot qu'un oubli :
-# le requirements.txt de l'amont n'epingle rien non plus, et je n'ai verifie
-# aucun numero de mon cote. Epingler une version non verifiee reviendrait a
-# inventer un chiffre. La construction de l'image est le test, et c'est le test
-# BON MARCHE : Modal la facture en temps PROCESSEUR, pas en temps de carte.
+# DEUX VERSIONS EPINGLEES, ET CHACUNE EST UN NUMERO RELEVE, PAS CHOISI AU JUGE.
+#
+# Premier lancement, 17/09/2026 : l'image s'est construite, les poids se sont
+# telecharges (14 fichiers, 66 s), puis le travail est mort a l'import sur
+#     ModuleNotFoundError: No module named 'torchao.dtypes.nf4tensor'
+# leve depuis torchtune/modules/common_utils.py. Noter l'endroit : PAS
+# << No module named 'torchao' >>. torchao etait bien installe ; c'est le chemin
+# du sous-module qui n'existait plus.
+#
+# Pourquoi pip ne pouvait pas s'en sortir seul : le pyproject.toml de torchtune
+# ne declare NI torch NI torchao, alors qu'il importe les deux a l'import. Il
+# n'y avait donc aucune contrainte a resoudre -- pip a pris le torchao le plus
+# recent. Retirer torchao de cette liste n'aiderait pas : l'erreur deviendrait
+# << No module named 'torchao' >> tout court. L'epinglage ne peut venir que
+# d'ici.
+#
+# Ou est passe le fichier, d'apres le commit qui l'a deplace (pytorch/ao
+# 60b42ac6, 13/04/2026, << Move NF4Tensor to quantization.quantize_.workflows >>) :
+#     torchao/dtypes/nf4tensor.py -> torchao/quantization/quantize_/workflows/nf4/nf4_tensor.py
+# et, dit par le commit lui-meme, << after this commit torchao/dtypes/ is now
+# empty >>. Verifie sur main : le dossier dtypes n'y est plus du tout.
+#
+# La frontiere, relevee par quatre sondes sur les tags publies :
+#     v0.15.0 present (40 651 o) | v0.16.0 present (41 508 o)
+#     v0.17.0 present (41 508 o) | v0.18.0 ABSENT (404)
+# 0.17.0 est donc la derniere version publiee qui expose le chemin attendu par
+# torchtune. torchtune est epingle a 0.6.1, sa derniere version publiee, c'est-a-dire
+# celle que pip installait deja : l'epingler ne change pas le comportement, il
+# empeche qu'une version future rejoue la meme panne.
+#
+# LE RESTE N'EST TOUJOURS PAS EPINGLE, et c'est delibere : je n'ai mesure que ces
+# deux numeros. Epingler les autres au juge reviendrait a inventer des chiffres.
+# Ce que la prochaine construction tranchera, et qui n'est pas verifie : qu'un
+# torchao de la generation 0.17 s'installe avec le torch recent que pip choisit.
+# La construction reste le test, et elle reste BON MARCHE : facturee en temps
+# PROCESSEUR, pas en temps de carte -- et les poids sont desormais en cache dans
+# le volume Modal, donc un nouvel essai ne retelecharge pas 12,6 Go.
 PAQUETS_MODAL = (
     "torch",
     "torchaudio",
-    "torchtune",
-    "torchao",
+    "torchtune==0.6.1",
+    "torchao==0.17.0",
     "transformers",
     "huggingface_hub",
     "einops",
