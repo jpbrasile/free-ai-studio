@@ -382,6 +382,7 @@ def modal_execute(
     memory_mb: Optional[int] = None,
     paquets: Optional[tuple] = None,
     apt: Optional[tuple] = None,
+    commandes: Optional[tuple] = None,
     volume: Optional[str] = None,
     point_de_montage: str = "/modeles",
 ) -> dict:
@@ -390,8 +391,9 @@ def modal_execute(
     Les arguments nommes ne servent qu'aux travaux lourds (la video). Sans eux,
     le comportement est exactement celui d'avant. Ils permettent de demander une
     carte plus grosse, un delai plus long, une image ou les bibliotheques sont
-    deja installees, et un disque persistant ou garder les modeles telecharges
-    d'un clip a l'autre.
+    deja installees, des commandes de construction pour les depots que pip
+    n'installe pas correctement, et un disque persistant ou garder les modeles
+    telecharges d'un clip a l'autre.
     """
     if not modal_configured():
         raise BackendUnavailable("Modal is not configured")
@@ -430,6 +432,23 @@ def modal_execute(
             # qu'une fois, pas a chaque clip. La construction est facturee en
             # temps processeur, pas en temps de carte graphique.
             image = image.pip_install(*paquets)
+        if commandes:
+            # Pourquoi des commandes et pas seulement des paquets : certains
+            # depots ne s'installent PAS correctement par pip, et le cas qui a
+            # impose ce parametre est instructif. FireRedTTS-2 a un setup.py
+            # reduit a find_packages(), et son sous-dossier fireredtts2/utils/
+            # n'a PAS de __init__.py. find_packages() ne le voit donc pas, et
+            # << pip install git+... >> livre un paquet AMPUTE : le travail meurt
+            # sur ModuleNotFoundError: No module named 'fireredtts2.utils'.
+            # Leurs auteurs ne peuvent pas voir ce trou : leur procedure est
+            # << pip install -e . >> depuis un clone, et un editable met
+            # l'arborescence entiere sur le sys.path, __init__.py ou pas.
+            # Reproduire une procedure d'installation demande d'executer des
+            # commandes ; l'approcher avec une liste de paquets est un pari.
+            # Ces commandes tournent APRES pip_install, et l'ordre compte :
+            # une version epinglee ci-dessus satisfait un requirements.txt sans
+            # version, donc elle survit. L'inverse la remonterait en silence.
+            image = image.run_commands(*commandes)
         volumes = {}
         if volume:
             volumes[point_de_montage] = modal.Volume.from_name(volume, create_if_missing=True)
@@ -2090,6 +2109,7 @@ def run_dialogue(jid: str, code: str):
             memory_mb=dialogue.MEMOIRE_MB,
             paquets=dialogue.PAQUETS_MODAL,
             apt=dialogue.APT_MODAL,
+            commandes=dialogue.COMMANDES_MODAL,
             volume=dialogue.VOLUME_MODELES,
         )
         finish_execution(jid, "modal", donnees)

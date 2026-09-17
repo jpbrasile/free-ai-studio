@@ -84,12 +84,13 @@ MODELE = {
     # Epingler le commit est ici une barriere de securite.
     "revision": "4af3f5cc4963373b86b52d750220d4de85261f05",
     "code": "https://github.com/FireRedTeam/FireRedTTS2",
-    # PAS EPINGLEE, et c'est un manque, pas un choix : les poids vivent sur
-    # Hugging Face (revision ci-dessus), le paquet Python vit sur GitHub, et je
-    # n'ai releve aucun commit de ce depot-la. Fabriquer un SHA plausible serait
-    # pire que l'avouer. Meme reserve que la LoRA de /chanson, dite au meme
-    # endroit : dans la fiche du travail et sur la page.
-    "code_revision": None,
+    # EPINGLEE le 17/09/2026. Elle est restee ouverte deux commits durant, faute
+    # d'avoir releve le moindre commit de ce depot -- un manque avoue plutot
+    # qu'un SHA plausible invente. Ceci est la tete de la branche principale,
+    # datee du 26/10/2025 : le depot n'a pas bouge depuis onze mois, donc
+    # l'epingler ne coute aucune maintenance. Meme motif que pour les poids :
+    # c'est ce code-la qui appelle torch.load sur des pickles.
+    "code_revision": "404f3f61d25bb4804859b588a6a734bf8468090c",
     "licence": "Apache 2.0",
     "restriction": "la licence elle-meme n'interdit rien, usage commercial compris",
     # LA NUANCE QUI COMPTE, ET QUI N'EST PAS DANS LA LICENCE. Le README des
@@ -129,11 +130,48 @@ FICHIERS_MODELE = (
     "Qwen2.5-1.5B/*",
 )
 
-# Dependances d'inference, etablies en lisant les imports un fichier apres
-# l'autre plutot qu'en recopiant le requirements.txt de l'amont -- lequel est
-# INCOMPLET : il oublie huggingface_hub, dont llm.py a pourtant besoin
-# (PyTorchModelHubMixin). Le suivre a la lettre donnerait une image qui tombe au
-# premier import.
+# COMMENT CE PAQUET S'INSTALLE -- ET POURQUOI PAS COMME JE L'AVAIS CRU.
+#
+# Deux lancements payes ont ete perdus a RECONSTRUIRE une procedure
+# d'installation au lieu de LIRE celle des auteurs. Elle tient en quatre
+# commandes, et COMMANDES_MODAL la reproduit telle quelle :
+#     git clone ... && cd FireRedTTS2
+#     pip install torch torchvision torchaudio   (index PyTorch)
+#     pip install -e .
+#     pip install -r requirements.txt
+#
+# LE PIEGE, paye au tarif de la carte le 17/09/2026 :
+#     ModuleNotFoundError: No module named 'fireredtts2.utils'
+# Leur setup.py tient en une ligne -- setup(name="fireredtts2", version="0.1",
+# packages=find_packages()) -- et fireredtts2/utils/ ne contient QUE spliter.py,
+# sans __init__.py. find_packages() ne retient que les dossiers qui en ont un :
+# << pip install git+... >> livre donc un paquet AMPUTE. Verifie sur le depot :
+# llm/ et codec/ ont le leur, utils/ non -- le trou est unique, il n'y a pas une
+# seconde panne identique derriere.
+#
+# Les auteurs ne peuvent pas voir ce trou : << pip install -e . >> laisse
+# l'arborescence source en place, ou un dossier sans __init__.py s'importe quand
+# meme comme paquet-espace-de-noms. AUCUNE lecture des imports, si soigneuse
+# soit-elle, ne pouvait reveler ca : ce n'est pas une dependance manquante,
+# c'est un paquet mutile par l'installation. La procedure etait la seule source.
+#
+# CE QUI RESTE DANS CETTE LISTE, ET SA REGLE : exactement ce que le
+# requirements.txt de l'amont ne peut pas donner -- ce qu'il OUBLIE, et ce qu'il
+# SOUS-SPECIFIE. Rien d'autre. Je ne trie plus ce que les auteurs installent :
+# gradio, optuna, accelerate et tensorboard partent desormais dans l'image via
+# leur fichier, alors qu'un commentaire precedent les ecartait comme outillage
+# de demonstration. Ce tri etait sans doute juste, mais il n'etait qu'un
+# raisonnement, et aucune mesure ne le soutient -- alors que deux mesures
+# condamnent l'ecart a la procedure documentee. Une construction ratee se paie
+# en temps PROCESSEUR ; une dependance oubliee se paie au tarif de la CARTE,
+# apres le telechargement des poids. L'asymetrie tranche seule.
+#
+# L'ORDRE EST LE CORRECTIF. Ces paquets sont poses AVANT les commandes, et c'est
+# ce qui sauve les epingles : le requirements.txt de l'amont demande
+# << torchao >> et << torchtune >> SANS version, une contrainte nue est
+# satisfaite par n'importe quelle version deja installee, et pip ne met a niveau
+# que sur -U. Dans l'autre ordre, la commande officielle remonterait torchao en
+# silence et rejouerait la panne de ce matin.
 #
 # torchtune EST necessaire : fireredtts2/llm/modules.py fait
 # << from torchtune.models.qwen2 import qwen2 >> et construit par la tous les
@@ -146,9 +184,6 @@ FICHIERS_MODELE = (
 # requirements.txt de l'amont et que torchtune pouvait l'appeler en interne.
 # C'est exactement ce qui arrive -- torchtune/modules/common_utils.py fait
 # << from torchao.dtypes.nf4tensor import NF4Tensor >>. Le pari etait bon.
-#
-# Ecartes : gradio, optuna, tensorboard -- interface de demonstration et
-# outillage de developpement, rien que l'inference appelle.
 #
 # DEUX VERSIONS EPINGLEES, ET CHACUNE EST UN NUMERO RELEVE, PAS CHOISI AU JUGE.
 #
@@ -188,18 +223,50 @@ FICHIERS_MODELE = (
 # PROCESSEUR, pas en temps de carte -- et les poids sont desormais en cache dans
 # le volume Modal, donc un nouvel essai ne retelecharge pas 12,6 Go.
 PAQUETS_MODAL = (
+    # Ce que la procedure des auteurs installe HORS requirements.txt, depuis
+    # l'index PyTorch. Sans numero, deliberement : ils epinglent
+    # torch==2.7.1+cu126 pour leur Python 3.11, quand modal_execute code en dur
+    # un Python 3.12. Transposer leur numero sans l'avoir verifie, ce serait
+    # l'inventer.
     "torch",
     "torchaudio",
+    # SOUS-SPECIFIES par leur requirements.txt, qui les demande nus. Poses ici,
+    # donc AVANT lui -- c'est l'ordre explique plus haut qui sauve l'epingle.
     "torchtune==0.6.1",
     "torchao==0.17.0",
-    "transformers",
+    # OUBLIES par leur requirements.txt : llm.py fait
+    # << from huggingface_hub import PyTorchModelHubMixin >>, et le script du
+    # travail s'en sert aussi pour snapshot_download.
     "huggingface_hub",
-    "einops",
-    "librosa",
     "tqdm",
-    "git+" + MODELE["code"] + ".git",
 )
-# git+https:// a besoin de git dans l'image.
+# transformers, einops et librosa ne sont plus listes ici, et gradio, optuna,
+# accelerate et tensorboard n'en sont plus exclus : tous arrivent par le
+# requirements.txt des auteurs, execute tel quel dans COMMANDES_MODAL. Une seule
+# liste fait foi, et c'est la leur -- en maintenir une seconde a cote invitait
+# la derive qui a coute les deux lancements du 17/09.
+
+# LA PROCEDURE DES AUTEURS, EXECUTEE TELLE QUELLE.
+#
+# Elle tourne APRES les paquets ci-dessus, et cet ordre est le correctif. Il est
+# MESURE, pas suppose (sonde locale, Python 3.11.5) : on pose packaging==23.0,
+# puis on execute un requirements.txt qui demande << packaging >> nu. pip
+# repond << Requirement already satisfied ... (23.0) >> et ne remonte rien --
+# il ne met a niveau que sur -U. Nos epingles torchao et torchtune survivent
+# donc au fichier de l'amont, qui les demande sans version. Dans l'autre ordre,
+# la commande officielle aurait remonte torchao en silence et rejoue la panne.
+#
+# Le clone est COMPLET, et non --depth 1 : le commit epingle doit rester
+# atteignable meme si la branche avance. S'il disparaissait, la construction
+# echouerait bruyamment -- ce qui est le comportement voulu, et facture en temps
+# processeur, pas en temps de carte.
+DOSSIER_CODE = "/opt/FireRedTTS2"
+COMMANDES_MODAL = (
+    "git clone " + MODELE["code"] + ".git " + DOSSIER_CODE,
+    "cd " + DOSSIER_CODE + " && git checkout " + MODELE["code_revision"],
+    "cd " + DOSSIER_CODE + " && pip install -e . && pip install -r requirements.txt",
+)
+# git est necessaire dans l'image pour le clone ci-dessus.
 APT_MODAL = ("git",)
 
 # Bornes de la demande. Trois minutes de dialogue, plafond annonce par les

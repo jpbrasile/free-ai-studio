@@ -133,20 +133,128 @@ def test_huggingface_hub_part_bien_dans_l_image(di):
     assert "huggingface_hub" in di.PAQUETS_MODAL
 
 
-def test_les_outils_de_developpement_ne_partent_pas(di):
-    """gradio, optuna et tensorboard sont au requirements.txt de l'amont et ne
-    servent qu'a la demonstration et au developpement. Les embarquer alourdirait
-    l'image sans que l'inference les appelle jamais."""
-    for inutile in ("gradio", "optuna", "tensorboard"):
-        assert not any(p.startswith(inutile) for p in di.PAQUETS_MODAL), (
-            inutile + " part dans l'image alors que l'inference ne l'appelle pas."
+def test_le_requirements_de_l_amont_est_execute_tel_quel(di):
+    """RENVERSEMENT ASSUME du 17/09/2026, avec sa raison.
+
+    Ce test interdisait gradio, optuna et tensorboard dans l'image, au motif
+    qu'ils ne servent qu'a la demonstration et au developpement. C'etait sans
+    doute vrai -- mais ce n'etait qu'un raisonnement, et aucune mesure ne le
+    soutenait, alors que DEUX lancements payes ont ete perdus ce jour-la a
+    s'ecarter de la procedure documentee. Les auteurs ecrivent
+    « pip install -r requirements.txt » : le Studio l'execute tel quel.
+
+    PAQUETS_MODAL ne garde donc que ce que leur fichier ne peut pas donner : ce
+    qu'il OUBLIE et ce qu'il SOUS-SPECIFIE. Un doublon ici serait une seconde
+    liste a maintenir, c'est-a-dire la derive a recommencer.
+    """
+    assert any("requirements.txt" in c for c in di.COMMANDES_MODAL), (
+        "le requirements.txt des auteurs n'est plus execute : le Studio est "
+        "retourne a une liste maison, ce qui a deja coute deux lancements."
+    )
+    for double in ("transformers", "einops", "librosa", "gradio", "optuna"):
+        assert not any(p.split("==")[0] == double for p in di.PAQUETS_MODAL), (
+            double + " est liste a la main alors que le requirements.txt de "
+            "l'amont le fournit : deux listes a maintenir au lieu d'une."
         )
 
 
-def test_le_paquet_a_besoin_de_git(di):
-    """Le code s'installe depuis GitHub : sans git dans l'image, pip echoue."""
-    assert any(p.startswith("git+") for p in di.PAQUETS_MODAL)
-    assert "git" in di.APT_MODAL
+def test_le_code_ne_s_installe_pas_par_pip_depuis_git(di):
+    """LA PANNE DU 17/09/2026, ET LE GARDE QUI L'EMPECHE DE REVENIR.
+
+    « pip install git+https://github.com/FireRedTeam/FireRedTTS2.git » parait la
+    facon naturelle d'installer ce code. Elle est fausse, et elle se paie au
+    tarif de la carte :
+
+        ModuleNotFoundError: No module named 'fireredtts2.utils'
+
+    leve APRES le telechargement des poids. Leur setup.py tient en une ligne --
+    setup(name="fireredtts2", version="0.1", packages=find_packages()) -- et
+    fireredtts2/utils/ ne contient que spliter.py, SANS __init__.py.
+    find_packages() ne retient que les dossiers qui en ont un : l'installation
+    livre un paquet ampute. Releve sur le depot : llm/ et codec/ ont le leur,
+    utils/ non, donc le trou est unique.
+
+    MECANISME MESURE, pas raisonne (sonde locale, Python 3.11.5, sur un paquet
+    fabrique imitant la structure, avec un sous-paquet TEMOIN muni de son
+    __init__.py) :
+        pip install .     -> temoin OK, dossier sans __init__.py ECHEC
+                             (ModuleNotFoundError, meme forme qu'en production)
+        pip install -e .  -> les deux OK
+    Le temoin passe dans les deux cas : la sonde discrimine, elle n'est pas
+    cassee. NON VERIFIE en Python 3.12, la version de l'image Modal.
+
+    Remettre git+ ici rejouerait la panne, qui ne se montre qu'une fois paye.
+    """
+    assert not any(p.startswith("git+") for p in di.PAQUETS_MODAL), (
+        "le code repasse par pip+git : find_packages() laissera fireredtts2.utils "
+        "de cote et le travail mourra a l'import, apres le telechargement des poids."
+    )
+    assert "git" in di.APT_MODAL, "sans git dans l'image, le clone echoue."
+
+
+def test_les_commandes_reproduisent_la_procedure_des_auteurs(di):
+    """La procedure documentee, et non une reconstruction a partir des imports.
+
+    Les gestes du README : cloner, se placer sur une revision, installer en
+    EDITABLE, puis poser le requirements.txt. Le « -e » est le point qui compte :
+    c'est lui qui laisse fireredtts2/utils s'importer malgre l'absence
+    d'__init__.py.
+    """
+    jointes = " ; ".join(di.COMMANDES_MODAL)
+    assert "git clone" in jointes, "le depot n'est plus clone."
+    assert "pip install -e ." in jointes, (
+        "l'installation n'est plus en editable : sans -e, fireredtts2.utils "
+        "disparait de l'image et le travail meurt a l'import, une fois paye."
+    )
+    assert "-r requirements.txt" in jointes, (
+        "le requirements.txt des auteurs n'est plus execute."
+    )
+
+
+def test_les_epingles_ne_sont_pas_reposees_apres_le_requirements(di):
+    """L'ordre suffit, et c'est MESURE -- pas besoin de re-epingler par prudence.
+
+    Sonde locale : packaging==23.0 pose, puis un requirements.txt demandant
+    « packaging » nu. pip repond « Requirement already satisfied ... (23.0) » et
+    ne remonte rien ; il ne met a niveau que sur -U. Les epingles vivent donc
+    dans PAQUETS_MODAL, pose AVANT les commandes, et nulle part ailleurs.
+
+    Une re-pose apres coup serait du bruit defensif masquant une question non
+    tranchee. Si ce test tombe, c'est qu'on a doute de l'ordre sans le remesurer.
+    """
+    epingles = dict(p.split("==") for p in di.PAQUETS_MODAL if "==" in p)
+    assert epingles.get("torchao") == "0.17.0", "l'epingle a quitte PAQUETS_MODAL."
+    for commande in di.COMMANDES_MODAL:
+        assert "torchao" not in commande, (
+            "torchao est re-epingle dans les commandes : soit l'ordre ne protege "
+            "plus l'epingle et il faut le remesurer, soit c'est une precaution "
+            "inutile qui cache la vraie garantie."
+        )
+
+
+def test_les_commandes_partent_vraiment_a_modal(sandbox, di, monkeypatch):
+    """Une constante definie et jamais transmise serait un silence paye.
+
+    COMMANDES_MODAL peut etre parfaite et ne jamais quitter le module : c'est
+    app.py qui doit la passer a modal_execute. Ce test attrape les arguments
+    reels de l'appel, puis fait echouer le fournisseur pour ne dependre d'aucun
+    contrat de sortie.
+    """
+    recu = {}
+
+    def espion(*args, **kwargs):
+        recu.update(kwargs)
+        raise sandbox.BackendUnavailable("capture")
+
+    monkeypatch.setattr(sandbox, "modal_execute", espion)
+    jid = "d" * 32
+    sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    sandbox.run_dialogue(jid, "print(1)")
+    assert recu.get("commandes") == di.COMMANDES_MODAL, (
+        "les commandes d'installation n'arrivent pas jusqu'a Modal : l'image se "
+        "construirait sans le code, et l'echec n'apparaitrait que sur la carte."
+    )
+    assert recu.get("apt") == di.APT_MODAL, "git ne part pas dans l'image."
 
 
 def test_script_est_du_python_valide(di):
@@ -326,21 +434,38 @@ def test_la_page_avoue_que_le_francais_n_est_mesure_par_personne(sandbox, di):
     )
 
 
-def test_la_revision_du_code_n_est_pas_presentee_comme_epinglee(sandbox, di):
+def test_la_revision_du_code_est_dite_telle_qu_elle_est(sandbox, di):
     """Les POIDS sont epingles a un commit -- ce sont des pickles, torch.load les
     execute, l'epinglage est une barriere de securite autant qu'une garantie de
-    reproductibilite. Le CODE vient de GitHub et son commit n'a jamais ete
-    releve. Tant que c'est vrai, il faut le dire plutot que d'inventer un SHA
-    plausible."""
+    reproductibilite. Le CODE le merite pour la meme raison : c'est LUI qui
+    appelle torch.load.
+
+    Epinglee le 17/09/2026 a la tete de la branche principale (26/10/2025),
+    apres etre restee ouverte deux commits durant faute d'avoir releve le moindre
+    commit du depot -- un manque avoue valant mieux qu'un SHA plausible invente.
+
+    Ce test couvre les DEUX etats, pour ne pas devenir vide le jour ou l'un
+    disparait : tant que c'est None, la page doit prevenir ; des que c'est un
+    SHA, il doit etre complet ET reellement pose par une commande.
+    """
     assert di.MODELE["revision"] and len(di.MODELE["revision"]) == 40, (
         "les poids ne sont plus epingles a un commit complet"
     )
-    if di.MODELE["code_revision"] is None:
-        public = di.preparer({"texte": DIALOGUE})["resume_public"]
+    sha = di.MODELE["code_revision"]
+    public = di.preparer({"texte": DIALOGUE})["resume_public"]
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/dialogue").text
+    if sha is None:
         assert public["code_revision_epinglee"] is False
-        page = TestClient(sandbox.app, base_url=LOCAL).get("/dialogue").text
         assert "code_revision" in page, (
             "la page ne previent pas que le code n'est pas epingle."
+        )
+    else:
+        assert len(sha) == 40, "un SHA tronque n'identifie pas un commit."
+        assert public["code_revision_epinglee"] is True
+        assert any(sha in c for c in di.COMMANDES_MODAL), (
+            "la fiche annonce une revision epinglee mais aucune commande ne la "
+            "pose : la page affirmerait « epingle » sur du code pris a la branche "
+            "principale. C'est exactement le mensonge que l'aveu precedent evitait."
         )
 
 
