@@ -976,7 +976,16 @@ function nomDeFichier(){
 // cas comptent, y compris celui ou le nettoyage n’a PAS eu lieu : le taire
 // laisserait croire qu’un rendu a ete verifie alors qu’il ne l’a pas ete.
 function blocNettoyage(n){
-  if(!n) return "";
+  // JAMAIS MUET. Un rapport absent n’est pas un rapport vide : c’est le cas
+  // même où la page peut servir un son déjà coupé sans l’écrire nulle part,
+  // et c’est arrivé deux fois — le 17/09 parce que l’affichage jetait les
+  // champs, le 18/09 parce qu’il affichait avant que le nettoyage soit inscrit.
+  // Le silence était le point commun des deux.
+  if(!n){
+    return '<p class="avert"><b>Nettoyage : état inconnu.</b> Le rapport n’est pas encore '
+      + 'arrivé. Rechargez la page dans une minute : s’il y a eu des coupes, le fichier '
+      + 'd’origine apparaîtra à côté du dialogue.</p>';
+  }
   if(n.fait === false){
     return '<p class="avert"><b>Le nettoyage n’a pas eu lieu</b> — ' + echapper(n.motif || "raison inconnue")
       + '. Le dialogue est livré tel que le modèle l’a produit.</p>';
@@ -1047,6 +1056,10 @@ function afficherDialogue(j){
 
 function suivre(id){
   const etat = document.getElementById("etat");
+  // Borne de l’attente du nettoyage. Sans elle, un témoin resté levé par une
+  // fiche illisible ferait tourner la page sans fin, et mieux vaut montrer ce
+  // qu’on a en le disant que faire attendre pour toujours.
+  let limiteNettoyage = 0;
   minuteur = setInterval(() => {
     fetch("/dialogue/jobs/" + id, {headers:{"Authorization":"Bearer "+CLE}})
       .then(r => r.json())
@@ -1057,6 +1070,24 @@ function suivre(id){
             + "long : environ 12,6 Go de poids se téléchargent.";
           montrerArret(id);
           return;
+        }
+        // LE RENDU EST FINI, LE NETTOYAGE NON. run_dialogue marque
+        // « succeeded » puis nettoie : sans cette attente, la page affichait
+        // et coupait sa scrutation avant que le rapport et le lien vers
+        // l’original n’existent. Mesuré le 18/09 sur deux onglets du même
+        // lancement : celui au premier plan n’a rien vu, celui en arrière-plan,
+        // dont Chrome bride les minuteurs, a tout vu. Le hasard décidait.
+        if(j.nettoyage_en_cours && !j.nettoyage){
+          if(!limiteNettoyage) limiteNettoyage = Date.now() + 300000;
+          if(Date.now() < limiteNettoyage){
+            cacherArret();
+            etat.innerHTML = '<span class="ok">✔ Dialogue rendu</span> — nettoyage en cours, '
+              + 'quelques dizaines de secondes. Le rapport de ce qui est retiré et le fichier '
+              + 'd’origine arrivent avec lui.';
+            return;
+          }
+          // Au-delà de la borne, on montre ce qu’on a. blocNettoyage() le dira :
+          // il n’est plus muet quand le rapport manque.
         }
         clearInterval(minuteur); minuteur = null;
         cacherArret();

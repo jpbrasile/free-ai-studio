@@ -842,6 +842,97 @@ def test_la_page_dit_ce_qu_elle_a_retire_et_garde_l_original(sandbox):
     )
 
 
+def test_le_temoin_dit_que_le_nettoyage_n_est_pas_fini(sandbox, monkeypatch):
+    """LA COURSE DU 18/09, trouvee par un lancement reel et par lui seul.
+
+    run_dialogue marque le travail << succeeded >> puis nettoie. La page arrete
+    de scruter des qu'elle voit ce mot : elle affichait donc le dialogue avant
+    que le rapport et le lien vers l'original n'existent, et ne regardait plus
+    jamais. Mesure sur les deux onglets d'un MEME lancement : celui au premier
+    plan (scrutation toutes les 5 s) n'a rien vu ; celui en arriere-plan, dont
+    Chrome bride les minuteurs, a tout vu. Le hasard decidait, et l'utilisateur
+    qui regardait sa page etait celui qui etait puni.
+
+    Aucun test ne pouvait le voir : ceux de la page lisent son code, et la
+    verification du 17/09 rejouait l'affichage sur une fiche DEJA TERMINEE, ce
+    qui contourne exactement la course. Celui-ci regarde la fiche PENDANT le
+    nettoyage, le seul instant ou la question se pose.
+    """
+    vu = {}
+
+    def faux_nettoyage(jid):
+        vu["pendant"] = sandbox.read_job(jid).get("nettoyage_en_cours")
+        job = sandbox.read_job(jid)
+        job["nettoyage"] = {"fait": True, "coupes": 0}
+        sandbox.write_job(jid, job)
+
+    def kaggle_qui_reussit(jid, *args, **kwargs):
+        job = sandbox.read_job(jid)
+        job["status"] = "succeeded"
+        sandbox.write_job(jid, job)
+
+    monkeypatch.setattr(sandbox, "run_kaggle", kaggle_qui_reussit)
+    monkeypatch.setattr(sandbox, "nettoyer_dialogue", faux_nettoyage)
+    jid = "d" * 32
+    sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    sandbox.run_dialogue(jid, "print(1)", "kaggle")
+
+    assert vu.get("pendant") is True, (
+        "pendant le nettoyage, la fiche ne dit pas qu'il reste quelque chose a "
+        "attendre : la page affichera un dialogue deja coupe sans l'ecrire."
+    )
+    assert "nettoyage_en_cours" not in sandbox.read_job(jid), (
+        "le temoin reste leve apres le nettoyage : la page attendrait pour rien."
+    )
+
+
+def test_le_temoin_se_retire_meme_si_le_nettoyage_casse(sandbox, monkeypatch):
+    """Un temoin qui reste leve fait attendre la page sans fin. Le finally le retire.
+
+    nettoyer_dialogue avale deja toutes ses pannes -- c'est voulu, un rendu paye
+    ne doit pas devenir un echec. Mais << deja >> n'est pas << toujours >> : si
+    quoi que ce soit remonte, le temoin doit tomber quand meme.
+    """
+    def nettoyage_qui_casse(jid):
+        raise RuntimeError("panne pendant le nettoyage")
+
+    def kaggle_qui_reussit(jid, *args, **kwargs):
+        job = sandbox.read_job(jid)
+        job["status"] = "succeeded"
+        sandbox.write_job(jid, job)
+
+    monkeypatch.setattr(sandbox, "run_kaggle", kaggle_qui_reussit)
+    monkeypatch.setattr(sandbox, "nettoyer_dialogue", nettoyage_qui_casse)
+    jid = "e" * 32
+    sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    with pytest.raises(RuntimeError):
+        sandbox.run_dialogue(jid, "print(1)", "kaggle")
+
+    assert "nettoyage_en_cours" not in sandbox.read_job(jid), (
+        "le temoin survit a une panne du nettoyage : la page attendrait 5 minutes "
+        "pour rien avant de se rabattre sur sa borne."
+    )
+
+
+def test_la_page_attend_le_nettoyage_et_ne_se_tait_jamais(sandbox):
+    """Les deux moities de la correction, cote page.
+
+    (1) Elle attend tant que le temoin est leve, au lieu de couper sa
+    scrutation. (2) Un rapport ABSENT ne la rend plus muette : c'etait le
+    silence, et non l'erreur, qui a permis les deux defauts -- celui du 17/09
+    ou l'affichage jetait les champs, et celui du 18/09 ou il affichait trop
+    tot. Dans les deux cas la page ne disait RIEN.
+    """
+    page = sandbox.dialogue.PAGE_HTML
+    assert "nettoyage_en_cours" in page, (
+        "la page ne regarde pas le temoin : elle affichera de nouveau avant le rapport."
+    )
+    assert "état inconnu" in page, (
+        "sans rapport, la page redevient muette -- et un son deja coupe passerait "
+        "pour un son intact."
+    )
+
+
 def test_un_point_d_interrogation_n_est_pas_annonce_comme_une_elision(sandbox, tmp_path):
     """DEFAUT REEL du rendu Kaggle du 17/09, laisse ouvert ce soir-la puis corrige.
 

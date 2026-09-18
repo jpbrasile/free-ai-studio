@@ -2168,6 +2168,23 @@ ROUTEUR_INTERNE = os.getenv("SANDBOX_ROUTEUR_URL", "http://free-tier-manager:800
 NETTOYAGE_DELAI_S = int(os.getenv("DIALOGUE_NETTOYAGE_TIMEOUT_SECONDS", "900"))
 
 
+def marquer_nettoyage_en_cours(jid: str, en_cours: bool) -> None:
+    """Pose ou retire le temoin que la page attend. Ne casse jamais le travail.
+
+    La fiche peut etre illisible ou non ecrivable ; dans ce cas la page se
+    rabattra sur sa propre borne d'attente plutot que de tourner sans fin.
+    """
+    try:
+        job = read_job(jid)
+        if en_cours:
+            job["nettoyage_en_cours"] = True
+        else:
+            job.pop("nettoyage_en_cours", None)
+        write_job(jid, job)
+    except Exception as exc:  # noqa: BLE001 - un temoin n'a pas a faire echouer un rendu paye
+        log.warning("Temoin de nettoyage du dialogue %s impossible : %s", jid, exc)
+
+
 def nettoyer_dialogue(jid: str) -> None:
     """Retire du rendu la parole que personne n'a demandee. NE CASSE JAMAIS LE TRAVAIL.
 
@@ -2291,7 +2308,23 @@ def run_dialogue(jid: str, code: str, ou: str):
             job["budget"] = reste
             write_job(jid, job)
     if read_job(jid).get("status") == "succeeded":
-        nettoyer_dialogue(jid)
+        # LE TEMOIN, ET POURQUOI IL EXISTE. Le travail est marque << succeeded >>
+        # par finish_execution AVANT que le nettoyage n'ait commence, et la page
+        # arrete de scruter des qu'elle voit ce mot. Mesure du 18/09/2026, sur
+        # les deux onglets d'un meme lancement : celui au premier plan, qui
+        # scrute toutes les 5 s, a affiche le dialogue SANS le rapport ni le
+        # lien vers l'original ; celui en arriere-plan, dont Chrome bride les
+        # minuteurs a environ une fois par minute, a tout affiche. La page
+        # promet que << rien n'est coupe en douce >>, et c'est justement
+        # l'utilisateur qui la regarde qui ne voyait rien.
+        # Le temoin dit a la page qu'il reste quelque chose a attendre. Il se
+        # leve dans un finally : meme si le nettoyage se casse la figure -- il
+        # avale pourtant tout -- la page ne doit jamais attendre sans fin.
+        marquer_nettoyage_en_cours(jid, True)
+        try:
+            nettoyer_dialogue(jid)
+        finally:
+            marquer_nettoyage_en_cours(jid, False)
 
 
 @app.get("/dialogue/etat")
