@@ -933,6 +933,85 @@ def test_la_page_attend_le_nettoyage_et_ne_se_tait_jamais(sandbox):
     )
 
 
+def test_un_mot_sans_duree_ne_se_coupe_pas_a_cote(sandbox, tmp_path):
+    """DEFAUT REEL du rendu Modal du 18/09, trouve en transcrivant le son SORTI.
+
+    Whisper date parfois un mot de t a t : debut et fin confondus. On sait qu'il
+    est la, pas ou il s'etend. Le recalage part alors d'un point au lieu d'un
+    intervalle et rend des bornes sans rapport avec le mot.
+
+    Mesure, pas hypothese : << ca >> date de 3,120 a 3,120 ; la coupe est sortie
+    a 3,150 -> 3,235, soit 85 ms ENTIEREMENT APRES le mot. Recompte sur le son
+    nettoye : << ca >> s'entend toujours, 3 fois avant comme apres. Ces 85 ms
+    ont donc ete pris a la parole voisine -- celle qu'on promet de ne pas
+    toucher -- pendant que la page annoncait << 1 passage retire >>.
+
+    Aucune mesure existante ne pouvait le voir : le nettoyage transcrit le son
+    d'ENTREE, et personne ne transcrivait celui qui en SORT. Le rapport se
+    verifiait contre lui-meme.
+
+    La geometrie ci-dessous est celle du cas reel : le creux le plus proche est
+    APRES le mot, donc le bord gauche tape la bride interieure et le bord droit
+    s'en va le chercher. La coupe se retrouve entiere du mauvais cote.
+    """
+    nd = sandbox.nettoyage_dialogue
+
+    source = _wav_avec_creux(tmp_path / "dialogue.wav", secondes=2.0,
+                             creux=((0.98, 1.02),))
+    cible = tmp_path / "dialogue-nettoye.wav"
+    mots = [
+        {"mot": "Tu", "debut": 0.0, "fin": 0.3},
+        {"mot": "as", "debut": 0.3, "fin": 0.6},
+        {"mot": "vu", "debut": 0.6, "fin": 0.9},
+        # Date de t a t, comme le << ca >> du 18/09.
+        {"mot": "ça", "debut": 0.9, "fin": 0.9},
+    ]
+    rapport = nd.nettoyer(str(source), str(cible), ["[S1]Tu as vu"], mots)
+
+    assert rapport["coupes"] == 0, (
+        "un mot sans duree mesurable a quand meme ete coupe : les bornes ne "
+        "viennent pas du mot, la coupe tombe a cote et mange la parole voisine. "
+        "Details rendus : %r" % (rapport["details"],)
+    )
+    motifs = [d["garde"] for d in rapport["details"] if d.get("garde")]
+    assert motifs == ["durée introuvable : on couperait à l'aveugle"], (
+        "le passage est epargne sous un autre motif que le sien : la page dirait "
+        "au lecteur une raison fausse. Motifs rendus : %r" % (motifs,)
+    )
+
+
+def test_un_mot_sans_duree_au_milieu_ne_disqualifie_pas_le_passage(sandbox, tmp_path):
+    """La garde de la duree ne regarde que les BORNES du groupe, et c'est vital.
+
+    La vraie hallucination du 18/09 -- << ? A l'autre point dedans ? >>, 1 415 ms
+    sur le rendu Kaggle, des mots absents du texte envoye -- contenait elle-meme
+    un mot sans duree (<< 'autre >>, date de 24,960 a 24,960). Une garde qui
+    aurait regarde TOUS les mots du groupe l'aurait epargnee, et la seule
+    intrusion franche du lot serait restee dans le fichier.
+    """
+    nd = sandbox.nettoyage_dialogue
+
+    source = _wav_avec_creux(tmp_path / "dialogue.wav", secondes=3.0,
+                             creux=((0.93, 0.99), (1.53, 1.59)))
+    cible = tmp_path / "dialogue-nettoye.wav"
+    mots = [
+        {"mot": "Tu", "debut": 0.0, "fin": 0.3},
+        {"mot": "as", "debut": 0.3, "fin": 0.6},
+        {"mot": "vu", "debut": 0.6, "fin": 0.9},
+        # Le passage etranger : ses bornes sont franches, un mot du milieu ne l'est pas.
+        {"mot": "point", "debut": 1.0, "fin": 1.2},
+        {"mot": "dedans", "debut": 1.2, "fin": 1.2},
+        {"mot": "vraiment", "debut": 1.25, "fin": 1.5},
+    ]
+    rapport = nd.nettoyer(str(source), str(cible), ["[S1]Tu as vu"], mots)
+
+    assert rapport["coupes"] == 1, (
+        "le passage etranger n'a pas ete coupe alors que ses BORNES sont "
+        "mesurables : un mot sans duree AU MILIEU a suffi a l'epargner. "
+        "Details rendus : %r" % (rapport["details"],)
+    )
+
+
 def test_un_point_d_interrogation_n_est_pas_annonce_comme_une_elision(sandbox, tmp_path):
     """DEFAUT REEL du rendu Kaggle du 17/09, laisse ouvert ce soir-la puis corrige.
 

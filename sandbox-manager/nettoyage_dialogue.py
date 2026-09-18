@@ -354,6 +354,29 @@ def reperer(repliques, mots, x, taux, canaux) -> list:
 
         t0 = float(mots[b1].get("debut", 0.0))
         t1 = float(mots[b2 - 1].get("fin", 0.0))
+
+        # GARDE DE LA DUREE. Whisper date parfois un mot de t a t : debut et fin
+        # confondus, duree nulle. On sait alors QU'IL EST LA, pas OU IL S'ETEND,
+        # et le recalage ci-dessous part d'un point au lieu d'un intervalle : il
+        # rend un couple de bornes qui n'a plus de rapport avec le mot.
+        # Cas reel, rendu Modal du 18/09, trouve en transcrivant le son SORTI du
+        # nettoyage -- aucune autre mesure ne pouvait le voir. << ca >> date de
+        # 3,120 a 3,120 ; la coupe est sortie a 3,150 -> 3,235, soit 85 ms
+        # ENTIEREMENT APRES le mot. Resultat mesure : << ca >> s'entend toujours
+        # -- 3 fois avant, 3 fois apres -- et ces 85 ms ont ete pris a la parole
+        # voisine, celle qu'on avait promis de ne pas toucher. La page, elle,
+        # annoncait << 1 passage retire >>.
+        # On ne coupe donc pas. C'est la ligne que ce dialogue-la prononce :
+        # << Sans ca, on couperait a l'aveugle. >>
+        # Rare et reel : 4 mots sur 164 (Modal) et 2 sur 168 (Kaggle) sont dates
+        # ainsi. La garde ne regarde que les bornes du GROUPE -- un mot sans
+        # duree au milieu d'un passage plus large ne le disqualifie pas, et la
+        # vraie hallucination de 1 415 ms du meme lot en contenait un.
+        if t1 <= t0:
+            details.append({"texte": texte,
+                            "garde": "durée introuvable : on couperait à l'aveugle"})
+            continue
+
         c0 = creux_le_plus_proche(x, taux, canaux, t0)
         c1 = creux_le_plus_proche(x, taux, canaux, t1)
         # Le recalage ne doit jamais deborder sur le mot voisin.
