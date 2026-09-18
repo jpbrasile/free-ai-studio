@@ -975,31 +975,46 @@ function nomDeFichier(){
 // reserves promettent que le fichier d’origine reste telechargeable. Les trois
 // cas comptent, y compris celui ou le nettoyage n’a PAS eu lieu : le taire
 // laisserait croire qu’un rendu a ete verifie alors qu’il ne l’a pas ete.
-function blocNettoyage(n){
+function blocNettoyage(j){
+  const n = j.nettoyage;
   // JAMAIS MUET. Un rapport absent n’est pas un rapport vide : c’est le cas
   // même où la page peut servir un son déjà coupé sans l’écrire nulle part,
   // et c’est arrivé deux fois — le 17/09 parce que l’affichage jetait les
   // champs, le 18/09 parce qu’il affichait avant que le nettoyage soit inscrit.
   // Le silence était le point commun des deux.
+  // Depuis le 18/09 le filtrage est DEMANDÉ, plus automatique : « pas de
+  // rapport » ne veut donc plus dire « en retard », mais « personne ne l’a
+  // demandé ». Dire l’un pour l’autre ferait attendre un rapport qui ne
+  // viendra jamais.
+  if(!n && j.nettoyage_en_cours){
+    return '<p class="avert"><b>Filtrage de la voix en cours…</b> Quelques dizaines de '
+      + 'secondes : le son est transcrit sur votre ordinateur, puis comparé au texte '
+      + 'que vous avez envoyé. Le rapport et le fichier d’origine arrivent ensemble.</p>';
+  }
   if(!n){
-    return '<p class="avert"><b>Nettoyage : état inconnu.</b> Le rapport n’est pas encore '
-      + 'arrivé. Rechargez la page dans une minute : s’il y a eu des coupes, le fichier '
-      + 'd’origine apparaîtra à côté du dialogue.</p>';
+    return '<p class="avert"><b>Son brut, tel que le modèle l’a produit.</b> Écoutez-le : '
+      + 's’il vous convient, il n’y a rien à faire. Si le modèle a ajouté des mots qui '
+      + 'n’étaient pas dans votre texte — ça lui arrive en fin de réplique — le filtrage '
+      + 'les repère et les retire, et garde l’original à côté.'
+      + '<div class="ligne"><button type="button" id="filtrer" class="primaire">'
+      + '🔎 Filtrer la voix</button>'
+      + '<span class="avert">Transcription sur votre processeur, gratuite, '
+      + 'quelques dizaines de secondes. Rien n’est envoyé ailleurs.</span></div></p>';
   }
   if(n.fait === false){
-    return '<p class="avert"><b>Le nettoyage n’a pas eu lieu</b> — ' + echapper(n.motif || "raison inconnue")
+    return '<p class="avert"><b>Le filtrage n’a pas eu lieu</b> — ' + echapper(n.motif || "raison inconnue")
       + '. Le dialogue est livré tel que le modèle l’a produit.</p>';
   }
   const coupes = n.coupes || 0;
   if(!coupes){
-    return '<p class="avert"><b>Nettoyage : rien à retirer.</b> Le rendu correspond au texte envoyé. '
+    return '<p class="avert"><b>Filtrage : rien à retirer.</b> Le rendu correspond au texte envoyé. '
       + 'La transcription sous-estime, donc c’est un plancher, pas une garantie.</p>';
   }
   const details = n.details || [];
   const morceaux = details.filter(d => d.millisecondes)
     .map(d => '« ' + echapper(d.texte) + ' » à ' + d.debut + ' s (' + d.millisecondes + ' ms)');
   const gardes = details.filter(d => d.garde);
-  let t = '<p class="avert"><b>Nettoyage : ' + coupes + ' passage(s) retiré(s)</b>, '
+  let t = '<p class="avert"><b>Filtrage : ' + coupes + ' passage(s) retiré(s)</b>, '
     + n.secondes_retirees + ' s en tout — de ' + n.duree_avant_s + ' s à ' + n.duree_apres_s + ' s.';
   if(morceaux.length) t += '<br>' + morceaux.join('<br>');
   // Le motif vient du rapport, jamais d'ici. La version precedente annoncait
@@ -1038,7 +1053,7 @@ function afficherDialogue(j){
       + '">⬇️ Télécharger l’original, avant nettoyage</a>'
       + '<span class="avert">Le son joué ci-dessus est la version nettoyée.</span></div>';
   }
-  html += blocNettoyage(j.nettoyage);
+  html += blocNettoyage(j);
   const notes = [];
   if(r.locuteurs) notes.push("Locuteurs entendus : " + r.locuteurs.map(n => "[S" + n + "]").join(", ")
     + " sur " + r.repliques + " réplique(s).");
@@ -1052,6 +1067,32 @@ function afficherDialogue(j){
   notes.push("<b>Personne n’a vérifié à l’oreille ce que ce modèle donne en français.</b>");
   html += '<p class="avert">' + notes.join("<br>") + "</p>";
   document.getElementById("resultat").innerHTML = html;
+  // Le bouton est recréé à chaque affichage, puisque tout le bloc est réécrit :
+  // son écouteur doit l’être aussi. Un écouteur posé une fois au chargement
+  // viserait un bouton qui n’existe pas encore.
+  const filtrer = document.getElementById("filtrer");
+  if(filtrer) filtrer.addEventListener("click", () => demanderFiltrage(j.id, filtrer));
+}
+
+function demanderFiltrage(id, bouton){
+  bouton.disabled = true;
+  bouton.textContent = "Filtrage demandé…";
+  fetch("/dialogue/jobs/" + id + "/nettoyer", {method:"POST", headers:ENTETES})
+    .then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok){ throw new Error(d.detail || ("HTTP " + r.status)); }
+      return d;
+    })
+    // La scrutation reprend : le rendu est fini, la page avait donc arrêté de
+    // regarder. Sans cela le filtrage tournerait sans que rien ne s’affiche,
+    // et il faudrait recharger la page pour voir qu’il a eu lieu.
+    .then(() => suivre(id))
+    .catch(e => {
+      bouton.disabled = false;
+      bouton.textContent = "🔎 Filtrer la voix";
+      document.getElementById("etat").innerHTML =
+        '<span class="ko">✖ ' + echapper(e.message) + "</span>";
+    });
 }
 
 function suivre(id){
@@ -1060,6 +1101,11 @@ function suivre(id){
   // fiche illisible ferait tourner la page sans fin, et mieux vaut montrer ce
   // qu’on a en le disant que faire attendre pour toujours.
   let limiteNettoyage = 0;
+  // suivre() est appelé deux fois maintenant : au lancement, puis au clic sur
+  // « Filtrer la voix », le rendu étant fini et la scrutation arrêtée. Sans
+  // cette ligne, un minuteur oublié interrogerait le serveur en double pour
+  // toujours — une page laissée ouverte finirait par marteler la route.
+  if(minuteur){ clearInterval(minuteur); minuteur = null; }
   minuteur = setInterval(() => {
     fetch("/dialogue/jobs/" + id, {headers:{"Authorization":"Bearer "+CLE}})
       .then(r => r.json())
@@ -1071,19 +1117,24 @@ function suivre(id){
           montrerArret(id);
           return;
         }
-        // LE RENDU EST FINI, LE NETTOYAGE NON. run_dialogue marque
-        // « succeeded » puis nettoie : sans cette attente, la page affichait
-        // et coupait sa scrutation avant que le rapport et le lien vers
-        // l’original n’existent. Mesuré le 18/09 sur deux onglets du même
-        // lancement : celui au premier plan n’a rien vu, celui en arrière-plan,
-        // dont Chrome bride les minuteurs, a tout vu. Le hasard décidait.
+        // LE FILTRAGE TOURNE ENCORE. Il dure une vingtaine de secondes et la
+        // page doit continuer de regarder, sinon le rapport et le lien vers
+        // l’original n’apparaîtraient qu’au prochain rechargement.
+        // Mesuré le 18/09, quand le filtrage était encore automatique : sur
+        // deux onglets du même lancement, celui au premier plan n’a rien vu,
+        // celui en arrière-plan — minuteurs bridés par Chrome — a tout vu. Le
+        // hasard décidait. Depuis, le filtrage est demandé, donc l’attente est
+        // voulue et annoncée ; le témoin reste ce qui la borne.
+        // On ne réaffiche PAS le dialogue ici : réécrire le bloc recréerait le
+        // lecteur audio et couperait l’écoute en cours — or c’est en écoutant
+        // qu’on vient de cliquer.
         if(j.nettoyage_en_cours && !j.nettoyage){
           if(!limiteNettoyage) limiteNettoyage = Date.now() + 300000;
           if(Date.now() < limiteNettoyage){
             cacherArret();
-            etat.innerHTML = '<span class="ok">✔ Dialogue rendu</span> — nettoyage en cours, '
-              + 'quelques dizaines de secondes. Le rapport de ce qui est retiré et le fichier '
-              + 'd’origine arrivent avec lui.';
+            etat.innerHTML = '<span class="ok">✔ Dialogue rendu</span> — filtrage de la voix '
+              + 'en cours, quelques dizaines de secondes. Le rapport de ce qui est retiré et '
+              + 'le fichier d’origine arrivent avec lui.';
             return;
           }
           // Au-delà de la borne, on montre ce qu’on a. blocNettoyage() le dira :

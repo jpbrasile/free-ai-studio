@@ -842,29 +842,59 @@ def test_la_page_dit_ce_qu_elle_a_retire_et_garde_l_original(sandbox):
     )
 
 
-def test_le_temoin_dit_que_le_nettoyage_n_est_pas_fini(sandbox, monkeypatch):
-    """LA COURSE DU 18/09, trouvee par un lancement reel et par lui seul.
+def _fiche_de_dialogue_rendu(sandbox, monkeypatch, jid, **extra):
+    """Un dialogue deja rendu, avec un son : l'etat d'ou part le filtrage."""
+    monkeypatch.setattr(sandbox, "dialogue_fichiers",
+                        lambda _jid: {"son": {"path": "%s/dialogue.wav" % _jid}})
+    fiche = {"id": jid, "status": "succeeded", "artifacts": [],
+             "dialogue": {"repliques": ["[S1]Bonjour"]}}
+    fiche.update(extra)
+    sandbox.write_job(jid, fiche)
+    return fiche
 
-    run_dialogue marque le travail << succeeded >> puis nettoie. La page arrete
-    de scruter des qu'elle voit ce mot : elle affichait donc le dialogue avant
-    que le rapport et le lien vers l'original n'existent, et ne regardait plus
-    jamais. Mesure sur les deux onglets d'un MEME lancement : celui au premier
-    plan (scrutation toutes les 5 s) n'a rien vu ; celui en arriere-plan, dont
-    Chrome bride les minuteurs, a tout vu. Le hasard decidait, et l'utilisateur
-    qui regardait sa page etait celui qui etait puni.
 
-    Aucun test ne pouvait le voir : ceux de la page lisent son code, et la
-    verification du 17/09 rejouait l'affichage sur une fiche DEJA TERMINEE, ce
-    qui contourne exactement la course. Celui-ci regarde la fiche PENDANT le
-    nettoyage, le seul instant ou la question se pose.
+def test_le_temoin_traverse_la_route_qui_le_sert(sandbox, monkeypatch):
+    """LE CHAINON MANQUANT, et la lecon de la journee du 18/09.
+
+    Le temoin << nettoyage_en_cours >> a ete ecrit sur la fiche par le serveur,
+    lu par la page, teste des DEUX cotes, reconstruit, verifie en direct dans le
+    conteneur, ecrit au PLAN et POUSSE. Il n'a jamais fonctionne : la route
+    /dialogue/jobs/{id} construit sa reponse champ par champ et ne recopiait pas
+    celui-la. La correction etait entierement inerte.
+
+    Mes deux tests regardaient chacun une moitie -- la fiche porte le temoin,
+    la page lit le temoin -- et aucun ne passait par la route entre les deux.
+    J'avais meme ecrit au PLAN que la rencontre des deux moities n'etait pas
+    verifiee ; je l'ai note au lieu de la tester.
+
+    Ce test-ci passe par la route. C'est le seul endroit ou le defaut existait.
     """
-    vu = {}
+    jid = "d" * 32
+    _fiche_de_dialogue_rendu(sandbox, monkeypatch, jid, nettoyage_en_cours=True)
 
-    def faux_nettoyage(jid):
-        vu["pendant"] = sandbox.read_job(jid).get("nettoyage_en_cours")
-        job = sandbox.read_job(jid)
-        job["nettoyage"] = {"fait": True, "coupes": 0}
-        sandbox.write_job(jid, job)
+    r = TestClient(sandbox.app, base_url=LOCAL).get("/dialogue/jobs/" + jid, headers=CLE)
+    assert r.status_code == 200, r.text
+    servi = r.json()
+
+    assert "nettoyage_en_cours" in servi, (
+        "la route ne transmet pas le temoin : la page ne peut pas l'attendre, et "
+        "la branche qui l'attend est du code mort. Champs servis : %r"
+        % (sorted(servi),)
+    )
+    assert servi["nettoyage_en_cours"] is True, (
+        "le temoin traverse mais arrive faux : %r" % (servi["nettoyage_en_cours"],)
+    )
+
+
+def test_le_filtrage_ne_part_plus_tout_seul(sandbox, monkeypatch):
+    """CHOIX DE L'UTILISATEUR, 18/09 : << parfois le dialogue initial est ok >>.
+
+    Le filtrage coutait une transcription Whisper medium sur le processeur --
+    une vingtaine de secondes pour 44 s d'audio -- a chaque rendu, y compris
+    ceux que personne n'aurait voulu retoucher. Et la decision demande d'avoir
+    ecoute : elle ne peut pas se prendre a la fin du rendu.
+    """
+    appels = []
 
     def kaggle_qui_reussit(jid, *args, **kwargs):
         job = sandbox.read_job(jid)
@@ -872,64 +902,132 @@ def test_le_temoin_dit_que_le_nettoyage_n_est_pas_fini(sandbox, monkeypatch):
         sandbox.write_job(jid, job)
 
     monkeypatch.setattr(sandbox, "run_kaggle", kaggle_qui_reussit)
-    monkeypatch.setattr(sandbox, "nettoyer_dialogue", faux_nettoyage)
-    jid = "d" * 32
+    monkeypatch.setattr(sandbox, "nettoyer_dialogue", lambda jid: appels.append(jid))
+    jid = "e" * 32
     sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
     sandbox.run_dialogue(jid, "print(1)", "kaggle")
 
-    assert vu.get("pendant") is True, (
-        "pendant le nettoyage, la fiche ne dit pas qu'il reste quelque chose a "
-        "attendre : la page affichera un dialogue deja coupe sans l'ecrire."
+    assert appels == [], (
+        "le rendu a declenche le filtrage tout seul : c'est justement ce que "
+        "l'utilisateur ne veut plus payer a chaque fois."
     )
     assert "nettoyage_en_cours" not in sandbox.read_job(jid), (
-        "le temoin reste leve apres le nettoyage : la page attendrait pour rien."
+        "un temoin est pose alors que rien n'a ete demande : la page annoncerait "
+        "une attente qui ne finira jamais."
     )
 
 
-def test_le_temoin_se_retire_meme_si_le_nettoyage_casse(sandbox, monkeypatch):
-    """Un temoin qui reste leve fait attendre la page sans fin. Le finally le retire.
+def test_le_filtrage_demande_leve_le_temoin_avant_de_rendre_la_main(sandbox, monkeypatch):
+    """L'ORDRE EST LE FOND DE L'AFFAIRE, pas un detail d'implementation.
+
+    Si le temoin etait pose dans le fil de travail, la reponse pourrait partir
+    la premiere : la page relirait la fiche, n'y verrait ni temoin ni rapport --
+    l'etat << rien demande >> -- et croirait son clic perdu. Le temoin doit donc
+    etre sur la fiche AVANT que la route ne reponde.
+    """
+    partis = []
+
+    class FilRetenu:
+        """Un fil qu'on ne demarre pas : on veut l'etat au moment de la reponse."""
+        def __init__(self, target=None, args=(), daemon=None, **kwargs):
+            self.target, self.args = target, args
+
+        def start(self):
+            partis.append(self)
+
+    jid = "f" * 32
+    _fiche_de_dialogue_rendu(sandbox, monkeypatch, jid)
+    monkeypatch.setattr(sandbox.threading, "Thread", FilRetenu)
+
+    r = TestClient(sandbox.app, base_url=LOCAL).post(
+        "/dialogue/jobs/%s/nettoyer" % jid, headers=CLE)
+
+    assert r.status_code == 200, r.text
+    assert sandbox.read_job(jid).get("nettoyage_en_cours") is True, (
+        "la route a repondu sans avoir pose le temoin : le fil n'a meme pas "
+        "demarre ici, donc c'est bien l'ordre qui est en cause."
+    )
+    assert len(partis) == 1, "le travail de filtrage n'a pas ete lance : %r" % (partis,)
+
+
+def test_le_temoin_se_retire_meme_si_le_filtrage_casse(sandbox, monkeypatch):
+    """Un temoin qui reste leve fait attendre la page. Le finally le retire.
 
     nettoyer_dialogue avale deja toutes ses pannes -- c'est voulu, un rendu paye
     ne doit pas devenir un echec. Mais << deja >> n'est pas << toujours >> : si
     quoi que ce soit remonte, le temoin doit tomber quand meme.
     """
-    def nettoyage_qui_casse(jid):
-        raise RuntimeError("panne pendant le nettoyage")
+    def filtrage_qui_casse(jid):
+        raise RuntimeError("panne pendant le filtrage")
 
-    def kaggle_qui_reussit(jid, *args, **kwargs):
-        job = sandbox.read_job(jid)
-        job["status"] = "succeeded"
-        sandbox.write_job(jid, job)
+    monkeypatch.setattr(sandbox, "nettoyer_dialogue", filtrage_qui_casse)
+    jid = "0" * 32
+    _fiche_de_dialogue_rendu(sandbox, monkeypatch, jid, nettoyage_en_cours=True)
 
-    monkeypatch.setattr(sandbox, "run_kaggle", kaggle_qui_reussit)
-    monkeypatch.setattr(sandbox, "nettoyer_dialogue", nettoyage_qui_casse)
-    jid = "e" * 32
-    sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
     with pytest.raises(RuntimeError):
-        sandbox.run_dialogue(jid, "print(1)", "kaggle")
+        sandbox._nettoyage_en_arriere_plan(jid)
 
     assert "nettoyage_en_cours" not in sandbox.read_job(jid), (
-        "le temoin survit a une panne du nettoyage : la page attendrait 5 minutes "
+        "le temoin survit a une panne du filtrage : la page attendrait 5 minutes "
         "pour rien avant de se rabattre sur sa borne."
     )
 
 
-def test_la_page_attend_le_nettoyage_et_ne_se_tait_jamais(sandbox):
-    """Les deux moities de la correction, cote page.
+def test_deux_clics_ne_lancent_pas_deux_transcriptions(sandbox, monkeypatch):
+    """Un double clic, ou une page rechargee, ne doit pas payer deux fois.
 
-    (1) Elle attend tant que le temoin est leve, au lieu de couper sa
-    scrutation. (2) Un rapport ABSENT ne la rend plus muette : c'etait le
-    silence, et non l'erreur, qui a permis les deux defauts -- celui du 17/09
-    ou l'affichage jetait les champs, et celui du 18/09 ou il affichait trop
-    tot. Dans les deux cas la page ne disait RIEN.
+    Chaque transcription occupe le processeur une vingtaine de secondes et prend
+    le verrou du Whisper d'alignement : deux en parallele feraient attendre la
+    seconde derriere la premiere pour le meme resultat.
+    """
+    partis = []
+
+    class FilRetenu:
+        def __init__(self, target=None, args=(), daemon=None, **kwargs):
+            self.target, self.args = target, args
+
+        def start(self):
+            partis.append(self)
+
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    monkeypatch.setattr(sandbox.threading, "Thread", FilRetenu)
+
+    jid = "1" * 32
+    _fiche_de_dialogue_rendu(sandbox, monkeypatch, jid, nettoyage_en_cours=True)
+    r = client.post("/dialogue/jobs/%s/nettoyer" % jid, headers=CLE)
+    assert r.status_code == 200 and r.json()["etat"] == "en cours", r.text
+    assert partis == [], "un filtrage etait deja en cours et un second est parti."
+
+    jid = "2" * 32
+    _fiche_de_dialogue_rendu(sandbox, monkeypatch, jid,
+                             nettoyage={"fait": True, "coupes": 0})
+    r = client.post("/dialogue/jobs/%s/nettoyer" % jid, headers=CLE)
+    assert r.status_code == 200 and r.json()["etat"] == "deja fait", r.text
+    assert partis == [], "le rapport existait deja et une transcription est repartie."
+
+
+def test_la_page_propose_le_filtrage_et_ne_se_tait_jamais(sandbox):
+    """Les trois etats du bloc, cote page, et aucun n'est le silence.
+
+    (1) Rien demande : le son est dit BRUT et le bouton est la. Depuis que le
+    filtrage se demande, << pas de rapport >> ne veut plus dire << en retard >> :
+    annoncer une attente ferait guetter un rapport qui ne viendra jamais.
+    (2) Filtrage en cours : la page attend en l'ecrivant, tant que le temoin est
+    leve, au lieu de couper sa scrutation.
+    (3) Rapport la : il s'affiche.
+
+    Le silence etait le point commun des deux defauts du 17 et du 18/09 : dans
+    les deux cas un son deja coupe pouvait passer pour un son intact.
     """
     page = sandbox.dialogue.PAGE_HTML
-    assert "nettoyage_en_cours" in page, (
-        "la page ne regarde pas le temoin : elle affichera de nouveau avant le rapport."
+    assert 'id="filtrer"' in page, "le bouton de filtrage n'est pas dans la page."
+    assert "/nettoyer" in page, "la page n'appelle jamais la route de filtrage."
+    assert "Son brut" in page, (
+        "sans rapport, la page ne dit pas que le son n'a pas ete filtre -- et un "
+        "son non verifie passerait pour un son verifie."
     )
-    assert "état inconnu" in page, (
-        "sans rapport, la page redevient muette -- et un son deja coupe passerait "
-        "pour un son intact."
+    assert "nettoyage_en_cours" in page, (
+        "la page ne regarde pas le temoin : elle n'attendrait pas la fin du filtrage."
     )
 
 

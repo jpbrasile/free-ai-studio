@@ -2307,24 +2307,27 @@ def run_dialogue(jid: str, code: str, ou: str):
             job = read_job(jid)
             job["budget"] = reste
             write_job(jid, job)
-    if read_job(jid).get("status") == "succeeded":
-        # LE TEMOIN, ET POURQUOI IL EXISTE. Le travail est marque << succeeded >>
-        # par finish_execution AVANT que le nettoyage n'ait commence, et la page
-        # arrete de scruter des qu'elle voit ce mot. Mesure du 18/09/2026, sur
-        # les deux onglets d'un meme lancement : celui au premier plan, qui
-        # scrute toutes les 5 s, a affiche le dialogue SANS le rapport ni le
-        # lien vers l'original ; celui en arriere-plan, dont Chrome bride les
-        # minuteurs a environ une fois par minute, a tout affiche. La page
-        # promet que << rien n'est coupe en douce >>, et c'est justement
-        # l'utilisateur qui la regarde qui ne voyait rien.
-        # Le temoin dit a la page qu'il reste quelque chose a attendre. Il se
-        # leve dans un finally : meme si le nettoyage se casse la figure -- il
-        # avale pourtant tout -- la page ne doit jamais attendre sans fin.
-        marquer_nettoyage_en_cours(jid, True)
-        try:
-            nettoyer_dialogue(jid)
-        finally:
-            marquer_nettoyage_en_cours(jid, False)
+    # LE FILTRAGE NE SE DECLENCHE PLUS TOUT SEUL. Choix de l'utilisateur,
+    # 18/09/2026 : << parfois le dialogue initial est ok >>. Il coutait une
+    # transcription Whisper medium sur le processeur de la machine -- une
+    # vingtaine de secondes pour 44 s d'audio -- a CHAQUE rendu, y compris ceux
+    # que personne n'aurait voulu retoucher. Et la decision demande d'avoir
+    # ecoute : elle ne peut donc pas se prendre ici, avant que quiconque ait
+    # entendu le son. Elle se prend depuis la page, par /dialogue/jobs/{id}/nettoyer.
+    return
+
+
+def _nettoyage_en_arriere_plan(jid: str) -> None:
+    """Le filtrage demande depuis la page, hors du fil qui repond a la requete.
+
+    Le temoin se leve AVANT le fil : si on le posait dedans, la reponse pourrait
+    partir la premiere et la page verrait une fiche sans temoin ni rapport --
+    exactement l'etat << rien demande >>. Elle croirait son clic perdu.
+    """
+    try:
+        nettoyer_dialogue(jid)
+    finally:
+        marquer_nettoyage_en_cours(jid, False)
 
 
 @app.get("/dialogue/etat")
@@ -2444,6 +2447,14 @@ def dialogue_job(jid: str, authorization: Optional[str] = Header(default=None)):
             sortie["son_original_url"] = (
                 f"/dialogue/jobs/{jid}/fichier?cle={jeton}&version=origine")
     sortie["nettoyage"] = job.get("nettoyage")
+    # LE TEMOIN DOIT TRAVERSER. Il est pose sur la fiche par le serveur et
+    # attendu par la page ; cette ligne est le chainon entre les deux, et son
+    # absence a rendu la correction du 18/09 entierement inerte -- ecrite,
+    # testee des deux cotes, poussee, et morte. Les deux tests regardaient
+    # chacun une moitie : l'un que la fiche porte le temoin, l'autre que la
+    # page le lit. AUCUN ne passait par cette route. Le test
+    # test_le_temoin_traverse_la_route_qui_le_sert ferme ce trou-la.
+    sortie["nettoyage_en_cours"] = bool(job.get("nettoyage_en_cours"))
     try:
         if fichiers.get("resume"):
             sortie["resume"] = json.loads(
@@ -2451,6 +2462,46 @@ def dialogue_job(jid: str, authorization: Optional[str] = Header(default=None)):
     except (OSError, ValueError):
         pass
     return sortie
+
+
+@app.post("/dialogue/jobs/{jid}/nettoyer")
+def dialogue_nettoyer(jid: str, authorization: Optional[str] = Header(default=None)):
+    """Filtre la voix D'UN RENDU DEJA FAIT, sur demande explicite de la page.
+
+    POURQUOI CE N'EST PLUS AUTOMATIQUE. Choix de l'utilisateur, 18/09/2026 :
+    << parfois le dialogue initial est ok >>. Le filtrage coute une
+    transcription Whisper medium sur le processeur de la machine -- une
+    vingtaine de secondes pour 44 s d'audio -- et il ne sert a rien quand le
+    modele a bien dit le texte. Surtout, la decision demande d'avoir ECOUTE :
+    elle ne peut pas se prendre a la fin du rendu, avant que quiconque ait
+    entendu le son.
+
+    REPOND TOUT DE SUITE, TRAVAILLE DERRIERE. Vingt secondes de transcription
+    dans le fil de la requete, c'est un navigateur qui attend sans rien dire et
+    un delai d'attente depasse au bout du compte. Le temoin est pose AVANT de
+    lancer le fil, jamais dedans : sinon la reponse pourrait partir la premiere
+    et la page verrait une fiche sans temoin ni rapport -- l'etat << rien
+    demande >> -- et croirait son clic perdu.
+
+    IDEMPOTENTE. Deux clics, ou un clic sur une page rechargee, ne lancent pas
+    deux transcriptions : le rapport deja la est rendu tel quel, et un filtrage
+    en cours est signale sans en demarrer un second.
+    """
+    auth(authorization)
+    job = read_job(jid)
+    if not job.get("dialogue"):
+        raise HTTPException(404, "Ce travail n'est pas un dialogue.")
+    if job.get("nettoyage"):
+        return {"etat": "deja fait", "nettoyage": job["nettoyage"]}
+    if job.get("nettoyage_en_cours"):
+        return {"etat": "en cours"}
+    if job.get("status") != "succeeded":
+        raise HTTPException(409, "Le dialogue n'est pas encore rendu : rien à filtrer.")
+    if not dialogue_fichiers(jid).get("son"):
+        raise HTTPException(409, "Ce dialogue n'a pas de fichier son.")
+    marquer_nettoyage_en_cours(jid, True)
+    threading.Thread(target=_nettoyage_en_arriere_plan, args=(jid,), daemon=True).start()
+    return {"etat": "lancé"}
 
 
 @app.get("/dialogue/jobs/{jid}/fichier")
