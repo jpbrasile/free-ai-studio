@@ -141,9 +141,56 @@ sera refait pour le modèle retenu :
 - **Trois réglages déjà payés le 09/09**, à reprendre tels quels : `enable_model_cpu_offload()`
   sous 60 Go — pas 20 —, `vae.enable_tiling()`, et `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
   posé **avant** le premier `import torch`, sinon ignoré en silence.
-- **Le premier chiffre à obtenir** : le clip de 3 s qui a coûté **422 s de calcul et
-  0,096 $** sur une L4 chez Modal, refait sur la 4090. De combien la 4090 bat la L4 est
-  **non mesuré** ici, et ne sera pas annoncé avant de l'être.
+- ~~**Le premier chiffre à obtenir** : le clip de 3 s qui a coûté **422 s de calcul et
+  0,096 $** sur une L4 chez Modal, refait sur la 4090.~~ **FAIT le 19/09/2026 à 18:43.**
+
+### Le premier clip fabriqué à la maison — 19/09/2026
+
+`C:\Users\test\Documents\clips-4090\clip_4090.mp4`, relu par ffmpeg : **3,04 s, 1280 × 704,
+24 im/s, h264, 636 218 octets.**
+
+| | À la maison, 19/09 | Loué chez Modal, 09/09 |
+|---|---|---|
+| carte | RTX 4090 (partagée) | L4 |
+| modèle | Wan 2.2 TI2V-5B | Wan 2.1 VACE 1.3B |
+| définition | **1280 × 704** | 832 × 480 |
+| images / cadence | 73 à 24 im/s | 49 à 16 im/s |
+| longueur du clip | **3,04 s** | 3,06 s |
+| passes de débruitage | **50** | 30 |
+| chargement du modèle | 23,7 s | — |
+| **calcul** | **411,8 s** | **422 s** |
+| pic mémoire carte | **12 841 Mo** | — |
+| **coût** | **0 $** | 0,117 $ |
+
+**Ce que ces nombres disent, et rien de plus.** Le même clip de 3 secondes sort en
+**pratiquement le même temps** — 412 s contre 422 s — mais à la maison il est en **720p au
+lieu de 480p**, avec **50 passes au lieu de 30**, et il **ne coûte rien**. À temps égal, la
+carte de la maison a produit **3,4 fois plus de pixels**. **Ce n'est pas une mesure propre du
+matériel** : les deux modèles sont différents, le 5B est presque quatre fois le 1,3B. Le
+chiffre honnête est celui du produit, pas celui d'un banc d'essai.
+
+**Et le nombre le plus utile pour la suite est le pic mémoire : 12 841 Mo.** C'est ce que la
+phase 3 passera à `gpu_local.utilisable(besoin)` — mesuré, pas estimé. Il tient largement
+dans les 24 564 Mo de la carte, et il tiendrait encore si un tiers en occupait 10 Go.
+
+**Deux défauts trouvés en route, tous deux écrits parce qu'ils se répéteront :**
+
+- **Le téléchargement des poids se bloque en silence.** À 14 067 Mo sur 34 200, plus un
+  octet pendant **treize minutes** (dates des fichiers partiels : 18:03:05 contre 18:16:36).
+  Cause : la couche de transfert « Xet » de `huggingface_hub` 1.9.2. Avec
+  `HF_HUB_DISABLE_XET=1` : **14 067 → 24 620 Mo en quatre-vingts secondes**, puis terminé.
+  **Sur cette machine, les poids se téléchargent Xet coupé.**
+- **Le Python de la machine ne peut pas servir** : son `numpy` et son `tokenizers` (0.15.2,
+  il en faut ≥ 0.22) sont en conflit avec `transformers`. On ne répare pas l'installation
+  d'un tiers pour une mesure — on isole. L'image de mesure est
+  `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime` plus `diffusers`, `transformers`,
+  `accelerate`, `ftfy`, `imageio` : **6,35 Go**, et elle voit la carte.
+- **Correction d'une ligne de la phase 2 ci-dessus** : `WanPipeline.__call__` **n'accepte
+  pas** d'argument `image` (vérifié dans `diffusers` 0.40.0). La phrase de la fiche du
+  modèle — « si le paramètre `image` est configuré, c'est de l'image-vers-vidéo » — parle de
+  leur outil à eux. L'image de **départ** passe par `WanImageToVideoPipeline`, l'autre
+  classe, qui traite `expand_timesteps` explicitement. La décision de routage ne change pas ;
+  le nom de la pièce, si.
 
 ## Phase 3 — router
 
@@ -202,9 +249,11 @@ représente en travail n'est pas mesuré** et sera chiffré avant d'être promis
 
 ## Non vérifié à ce jour
 
-- De combien la 4090 bat la L4 louée.
-- ~~Le temps de premier chargement des 19 Go de poids depuis un disque local.~~ Le chiffre
-  à obtenir est celui des **34,20 Go** de la TI2V-5B, et il n'est pas mesuré.
+- ~~De combien la 4090 bat la L4 louée.~~ **Mesuré le 19/09** : 412 s contre 422 s pour un
+  clip de 3 s, mais en 720p au lieu de 480p et 50 passes au lieu de 30 — voir le tableau.
+  Reste non mesuré : la **même** tâche des deux côtés, qui seule comparerait les cartes.
+- ~~Le temps de premier chargement des 19 Go de poids depuis un disque local.~~ **Mesuré :
+  23,7 s** pour charger la TI2V-5B depuis le disque local (poids déjà téléchargés).
 - ~~La place disque totale que la phase 2 demande~~ — 34,20 Go de poids, mesurés ; reste
   non mesuré ce que l'image torch + CUDA fait grossir sous WSL2.
 - **Si la TI2V-5B tient vraiment dans 24 Go sur CETTE carte**, qui est partagée. La fiche
