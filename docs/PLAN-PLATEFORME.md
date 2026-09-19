@@ -149,10 +149,53 @@ la règle est violée au sens plein **sans qu'une seule ligne de code ne change*
 *Rectification d'une version antérieure de ce document : j'avais écrit que cette règle
 était « tenue par construction ». C'est faux.*
 
-> **Décision.** (a) Chiffrer `keys.json` au repos ; (b) laisser en clair et écrire la
-> raison dans `AGENTS.md`, en remplaçant la phrase qui ordonne l'inverse ; (c) faire de
-> `STUDIO_HEBERGE=true` un mode qui **refuse de démarrer** tant que les clés ne sont pas
-> chiffrées. *(c) est la moins coûteuse et ferme le seul chemin réellement dangereux.*
+**Deux mesures du 19/09 rendent le remède plus nécessaire, et moins simple qu'il n'y
+paraît.**
+
+**Un : `free-tier-manager` ne lit jamais `STUDIO_HEBERGE`.** La recherche de `HEBERGE` dans
+tout `free-tier-manager/` ne renvoie **aucune ligne**. La variable parvient pourtant au
+service — il la reçoit par `env_file: .env` (`docker-compose.yml:131-132`, et
+`.env.example:333` la pose à `false`) — mais **aucune ligne ne la consulte**. Le seul
+service qui la lit est `sandbox-manager` (`app.py:67`), pour couper Kaggle automatique.
+**Le drapeau qui déclare « cette instance est hébergée » est donc invisible au service qui
+écrit les clés en clair** : le jour où il passe à `true`, le bac à sable réagit et le
+stockage des clés ne bronche pas.
+
+**Deux : le drapeau est une déclaration, pas une détection** — et c'est le code lui-même
+qui l'écrit (`sandbox-manager/app.py:65-66`) : « *Ces signes sont des indices, pas une
+preuve : une instance exposee par un moyen qui n'en laisse aucun doit etre declaree avec
+STUDIO_HEBERGE=true.* » Une instance exposée **sans** avoir été déclarée n'est donc
+protégée par rien.
+
+> **Décision.** Trois options — et elles ne sont pas de même rang. C'est le classement qui
+> est la décision, pas le choix entre elles.
+>
+> **(c) Le refus au démarrage — d'abord.** Faire de `STUDIO_HEBERGE=true` un mode qui
+> **refuse de démarrer** tant que les clés ne sont pas protégées. C'est le patron que le
+> dépôt applique déjà partout : `budget_verifier` refuse avant de dépenser, `preparer()`
+> refuse LoRA+T4 « au lieu de parier », `exiger_page_du_studio` refuse côté serveur.
+> **Coût réel : deux changements, pas un** — faire lire le drapeau par
+> `free-tier-manager`, puis refuser. Et une troisième ligne utile, puisque le drapeau est
+> déclaratif : refuser aussi lorsque le service n'est **pas** lié à `127.0.0.1`, car cette
+> condition-là, elle, **se constate** au lieu de se déclarer.
+>
+> **(a) Chiffrer `keys.json` au repos — utile, pas urgent, et à son vrai rang.** Sur une
+> machine mono-utilisateur, la clé de déchiffrement vit sur la même machine, lisible par le
+> même processus : le chiffrement ne défend qu'un seul cas, **le fichier qui s'échappe sans
+> sa machine** — sauvegarde égarée, dossier de support, disque revendu. Ce cas est réel et
+> mérite d'être traité ; il n'est simplement pas celui qui justifierait de retenir le
+> reste. **Il ne conditionne pas (c)** : mieux vaut un refus qui marche sans chiffrement
+> qu'un chiffrement sans refus.
+>
+> **(b) Écrire la raison dans `AGENTS.md` — dans tous les cas.** Quelle que soit l'issue
+> des deux autres, `AGENTS.md:77` ne peut pas continuer d'**ordonner le contraire** de la
+> règle du plan. Ce point ne dépend d'aucune décision technique.
+>
+> **Ce qui borne le risque d'aujourd'hui, mesuré le 19/09** : `config/` est dans
+> `.gitignore` et **non suivi** — `git ls-files config/` ne rend aucune ligne, donc
+> **aucune clé n'a jamais été commitée** — et les trois ports sont liés à `127.0.0.1`
+> (`docker-compose.yml:110`, `:134`, `:162`). Les seules clés en jeu sont celles de
+> l'utilisateur, sur sa machine. **Cela borne l'urgence ; cela ne referme pas le chemin.**
 
 ### 2. Windows — ici, c'est le dépôt qui a raison contre le plan
 
@@ -979,6 +1022,7 @@ Ce que le §6 porte, et qui se décide maintenant :
 | 9 | **La date de l'essai machine neuve** | §6 | une date · l'impossibilité écrite, avec son échéance |
 | 10 | **La branche `audit-20260911`** | en-tête | **`main` est ancêtre : la fusion est une avance directe, sans conflit possible.** fusionner · écrire pourquoi on ne fusionne pas |
 | 11 | **Le trou des budgets Modal** | ci-dessous | corriger · documenter et assumer |
+| 17 | **Les clés en clair**, décomposé le 19/09 en deux décisions de rangs différents. **Bon marché et d'abord** : le refus au démarrage — sachant que `free-tier-manager` **ne lit même pas `STUDIO_HEBERGE`** (recherche de `HEBERGE` vide dans tout le service) et que le drapeau est **déclaratif, pas détecté** (`sandbox-manager/app.py:65-66`). **Ouvert, à son vrai rang** : le chiffrement au repos, qui ne défend que le fichier échappé sans sa machine | §2.1 | **(1) faire lire le drapeau et refuser de démarrer, plus un refus sur liaison non locale ; (2) corriger `AGENTS.md:77` dans tous les cas ; (3) chiffrement au repos, tranché plus tard** · tout faire d'un coup · ne rien faire tant que `STUDIO_HEBERGE` reste `false` |
 | 12 | **`FREE_ONLY=false` est-il un état admis ?** Si oui, la règle des rôles n'est pas défendue par du code | §5 étape 1 | interdit · admis et documenté |
 
 **Sur le point 11, qui est le seul défaut connu pouvant coûter de l'argent réel.**
