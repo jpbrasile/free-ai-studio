@@ -1307,8 +1307,17 @@ procédure, c'est un classement par **coût du retard** :
 4. **`modal/profiles.json` supprimé, `AGENTS.md:111` retirée** — une vérité fausse de
    moins, avant que le registre n'en hérite.
 5. **La fusion dans `main`** — pour que le dépôt public cesse de mentir sur lui-même.
-6. **Le registre, puis le contrôle de fraîcheur en CI**, puis les évaluations.
-7. **La vérification de la licence de Piper**, avant toute réorganisation.
+6. **Le GPU local d'abord** — chantier ouvert le 19/09/2026 sur demande de l'utilisateur
+   (« le gpu local ne devrait pas être utilisé de façon automatique ? »), **inséré ici, ce
+   qui décale le registre et Piper d'un rang**. Motif : il rend **gratuit ce qui est payant
+   aujourd'hui** — 1,2781 $ loués chez Modal en septembre pendant que la 4090 de la maison
+   est libre à 24 138 Mo — et il referme le seul endroit où le dépôt promettait une chose
+   et en faisait une autre. **Phase 1 FAITE le soir même, `fddb061`** : la carte est déjà
+   passée au conteneur par WSL2 (mesuré, sans image CUDA), surcouche `docker-compose.gpu.yml`
+   appliquée seulement si une carte répond, sonde qui mesure **au lancement**. Phases 2
+   (torch ~3 Go, poids Wan 19 Go) et 3 (le routage) à venir : `docs/GPU-LOCAL.md`.
+7. **Le registre, puis le contrôle de fraîcheur en CI**, puis les évaluations.
+8. **La vérification de la licence de Piper**, avant toute réorganisation.
 
 ---
 
