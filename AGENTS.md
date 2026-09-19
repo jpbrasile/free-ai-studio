@@ -104,15 +104,24 @@ Ne jamais inventer endpoints, modèles, prix ou quotas.
 
 ## GPU : stratégie officielle
 
-Pour Image / Vidéo / modèles lourds :
+Pour Image / Vidéo / modèles lourds — **ordre réel, relu dans le code le 19/09/2026**
+(`sandbox-manager/app.py:939-975`, `video.py:392`) :
 
 ```text
-GPU local suffisant
+Modal configuré + mois en cours sous le plafond
+        ↓ sinon (non configuré, plafond atteint, panne)
+bac à sable local
         ↓ sinon
-Modal configuré + crédit gratuit utilisable
-        ↓ sinon
-Colab / Kaggle en secours manuel cliquable
+Kaggle, puis Colab — AUTOMATIQUEMENT, pas en secours cliquable
 ```
+
+> ~~**Ce que ce bloc annonçait jusqu'au 19/09/2026** : « GPU local suffisant ↓ sinon Modal
+> configuré ↓ sinon Colab / Kaggle en **secours manuel cliquable** ».~~ Inversé, et le
+> secours n'est pas manuel : `run_auto` pose `fallback_order = ["modal", "local", "kaggle",
+> "colab"]` et enchaîne tout seul. **Il n'existe aucun chemin GPU local** pour la vidéo.
+> C'est le même défaut que `docs/MODAL_CATALOG.md` et que la section `policy` de
+> `modal/profiles.json` : trois descriptions de la même règle, toutes fausses dans le même
+> sens, dans les fichiers qu'un agent lit en premier.
 
 ### Modal
 

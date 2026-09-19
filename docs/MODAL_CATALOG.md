@@ -6,18 +6,23 @@
 
 Modal est le backend GPU distant automatique de Free AI Studio.
 
-Parcours :
+Parcours **réel**, relu dans le code le 19/09/2026 (`sandbox-manager/app.py:939-975`) :
 
 ```text
-GPU local suffisant
-→ utiliser le GPU local
+Modal configuré, et le mois en cours sous le plafond
+→ Modal
 
-sinon
-→ Modal si configuré et si l'usage reste couvert par le crédit gratuit
-
-sinon
-→ proposer Colab / Kaggle en secours manuel
+sinon — non configuré, plafond atteint, ou panne
+→ le bac à sable local, puis Kaggle, puis Colab, AUTOMATIQUEMENT, dans cet ordre
 ```
+
+> ~~**Ce que ce fichier annonçait jusqu'au 19/09/2026** : « GPU local suffisant → utiliser
+> le GPU local ; sinon Modal si configuré ; sinon proposer Colab / Kaggle en secours
+> **manuel** ».~~ Faux **deux fois**, et mesuré : `run_auto` pose lui-même
+> `fallback_order = ["modal", "local", "kaggle", "colab"]` puis teste `modal_configured()`
+> **en premier** (`app.py:942`, `:945`), et l'enchaînement est **automatique**, pas
+> cliquable. La vidéo n'a **aucun** chemin GPU local : `preparer()` part sur Modal par
+> défaut (`video.py:392`). Un agent qui lisait ce paragraphe croyait l'inverse du produit.
 
 Le débutant ne doit pas avoir à comprendre les GPU, endpoints, volumes ou conteneurs.
 
