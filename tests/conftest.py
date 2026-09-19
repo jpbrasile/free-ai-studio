@@ -46,8 +46,13 @@ def routeur(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-factice")
     monkeypatch.setenv("FREE_PROVIDER_ORDER", "gemini,openrouter,groq")
     monkeypatch.setenv("ENABLE_GROQ", "false")
+    # STUDIO_HEBERGE et STUDIO_ADRESSE_PUBLIEE : depuis le 19/09/2026 le routeur
+    # REFUSE de charger si elles annoncent une instance exposee. Un poste dont le
+    # .env les porte ferait echouer toute la suite pour une raison etrangere a ce
+    # qui est teste. test_garde_exposition.py les pose explicitement.
     for nom in ("GEMINI_FREE_MODEL", "GEMINI_MAX_MODEL", "ENABLE_GEMINI", "ENABLE_GEMINI_MAX",
-                "GROQ_API_KEY", "ALLOW_FREE_TIER_ACCOUNTS", "FREE_ONLY"):
+                "GROQ_API_KEY", "ALLOW_FREE_TIER_ACCOUNTS", "FREE_ONLY",
+                "STUDIO_HEBERGE", "STUDIO_ADRESSE_PUBLIEE"):
         monkeypatch.delenv(nom, raising=False)
     monkeypatch.setenv("FREE_AI_CONFIG_DIR", str(_JETABLE / ("config-%d" % next(_numero))))
     return charger("free-tier-manager")
@@ -57,7 +62,8 @@ def routeur(monkeypatch):
 def sandbox(monkeypatch):
     """Le gestionnaire de bacs a sable, sans Modal ni Kaggle configures."""
     monkeypatch.setenv("SANDBOX_MANAGER_KEY", "cle-sandbox-de-test")
-    for nom in ("STUDIO_HEBERGE", "WEBUI_AUTH", "KAGGLE_ENABLED", "KAGGLE_USERNAME",
+    for nom in ("STUDIO_HEBERGE", "STUDIO_ADRESSE_PUBLIEE", "WEBUI_AUTH",
+                "KAGGLE_ENABLED", "KAGGLE_USERNAME",
                 "KAGGLE_KEY", "KAGGLE_API_TOKEN", "MODAL_ENABLED", "MODAL_TOKEN_ID",
                 "MODAL_TOKEN_SECRET"):
         monkeypatch.delenv(nom, raising=False)

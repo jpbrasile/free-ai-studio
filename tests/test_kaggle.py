@@ -5,6 +5,7 @@ Kaggle et ne garde plus d'identifiants Kaggle : il ne reste que le lien manuel.
 """
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from conftest import charger
@@ -48,13 +49,46 @@ def test_proxy_coupe_kaggle(sandbox):
     assert etat["kaggle"]["automatique_permis"] is False
 
 
-def test_declarations_coupent_kaggle(monkeypatch, sandbox):
-    for nom in ("STUDIO_HEBERGE", "WEBUI_AUTH"):
-        monkeypatch.setenv(nom, "true")
-        module = charger("sandbox-manager")
-        etat = TestClient(module.app, base_url=LOCAL).get("/etat").json()
-        assert etat["kaggle"]["automatique_permis"] is False, nom
-        monkeypatch.delenv(nom)
+def test_webui_auth_coupe_kaggle(monkeypatch):
+    """Plusieurs comptes sur le Studio : les calculs des autres partiraient
+    sur le compte Kaggle du proprietaire."""
+    monkeypatch.setenv("WEBUI_AUTH", "true")
+    monkeypatch.setenv("SANDBOX_MANAGER_KEY", "cle-sandbox-de-test")
+    module = charger("sandbox-manager")
+    etat = TestClient(module.app, base_url=LOCAL).get("/etat").json()
+    assert etat["kaggle"]["automatique_permis"] is False
+
+
+def test_studio_heberge_ne_degrade_plus_il_refuse(monkeypatch):
+    """CHANGEMENT DU 19/09/2026, et il faut le lire comme tel.
+
+    Jusqu'ici STUDIO_HEBERGE=true coupait Kaggle automatique et le service
+    continuait de tourner. Depuis la decision 3 du paragraphe 8, il REFUSE DE
+    DEMARRER : ce service ecrit les jetons Modal et Kaggle en clair dans
+    config/sandbox-keys.json, et une instance hebergee les expose.
+
+    Consequence assumee : la branche STUDIO_HEBERGE de contexte_partage() n'est
+    plus atteignable a l'import -- on ne peut plus lancer un Studio declare
+    heberge du tout. Les deux autres branches (WEBUI_AUTH, adresse de la
+    requete) restent vivantes, et le test suivant garde la premiere.
+    """
+    monkeypatch.setenv("STUDIO_HEBERGE", "true")
+    monkeypatch.setenv("SANDBOX_MANAGER_KEY", "cle-sandbox-de-test")
+    with pytest.raises(Exception) as leve:
+        charger("sandbox-manager")
+    assert "DEMARRAGE REFUSE" in str(leve.value)
+
+
+def test_la_regle_de_partage_reste_ecrite_pour_studio_heberge(sandbox, monkeypatch):
+    """La branche devenue inatteignable a l'import reste juste, et testee.
+
+    Le jour ou les cles seront chiffrees et le refus rouvert, c'est elle qui
+    reprendra du service. L'effacer maintenant la ferait revenir fausse.
+    """
+    monkeypatch.setattr(sandbox, "STUDIO_HEBERGE", True)
+    assert sandbox.contexte_partage() == (
+        "STUDIO_HEBERGE=true : instance declaree hebergee"
+    )
 
 
 def test_auto_saute_kaggle_en_contexte_partage(sandbox, monkeypatch):

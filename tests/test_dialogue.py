@@ -28,10 +28,14 @@ DIALOGUE = "[S1]Tu as vu ça ?\n[S2]Non, raconte.\n[S1]Deux voix, un seul fichie
 
 @pytest.fixture
 def di(sandbox, monkeypatch, tmp_path):
-    """Le module dialogue, avec un compteur de depense jetable."""
-    module = sandbox.dialogue
-    monkeypatch.setattr(module, "BUDGET_FICHIER", tmp_path / "dialogue-budget.json")
-    return module
+    """Le module dialogue, avec le compteur UNIQUE deplace dans un jetable.
+
+    Voir la fixture jumelle de test_chanson.py : c'est budget_modal.FICHIER
+    qu'il faut deplacer, dialogue.BUDGET_FICHIER n'etant plus qu'un alias.
+    """
+    monkeypatch.setattr(sandbox.budget_modal, "FICHIER",
+                        tmp_path / "modal-budget.json")
+    return sandbox.dialogue
 
 
 # --- Ce qui est refuse AVANT de payer la carte --------------------------------
@@ -380,38 +384,46 @@ def test_prix_compte_la_memoire(di, monkeypatch):
     assert di.prix_seconde("X9") > di.prix_seconde("L40S") - 1e-12
 
 
-def test_les_trois_tables_de_prix_ne_divergent_pas(sandbox, di):
-    """chanson.py, video.py et dialogue.py recopient les MEMES prix Modal.
+def test_chaque_module_compte_SA_memoire(sandbox, di, monkeypatch):
+    """Ce qui remplace test_les_trois_tables_de_prix_ne_divergent_pas.
 
-    Le 17/09, deux de ces tables portaient deja deux dates de releve
-    differentes -- 15/09 et 09/09 : une table relue, l'autre oubliee, et rien ne
-    le signalait. Une troisieme copie multiplie l'occasion de diverger.
-
-    Ce controle ne verifie pas que les prix sont JUSTES -- seule une lecture de
-    modal.com/pricing le dit -- mais qu'une lecture faite d'un cote a bien ete
-    reportee des deux autres.
+    Les trois tables ont fusionne le 19/09/2026 : il n'y a plus de copies a
+    comparer, et l'identite des prix est gardee par test_chanson.py. Mais la
+    fusion cree un risque neuf : une seule fonction prix_seconde() pour trois
+    modules qui ne demandent PAS la meme memoire a Modal -- 16 Gio pour la
+    video, 24 pour la chanson et le dialogue. Si un renvoi passait la mauvaise,
+    le compteur se tromperait en silence, et vers le bas pour la video.
     """
-    for autre in (sandbox.chanson, sandbox.video):
-        communes = sorted(set(di.PRIX_GPU_USD_S) & set(autre.PRIX_GPU_USD_S))
-        assert communes, "les tables n'ont plus aucune carte en commun"
-        ecarts = {c: (di.PRIX_GPU_USD_S[c], autre.PRIX_GPU_USD_S[c])
-                  for c in communes if di.PRIX_GPU_USD_S[c] != autre.PRIX_GPU_USD_S[c]}
-        assert not ecarts, (
-            "dialogue.py compte la meme carte a un autre prix : %s. Une des "
-            "lectures n'a pas ete reportee." % ecarts)
-        assert di.PRIX_CPU_USD_S == autre.PRIX_CPU_USD_S, "prix du coeur divergent"
-        assert di.PRIX_MEMOIRE_USD_S == autre.PRIX_MEMOIRE_USD_S, "prix de la memoire divergent"
+    monkeypatch.setenv("MODAL_CPU", "1.0")
+    monkeypatch.setenv("VIDEO_MEMORY_MB", "16384")
+    fixe = 0.000222 + 0.0000131
+    assert di.prix_seconde("L4") == pytest.approx(
+        fixe + 0.00000222 * di.MEMOIRE_MB / 1024)
+    assert sandbox.chanson.prix_seconde("L4") == pytest.approx(
+        fixe + 0.00000222 * sandbox.chanson.MEMOIRE_MB / 1024)
+    assert sandbox.video.prix_seconde("L4") == pytest.approx(
+        fixe + 0.00000222 * 16)
+    assert sandbox.video.prix_seconde("L4") < di.prix_seconde("L4"), (
+        "la video demande moins de memoire : elle doit couter moins")
 
 
-def test_le_compteur_est_separe_de_celui_de_la_chanson(sandbox, di):
-    """Trois plafonds etanches : 5 + 20 + 5 = exactement le credit declare.
+def test_le_compteur_est_LE_MEME_que_celui_de_la_chanson(sandbox, di):
+    """RENVERSEMENT DU 19/09/2026, et il faut le lire comme tel.
 
-    Un compteur partage ferait qu'un dialogue mange le budget des chansons sans
-    que rien ne le dise. Des fichiers distincts, c'est ce qui rend les plafonds
-    reellement separes.
+    Ce test exigeait l'inverse, avec ce motif : << Un compteur partage ferait
+    qu'un dialogue mange le budget des chansons sans que rien ne le dise. Des
+    fichiers distincts, c'est ce qui rend les plafonds reellement separes. >>
+
+    Le motif etait juste et la conclusion fausse. Des plafonds separes dont la
+    somme vaut le credit entier -- 5 + 20 + 5 = 30 -- ne protegent de rien : ils
+    autorisent a depenser le credit une fois et demie si les trois travaillent
+    le meme mois, et aucun ne comptait le bac a sable, quatrieme depensier. Ce
+    qui protege, c'est un total commun. Ce qui empeche un usage d'affamer les
+    autres, c'est la part reservee, pas la cloison.
     """
-    assert di.BUDGET_FICHIER != sandbox.chanson.BUDGET_FICHIER
-    assert "dialogue" in di.BUDGET_FICHIER.name
+    assert di.BUDGET_FICHIER == sandbox.chanson.BUDGET_FICHIER
+    assert di.BUDGET_FICHIER == sandbox.video.BUDGET_FICHIER
+    assert "modal-budget" in di.BUDGET_FICHIER.name
 
 
 def test_plafond_refuse_avant_de_lancer(sandbox, di, monkeypatch):

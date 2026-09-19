@@ -20,10 +20,16 @@ PAROLES = "[Verse]\nPaper boats along the stream\n[Chorus]\nSing it low and sing
 
 @pytest.fixture
 def ch(sandbox, monkeypatch, tmp_path):
-    """Le module chanson, avec un compteur de depense jetable."""
-    module = sandbox.chanson
-    monkeypatch.setattr(module, "BUDGET_FICHIER", tmp_path / "chanson-budget.json")
-    return module
+    """Le module chanson, avec le compteur UNIQUE deplace dans un jetable.
+
+    Ce qui est deplace est budget_modal.FICHIER, et non chanson.BUDGET_FICHIER :
+    depuis le 19/09/2026 ce dernier n'est qu'un alias que le code ne lit plus.
+    Le deplacer laissait les tests ecrire ailleurs que la ou le service lit --
+    et ils passaient quand meme, ce qui est la pire facon de passer.
+    """
+    monkeypatch.setattr(sandbox.budget_modal, "FICHIER",
+                        tmp_path / "modal-budget.json")
+    return sandbox.chanson
 
 
 def test_demande_bornee(ch):
@@ -86,30 +92,32 @@ def test_compteur_video_compte_aussi_cpu_memoire(sandbox, monkeypatch):
     assert sandbox.video.prix_seconde("L4") == pytest.approx(0.000222 + 0.0000131 + 0.00000222 * 16)
 
 
-def test_les_deux_tables_de_prix_ne_divergent_pas(sandbox, ch):
-    """chanson.py et video.py recopient les MEMES prix Modal, chacun de son cote.
+def test_il_n_y_a_plus_qu_une_table_de_prix(sandbox, ch):
+    """Le remede a remplace la surveillance : il n'y a plus de copie a surveiller.
 
-    Le 17/09 ils portaient deux dates de releve differentes -- 15/09 et 09/09 :
-    une table relue, l'autre oubliee, et rien ne le signalait. Les prix se
-    trouvaient identiques cette fois-la ; la prochaine, ce sera un compteur qui
-    refuse ou laisse passer un lancement au mauvais seuil.
+    CE QUE CE TEST REMPLACE, et pourquoi il fallait le remplacer. Il comparait
+    les cartes COMMUNES aux tables de chanson.py et video.py -- et il passait au
+    vert le 19/09/2026 alors que chanson.py et dialogue.py n'avaient que QUATRE
+    cartes contre HUIT a video.py. Les quatre communes s'accordaient, donc rien
+    ne se signalait ; pendant ce temps prix_seconde() facturait une A100 au
+    tarif L40S et une H100 a la MOITIE de son prix, une carte inconnue retombant
+    sur la plus chere CONNUE. Un test qui ne regarde que l'intersection ne voit
+    jamais une troncature.
 
-    Ce controle compare les cartes communes aux deux fichiers. Il ne verifie pas
-    que les prix sont JUSTES -- seule une lecture de modal.com/pricing le dit --
-    mais qu'une lecture faite d'un cote a bien ete reportee de l'autre.
+    Ce test-ci ne compare plus : il exige que ce soit le MEME objet. Deux
+    lectures ne peuvent plus diverger, puisqu'il n'y en a plus qu'une.
     """
-    v = sandbox.video
-    communes = sorted(set(ch.PRIX_GPU_USD_S) & set(v.PRIX_GPU_USD_S))
-    assert communes, "les deux tables n'ont plus aucune carte en commun"
-
-    ecarts = {c: (ch.PRIX_GPU_USD_S[c], v.PRIX_GPU_USD_S[c])
-              for c in communes if ch.PRIX_GPU_USD_S[c] != v.PRIX_GPU_USD_S[c]}
-    assert not ecarts, (
-        "chanson.py et video.py comptent la meme carte a des prix differents : "
-        "%s. Une des deux lectures n'a pas ete reportee." % ecarts)
-
-    assert ch.PRIX_CPU_USD_S == v.PRIX_CPU_USD_S, "prix du coeur divergent"
-    assert ch.PRIX_MEMOIRE_USD_S == v.PRIX_MEMOIRE_USD_S, "prix de la memoire divergent"
+    b = sandbox.budget_modal
+    for module in (ch, sandbox.video, sandbox.dialogue):
+        assert module.PRIX_GPU_USD_S is b.PRIX_GPU_USD_S, (
+            "%s s'est refait une table de prix a lui" % module.__name__)
+        assert module.PRIX_CPU_USD_S == b.PRIX_CPU_USD_S
+        assert module.PRIX_MEMOIRE_USD_S == b.PRIX_MEMOIRE_USD_S
+        assert module.PRIX_RELEVE_LE == b.PRIX_RELEVE_LE
+    # Les huit cartes, et non les quatre qui avaient survecu a la copie.
+    assert {"T4", "L4", "A10", "A10G", "L40S", "A100", "A100-80GB", "H100"} <= set(
+        b.PRIX_GPU_USD_S)
+    assert b.prix_seconde("H100", 1024) > b.prix_seconde("L40S", 1024)
 
 
 def test_plafond_refuse_avant_de_lancer(sandbox, ch, monkeypatch):

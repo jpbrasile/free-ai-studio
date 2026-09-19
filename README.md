@@ -321,15 +321,19 @@ Mesuré le 09/09/2026, chaque ligne par un appel réel :
 | Lire à haute voix (16/09/2026) | deux voix Piper dans le routeur du Studio, sur le processeur : « siwis » en français, « norman » en anglais, choisies phrase par phrase ; le texte ne quitte pas le PC | gratuit, sans clé |
 | Dictée (15/09/2026) | au choix, sur la page d’accueil du Studio : « Groq si possible » (`whisper-large-v3`, avec une clé Groq ; sans clé, ou si Groq refuse, l’ordinateur prend le relais) ou « Sur cet ordinateur » (Whisper `small` sur le processeur, la voix ne quitte pas le PC). La langue parlée est reconnue toute seule ; sur l’ordinateur, parmi le français et l’anglais (`DICTEE_LANGUES`) | gratuit |
 | **Fabrication de vidéo** | modèle ouvert **Wan 2.1 VACE 1,3 B** (Apache 2.0) sur une machine Modal louée à la minute | **crédit Modal de 30 $/mois, carte bancaire exigée** ; au-delà du crédit, Modal facture jusqu’à votre limite de dépense |
-| **Chanson** (15/09/2026 ; essayée en réel sur Kaggle et Modal, pas Colab) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026, relus inchangés le 17/09/2026), 0,52 $ au pire par chanson, 0,08 $ compté pour l’essai du 15/09, plafond à part de 5 $/mois ; Kaggle et Colab : gratuit |
+| **Chanson** (15/09/2026 ; essayée en réel sur Kaggle et Modal, pas Colab) | modèle ouvert **YuE2-3B** (**CC BY-NC 4.0, non commercial**) : sur Modal (carte L4 louée), ou sur la carte T4 gratuite de Kaggle ou de Colab | Modal : **estimé** 1,04 $ de l’heure (carte, processeur et 24 Gio de mémoire, prix relevés le 15/09/2026, relus inchangés le 17/09/2026), 0,52 $ au pire par chanson, 0,08 $ compté pour l’essai du 15/09, sur le plafond Modal **partagé** avec la vidéo, le dialogue et le Sandbox (30 $/mois par défaut) ; Kaggle et Colab : gratuit |
 
 **Pourquoi la vidéo est à part.** Aucun service de fabrication de vidéo n’est gratuit et
 hébergé en septembre 2026. Le Studio fait donc tourner un modèle ouvert sur une carte
 graphique louée. Un seul modèle couvre les trois demandes : décrire une scène, partir d’une
 image, finir sur une autre, et garder un personnage ressemblant grâce à une image de
 référence. La page `/video` du Sandbox affiche en permanence ce qui a été dépensé dans le
-mois, et **refuse de lancer un clip avant** qu’il fasse dépasser le plafond
-(`VIDEO_BUDGET_USD_PAR_MOIS`, 20 $ par défaut).
+mois, et **refuse de lancer un clip avant** qu’il fasse dépasser le plafond.
+Depuis le 19/09/2026 ce plafond est **unique et partagé**
+(`MODAL_BUDGET_USD_PAR_MOIS`, 30 $ par défaut) entre la vidéo, la chanson, le
+dialogue et les travaux envoyés au Sandbox ; une part en est **réservée** à ce
+dernier (`MODAL_PART_RESERVEE_AUTONOME`, la moitié par défaut) et les demandes
+faites depuis les pages sont refusées avant de l’entamer.
 
 **Carte bancaire et facturation — relevé du 11/09/2026.** Modal affiche « 30 $ de crédit
 gratuit par mois » pour son offre Starter ([pricing](https://modal.com/pricing)), mais
@@ -340,9 +344,10 @@ moins le crédit ([budgets](https://modal.com/docs/guide/budgets)). Réglez-la a
 <https://modal.com/settings/usage>. Aucune source officielle ne mentionne de palier « sans
 carte » : l’audit du 11/09/2026 citait 5 $ sans carte, ce relevé ne le retrouve pas.
 
-Le Studio **ne lit pas** votre compte Modal. Son plafond de 20 $ ne compte que ses propres
-clips vidéo, pas le reste du Sandbox ni d’autres usages de Modal, et le crédit de 30 $ que
-la page affiche est celui que vous déclarez (`MODAL_CREDIT_MENSUEL_USD`) : la page le dit.
+Le Studio **ne lit pas** votre compte Modal. Son plafond compte désormais **tout ce que le
+Studio envoie chez Modal** — clips, chansons, dialogues et code envoyé au Sandbox — mais pas
+vos autres usages de Modal ; et le crédit de 30 $ que la page affiche est celui que vous
+déclarez (`MODAL_CREDIT_MENSUEL_USD`) : la page le dit.
 
 **Ce que coûte un clip, mesuré le 09/09/2026.** Réglage le moins cher (3 s, « Rapide »,
 carte L4) : 832×480, 49 images, **7 minutes d’attente**. Le premier chiffre publié,
@@ -366,8 +371,8 @@ un style : YuE2-3B compose une partition, puis la chante, voix et instruments, j
 Trois endroits où le lancer :
 - **Modal**, carte L4 : le pipeline officiel, tel quel. Le compteur ajoute cette fois le
   processeur et la mémoire, que Modal facture en plus de la carte. Une chanson n’est lancée
-  que si son pire cas (30 minutes) tient sous le plafond `CHANSON_BUDGET_USD_PAR_MOIS`
-  (5 $ par défaut, à part des 20 $ de la vidéo) : au pire 9 chansons par mois. Essayé le
+  que si son pire cas (30 minutes) tient sous ce qui reste du plafond partagé
+  `MODAL_BUDGET_USD_PAR_MOIS`, part du Sandbox déduite. Essayé le
   15/09/2026, premier lancement : 43 secondes de chanson en moins de 5 minutes, image et
   téléchargement du modèle compris, comptées 0,08 $ par le Studio. La facture de Modal
   elle-même n’a pas été relevée.

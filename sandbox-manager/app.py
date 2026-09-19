@@ -19,9 +19,11 @@ from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
+import budget_modal
 import chanson
 import depenses
 import dialogue
+import garde_exposition
 # Nettoyage du rendu de /dialogue. Au niveau du module, PAS au moment de
 # l'appel : le Dockerfile prend tout le dossier (COPY *.py), donc un module
 # absent serait une erreur de livraison, pas un alea d'execution -- et elle doit
@@ -71,7 +73,15 @@ KAGGLE_MANUEL = "https://www.kaggle.com/code"
 
 
 def contexte_partage(request: Optional[Request] = None) -> Optional[str]:
-    """La raison de couper Kaggle automatique, ou None sur un Studio personnel."""
+    """La raison de couper Kaggle automatique, ou None sur un Studio personnel.
+
+    19/09/2026 : la premiere branche n'est plus atteignable a l'import. Un
+    STUDIO_HEBERGE=true fait desormais REFUSER le demarrage de ce service
+    (garde_exposition.py) parce qu'il ecrit ses jetons en clair -- couper Kaggle
+    ne suffisait pas. Elle reste ecrite et testee : elle reprendra du service le
+    jour ou les cles seront chiffrees et le refus rouvert. Les deux autres
+    branches, elles, sont vivantes.
+    """
     if STUDIO_HEBERGE:
         return "STUDIO_HEBERGE=true : instance declaree hebergee"
     if MULTI_UTILISATEUR:
@@ -101,6 +111,11 @@ def refus_kaggle(raison: str) -> HTTPException:
 # depuis le navigateur, sans terminal.
 CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
 KEYS_FILE = CONFIG_DIR / "sandbox-keys.json"
+
+# Meme refus que cote routeur, et pour la meme raison : ce magasin-ci tient les
+# jetons Modal et les identifiants Kaggle, en clair. Le paragraphe 2.1 du plan ne
+# nommait que config/keys.json ; il y en a DEUX, releve le 19/09/2026.
+garde_exposition.verifier_ou_refuser(str(KEYS_FILE))
 SECRET_NAMES = ("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "KAGGLE_USERNAME", "KAGGLE_KEY")
 
 # Photographie de l'environnement AVANT toute injection du magasin : sert a
@@ -391,6 +406,7 @@ def modal_execute(
     commandes: Optional[tuple] = None,
     volume: Optional[str] = None,
     point_de_montage: str = "/modeles",
+    usage: Optional[str] = "autonome",
 ) -> dict:
     """Execute du code sur une machine Modal.
 
@@ -400,6 +416,23 @@ def modal_execute(
     deja installees, des commandes de construction pour les depots que pip
     n'installe pas correctement, et un disque persistant ou garder les modeles
     telecharges d'un clip a l'autre.
+
+    `usage` dit QUI paie, et son defaut est deliberement le bac a sable.
+    Jusqu'au 19/09/2026, cette fonction etait le QUATRIEME depensier Modal du
+    Studio, et le seul que personne ne comptait : run_auto() met << modal >>
+    en tete de son ordre de repli, donc tout code envoye au bac a sable
+    partait sur une carte louee a cote des trois compteurs. La video, la
+    chanson et le dialogue, eux, comptent DEJA avant et apres leur appel --
+    ils passent donc usage=None pour ne pas etre comptes deux fois.
+
+    Le defaut va dans le sens du refus : un appelant qui oublie ce parametre
+    est compte, il n'echappe pas au plafond. C'est l'inverse qui avait cours.
+
+    CE QUE CE CHOIX SIMPLIFIE, et qu'il faut savoir : la meme route sert a un
+    agent et a une personne qui envoie du code depuis la page. Le service ne
+    sait pas les distinguer, donc les deux sont comptes sur << autonome >> et
+    peuvent entamer la part reservee. C'est un defaut connu et ecrit, la ou
+    l'etat d'avant etait de ne rien compter du tout.
     """
     if not modal_configured():
         raise BackendUnavailable("Modal is not configured")
@@ -424,7 +457,18 @@ def modal_execute(
     memory = memory_mb or int(os.getenv("MODAL_MEMORY_MB", "2048"))
     gpu_name = (gpu_type or os.getenv("MODAL_GPU_DEFAULT", "T4")).strip() if gpu else None
     app_name = os.getenv("MODAL_APP_NAME", "free-ai-studio-sandbox").strip() or "free-ai-studio-sandbox"
+
+    # REFUSER AVANT DE LOUER. Le pire cas, c'est la machine qui va jusqu'au
+    # bout de son delai sans rien rendre : c'est le seul chiffre honnete ici,
+    # et il se calcule sur la carte et la memoire reellement demandees. Un
+    # travail sans carte ne paie que le processeur et la memoire, ce que
+    # budget_modal.prix_seconde() sait faire -- le compter au prix d'un H100
+    # refuserait les travaux les moins chers du service.
+    if usage:
+        budget_modal.verifier(usage, gpu_name, sandbox_lifetime, memory,
+                              quoi="Ce travail sur Modal")
     sb = None
+    loue_depuis = None
     local_out = JOBS / jid / "modal-output"
     local_out.mkdir(parents=True, exist_ok=True)
 
@@ -458,6 +502,9 @@ def modal_execute(
         volumes = {}
         if volume:
             volumes[point_de_montage] = modal.Volume.from_name(volume, create_if_missing=True)
+        # A partir d'ici une machine est louee : le compteur encaissera le
+        # temps passe, meme si la suite echoue.
+        loue_depuis = time.time()
         sb = modal.Sandbox.create(
             "sleep",
             str(sandbox_lifetime),
@@ -522,6 +569,17 @@ def modal_execute(
         # A process exit is returned above; exceptions here are treated as infrastructure failures.
         raise BackendUnavailable(f"Modal unavailable: {type(exc).__name__}: {str(exc)[:800]}") from exc
     finally:
+        if usage and loue_depuis is not None:
+            # Meme si le travail a echoue : la carte a ete louee pendant ce
+            # temps-la. Ne compter que les reussites donnerait un compteur
+            # menteur -- c'est deja la regle des trois autres usages.
+            try:
+                budget_modal.consommer(usage, gpu_name,
+                                       time.time() - loue_depuis, memory)
+            except Exception:
+                # Un compteur qui ne sait pas s'ecrire ne doit pas faire perdre
+                # le resultat d'un calcul qui, lui, a abouti.
+                log.exception("budget Modal : encaissement impossible")
         if sb is not None:
             # Release cloud resources (including any GPU reservation) as soon as
             # stdout/stderr and artifacts have been collected. wait=True makes
@@ -625,6 +683,11 @@ def run_modal(jid: str, code: str, gpu: bool, internet: bool):
         return
     try:
         finish_execution(jid, "modal", modal_execute(jid, code, gpu, internet))
+    except budget_modal.BudgetDepasse as exc:
+        # Un refus de budget n'est pas une panne de Modal, et le message dit
+        # deja quoi faire. Ici l'utilisateur a demande Modal explicitement :
+        # on ne choisit pas un autre fournisseur a sa place.
+        terminer_en_echec(jid, str(exc)[:1000])
     except BackendUnavailable as exc:
         terminer_en_echec(jid, str(exc)[:1000])
 
@@ -888,6 +951,12 @@ def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool
             attempts.append({"provider": "modal", "result": "executed", "exit_code": data.get("exit_code")})
             finish_execution(jid, "modal", data, attempts)
             return
+        except budget_modal.BudgetDepasse as exc:
+            # Le plafond du mois est atteint : ce n'est pas une panne, c'est un
+            # refus, et le mode auto a justement trois suites gratuites. Le
+            # laisser remonter tuerait le fil et laisserait le travail en
+            # << routing >> pour toujours.
+            attempts.append({"provider": "modal", "result": "budget_exhausted", "detail": str(exc)[:500]})
         except BackendUnavailable as exc:
             attempts.append({"provider": "modal", "result": "unavailable", "detail": str(exc)[:500]})
     else:
@@ -1422,6 +1491,23 @@ def etat(request: Request):
     }
 
 
+@app.get("/budget/modal")
+def budget_modal_etat(authorization: Optional[str] = Header(default=None)):
+    """Le compteur UNIQUE des depenses Modal, tous usages confondus.
+
+    Les trois pages n'en montrent chacune qu'une tranche -- leur plafond, leur
+    compte a elles. Celle-ci rend le total, la part reservee au bac a sable et
+    la repartition par usage, qui est le seul endroit ou le quatrieme
+    depensier devient visible.
+
+    Authentifiee, comme /depenses/etat et contrairement a /etat : elle rend
+    des montants, pas des booleens. Et comme /depenses/etat, elle ne dit que
+    l'ESTIMATION locale ; le compte qui fait foi est celui de Modal.
+    """
+    auth(authorization)
+    return budget_modal.lire()
+
+
 @app.get("/depenses/etat")
 def depenses_etat(
     forcer: bool = False,
@@ -1769,6 +1855,9 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
             paquets=VIDEO_PAQUETS,
             apt=("ffmpeg",),
             volume=video.VOLUME_MODELES,
+            # Compte par video.budget_verifier()/budget_consommer(), juste
+            # au-dessus et juste en dessous : pas deux fois.
+            usage=None,
         )
         finish_execution(jid, "modal", donnees)
     except BackendUnavailable as exc:
@@ -1946,6 +2035,9 @@ def run_chanson(jid: str, code: str, ou: str):
             memory_mb=chanson.MEMOIRE_MB,
             paquets=chanson.PAQUETS_MODAL,
             volume=chanson.VOLUME_MODELES,
+            # Compte par chanson.budget_verifier()/budget_consommer(), juste
+            # au-dessus et juste en dessous : pas deux fois.
+            usage=None,
         )
         finish_execution(jid, "modal", donnees)
     except BackendUnavailable as exc:
@@ -2297,6 +2389,9 @@ def run_dialogue(jid: str, code: str, ou: str):
                 apt=dialogue.APT_MODAL,
                 commandes=dialogue.COMMANDES_MODAL,
                 volume=dialogue.VOLUME_MODELES,
+                # Compte par dialogue.budget_verifier()/budget_consommer(),
+                # juste au-dessus et juste en dessous : pas deux fois.
+                usage=None,
             )
             finish_execution(jid, "modal", donnees)
     except BackendUnavailable as exc:

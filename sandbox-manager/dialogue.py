@@ -48,39 +48,45 @@ import base64
 import json
 import os
 import re
-import threading
-import time
-from pathlib import Path
-from typing import Dict
 
-CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
-BUDGET_FICHIER = CONFIG_DIR / "dialogue-budget.json"
-_VERROU = threading.Lock()
+import budget_modal
 
-# Prix Modal releves sur https://modal.com/pricing. Ils servent a COMPTER, pas a
-# facturer. Ces six chiffres sont les MEMES que ceux de chanson.py et video.py :
-# un test le verifie, parce que le 17/09 deux de ces tables portaient deja deux
-# dates de releve differentes sans que rien ne le signale.
-PRIX_RELEVE_LE = "2026-09-17"
-PRIX_GPU_USD_S: Dict[str, float] = {
-    "T4": 0.000164,
-    "L4": 0.000222,
-    "A10": 0.000306,
-    "L40S": 0.000542,
-}
-PRIX_CPU_USD_S = 0.0000131       # par coeur physique et par seconde
-PRIX_MEMOIRE_USD_S = 0.00000222  # par Gio et par seconde
+# Le compteur des depenses Modal est commun aux quatre usages -- la video, la
+# chanson, le dialogue et le bac a sable lui-meme. Il tient le fichier, le
+# verrou, la table des prix et le plafond ; ce module n'en garde que des
+# renvois. CONFIG_DIR a disparu d'ici avec le fichier qu'il servait a nommer.
+BUDGET_FICHIER = budget_modal.FICHIER
 
-# 5 $ par mois, demande de l'utilisateur le 17/09 (<< budget 5 $ aussi >>).
+# TABLE UNIQUE depuis le 19/09/2026 : les prix Modal vivent dans
+# budget_modal.py et ce module les LIT au lieu d'en garder une copie. Les noms
+# sont conserves parce que les tests et les pages les citent ; ce ne sont plus
+# que des renvois.
 #
-# ARITHMETIQUE A DIRE TOUT HAUT : 5 (chanson) + 20 (video) + 5 (dialogue) = 30 $,
-# soit EXACTEMENT le credit Modal que l'utilisateur declare. Les trois compteurs
-# sont etanches -- aucun ne voit les deux autres -- donc les trois peuvent
-# atteindre leur plafond le meme mois et le total sortirait du credit. Ce n'est
-# pas un defaut cache : c'est la raison pour laquelle la page renvoie vers la
-# limite de depense a regler chez Modal, seul endroit ou le compte fait foi.
-BUDGET_MENSUEL_USD = float(os.getenv("DIALOGUE_BUDGET_USD_PAR_MOIS", "5"))
-CREDIT_OFFERT_USD = float(os.getenv("MODAL_CREDIT_MENSUEL_USD", "30"))
+# Ce que la copie coutait, et qu'aucun test ne voyait : video.py portait les
+# HUIT cartes, chanson.py et dialogue.py n'en portaient que QUATRE. Le test qui
+# gardait ce flanc ne comparait que les cartes COMMUNES, donc il passait au
+# vert -- pendant que prix_seconde() facturait une A100 au tarif L40S et une
+# H100 a la MOITIE de son prix, parce qu'une carte inconnue retombe sur la plus
+# chere CONNUE. Une table tronquee rend ce repli menteur.
+PRIX_RELEVE_LE = budget_modal.PRIX_RELEVE_LE
+PRIX_GPU_USD_S = budget_modal.PRIX_GPU_USD_S
+PRIX_CPU_USD_S = budget_modal.PRIX_CPU_USD_S
+PRIX_MEMOIRE_USD_S = budget_modal.PRIX_MEMOIRE_USD_S
+
+# CE QUI ETAIT ECRIT ICI, et qui a ete repare le 19/09/2026 :
+#
+#   << ARITHMETIQUE A DIRE TOUT HAUT : 5 (chanson) + 20 (video) + 5
+#   (dialogue) = 30 $, soit EXACTEMENT le credit Modal que l'utilisateur
+#   declare. Les trois compteurs sont etanches -- aucun ne voit les deux
+#   autres -- donc les trois peuvent atteindre leur plafond le meme mois et
+#   le total sortirait du credit. >>
+#
+# Le depot avait donc ECRIT son propre defaut sans le corriger, et le
+# renvoyait a la limite de depense reglee chez Modal. C'etait vrai et
+# insuffisant : un garde-fou qui delegue sa garde n'en est pas un. Il y a
+# desormais UN plafond pour les quatre usages, ce module compris.
+BUDGET_MENSUEL_USD = budget_modal.plafond_de("dialogue")
+CREDIT_OFFERT_USD = budget_modal.CREDIT_OFFERT_USD
 
 # Garde-fou dur : au-dela, la machine est arretee et le compteur encaisse ce qui
 # a ete consomme. Le premier lancement telecharge environ 12,6 Go de poids.
@@ -326,84 +332,52 @@ BALISE = re.compile(r"^\[S([1-9][0-9]*)\]")
 
 
 # --- Compteur de depense ------------------------------------------------------
-
-def _mois_courant() -> str:
-    return time.strftime("%Y-%m")
+#
+# UN SEUL compteur depuis le 19/09/2026 : budget_modal.py, partage avec les
+# deux autres fonctions ET avec le bac a sable lui-meme, qui envoyait du code
+# sur Modal sans etre compte par personne. Ce qui suit ne compte plus rien :
+# ce sont des renvois, gardes pour que app.py, les tests et les pages n'aient
+# pas a savoir ou vit le compteur. Le motif est en tete de budget_modal.py.
 
 
 def budget_lire() -> dict:
-    """Etat du mois en cours. Un mois neuf remet les compteurs a zero."""
-    donnees = {"mois": _mois_courant(), "secondes": 0.0, "usd": 0.0, "dialogues": 0}
-    try:
-        brut = json.loads(BUDGET_FICHIER.read_text(encoding="utf-8"))
-        if brut.get("mois") == donnees["mois"]:
-            donnees.update({
-                "secondes": float(brut.get("secondes", 0)),
-                "usd": float(brut.get("usd", 0)),
-                "dialogues": int(brut.get("dialogues", 0)),
-            })
-    except (OSError, ValueError, TypeError):
-        pass
-    donnees["plafond_usd"] = BUDGET_MENSUEL_USD
-    donnees["credit_offert_usd"] = CREDIT_OFFERT_USD
-    donnees["reste_usd"] = max(0.0, BUDGET_MENSUEL_USD - donnees["usd"])
-    donnees["prix_releve_le"] = PRIX_RELEVE_LE
-    return donnees
+    """L'etat du mois, TOUS usages confondus, vu du plafond de celui-ci."""
+    etat = budget_modal.vue("dialogue")
+    etat["dialogues"] = etat["appels"]["dialogue"]
+    return etat
 
 
 def budget_ecrire(secondes: float, usd: float, dialogues: int) -> None:
-    BUDGET_FICHIER.parent.mkdir(parents=True, exist_ok=True)
-    tmp = BUDGET_FICHIER.with_suffix(".tmp")
-    tmp.write_text(json.dumps({
-        "mois": _mois_courant(),
-        "secondes": round(secondes, 1),
-        "usd": round(usd, 4),
-        "dialogues": dialogues,
-        "note": "Estimation locale, pas une facture. Le compte qui fait foi est "
-                "celui de Modal. Ce plafond est a part de ceux de la chanson et "
-                "de la video. Supprimez ce fichier pour repartir de zero.",
-    }, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(BUDGET_FICHIER)
+    """Pose l'etat de cet usage. Outil de TEST : le service passe par
+    budget_consommer(), qui ajoute au lieu de poser."""
+    budget_modal.poser("dialogue", secondes, usd, dialogues)
 
 
 def prix_seconde(gpu: str) -> float:
-    """Carte + processeur + memoire demandee, par seconde.
-
-    Une carte inconnue est comptee au prix de la plus chere connue : se tromper
-    vers le haut est le bon sens du refus.
-    """
-    carte = PRIX_GPU_USD_S.get(gpu.upper(), max(PRIX_GPU_USD_S.values()))
-    coeurs = float(os.getenv("MODAL_CPU", "1.0"))
-    return carte + PRIX_CPU_USD_S * coeurs + PRIX_MEMOIRE_USD_S * MEMOIRE_MB / 1024
+    return budget_modal.prix_seconde(gpu, MEMOIRE_MB)
 
 
 def budget_verifier(gpu: str, duree_max_s: int) -> dict:
-    """Refuse AVANT de lancer si le pire cas depasse le plafond du mois."""
-    etat = budget_lire()
-    pire = prix_seconde(gpu) * duree_max_s
-    if etat["usd"] + pire > BUDGET_MENSUEL_USD:
-        raise BudgetDepasse(
-            f"Plafond du mois atteint pour les dialogues. Déjà dépensé ce mois-ci : "
-            f"{etat['usd']:.2f} $ sur {BUDGET_MENSUEL_USD:.2f} $. Un dialogue peut "
-            f"coûter jusqu'à {pire:.2f} $ sur Modal, donc il n'est pas lancé. "
-            f"Le compteur repart tout seul le 1er du mois prochain."
-        )
-    etat["cout_max_usd"] = round(pire, 3)
+    """Refuse AVANT de lancer si le pire cas entame ce qui reste a cet usage."""
+    etat = budget_modal.verifier(
+        "dialogue", gpu, duree_max_s, MEMOIRE_MB,
+        quoi="Un dialogue", suite="")
+    etat["cout_max_usd"] = etat["cout_max_usd"]
+    etat["dialogues"] = etat["appels"]["dialogue"]
     return etat
 
 
 def budget_consommer(gpu: str, secondes: float) -> dict:
     """Encaisse le temps reellement passe, meme si le dialogue a echoue."""
-    with _VERROU:
-        etat = budget_lire()
-        secondes_total = etat["secondes"] + max(0.0, secondes)
-        usd_total = etat["usd"] + prix_seconde(gpu) * max(0.0, secondes)
-        budget_ecrire(secondes_total, usd_total, etat["dialogues"] + 1)
-    return budget_lire()
+    etat = budget_modal.consommer("dialogue", gpu, secondes, MEMOIRE_MB)
+    etat["dialogues"] = etat["appels"]["dialogue"]
+    return etat
 
 
-class BudgetDepasse(RuntimeError):
-    """Le plafond mensuel serait franchi : rien n'est lance."""
+# LA MEME exception pour les trois, et c'etait un piege arme : un
+# `except video.BudgetDepasse` attrapait jusqu'ici une classe differente de
+# celle que chanson.py levait.
+BudgetDepasse = budget_modal.BudgetDepasse
 
 
 # --- Le script envoye sur la machine distante ---------------------------------
@@ -865,13 +839,18 @@ document.getElementById("ou").addEventListener("change", majOu);
 
 function budgetTexte(b){
   const part = Math.min(100, 100 * b.usd / b.plafond_usd);
-  return "Dialogues sur Modal ce mois-ci, selon le Studio : <b>" + b.usd.toFixed(2)
-    + " $</b> sur un plafond de " + b.plafond_usd.toFixed(2) + " $. " + b.dialogues + " dialogue(s)."
+  return "Dépensé sur Modal ce mois-ci selon le Studio, tous usages confondus : <b>"
+    + b.usd.toFixed(2) + " $</b> sur les " + b.plafond_usd.toFixed(2)
+    + " $ ouverts aux demandes. " + b.dialogues + " dialogue(s) sur cette page."
     + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
     + '<span class="avert">Estimation locale d’après les prix relevés le ' + b.prix_releve_le
-    + ', pas une facture. Ce plafond est <b>à part</b> de ceux de la chanson et de la vidéo, '
-    + 'et aucun des trois ne voit les deux autres : additionnés, ils atteignent exactement le '
-    + 'crédit de ' + b.credit_offert_usd.toFixed(0) + ' $ que vous avez déclaré. '
+    + ', pas une facture. Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
+    + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
+    + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '
+    + b.reserve_autonome_usd.toFixed(2) + ' $ sont réservés au Sandbox et ne peuvent pas '
+    + 'être entamés ici. '
+    + 'Le crédit de ' + b.credit_offert_usd.toFixed(0)
+    + ' $ par mois est celui que vous avez déclaré. '
     + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">Réglez votre '
     + 'limite de dépense chez Modal</a> : c’est le seul compte qui fait foi.</span>';
 }

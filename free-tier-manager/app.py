@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
+
+import garde_exposition
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Response
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -90,6 +92,19 @@ PROVIDERS = {
 # dernier mot pour qui sait s'en servir.
 CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
 KEYS_FILE = CONFIG_DIR / "keys.json"
+
+# Le drapeau que ce service ne lisait PAS jusqu'au 19/09/2026, alors qu'il le
+# recevait bien par env_file. Le seul a le lire etait le bac a sable, qui ne
+# detient aucune cle de fournisseur : le drapeau qui declare << cette instance
+# est hebergee >> etait donc invisible au service qui ecrit les cles en clair.
+STUDIO_HEBERGE = os.getenv("STUDIO_HEBERGE", "false").strip().lower() == "true"
+STUDIO_ADRESSE_PUBLIEE = os.getenv("STUDIO_ADRESSE_PUBLIEE", "127.0.0.1").strip()
+
+# Refus au demarrage si ces cles seraient lisibles d'ailleurs que d'ici. Ici et
+# non dans un evenement de demarrage : uvicorn doit refuser de CHARGER
+# l'application, pas la servir a moitie. Sur un Studio personnel -- publie sur
+# 127.0.0.1, non declare heberge -- cette ligne ne fait rien.
+garde_exposition.verifier_ou_refuser(str(KEYS_FILE))
 
 # Ce que le debutant doit comprendre de chaque fournisseur, et ou aller chercher
 # la cle. L'ordre d'essai reel reste FREE_PROVIDER_ORDER.

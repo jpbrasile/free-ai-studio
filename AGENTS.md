@@ -74,7 +74,15 @@ Le configurateur doit :
 - expliquer à quoi sert chaque service ;
 - fournir son lien officiel ;
 - permettre de sauter les services facultatifs ;
-- stocker les secrets uniquement côté serveur ;
+- stocker les secrets uniquement côté serveur — **et « serveur » veut dire ici
+  *le PC de la personne qui s'en sert*, lié à `127.0.0.1`. Cette ligne a longtemps
+  ordonné le contraire de la règle du plan d'origine (« *Keys live client-side
+  only, encrypted* ») sans le dire. Les clés sont écrites **en clair** dans
+  `config/keys.json` et `config/sandbox-keys.json` ; depuis le 19/09/2026 les deux
+  services **refusent de démarrer** si `STUDIO_HEBERGE=true` ou si
+  `STUDIO_ADRESSE_PUBLIEE` sort de la boucle locale (`garde_exposition.py`).
+  N'écrivez donc jamais de code qui suppose ce magasin sûr ailleurs que sur la
+  machine de l'utilisateur ;
 - tester la configuration sans afficher les secrets.
 
 Commencer de préférence par Gemini, Groq et OpenRouter.

@@ -29,39 +29,37 @@ import json
 import os
 import re
 import secrets
-import threading
-import time
-from pathlib import Path
-from typing import Dict
 
-CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
-BUDGET_FICHIER = CONFIG_DIR / "chanson-budget.json"
-_VERROU = threading.Lock()
+import budget_modal
 
-# Prix Modal releves sur https://modal.com/pricing. Ils servent a COMPTER, pas a
-# facturer. Contrairement a la video, le compteur ajoute le processeur et la
-# memoire : ce modele demande 24 Gio de memoire vive, que Modal facture a part,
-# soit un quart du prix de la carte L4.
+# Le compteur des depenses Modal est commun aux quatre usages -- la video, la
+# chanson, le dialogue et le bac a sable lui-meme. Il tient le fichier, le
+# verrou, la table des prix et le plafond ; ce module n'en garde que des
+# renvois. CONFIG_DIR a disparu d'ici avec le fichier qu'il servait a nommer.
+BUDGET_FICHIER = budget_modal.FICHIER
+
+# TABLE UNIQUE depuis le 19/09/2026 : les prix Modal vivent dans
+# budget_modal.py et ce module les LIT au lieu d'en garder une copie. Les noms
+# sont conserves parce que les tests et les pages les citent ; ce ne sont plus
+# que des renvois.
 #
-# RELUS LE 17/09/2026 : les six chiffres ci-dessous sont INCHANGES depuis le
-# 15/09. La page de Modal ne porte aucune date de mise a jour, donc la seule
-# date qui existe est celle de NOTRE lecture -- d'ou cette constante, affichee
-# sur la page. Rien ne la rafraichit : c'est une lecture humaine, a refaire.
-PRIX_RELEVE_LE = "2026-09-17"
-PRIX_GPU_USD_S: Dict[str, float] = {
-    "T4": 0.000164,
-    "L4": 0.000222,
-    "A10": 0.000306,
-    "L40S": 0.000542,
-}
-PRIX_CPU_USD_S = 0.0000131       # par coeur physique et par seconde
-PRIX_MEMOIRE_USD_S = 0.00000222  # par Gio et par seconde
+# Ce que la copie coutait, et qu'aucun test ne voyait : video.py portait les
+# HUIT cartes, chanson.py et dialogue.py n'en portaient que QUATRE. Le test qui
+# gardait ce flanc ne comparait que les cartes COMMUNES, donc il passait au
+# vert -- pendant que prix_seconde() facturait une A100 au tarif L40S et une
+# H100 a la MOITIE de son prix, parce qu'une carte inconnue retombe sur la plus
+# chere CONNUE. Une table tronquee rend ce repli menteur.
+PRIX_RELEVE_LE = budget_modal.PRIX_RELEVE_LE
+PRIX_GPU_USD_S = budget_modal.PRIX_GPU_USD_S
+PRIX_CPU_USD_S = budget_modal.PRIX_CPU_USD_S
+PRIX_MEMOIRE_USD_S = budget_modal.PRIX_MEMOIRE_USD_S
 
-# 5 $ par defaut : avec les 20 $ de la video, 25 $ restent sous les 30 $ de
-# credit Modal que l'utilisateur declare. Aucun des deux compteurs ne voit
-# l'autre, ni le reste du bac a sable.
-BUDGET_MENSUEL_USD = float(os.getenv("CHANSON_BUDGET_USD_PAR_MOIS", "5"))
-CREDIT_OFFERT_USD = float(os.getenv("MODAL_CREDIT_MENSUEL_USD", "30"))
+# Ce que les DEMANDES peuvent atteindre : le plafond unique moins la part
+# reservee au bac a sable. CHANSON_BUDGET_USD_PAR_MOIS n'est plus lu. Le
+# commentaire qui etait ici disait << aucun des deux compteurs ne voit
+# l'autre >> : c'est exactement ce qui est referme. Voir budget_modal.py.
+BUDGET_MENSUEL_USD = budget_modal.plafond_de("chanson")
+CREDIT_OFFERT_USD = budget_modal.CREDIT_OFFERT_USD
 
 # Garde-fou dur sur Modal : au-dela, la machine est arretee et le compteur
 # encaisse ce qui a ete consomme. Le premier lancement telecharge environ 7 Go.
@@ -150,84 +148,52 @@ MAX_PAROLES = 4000
 
 
 # --- Compteur de depense ------------------------------------------------------
-
-def _mois_courant() -> str:
-    return time.strftime("%Y-%m")
+#
+# UN SEUL compteur depuis le 19/09/2026 : budget_modal.py, partage avec les
+# deux autres fonctions ET avec le bac a sable lui-meme, qui envoyait du code
+# sur Modal sans etre compte par personne. Ce qui suit ne compte plus rien :
+# ce sont des renvois, gardes pour que app.py, les tests et les pages n'aient
+# pas a savoir ou vit le compteur. Le motif est en tete de budget_modal.py.
 
 
 def budget_lire() -> dict:
-    """Etat du mois en cours. Un mois neuf remet les compteurs a zero."""
-    donnees = {"mois": _mois_courant(), "secondes": 0.0, "usd": 0.0, "chansons": 0}
-    try:
-        brut = json.loads(BUDGET_FICHIER.read_text(encoding="utf-8"))
-        if brut.get("mois") == donnees["mois"]:
-            donnees.update({
-                "secondes": float(brut.get("secondes", 0)),
-                "usd": float(brut.get("usd", 0)),
-                "chansons": int(brut.get("chansons", 0)),
-            })
-    except (OSError, ValueError, TypeError):
-        pass
-    donnees["plafond_usd"] = BUDGET_MENSUEL_USD
-    donnees["credit_offert_usd"] = CREDIT_OFFERT_USD
-    donnees["reste_usd"] = max(0.0, BUDGET_MENSUEL_USD - donnees["usd"])
-    donnees["prix_releve_le"] = PRIX_RELEVE_LE
-    return donnees
+    """L'etat du mois, TOUS usages confondus, vu du plafond de celui-ci."""
+    etat = budget_modal.vue("chanson")
+    etat["chansons"] = etat["appels"]["chanson"]
+    return etat
 
 
 def budget_ecrire(secondes: float, usd: float, chansons: int) -> None:
-    BUDGET_FICHIER.parent.mkdir(parents=True, exist_ok=True)
-    tmp = BUDGET_FICHIER.with_suffix(".tmp")
-    tmp.write_text(json.dumps({
-        "mois": _mois_courant(),
-        "secondes": round(secondes, 1),
-        "usd": round(usd, 4),
-        "chansons": chansons,
-        "note": "Estimation locale, pas une facture. Le compte qui fait foi est "
-                "celui de Modal. Supprimez ce fichier pour repartir de zero.",
-    }, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(BUDGET_FICHIER)
+    """Pose l'etat de cet usage. Outil de TEST : le service passe par
+    budget_consommer(), qui ajoute au lieu de poser."""
+    budget_modal.poser("chanson", secondes, usd, chansons)
 
 
 def prix_seconde(gpu: str) -> float:
-    """Carte + processeur + memoire demandee, par seconde.
-
-    Une carte inconnue est comptee au prix de la plus chere connue : se tromper
-    vers le haut est le bon sens du refus.
-    """
-    carte = PRIX_GPU_USD_S.get(gpu.upper(), max(PRIX_GPU_USD_S.values()))
-    coeurs = float(os.getenv("MODAL_CPU", "1.0"))
-    return carte + PRIX_CPU_USD_S * coeurs + PRIX_MEMOIRE_USD_S * MEMOIRE_MB / 1024
+    return budget_modal.prix_seconde(gpu, MEMOIRE_MB)
 
 
 def budget_verifier(gpu: str, duree_max_s: int) -> dict:
-    """Refuse AVANT de lancer si le pire cas depasse le plafond du mois."""
-    etat = budget_lire()
-    pire = prix_seconde(gpu) * duree_max_s
-    if etat["usd"] + pire > BUDGET_MENSUEL_USD:
-        raise BudgetDepasse(
-            f"Plafond du mois atteint pour les chansons. Déjà dépensé ce mois-ci : "
-            f"{etat['usd']:.2f} $ sur {BUDGET_MENSUEL_USD:.2f} $. Une chanson peut "
-            f"coûter jusqu'à {pire:.2f} $ sur Modal, donc elle n'est pas lancée. "
-            f"Kaggle reste possible, gratuitement. Le compteur repart "
-            f"tout seul le 1er du mois prochain."
-        )
-    etat["cout_max_usd"] = round(pire, 3)
+    """Refuse AVANT de lancer si le pire cas entame ce qui reste a cet usage."""
+    etat = budget_modal.verifier(
+        "chanson", gpu, duree_max_s, MEMOIRE_MB,
+        quoi="Une chanson", suite="Kaggle reste possible, gratuitement.")
+    etat["cout_max_usd"] = etat["cout_max_usd"]
+    etat["chansons"] = etat["appels"]["chanson"]
     return etat
 
 
 def budget_consommer(gpu: str, secondes: float) -> dict:
     """Encaisse le temps reellement passe, meme si la chanson a echoue."""
-    with _VERROU:
-        etat = budget_lire()
-        secondes_total = etat["secondes"] + max(0.0, secondes)
-        usd_total = etat["usd"] + prix_seconde(gpu) * max(0.0, secondes)
-        budget_ecrire(secondes_total, usd_total, etat["chansons"] + 1)
-    return budget_lire()
+    etat = budget_modal.consommer("chanson", gpu, secondes, MEMOIRE_MB)
+    etat["chansons"] = etat["appels"]["chanson"]
+    return etat
 
 
-class BudgetDepasse(RuntimeError):
-    """Le plafond mensuel serait franchi : rien n'est lance."""
+# LA MEME exception pour les trois, et c'etait un piege arme : un
+# `except video.BudgetDepasse` attrapait jusqu'ici une classe differente de
+# celle que chanson.py levait.
+BudgetDepasse = budget_modal.BudgetDepasse
 
 
 # --- Le script envoye sur la machine distante ---------------------------------
@@ -956,11 +922,17 @@ document.getElementById("modele").addEventListener("change", majModele);
 
 function budgetTexte(b){
   const part = Math.min(100, 100 * b.usd / b.plafond_usd);
-  return "Chansons sur Modal ce mois-ci, selon le Studio : <b>" + b.usd.toFixed(2)
-    + " $</b> sur un plafond de " + b.plafond_usd.toFixed(2) + " $. " + b.chansons + " chanson(s)."
+  return "Dépensé sur Modal ce mois-ci selon le Studio, tous usages confondus : <b>"
+    + b.usd.toFixed(2) + " $</b> sur les " + b.plafond_usd.toFixed(2)
+    + " $ ouverts aux demandes. " + b.chansons + " chanson(s) sur cette page."
     + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
     + '<span class="avert">Estimation locale d’après les prix relevés le ' + b.prix_releve_le
-    + ', pas une facture. Ce plafond est à part de celui de la vidéo. Le crédit de '
+    + ', pas une facture. Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
+    + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
+    + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '
+    + b.reserve_autonome_usd.toFixed(2) + ' $ sont réservés au Sandbox et ne peuvent pas '
+    + 'être entamés ici. '
+    + 'Le crédit de '
     + b.credit_offert_usd.toFixed(0) + ' $ par mois est celui que vous avez déclaré, non vérifié '
     + 'chez Modal, qui exige une carte bancaire et facture au-delà : '
     + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">réglez votre '
