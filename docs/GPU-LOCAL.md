@@ -152,12 +152,46 @@ sera refait pour le modèle retenu :
   demandé* : une image de fin ou une image de référence part chez Modal même si la carte
   est libre, parce que le modèle de la maison ne sait pas les faire (voir le tableau de la
   phase 2). Le refuser à la mémoire libre seule produirait un clip qui ignore la consigne.
-- **Occupée ⇒ on va chez Modal.** On n'attend pas la carte, on n'arrête jamais le travail
-  qui la tient : elle est partagée avec le jumeau plasma et, certains jours, un serveur
-  LLM qui y tenait 15,5 Go le 04/09.
+- ~~**Occupée ⇒ on va chez Modal.** On n'attend pas la carte~~ — **corrigé par l'utilisateur
+  le 19/09 au soir : « il faut que le client ait le choix du gpu local et du bypass si
+  occupée ».** Ce n'est pas à nous de décider pour lui ; voir la section suivante. Ce qui
+  ne change pas : **on n'arrête jamais le travail qui tient la carte**, elle est partagée
+  avec le jumeau plasma et, certains jours, un serveur LLM qui y tenait 15,5 Go le 04/09.
 - Un manque de mémoire en cours de route est un **repli**, pas une panne du Studio.
 - Sur la page, deux mots suffisent : « fait à la maison » ou « loué chez Modal », et ce
   que le travail aurait coûté.
+
+### Le choix appartient au client — décidé le 19/09/2026
+
+**Ce qui a provoqué la décision, et ce n'est pas une préférence.** Le soir du 19/09, le
+premier clip local était prêt à partir et **n'a pas pu** : un calcul du jumeau plasma tenait
+la carte. Il a fallu attendre **de 18:20:54 à 18:35:52, quinze minutes**, pour une fabrication
+qui a ensuite duré quelques minutes. **L'attente était plus longue que le travail.** Et la
+règle que j'avais écrite — « occupée ⇒ on va chez Modal » — aurait dépensé de l'argent sans
+demander, là où quinze minutes de patience ne coûtaient rien.
+
+**Aucune règle écrite d'avance ne sait si le client est pressé.** Donc trois réglages, et
+il en choisit un :
+
+| Réglage | Ce qui se passe |
+|---|---|
+| **À la maison si la carte est libre** *(par défaut quand une carte existe)* | occupée ⇒ on **demande**, on ne décide pas |
+| **Toujours chez Modal** | le contournement permanent : la carte partagée n'entre jamais en jeu |
+| **Toujours à la maison** | jamais un centime, on attend le temps qu'il faut |
+
+**Et quand la carte est occupée, la page montre trois choses et attend :**
+
+- **ce qui bloque, en clair et avec le nombre** : « un autre calcul tient la carte, il reste
+  8,9 Go libres sur 24,5 » — jamais « indisponible » tout seul ;
+- **« J'attends »** : la demande se met en file, le client voit où il en est et **peut
+  changer d'avis à tout moment** ;
+- **« Louer chez Modal »** : avec **le prix avant**, pas après — « environ 0,12 $, il vous
+  reste 28,72 $ ce mois-ci ».
+
+**Le coût honnête de ce choix** : « j'attends » demande au Studio de garder une demande en
+attente entre deux rechargements de page, ce qui n'existe pas aujourd'hui. **Ce que ça
+représente en travail n'est pas mesuré** et sera chiffré avant d'être promis. Le réglage
+« toujours chez Modal », lui, ne demande rien de neuf : c'est le comportement actuel.
 
 ## Ce qui est refusé d'avance
 
