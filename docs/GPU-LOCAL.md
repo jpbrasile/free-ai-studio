@@ -343,6 +343,37 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   page → fichier : les quatre sont mesurés. **Ce qui reste non vérifié**, et qui n'est pas
   la même chose : le chemin **« les poids manquent »** sur une machine qui ne les a pas
   (tenu par un test, jamais vu en vrai), le script de téléchargement `telecharger-modele-
-  video.ps1` **jamais exécuté** — les 34 Go étaient déjà là —, et la boîte « la carte est
-  prise » **vue dans un navigateur** : son code est jugé par les tests, son rendu par
-  personne.
+  video.ps1` **jamais exécuté** — les 34 Go étaient déjà là —, et ~~la boîte « la carte est
+  prise » **vue dans un navigateur**~~ (ligne suivante).
+- ~~La boîte « la carte est prise » vue à l'écran.~~ **Vue le 19/09 vers 21:10.** Elle
+  affiche « NVIDIA GeForce RTX 4090 : 3.2 Go libres sur 24.0, il en faut 12.5 », puis les
+  trois sorties « J'attends », « Louer chez Modal — environ 0,114 $ » et « Annuler ».
+  **Comment elle a été obtenue, mot pour mot** : les 3 275 Mo libres sont un relevé RÉEL,
+  mesuré à 20:29 pendant qu'un conteneur à moi tenait 20 Go de la carte ; ce relevé a été
+  **rejoué** dans `ou_calculer.decider()` — code non modifié — qui a rendu le `on-demande`
+  et sa phrase ; la page a dessiné cette réponse par sa propre fonction. **Ce qui n'a donc
+  pas été refait au moment du rendu** : l'occupation de la carte, car trois `julia.exe`
+  étaient présents et la règle du dépôt interdit alors de lancer quoi que ce soit dessus.
+  Le trajet « carte vraiment prise → 409 → boîte » reste mesuré par bouts, pas d'un tenant.
+
+## Le modèle de la maison ne se voyait nulle part sur la page (19/09, 21:0x)
+
+Relevé du propriétaire : **« pas de Wan 2.2 sur le lien /video »**. Exact, et ce n'était pas
+un oubli d'affichage : le menu « Qualité » ne propose que la Wan 2.1 (1,3 B et 14 B), parce
+que le modèle de la maison **ne se choisit pas** — il se déduit du réglage « Carte de cet
+ordinateur ». Mais sur le réglage PAR DÉFAUT, carte libre, c'est la Wan 2.2 qui fabrique le
+clip. La page annonçait donc, sur son chemin le plus fréquent, le nom d'un modèle qui ne
+tournait pas, et le pied de page écrivait « Modèle : Wan2.1 » au singulier.
+
+Réparé le soir même, sans rien inventer : la ligne de licence et le pied lisent le
+dictionnaire déjà servi par `/video/budget`, qui contient l'entrée `maison`.
+
+| | avant | après |
+|---|---|---|
+| menu | « Qualité » | « Qualité si on loue » |
+| licence | une ligne, Wan 2.1 | deux : « Si on loue : Wan 2.1… » et « À la maison : Wan-AI/Wan2.2-TI2V-5B-Diffusers — Apache 2.0, 1280 × 704 à 24 images/s, gratuit » |
+| pied | « Modèle : Wan2.1-VACE-1.3B (19 Go) » | « Modèles : …1.3B (19 Go) quand on loue, …TI2V-5B (34 Go) sur la carte de cet ordinateur » |
+
+La seconde ligne disparaît sous « toujours sur une machine louée » : elle ne décrit alors
+plus rien. Tenu par `test_la_page_nomme_le_modele_de_la_maison` (317 tests verts), relu
+dans Chrome le 19/09 à 21:1x.

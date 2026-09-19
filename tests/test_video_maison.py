@@ -245,3 +245,28 @@ def test_sans_bac_a_sable_gpu_l_execution_maison_refuse_clairement(sandbox):
     with pytest.raises(sandbox.BackendUnavailable) as erreur:
         sandbox.maison_execute("abc", "print(1)")
     assert "docker-compose.gpu.yml" in str(erreur.value)
+
+
+# --- 5. La page nomme le modele qui fabrique vraiment le clip -----------------
+
+def test_la_page_nomme_le_modele_de_la_maison(studio):
+    """Defaut vu par le proprietaire le 19/09 : << pas de Wan 2.2 sur /video >>.
+
+    La page ne nommait que la Wan 2.1, celle qu'on LOUE, alors que le reglage
+    par defaut fabrique le clip ici avec la Wan 2.2 -- 1280x704 a 24 images/s
+    au lieu de 832x480 a 16. Un nom affiche pour un modele qui ne tourne pas
+    est un faux vert d'interface : il se lit comme une mesure.
+
+    Ce test ne juge pas du rendu, il juge que le nom est LA : servi par
+    /video/budget, et utilise par la page."""
+    client = TestClient(studio.app, base_url=LOCAL)
+
+    budget = client.get("/video/budget", headers=CLE).json()
+    maison = budget["modeles"]["maison"]
+    assert maison["hf"] == "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
+    assert maison["images_par_seconde"] == 24
+    assert (maison["largeur"], maison["hauteur"]) == (1280, 704)
+
+    page = client.get("/video", headers=CLE).text
+    assert 'MODELES["maison"]' in page          # la ligne de licence la nomme
+    assert "Qualité si on loue" in page         # le menu ne promet plus l'autre

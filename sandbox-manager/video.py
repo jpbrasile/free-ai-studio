@@ -670,10 +670,22 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
   <label>Durée
     <select id="duree"><option value="3">3 secondes</option><option value="5" selected>5 secondes</option></select>
   </label>
-  <label>Qualité
+  <!-- « si on loue » ici aussi, et pour la même raison que le menu voisin :
+       quand le clip est fabriqué sur la carte de cet ordinateur, ce menu ne
+       gouverne rien. Le modèle de la maison n'est pas dans cette liste -- il
+       ne se choisit pas, il se déduit du réglage du dessous -- et la page l'a
+       donc tu jusqu'au 19/09/2026 au soir, alors qu'il est celui qui fabrique
+       le clip sur le réglage PAR DÉFAUT. Le propriétaire l'a vu : « pas de
+       Wan 2.2 sur le lien /video ». La ligne de licence en dessous nomme
+       maintenant les deux, et dit lequel part vraiment. -->
+  <label>Qualité si on loue
     <select id="qualite"><option value="rapide" selected>Rapide — Wan 2.1, 1,3 B</option><option value="soigne">Soignée — Wan 2.1, 14 B (plus chère)</option></select>
   </label>
-  <label>Où
+  <!-- Ce menu ne dit plus OÙ le clip se fabrique : depuis le 19/09/2026 c'est
+       la ligne « Carte de cet ordinateur », juste en dessous, qui le décide.
+       Celui-ci dit quelle machine on loue QUAND on loue. Garder le mot « Où »
+       aurait laissé deux réglages se disputer la même question. -->
+  <label>Si on loue
     <select id="ou"><option value="modal" selected>Modal — machine louée (carte bancaire exigée)</option><option value="kaggle">Kaggle — gratuit, plus lent</option></select>
   </label>
   <button id="lancer" class="primaire">Fabriquer</button>
@@ -720,13 +732,35 @@ const ENTETES = {"Authorization":"Bearer "+CLE, "Content-Type":"application/json
 const IMAGES = {};
 let minuteur = null;
 let MODELES = null;
+let CARTE_POSSIBLE = false;   // cet ordinateur a-t-il une carte branchée au Studio
 
 // La licence s'affiche LA OU l'on choisit, pas dans une note en bas de page.
+//
+// Et depuis le 19/09/2026 elle nomme les DEUX modèles quand il y a une carte
+// ici : celui qu'on loue, et celui de la maison. Le menu « Qualité si on loue »
+// ne nomme que la Wan 2.1 ; or sur le réglage par défaut, carte libre, c'est la
+// Wan 2.2 qui fabrique le clip -- 1280x704 à 24 images/s au lieu de 832x480 à
+// 16. La page affichait donc, sur son chemin le plus fréquent, le nom d'un
+// modèle qui ne tournait pas. Aucun chiffre n'est écrit ici à la main : tout
+// vient du dictionnaire servi par /video/budget.
 function majLicence(){
-  const m = MODELES && MODELES[document.getElementById("qualite").value];
-  document.getElementById("licence").textContent = m
-    ? ("Modèle " + m.hf + " : licence " + m.licence + ", " + m.territoire + ".")
-    : "";
+  const cible = document.getElementById("licence");
+  if(!MODELES){ cible.textContent = ""; return; }
+  const m = MODELES[document.getElementById("qualite").value];
+  const lignes = [];
+  if(m){
+    lignes.push("Si on loue : <b>" + m.hf + "</b> — licence " + m.licence + ", "
+                + m.territoire + ".");
+  }
+  const maison = MODELES["maison"];
+  const reglage = (document.getElementById("reglage") || {}).value;
+  if(CARTE_POSSIBLE && maison && reglage !== "toujours-modal"){
+    lignes.push("À la maison : <b>" + maison.hf + "</b> — licence " + maison.licence
+                + ", " + maison.largeur + "×" + maison.hauteur + " à "
+                + maison.images_par_seconde + " images/s, gratuit. "
+                + maison.note);
+  }
+  cible.innerHTML = lignes.join("<br>");
 }
 document.getElementById("qualite").addEventListener("change", majLicence);
 
@@ -802,8 +836,15 @@ function rafraichirBudget(){
         k.textContent = "Kaggle — coupé ici : Studio partagé";
       }
       const p = document.getElementById("pied");
-      p.innerHTML = "Modèle : <b>" + d.modeles.rapide.hf + "</b> (" + d.modeles.rapide.licence
-        + ", " + d.modeles.rapide.poids_go + " Go). Rien ne part chez un fournisseur d’IA : "
+      // Deux modèles, pas un : celui qu'on loue et celui d'ici. Le pied ne
+      // citait que le premier -- voir le commentaire de majLicence().
+      p.innerHTML = "Modèles : <b>" + d.modeles.rapide.hf + "</b> (" + d.modeles.rapide.licence
+        + ", " + d.modeles.rapide.poids_go + " Go) quand on loue"
+        + (CARTE_POSSIBLE && d.modeles.maison
+            ? (", <b>" + d.modeles.maison.hf + "</b> (" + d.modeles.maison.licence + ", "
+               + d.modeles.maison.poids_go + " Go) sur la carte de cet ordinateur")
+            : "")
+        + ". Rien ne part chez un fournisseur d’IA : "
         + "le calcul tourne sur une machine que vous louez à la minute, et le modèle est "
         + "téléchargé une fois puis gardé en cache."
         + '<br><a href="/">Retour au Sandbox</a> &nbsp; <a href="/cles">Brancher Modal ou Kaggle</a>';
@@ -918,8 +959,10 @@ function chargerReglage(){
     .then(r => r.json())
     .then(d => {
       if(!d.carte_possible) return d;   // pas de carte ici : rien à régler
+      CARTE_POSSIBLE = true;
       document.getElementById("ouCalculer").hidden = false;
       document.getElementById("reglage").value = d.reglage;
+      majLicence();   // la ligne de licence doit nommer le modèle de la maison
       const durees = Object.keys(d.durees_maison || {}).join(" et ");
       document.getElementById("reglageNote").textContent =
         "Fabriquer ici ne coûte rien. La carte est partagée : le Studio ne prend "
@@ -933,6 +976,7 @@ function chargerReglage(){
 const selReglage = document.getElementById("reglage");
 if(selReglage){
   selReglage.addEventListener("change", () => {
+    majLicence();   // « toujours sur une machine louée » retire la ligne maison
     fetch("/video/ou-calculer", {method:"POST", headers:ENTETES,
                                  body:JSON.stringify({reglage: selReglage.value})})
       .catch(() => {});
@@ -1039,7 +1083,10 @@ function envoyer(extra){
 
 document.getElementById("lancer").addEventListener("click", () => { ATTENTE_DEPUIS = null; envoyer(null); });
 
-rafraichirBudget();
-chargerReglage();
+// Dans cet ordre, et pas l'inverse : le pied de page et la ligne de licence
+// nomment le modèle de la maison, ce qu'ils ne peuvent faire que si l'on sait
+// déjà si cet ordinateur a une carte. chargerReglage() répond à cette
+// question ; rafraichirBudget() écrit les deux lignes.
+chargerReglage().then(rafraichirBudget);
 </script>
 </body></html>"""
