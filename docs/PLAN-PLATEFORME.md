@@ -1117,8 +1117,15 @@ est devenu. **Quatre décisions sont de l'utilisateur ; les treize autres, il m'
 de les trancher** (« tranche sur le reste »). Chaque ligne dit **qui** a décidé, pour
 qu'on puisse revenir sur les miennes sans revenir sur les siennes.
 
-**Aucune de ces décisions n'est un travail fait.** Ce sont des arbitrages ; le code qu'ils
-appellent n'est pas écrit à ce jour.
+~~**Aucune de ces décisions n'est un travail fait.** Ce sont des arbitrages ; le code qu'ils
+appellent n'est pas écrit à ce jour.~~
+
+> **Caduc dans la nuit du 19/09/2026, et c'est la seule ligne de ce §8 qui ait changé de
+> statut.** Les décisions **2** et **3** — les deux premières de l'ordre de marche, les
+> deux seules qui coûtaient déjà quelque chose — sont **écrites en code**, commit
+> `4b67ba6`. Chacune porte désormais un encadré « Fait » sous son titre. **Les quinze
+> autres restent des arbitrages sans code**, et la phrase barrée continue de valoir
+> pour elles.
 
 ### Les quatre décisions de l'utilisateur
 
@@ -1139,6 +1146,36 @@ c'est sa décision. Ce qu'elle entraîne, écrit d'avance :
 
 #### 2. Un seul budget Modal, partagé entre le mode autonome et les demandes humaines *(point 11)*
 
+> **FAIT le 19/09/2026 au soir, commit `4b67ba6`.** `sandbox-manager/budget_modal.py` :
+> un fichier `config/modal-budget.json`, un plafond `MODAL_BUDGET_USD_PAR_MOIS`
+> (30 $ par défaut), **quatre** usages, et `MODAL_PART_RESERVEE_AUTONOME` (50 %,
+> ajustable) que les demandes ne peuvent pas entamer. Le mois en cours est repris une
+> fois des trois anciens fichiers, qui restent en place.
+>
+> **Le quatrième dépensier est entré avec les trois autres, et c'est le plus important
+> de ce commit** : le contrôle est posé dans `modal_execute()` lui-même, par où passent
+> `run_auto()` et `run_modal()`. Son paramètre `usage` vaut **« autonome » par défaut**,
+> de sorte qu'un cinquième appelant écrit demain sera compté sans que personne y pense —
+> c'est l'inverse qui avait cours. **Ce que ce choix simplifie, et qui reste un défaut
+> écrit** : la même route sert à un agent et à une personne qui envoie du code depuis la
+> page, le service ne sait pas les distinguer, donc les deux peuvent entamer la réserve.
+>
+> **Deux défauts non prévus, trouvés en chemin et refermés par la même fusion.**
+> (a) `chanson.py` et `dialogue.py` ne portaient que **quatre** des huit cartes ; une
+> carte inconnue retombant sur la plus chère *connue*, une A100 était estimée au tarif
+> L40S et une **H100 à la moitié de son prix**. Le test qui gardait ce flanc ne comparait
+> que les cartes **communes** : par construction, il ne pouvait pas voir une troncature.
+> (b) Il y avait **trois classes `BudgetDepasse` distinctes** : un
+> `except video.BudgetDepasse` n'attrapait pas ce que `chanson.py` levait.
+>
+> **Conséquence à connaître** : le plafond ouvert aux demandes vaut **15 $** par défaut,
+> là où la vidéo seule en avait 20. `MODAL_PART_RESERVEE_AUTONOME=0` rend l'ancien
+> comportement, moins la cloison.
+>
+> **Non fait** : la part en **appels par jour** pour les fournisseurs qui ne publient
+> aucune limite — voir le dernier paragraphe de cette décision. Elle ne concerne pas
+> Modal, qui facture en dollars.
+
 Aujourd'hui **trois** compteurs — 5 $, 20 $, 5 $ — dont la somme **égale exactement** le
 crédit déclaré de 30 $ (`docker-compose.yml:95-97`, `.env.example:245`), et **aucun ne voit
 les deux autres**. Un compteur unique **referme le défaut par construction** : on ne peut
@@ -1152,6 +1189,29 @@ l'utilisateur**, jamais en pourcentage d'un dénominateur inconnu — un pourcen
 un nombre fabriqué.
 
 #### 3. Refus au démarrage si les clés sont exposées *(point 17)*
+
+> **FAIT le 19/09/2026 au soir, commit `4b67ba6`.** `garde_exposition.py`, en **deux
+> exemplaires octet pour octet** — un par contexte de construction — dont l'identité est
+> gardée par un test, sur l'idiome que le dépôt avait déjà. Le contexte ne pouvait pas
+> être la racine : elle contient `.env` et `config/`, c'est-à-dire les secrets que ce
+> module protège.
+>
+> **Les deux magasins, pas un.** Le §2.1 ne nommait que `config/keys.json` ;
+> `config/sandbox-keys.json` écrit les jetons Modal et Kaggle en clair de la même façon.
+> Les deux services refusent de charger, **à l'import**, pas au premier appel.
+>
+> **La troisième condition se constate.** `STUDIO_ADRESSE_PUBLIEE` est la **même chaîne**
+> qui ouvre le port dans `docker-compose.yml` et que le service relit : on ne peut pas
+> publier sur le réseau sans que la garde le voie. Lire sa propre adresse de liaison
+> n'aurait rien dit — dans le conteneur, uvicorn écoute toujours `0.0.0.0`.
+>
+> **Aucun interrupteur**, et un test le vérifie sur la source pour que personne n'ajoute
+> « une petite option » plus tard sans le décider. **Aucun drapeau de chiffrement** non
+> plus : un drapeau qui annoncerait un chiffrement qui n'existe pas serait faux.
+>
+> **Conséquence assumée** : un Studio déclaré hébergé **ne démarre plus du tout**. La
+> première branche de `contexte_partage()` n'est plus atteignable à l'import ; elle reste
+> écrite et testée pour le jour où les clés seront chiffrées et le refus rouvert.
 
 Retenu tel que proposé au §2.1, avec son coût réel : **deux changements, pas un**, puisque
 `free-tier-manager` **ne lit même pas** `STUDIO_HEBERGE` aujourd'hui. Plus la troisième
@@ -1233,8 +1293,12 @@ pour les écarter vaut mieux que de les taire ; les taire les a fait passer pour
 Le gel étant levé, rien ne bloque plus rien. L'ordre ci-dessous n'est donc plus une
 procédure, c'est un classement par **coût du retard** :
 
-1. **Le budget Modal unique** — seul défaut connu qui coûte de l'argent réel.
-2. **Le refus au démarrage** — trois conditions, et il tient sans chiffrement.
+1. ~~**Le budget Modal unique** — seul défaut connu qui coûte de l'argent réel.~~
+   **FAIT le 19/09/2026 au soir, `4b67ba6`** — et il y avait un **quatrième**
+   dépensier, pas trois : voir la décision 2 ci-dessus.
+2. ~~**Le refus au démarrage** — trois conditions, et il tient sans chiffrement.~~
+   **FAIT le 19/09/2026 au soir, `4b67ba6`** — et **deux** magasins de clés en clair,
+   pas un : voir la décision 3 ci-dessus.
 3. **Les deux dates du 31/10** — elles ne coûtent rien à poser et tout à oublier.
 4. **`modal/profiles.json` supprimé, `AGENTS.md:111` retirée** — une vérité fausse de
    moins, avant que le registre n'en hérite.
