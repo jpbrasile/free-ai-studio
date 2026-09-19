@@ -15,6 +15,28 @@ Le Studio de ce PC ne sert pas à l'essai. Il n'écoute que `127.0.0.1`, et l'es
 d'abord sur l'installation. Que l'autre ordinateur soit sur le même Wi-Fi n'y change rien :
 il lui faut seulement Internet.
 
+## La date : 31 octobre 2026
+
+<!-- echeance: essai-machine-neuve | butoir: 2026-10-31 | etat: en-attente -->
+
+Décision de l'utilisateur du 19/09/2026 (`docs/PLAN-PLATEFORME.md` §8, décision 9). La
+grille de la section 2 est vide : le Studio n'a **aucun** nombre sur la seule question qui
+compte — un débutant sous Windows y arrive-t-il seul. Une mesure repoussée sans date ne se
+repousse pas, elle s'oublie ; celle-ci a donc un jour de péremption.
+
+La ligne de commentaire ci-dessus est relue par `scripts/verifier-echeances.py`, étape
+« Échéances » de la CI. Trois écritures possibles :
+
+- l'essai est joué → `etat: tenue | preuve: <date, n/6, version testée>` ;
+- on renonce à mesurer → `etat: abandonnee | preuve: <date et qui décide>`, **et** le texte
+  de ce document écrit les mots **mesure abandonnée** ;
+- rien n'est fait et on est avant le butoir → `etat: en-attente`.
+
+Passé le 31/10/2026, cette dernière écriture fait **échouer la CI**. « En attente » cesse
+d'être une réponse : ou l'essai est joué, ou la mesure est déclarée abandonnée — écrit,
+daté, et par quelqu'un. Reporter la date est possible, mais demande de la changer **ici et
+dans le script** : un report redevient une décision qu'on voit passer.
+
 ## Ce qu'il faut
 
 - Windows 10 22H2 ou Windows 11 23H2 au moins, 64 bits : c'est l'exigence de Docker Desktop,
