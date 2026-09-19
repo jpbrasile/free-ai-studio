@@ -1005,6 +1005,11 @@ Ce que le §6 porte, et qui se décide maintenant :
 
 ## §7 — Les décisions ouvertes
 
+> **État du matin du 19/09. Les dix-sept points ont tous été tranchés le soir même : voir
+> le §8.** Ce tableau reste écrit tel quel — on n'efface rien, et les options écartées
+> expliquent les choix retenus.
+
+
 | # | Décision | Section | Options |
 |---|---|---|---|
 | 1 | **La thèse d'autonomie** : reprise, enterrée ou suspendue ? | §3 | reprise (les 13 exceptions deviennent des dettes) · enterrée, datée · suspendue jusqu'à la relecture des 13 |
@@ -1041,6 +1046,99 @@ objet. *Ce rangement est proposé, pas acté : il attend une ligne de l'utilisat
 
 ---
 
+## §8 — Les décisions prises, 19/09/2026
+
+**Le §7 ci-dessus reste écrit tel quel** — on n'efface rien. Ce §8 dit ce que chaque point
+est devenu. **Quatre décisions sont de l'utilisateur ; les treize autres, il m'a demandé
+de les trancher** (« tranche sur le reste »). Chaque ligne dit **qui** a décidé, pour
+qu'on puisse revenir sur les miennes sans revenir sur les siennes.
+
+**Aucune de ces décisions n'est un travail fait.** Ce sont des arbitrages ; le code qu'ils
+appellent n'est pas écrit à ce jour.
+
+### Les quatre décisions de l'utilisateur
+
+#### 1. Le gel est levé : les fonctions nouvelles sont permises à nouveau *(point 2)*
+
+Ce n'est pas l'amendement que je recommandais — je proposais « aucune fonction **visible**
+nouvelle, les corrections restent attendues ». L'utilisateur a tranché plus large, et
+c'est sa décision. Ce qu'elle entraîne, écrit d'avance :
+
+- **La quatorzième exception n'a plus d'objet.** Le registre, le refus au démarrage et le
+  budget commun s'écrivent directement, sans porte à franchir.
+- **Le gel était la seule pression qui maintenait l'essai machine neuve en vie.** Il a été
+  contourné treize fois — mais chaque contournement devait **s'écrire**, et cette écriture
+  rappelait la dette. Sans lui, **la date butoir du §6 devient le seul levier restant**,
+  d'où le caractère exécutoire donné au point 9 ci-dessous.
+- **Le compteur de fonctions nouvelles depuis le 13/09 continue de tourner.** Il ne refuse
+  plus rien ; il mesure l'écart entre le produit essayé un jour et le produit réel.
+
+#### 2. Un seul budget Modal, partagé entre le mode autonome et les demandes humaines *(point 11)*
+
+Aujourd'hui **trois** compteurs — 5 $, 20 $, 5 $ — dont la somme **égale exactement** le
+crédit déclaré de 30 $ (`docker-compose.yml:95-97`, `.env.example:245`), et **aucun ne voit
+les deux autres**. Un compteur unique **referme le défaut par construction** : on ne peut
+plus dépasser en additionnant trois plafonds qui s'ignorent.
+
+Dedans, **une part réservée à la validation automatique** — la décision du 19/09 : 50 %,
+ajustable. La forme existe déjà et se reprend telle quelle : la réserve protégée du Boost
+**refuse avant de dépenser**, pas après. Et le rappel qui vaut pour Gemini : là où le
+fournisseur **ne publie aucune limite**, la part se dit en **appels par jour fixés par
+l'utilisateur**, jamais en pourcentage d'un dénominateur inconnu — un pourcentage y serait
+un nombre fabriqué.
+
+#### 3. Refus au démarrage si les clés sont exposées *(point 17)*
+
+Retenu tel que proposé au §2.1, avec son coût réel : **deux changements, pas un**, puisque
+`free-tier-manager` **ne lit même pas** `STUDIO_HEBERGE` aujourd'hui. Plus la troisième
+condition, celle qui **se constate** au lieu de se déclarer : refuser aussi lorsque le
+service n'est pas lié à `127.0.0.1`. **Le chiffrement au repos n'est pas un préalable** et
+reste au rang où le §2.1 le range.
+
+#### 4. MIT pour le dépôt client ; la part critique sur le dépôt privé *(point 4)*
+
+Confirmé et **déjà exécuté** : `jpbrasile/free-ai-studio-jugement` existe depuis le matin
+du 19/09, **privé, sans licence** — tous droits réservés. Le dépôt public reste **MIT**.
+La ligne de partage est celle du §5 étape 4 : **ce qui tourne** est public, **ce qui juge**
+est privé, **ce qui mesure** est sauvegardé hors git.
+
+Conséquence à ne pas perdre : **ce qui protège n'est ni le code ni les évaluations, c'est
+que la copie est sans valeur sans les mesures.** Un clone parti aujourd'hui a zéro ligne.
+
+### Les treize que j'ai tranchées
+
+| # | Point | Ce que je tranche | Pourquoi |
+|---|---|---|---|
+| 1 | **La thèse d'autonomie** | **Suspendue** — et un chiffre d'ici là : reprendre les treize exceptions et compter, cas par cas, ce qu'un agent aurait pu mener seul | Ni la reprendre ni l'enterrer sans mesure. Le comptage est rétrospectif, gratuit, faisable en une séance — et ce serait **le premier chiffre d'autonomie du projet** |
+| 3 | **Piper (GPL) dans un dépôt MIT** | **Vérifier d'abord la licence réelle du paquet installé** ; si GPL confirmé, **isoler Piper en processus séparé** | La contradiction repose sur **une seule source non vérifiée** (`PLAN.md:147`) : on ne réorganise pas un dépôt sur une croyance. Si elle tient, l'isolement est le remède standard et le moins cher. Piper est le cas grave parce qu'il est **importé dans le processus** (`app.py:1470`) d'un artefact distribué, là où YuE2 tourne à distance |
+| 5 | **Les modèles CC BY-NC déjà en service** | **Les garder**, et porter la restriction **au point de choix**, pas en note de bas de page | C'est déjà ce que le dépôt pratique sans l'écrire (`dialogue.py:130-141`, montré en `:732-735`). La règle juste distingue **ce que le Studio fait tourner à la demande** de **ce qu'il distribue**. Deux obligations viennent avec : `commercial_ok: false` dans le registre, et **épingler la révision de la LoRA**, aujourd'hui `None` (`chanson.py:126-133`) |
+| 6 | **La clé de l'agent validateur** | **Déjà fixée** par la décision 4 de l'utilisateur : **pré-validation locale obligatoire** chez le contributeur, **décision finale** chez l'administrateur | On ne peut pas avoir à la fois « le client valide chez lui » et « la barre est secrète ». Le contributeur sait s'il a une chance ; il ne sait pas où est la barre |
+| 7 | **La sortie réseau du bac à sable** | **Jamais de sortie réseau.** La récupération se fait **avant**, par une étape séparée qui télécharge, empreinte et dépose l'artefact ; le bac à sable reste `internal: true` | C'est la propriété la plus dure du dépôt, et le plan d'origine en demandait **moins**. Ouvrir la sortie pour la commodité d'un agent échangerait la seule garantie réelle contre du confort |
+| 8 | **`modal/profiles.json`** | **Supprimé**, et la ligne `AGENTS.md:111` retirée avec lui | Lu par **aucun** code, déjà faux sur trois fonctions, et `AGENTS.md` y envoie les agents comme « la version lisible par machine ». **Le laisser est pire que les deux autres options** : une vérité concurrente que personne ne maintient. Le registre prendra la place |
+| 9 | **La date de l'essai machine neuve** | **Butoir au 31/10/2026.** Passé ce jour sans verdicts, le document écrit **« mesure abandonnée »**, pas « en attente » | L'utilisateur peut **déplacer** cette date ; il ne peut pas la laisser vide. **Le gel étant levé, c'est le seul levier qui reste.** Une échéance qu'on peut manquer et qui le dit vaut mieux qu'une « obligation permanente », qui est une épitaphe |
+| 10 | **La branche `audit-20260911`** | **Fusionner dans `main`** | 0 de retard, 44 d'avance, `main` est un **ancêtre** : avance directe, aucun conflit possible. Et `main` est ce que le monde voit d'un dépôt public — il est aujourd'hui **trompeur** |
+| 12 | **`FREE_ONLY=false` est-il un état admis ?** | **Oui — mais jamais par défaut, jamais silencieux** : choix explicite, plafonné, qui **expire**. La forme du Boost | Interdire un état que le code sait produire, c'est se mentir. L'encadrer le rend visible |
+| 13 | **Le contrôle de fraîcheur des descriptions** | **Oui**, et il devient **une dixième étape nommée de la CI** | Position de l'utilisateur du 19/09 : une description périmée est un risque inacceptable pour un fonctionnement automatique. Les cinq pièces sont au §5 étape 1 — zone engendrée, provenance, **`PÉRIMÉ`** plutôt qu'un nombre vieilli, fonction d'empreinte **importée** et jamais réécrite, `--check` qui sort en 1 |
+| 14 | **Deux dépôts** | **Fait** le matin du 19/09 | — |
+| 15 | **Les sauvegardes** | **Même butoir : premier essai de restauration avant le 31/10/2026** | Une sauvegarde compte le jour où elle a été **remise en place**. Les trois questions non vérifiées — troisième copie, sauvegarde du VPS lui-même, localisation européenne — se répondent en la jouant |
+| 16 | **Où vivent les coordonnées du VPS** | **Les deux** : `.env.example` dans le dépôt privé pour lire, **secrets de CI** pour exécuter | L'un documente, l'autre exécute ; **aucun des deux ne porte de valeur en clair** |
+
+### L'ordre dans lequel cela se fait
+
+Le gel étant levé, rien ne bloque plus rien. L'ordre ci-dessous n'est donc plus une
+procédure, c'est un classement par **coût du retard** :
+
+1. **Le budget Modal unique** — seul défaut connu qui coûte de l'argent réel.
+2. **Le refus au démarrage** — trois conditions, et il tient sans chiffrement.
+3. **Les deux dates du 31/10** — elles ne coûtent rien à poser et tout à oublier.
+4. **`modal/profiles.json` supprimé, `AGENTS.md:111` retirée** — une vérité fausse de
+   moins, avant que le registre n'en hérite.
+5. **La fusion dans `main`** — pour que le dépôt public cesse de mentir sur lui-même.
+6. **Le registre, puis le contrôle de fraîcheur en CI**, puis les évaluations.
+7. **La vérification de la licence de Piper**, avant toute réorganisation.
+
+---
+
 ## Ordre de marche recommandé
 
 **La mesure est première pour *décider*, le registre est premier pour *coder*.** Deux
@@ -1048,10 +1146,13 @@ chemins distincts qui avancent en parallèle, avec trois garde-fous :
 
 1. **Le §6 se date cette semaine** — une date d'essai, ou l'aveu écrit de son impossibilité
    avec son échéance.
-2. **Le registre entre par une quatorzième exception datée**, levée par l'utilisateur,
-   écrite **avant** le travail, avec sa section « ce qu'elle ne couvre pas ».
-3. **Le gel redevient absolu à sa sortie** : plus rien de code-neuf tant que la grille des
-   six tâches n'a pas ses verdicts.
+2. ~~**Le registre entre par une quatorzième exception datée**, levée par l'utilisateur,
+   écrite **avant** le travail, avec sa section « ce qu'elle ne couvre pas ».~~
+   **Caduc depuis le 19/09** : le gel est levé (§8, décision 1). Le registre s'écrit
+   directement.
+3. ~~**Le gel redevient absolu à sa sortie** : plus rien de code-neuf tant que la grille des
+   six tâches n'a pas ses verdicts.~~ **Caduc, même motif.** Le seul levier restant sur le
+   §6 est la date butoir du 31/10/2026 (§8, point 9).
 
 **Ce qui ferait changer cet ordre, écrit d'avance pour que le changement soit visible :**
 
@@ -1059,8 +1160,10 @@ chemins distincts qui avancent en parallèle, avec trois garde-fous :
   cette date et cette impossibilité **s'écrivent — elles ne se taisent pas** ;
 - si la fusion des six copies révèle une contradiction **matérielle** de licence, le
   registre devient urgent **pour le risque**, pas pour l'hygiène ;
-- si une quatorzième demande touche la vidéo, la chanson ou le dialogue, la priorité devient
-  le trou des budgets Modal (§7, point 11) : c'est le seul défaut qui coûte de l'argent.
+- ~~si une quatorzième demande touche la vidéo, la chanson ou le dialogue, la priorité devient
+  le trou des budgets Modal (§7, point 11) : c'est le seul défaut qui coûte de l'argent.~~
+  **Tranché le 19/09** : un seul budget partagé (§8, décision 2). Le trou se referme par
+  construction, et ce correctif passe en tête de l'ordre du §8.
 
 ---
 
