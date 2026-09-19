@@ -354,7 +354,29 @@ if ($creees -gt 0) {
 # --- 7. Construction et demarrage ----------------------------------------------
 Titre "Demarrage des services"
 Note "Premiere fois : plusieurs minutes de telechargement. C'est normal."
-$up = Executer "docker" @("compose", "up", "-d", "--build") "compose-up"
+# La carte de la maison, si elle existe. La surcouche docker-compose.gpu.yml
+# n'est ajoutee QUE si une carte repond : une reservation `driver: nvidia` sur
+# une machine sans carte fait ECHOUER `docker compose up`, et le debutant sans
+# carte -- le cas le plus courant -- ne doit jamais rencontrer ce message.
+# Mesure du 19/09/2026 sur cette machine : le passage de la carte par WSL2
+# marche deja, sans image CUDA (`docker run --gpus all python:3.12-slim
+# nvidia-smi` rend la 4090). Ce que la surcouche donne, c'est la MESURE de la
+# memoire libre au lancement ; faire tourner un modele dessus est la phase 2,
+# decrite dans docs/GPU-LOCAL.md.
+$argsCompose = @("compose")
+$carte = $null
+if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+    try {
+        $releve = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null
+        if ($LASTEXITCODE -eq 0 -and $releve) { $carte = ($releve | Select-Object -First 1).Trim() }
+    } catch { $carte = $null }
+}
+if ($carte) {
+    $argsCompose += @("-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml")
+    Bon "Carte graphique vue : $carte"
+}
+$argsCompose += @("up", "-d", "--build")
+$up = Executer "docker" $argsCompose "compose-up"
 if ($up.Code -ne 0) {
     # Les 25 dernieres lignes defilent dans une fenetre noire qu'on ne sait pas
     # faire remonter et encore moins recopier. Le texte entier existe deja sur le
