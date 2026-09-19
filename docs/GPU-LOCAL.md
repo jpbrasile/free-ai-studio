@@ -54,8 +54,81 @@ répond seulement à « peut-on, là, tout de suite ». Sans elle, la phase 2 d�
 > utilise réellement — image de **fin** (`mask` + `video=`, `video.py:308`) et
 > `reference_images` pour la cohérence d'un personnage (`:322`) —, car les perdre serait
 > une régression du produit, pas une mise à jour ; (3) sa licence et sa restriction de
-> territoire. Tant que ces trois réponses ne sont pas écrites ici, la phase 2 n'a pas de
-> modèle.
+> territoire. ~~Tant que ces trois réponses ne sont pas écrites ici, la phase 2 n'a pas de
+> modèle.~~ *Les trois réponses sont mesurées ci-dessous, le 19/09/2026 au soir.*
+
+### Les trois réponses, mesurées
+
+**Question 3 d'abord, parce qu'elle ne bloque rien : Apache 2.0, aucune restriction de
+pays**, pour la TI2V-5B comme pour la seule VACE 2.2 qui existe. Rien à surveiller de ce
+côté.
+
+**Question 1 — une seule variante de la 2.2 tient sur 24 Go.** Tailles relevées par
+l'API de Hugging Face le 19/09, pas recopiées d'une page :
+
+| Modèle | Sur disque | Tient sur la 4090 ? | Garde les 3 commandes ? |
+|---|---|---|---|
+| `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | **34,20 Go** | **oui** — la fiche dit « at least 24GB VRAM (e.g, RTX 4090 GPU) » | **non** |
+| `Wan-AI/Wan2.2-T2V-A14B` et `I2V-A14B` | — | non, deux experts de 14 milliards | non |
+| `alibaba-pai/Wan2.2-VACE-Fun-A14B` | **81,24 Go** | **non** | oui |
+| `Wan-AI/Wan2.1-VACE-1.3B-diffusers` *(ce qui tourne aujourd'hui)* | 19 Go | oui | oui |
+
+**Question 2 — et c'est elle qui décide : la Wan 2.2 n'a pas de VACE.**
+
+- La liste officielle de l'organisation Wan-AI ne contient **aucun** `Wan2.2-VACE` : il y a
+  T2V-A14B, I2V-A14B, TI2V-5B, S2V-14B, Animate-14B, rien d'autre.
+- La documentation de `diffusers` dit la même chose de son côté : les seuls points de
+  contrôle que `WanVACEPipeline` annonce sont `Wan-AI/Wan2.1-VACE-1.3B-diffusers` et
+  `Wan-AI/Wan2.1-VACE-14B-diffusers`.
+- Le seul VACE 2.2 qui existe vient d'une **autre équipe** (PAI-Fun, pas l'équipe Wan) :
+  81,24 Go, faits de **deux experts de 34,68 Go chacun**. Avec le déchargement vers la
+  mémoire centrale, un seul expert est sur la carte à la fois — **34,68 Go dans 24 Go, ça
+  ne rentre pas.** Il faudrait le comprimer en float8 (≈ 17 Go) ou le charger couche par
+  couche, beaucoup plus lent. Sa propre fiche ne donne d'ailleurs aucun exemple `diffusers`,
+  seulement ComfyUI et ses scripts maison.
+
+**Le piège, écrit noir sur blanc parce qu'il ne fait aucun bruit.** La TI2V-5B **accepte**
+l'argument `last_image` et **ne s'en sert pas**. Sa configuration porte
+`"expand_timesteps": true`, et dans `pipeline_wan_i2v.py` cette branche-là ne garde que la
+première image :
+
+```python
+if self.config.expand_timesteps:
+    video_condition = image          # last_image n'entre nulle part
+elif last_image is None:
+    ...
+```
+
+Commentaire des auteurs deux cents lignes plus bas : `# wan 2.2 5b i2v use firt_frame_mask
+to mask timesteps`. Aucune erreur levée, aucun message : **l'image de fin serait ignorée en
+silence.** C'est exactement le faux vert qu'on refuse — un bouton qui a l'air de marcher.
+
+### Ce que ces mesures décident
+
+« La 2.2 remplace la 2.1 » est vrai pour un clip ordinaire, et **faux pour la page `/video`
+telle qu'elle est** : ses trois commandes sont des fonctions de VACE, et la 2.2 n'a pas de
+VACE qui tienne sur la carte. On ne choisit donc pas un modèle, **on route selon ce que le
+client demande** :
+
+| Ce que le client demande | Où ça tourne | Modèle |
+|---|---|---|
+| un clip : texte seul, ou texte + image de **départ** | **à la maison, gratuit** | Wan 2.2 TI2V-5B, 720p à 24 im/s |
+| une image de **fin** | loué chez Modal | Wan 2.1 VACE, faute de 2.2 qui rentre |
+| une image de **référence** (garder un personnage) | loué chez Modal | idem |
+
+La page le dit en une ligne quand ça part chez Modal, et la 2.1 reste **avec son motif
+écrit** au lieu d'être défendue. À rouvrir le jour où l'équipe Wan publie un VACE 2.2.
+
+**Deux conséquences chiffrées, à ne pas recopier de la 2.1 :**
+
+- **Le clip ne se compte plus pareil.** La 2.1 tourne à 16 images par seconde (49 images
+  = 3 s, table `DUREES` de `video.py`). L'exemple officiel de la 5B est **121 images,
+  704 × 1280, 24 images par seconde**. La table est à refaire, pas à traduire.
+- **Le téléchargement passe de 19 Go à 34,20 Go** : transformeur 20,0 Go (en fp32 dans le
+  dépôt, chargé en bf16 ⇒ ≈ 10 Go sur la carte), lecteur de texte umT5 11,4 Go, VAE 2,8 Go.
+  Place libre sur `C:` mesurée à l'instant : **405 Go**, dont 84 Go récupérables dans Docker.
+  **Téléchargement lancé le 19/09 au soir** dans le cache du profil ; effaçable si le choix
+  change.
 
 Le coût ci-dessous est celui **mesuré pour la 2.1** ; il donne l'ordre de grandeur, et il
 sera refait pour le modèle retenu :
@@ -75,6 +148,10 @@ sera refait pour le modèle retenu :
 ## Phase 3 — router
 
 - `run_auto` et la vidéo demandent à `gpu_local.utilisable(besoin)` avant de louer.
+- **La mémoire libre n'est pas le seul critère.** La vidéo regarde d'abord *ce qui est
+  demandé* : une image de fin ou une image de référence part chez Modal même si la carte
+  est libre, parce que le modèle de la maison ne sait pas les faire (voir le tableau de la
+  phase 2). Le refuser à la mémoire libre seule produirait un clip qui ignore la consigne.
 - **Occupée ⇒ on va chez Modal.** On n'attend pas la carte, on n'arrête jamais le travail
   qui la tient : elle est partagée avec le jumeau plasma et, certains jours, un serveur
   LLM qui y tenait 15,5 Go le 04/09.
@@ -92,5 +169,12 @@ sera refait pour le modèle retenu :
 ## Non vérifié à ce jour
 
 - De combien la 4090 bat la L4 louée.
-- Le temps de premier chargement des 19 Go de poids depuis un disque local.
-- La place disque totale que la phase 2 demande, et ce qu'elle fait grossir sous WSL2.
+- ~~Le temps de premier chargement des 19 Go de poids depuis un disque local.~~ Le chiffre
+  à obtenir est celui des **34,20 Go** de la TI2V-5B, et il n'est pas mesuré.
+- ~~La place disque totale que la phase 2 demande~~ — 34,20 Go de poids, mesurés ; reste
+  non mesuré ce que l'image torch + CUDA fait grossir sous WSL2.
+- **Si la TI2V-5B tient vraiment dans 24 Go sur CETTE carte**, qui est partagée. La fiche
+  annonce 24 Go pour une carte entière ; la sonde de la phase 1 décidera sur la mémoire
+  libre à l'instant, et un manque en cours de route est un repli chez Modal, pas une panne.
+- La qualité comparée : personne n'a encore vu côte à côte un clip de la 1.3B 480p et un
+  de la 5B 720p sur le même texte.

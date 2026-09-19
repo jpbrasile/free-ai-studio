@@ -1315,7 +1315,14 @@ procédure, c'est un classement par **coût du retard** :
    et en faisait une autre. **Phase 1 FAITE le soir même, `fddb061`** : la carte est déjà
    passée au conteneur par WSL2 (mesuré, sans image CUDA), surcouche `docker-compose.gpu.yml`
    appliquée seulement si une carte répond, sonde qui mesure **au lancement**. Phases 2
-   (torch ~3 Go, poids Wan 19 Go) et 3 (le routage) à venir : `docs/GPU-LOCAL.md`.
+   (torch ~3 Go, ~~poids Wan 19 Go~~ **poids Wan 2.2 TI2V-5B, 34,20 Go mesurés**) et 3 (le
+   routage) à venir : `docs/GPU-LOCAL.md`. **Modèle tranché le 19/09 au soir**, après
+   l'arrêt de l'utilisateur (« 2.1 deprecated ») : la Wan 2.2 **n'a pas de VACE**, et les
+   trois commandes de la page `/video` sont des fonctions de VACE. Donc **on route selon ce
+   que le client demande** — clip ordinaire à la maison sur la 2.2 TI2V-5B, image de fin ou
+   de référence chez Modal sur la 2.1, avec le motif affiché. Le détail mesuré, dont le
+   piège du `last_image` **accepté puis ignoré en silence** par la 5B, est dans
+   `docs/GPU-LOCAL.md`.
 7. **Le registre, puis le contrôle de fraîcheur en CI**, puis les évaluations.
 8. **La vérification de la licence de Piper**, avant toute réorganisation.
 
