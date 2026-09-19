@@ -240,6 +240,38 @@ attente entre deux rechargements de page, ce qui n'existe pas aujourd'hui. **Ce 
 représente en travail n'est pas mesuré** et sera chiffré avant d'être promis. Le réglage
 « toujours chez Modal », lui, ne demande rien de neuf : c'est le comportement actuel.
 
+### Ce qui a été écrit le 19/09 au soir
+
+Le routage existe en code, **et il n'a encore jamais tourné dans la pile complète** — voir
+la dernière ligne de « Non vérifié » plus bas. Les pièces :
+
+| Pièce | Ce qu'elle fait |
+|---|---|
+| `sandbox-manager/ou_calculer.py` | tranche le factuel, **rend la question** dès qu'il reste un goût à arbitrer |
+| `sandbox-worker-gpu/Dockerfile` | le même worker, sur l'image `pytorch:2.6.0-cuda12.4` mesurée le 19/09 |
+| `docker-compose.gpu.yml` | le deuxième bac à sable, la carte, le cache des 34 Go |
+| `POST /video/creer` | **409 + la décision** quand la carte est prise : ni dépense ni attente décidée à la place du client |
+| `GET`/`POST /video/ou-calculer` | les trois réglages, gardés dans `/config/ou-calculer.json` |
+| la page `/video` | le réglage, la boîte « la carte est prise » avec ses nombres, et « fait à la maison, 0 $ » à l'arrivée |
+
+**L'attente vit dans la page, pas dans le service**, et c'est une décision, pas un oubli :
+une file côté serveur n'a pas été chiffrée (voir le paragraphe ci-dessus), alors que
+« la page redemande toutes les 30 secondes et le client peut arrêter d'un clic » ne coûte
+rien et se voit. Ce qui est perdu : fermer l'onglet arrête l'attente. C'est écrit sur la page.
+
+**La durée de 5 secondes est entrée dans la table le 19/09 à 19:23** : 121 images,
+**14 902 Mo de pic, 598 s de calcul**, `clip_4090_5s.mp4`. Elle apprend quelque chose qui
+interdit d'extrapoler la troisième : **66 % d'images en plus coûtent 45 % de temps en plus
+mais seulement 16 % de mémoire en plus**. Ni l'un ni l'autre n'est proportionnel, et pas
+dans le même sens. Une durée absente de la table est donc vraiment inconnue.
+
+**Un défaut trouvé en écrivant la phase 3, réparé dans le même tour.** Le script de la
+maison recevait l'**image de départ** et ne la posait nulle part : `WanPipeline` n'a pas
+d'argument `image` (c'est `WanImageToVideoPipeline` qui l'a). Le clip serait sorti **sans
+l'image demandée, sans un mot** — exactement la panne silencieuse que la phase 2 avait
+documentée pour l'image de fin. Les trois images jointes partent donc chez le loueur, et
+trois gardes le disent : le routage, `preparer(maison=True)`, et le script lui-même.
+
 ## Ce qui est refusé d'avance
 
 - **Réserver la carte au Studio.** Elle ne lui appartient pas.
@@ -261,3 +293,10 @@ représente en travail n'est pas mesuré** et sera chiffré avant d'être promis
   libre à l'instant, et un manque en cours de route est un repli chez Modal, pas une panne.
 - La qualité comparée : personne n'a encore vu côte à côte un clip de la 1.3B 480p et un
   de la 5B 720p sur le même texte.
+- **Le routage de la phase 3 n'a jamais tourné dans la pile Docker complète.** Il est tenu
+  par 32 tests (`tests/test_ou_calculer.py`, `tests/test_video_maison.py`) qui remplacent la
+  sonde et le lancement : ils jugent la décision, pas la fabrication. **Restent non
+  vérifiés** : que `sandbox-worker-gpu` se construise, qu'il voie la carte depuis
+  `docker compose`, que le compte non privilégié (uid 10001) puisse lire les 34 Go montés
+  depuis `C:\Users\…\.cache\huggingface`, et qu'un clip aille de la page au fichier par ce
+  chemin. Tant que ce n'est pas fait, la phase 3 est **écrite**, pas **livrée**.

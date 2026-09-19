@@ -374,6 +374,19 @@ if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
 if ($carte) {
     $argsCompose += @("-f", "docker-compose.yml", "-f", "docker-compose.gpu.yml")
     Bon "Carte graphique vue : $carte"
+
+    # Les 34 Go de poids du modele video. S'ils sont DEJA dans le cache Hugging
+    # Face du profil -- c'est le cas de quiconque a deja telecharge un modele a
+    # la main -- on monte ce dossier au lieu d'en remplir un deuxieme dans
+    # Docker. Mesure du 19/09 : ce telechargement a pris presque une heure et
+    # une reprise apres blocage ; le refaire pour rien serait de la peine pure.
+    # GPU_MODELES_DIR est passe par l'environnement de CE processus : le .env de
+    # l'utilisateur n'est jamais modifie.
+    $cacheHF = Join-Path $env:USERPROFILE ".cache\huggingface"
+    if (Test-Path (Join-Path $cacheHF "hub")) {
+        $env:GPU_MODELES_DIR = $cacheHF
+        Note "Modeles deja telecharges reutilises : $cacheHF"
+    }
 }
 $argsCompose += @("up", "-d", "--build")
 $up = Executer "docker" $argsCompose "compose-up"

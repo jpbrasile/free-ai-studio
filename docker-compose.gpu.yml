@@ -11,16 +11,18 @@
 # Le passage de la carte par WSL2 fonctionne donc DEJA, sans image CUDA et sans
 # rien installer : c'est le morceau repute penible, et il etait deja en place.
 #
-# Ce que cette surcouche donne, et ce qu'elle ne donne pas : elle rend la carte
-# VISIBLE au service qui decide (mesure de la memoire libre par nvidia-smi, que
-# le runtime injecte). Elle n'installe ni CUDA, ni torch, ni aucun modele --
-# c'est la phase 2 du chantier, decrite dans docs/GPU-LOCAL.md.
+# Ce que cette surcouche donne : la carte est VISIBLE au service qui decide
+# (mesure de la memoire libre par nvidia-smi, que le runtime injecte), ET un
+# deuxieme bac a sable qui sait s'en servir -- `sandbox-worker-gpu`, ajoute en
+# phase 3 le 19/09/2026. Tout le detail : docs/GPU-LOCAL.md.
 #
 # Usage : docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# `scripts/demarrer.ps1` le fait tout seul quand une carte repond.
 services:
   sandbox-manager:
     environment:
       GPU_LOCAL_ACTIF: "${GPU_LOCAL_ACTIF:-true}"
+      SANDBOX_WORKER_GPU_URL: http://sandbox-worker-gpu:8000
     deploy:
       resources:
         reservations:
@@ -28,3 +30,58 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # Le bac a sable de la maison. Meme code que celui sur processeur, meme
+  # volume /workspace (le gestionnaire y relit le clip), meme cloison reseau.
+  sandbox-worker-gpu:
+    build:
+      # La racine, pour copier sandbox-worker/app.py sans le dupliquer.
+      context: .
+      dockerfile: sandbox-worker-gpu/Dockerfile
+    container_name: free-ai-studio-sandbox-worker-gpu
+    restart: unless-stopped
+    environment:
+      SANDBOX_WORKER_KEY: ${SANDBOX_WORKER_KEY}
+      # Un clip de 3 s a pris 412 s de calcul le 19/09, plus 24 s de chargement.
+      # 2400 s couvre le premier lancement, telechargement du modele compris.
+      SANDBOX_TIMEOUT_SECONDS: ${VIDEO_TIMEOUT_SECONDS:-2400}
+      SANDBOX_MAX_CODE_BYTES: ${SANDBOX_MAX_CODE_BYTES:-500000}
+      SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-200000}
+      # Sans ces variables-la, le script ne trouve pas la carte -- le runtime
+      # NVIDIA les pose dans le conteneur, et le worker construit un
+      # environnement nu -- et il retelechargerait 34 Go a chaque clip.
+      SANDBOX_ENV_PASSTHROUGH: "LD_LIBRARY_PATH,NVIDIA_VISIBLE_DEVICES,NVIDIA_DRIVER_CAPABILITIES,CUDA_VISIBLE_DEVICES,HF_HOME,HF_HUB_DISABLE_XET"
+      HF_HOME: /cache/huggingface
+      # Mesure du 19/09 : la couche de transfert << Xet >> de huggingface_hub
+      # 1.9.2 s'est bloquee treize minutes sans ecrire un octet, a 14 067 Mo sur
+      # 34 200. Coupee, les memes fichiers sont descendus en quatre-vingts
+      # secondes. Ce n'est pas une precaution de style.
+      HF_HUB_DISABLE_XET: "1"
+    networks:
+      - sandbox-internal
+    volumes:
+      - sandbox-data:/workspace
+      # Les 34 Go de poids. Par defaut un volume Docker, qui se remplit au
+      # premier clip. Sur une machine qui a deja le modele dans le cache du
+      # profil, `scripts/demarrer.ps1` pose GPU_MODELES_DIR sur ce cache et rien
+      # n'est retelecharge.
+      - ${GPU_MODELES_DIR:-modeles-gpu}:/cache/huggingface
+    # PAS de `read_only` ici, contrairement au bac a sable sur processeur : le
+    # cache des modeles s'ecrit, et les bibliotheques CUDA posent leurs fichiers
+    # de compilation. Tout le reste du cloisonnement est garde, y compris le
+    # reseau interne et le compte non privilegie.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  modeles-gpu:

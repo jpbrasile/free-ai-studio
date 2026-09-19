@@ -58,6 +58,11 @@ DUREE_MAX_S = int(os.getenv("VIDEO_TIMEOUT_SECONDS", "2400"))
 
 VOLUME_MODELES = os.getenv("VIDEO_MODAL_VOLUME", "free-ai-studio-modeles")
 CACHE_MODAL = "/modeles/hf"
+# Ou le bac a sable de la maison garde les 34 Go de poids. Le worker construit
+# un environnement nu pour le script : sans ce chemin ecrit DANS la demande, le
+# modele se retelechargerait a chaque clip, dans un dossier de travail efface
+# ensuite. Le meme chemin est monte cote compose (docker-compose.gpu.yml).
+CACHE_MAISON = os.getenv("VIDEO_CACHE_MAISON", "/cache/huggingface")
 
 MODELES = {
     "rapide": {
@@ -91,7 +96,54 @@ MODELES = {
         "etapes": 30,
         "note": "Meilleure image, environ six fois le prix. Reserve aux plans qui comptent.",
     },
+    # Le modele de la MAISON. Il ne se choisit pas dans la liste des qualites :
+    # il est choisi par `ou_calculer.decider()` quand le clip peut etre fabrique
+    # sur la carte d'ici. Premier clip mesure le 19/09/2026 a 18:43 : 412 s de
+    # calcul, 12 841 Mo de pic, 0 $, contre 422 s et 0,117 $ pour le meme clip
+    # de 3 s loue chez Modal -- mais en 720p au lieu de 480p.
+    #
+    # Il n'a PAS de VACE, et c'est la contrainte qui gouverne tout le routage :
+    # la Wan 2.2 n'en publie aucun, et le seul qui existe (chez une autre
+    # equipe) pese 81,24 Go en deux experts de 34,68 Go, donc ne tient pas dans
+    # 24 Go. Une image de fin ou de reference ne peut donc pas etre fabriquee
+    # ici -- elle part chez Modal, et la page le dit.
+    "maison": {
+        "titre": "A la maison (gratuit)",
+        "hf": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+        "famille": "ti2v",
+        "parametres": "5 milliards",
+        "poids_go": 34,
+        "licence": "Apache 2.0",
+        "territoire": "aucune restriction de pays",
+        "gpu": "maison",
+        "largeur": 1280,
+        "hauteur": 704,
+        "flow_shift": None,
+        "etapes": 50,
+        "images_par_seconde": 24,
+        "note": "Fabrique sur la carte de cet ordinateur. Ne coute rien, "
+                "ne sait pas faire l'image de fin ni l'image de reference.",
+    },
 }
+
+# Le modele de la maison tourne a 24 images par seconde, pas 16, et n'accepte
+# lui aussi qu'un nombre d'images de la forme 4k+1. Cette table ne porte que les
+# durees dont le besoin memoire a ete MESURE sur la carte -- voir
+# `ou_calculer.BESOIN_MO_MESURE`. Une duree absente d'ici part chez Modal avec
+# son motif : on ne lance pas un travail sur un chiffre suppose.
+DUREES_MAISON = {
+    "3": {"images": 73, "secondes": 3},
+    "5": {"images": 121, "secondes": 5},
+}
+
+
+def images_maison(duree: str):
+    """Combien d'images pour cette duree sur le modele de la maison, ou None.
+
+    `None` n'est pas un echec : il veut dire << cette duree n'a pas encore ete
+    mesuree ici >>, et le routage part chez Modal en le disant."""
+    entree = DUREES_MAISON.get(str(duree))
+    return entree["images"] if entree else None
 
 # 16 images par seconde, et le modele n'accepte qu'un nombre d'images de la forme
 # 4k+1. D'ou ces valeurs qui ne sont pas rondes.
@@ -133,6 +185,25 @@ def budget_ecrire(secondes: float, usd: float, clips: int) -> None:
 
 def prix_seconde(gpu: str) -> float:
     return budget_modal.prix_seconde(gpu, int(os.getenv("VIDEO_MEMORY_MB", "16384")))
+
+
+# Temps de calcul MESURE sur une machine louee, par qualite et par duree. Sert
+# a chiffrer ce qu'une location couterait AVANT de la lancer : quand la carte
+# d'ici est prise, le client choisit entre attendre et payer, et il ne peut pas
+# choisir sans le prix. Rien n'est extrapole -- une combinaison absente rend
+# None, et la page affiche alors le plafond du pire cas, qui est honnete mais
+# large.
+SECONDES_MESUREES = {
+    ("rapide", "3"): 422,   # 09/09/2026, L4, 49 images en 832x480, 0,117 $
+}
+
+
+def prix_estime(qualite: str, duree: str):
+    """Ce que cette location couterait, en dollars, ou None si non mesure."""
+    secondes = SECONDES_MESUREES.get((str(qualite), str(duree)))
+    if secondes is None or qualite not in MODELES:
+        return None
+    return round(prix_seconde(MODELES[qualite]["gpu"]) * secondes, 4)
 
 
 def budget_verifier(gpu: str, duree_max_s: int) -> dict:
@@ -208,7 +279,7 @@ assurer([
 
 import PIL.Image
 import torch
-from diffusers import AutoencoderKLWan, WanVACEPipeline
+from diffusers import AutoencoderKLWan, WanPipeline, WanVACEPipeline
 from diffusers.schedulers.scheduling_unipc_multistep import UniPCMultistepScheduler
 from diffusers.utils import export_to_video
 
@@ -228,6 +299,12 @@ print("Precision : %s" % ("bfloat16" if supporte_bf16 else "float16"), flush=Tru
 
 L, H = int(D["largeur"]), int(D["hauteur"])
 IMAGES = int(D["images"])
+# Deux familles de modeles passent par ce script, et une seule sait faire les
+# images de fin et de reference :
+#   "vace" -> Wan 2.1 VACE, loue chez Modal ou Kaggle, 16 images/s
+#   "ti2v" -> Wan 2.2 TI2V-5B, la carte de la maison, 24 images/s, PAS de VACE
+FAMILLE = D.get("famille", "vace")
+FPS = int(D.get("images_par_seconde", 16))
 
 
 def charger(cle):
@@ -245,10 +322,16 @@ reference = charger("image_reference")
 print("Chargement du modele %s ..." % D["modele"], flush=True)
 t0 = time.time()
 vae = AutoencoderKLWan.from_pretrained(D["modele"], subfolder="vae", torch_dtype=torch.float32)
-pipe = WanVACEPipeline.from_pretrained(D["modele"], vae=vae, torch_dtype=dtype)
-pipe.scheduler = UniPCMultistepScheduler.from_config(
-    pipe.scheduler.config, flow_shift=float(D["flow_shift"])
-)
+if FAMILLE == "ti2v":
+    # Le modele de la maison. Sa configuration porte son propre ordonnanceur et
+    # son propre `expand_timesteps` : on ne lui impose PAS de flow_shift, qui
+    # est un reglage de la 2.1.
+    pipe = WanPipeline.from_pretrained(D["modele"], vae=vae, torch_dtype=dtype)
+else:
+    pipe = WanVACEPipeline.from_pretrained(D["modele"], vae=vae, torch_dtype=dtype)
+    pipe.scheduler = UniPCMultistepScheduler.from_config(
+        pipe.scheduler.config, flow_shift=float(D["flow_shift"])
+    )
 
 # MESURE DU 09/09 : tout mettre sur la carte a sature 22 Go et le clip est mort
 # en pleine compression d'images. Le coupable n'est pas le modele d'images (1,3
@@ -290,7 +373,22 @@ kwargs = dict(
 # Image de depart et/ou de fin : on fabrique une piste ou seules ces deux images
 # sont connues, le reste est gris et masque. C'est la facon dont VACE recoit une
 # contrainte de premiere et de derniere image.
-if depart is not None or fin is not None:
+if FAMILLE == "ti2v" and (depart is not None or fin is not None or reference is not None):
+    # Ce cas ne doit jamais arriver : `ou_calculer.decider()` envoie ces clips
+    # chez Modal, et `preparer(maison=True)` refuse deja. Le troisieme garde est
+    # ici parce que les deux premiers sont dans un autre fichier, et que la
+    # panne qu'on evite est SILENCIEUSE : `diffusers` accepte `last_image` sur
+    # ce modele et ne s'en sert pas (mesure du 19/09), et `WanPipeline` n'a
+    # meme pas d'argument `image` -- une image de depart posee ici partirait a
+    # la poubelle sans un mot. Mieux vaut un arret net qu'un clip qui a l'air
+    # bon et ignore la consigne.
+    print("ECHEC : le modele de la maison, tel qu'il est lance ici, ne pose ni "
+          "l'image de depart ni l'image de fin ni l'image de reference. "
+          "Ce clip devait partir chez Modal.",
+          file=sys.stderr)
+    sys.exit(4)
+
+if FAMILLE != "ti2v" and (depart is not None or fin is not None):
     gris = PIL.Image.new("RGB", (L, H), (128, 128, 128))
     noir = PIL.Image.new("L", (L, H), 0)
     blanc = PIL.Image.new("L", (L, H), 255)
@@ -313,7 +411,7 @@ erreurs = []
 # une liste d'images ou une liste par element du lot : on essaie les deux plutot
 # que d'epingler une version qui vieillira.
 essais = [None]
-if reference is not None:
+if reference is not None and FAMILLE != "ti2v":
     essais = [[reference], [[reference]]]
 
 for tentative in essais:
@@ -335,7 +433,7 @@ if resultat is None:
     sys.exit(3)
 
 chemin = os.path.join(SORTIE, "video.mp4")
-export_to_video(resultat, chemin, fps=16)
+export_to_video(resultat, chemin, fps=FPS)
 
 # Un MP4 range son sommaire (duree, taille, position des images) a la FIN du
 # fichier. Un navigateur doit alors telecharger tout le fichier avant d'afficher
@@ -362,10 +460,12 @@ resume = {
     "fichier": "video.mp4",
     "octets": taille,
     "images": IMAGES,
-    "secondes_video": round(IMAGES / 16.0, 1),
+    "images_par_seconde": FPS,
+    "secondes_video": round(IMAGES / float(FPS), 1),
     "largeur": L,
     "hauteur": H,
     "modele": D["modele"],
+    "famille": FAMILLE,
     "carte": nom_gpu,
     "precision": "bfloat16" if supporte_bf16 else "float16",
     "secondes_calcul": round(time.time() - DEBUT, 1),
@@ -389,15 +489,28 @@ def construire_script(demande: dict) -> str:
     return _SCRIPT.replace("__DEMANDE__", charge)
 
 
-def preparer(payload: dict, pour_modal: bool = True) -> dict:
-    """Traduit ce que la page a envoye en une demande complete et bornee."""
+def preparer(payload: dict, pour_modal: bool = True, maison: bool = False) -> dict:
+    """Traduit ce que la page a envoye en une demande complete et bornee.
+
+    `maison` n'est pas un choix du client : c'est le verdict de
+    `ou_calculer.decider()`. La qualite demandee ne survit pas a ce verdict --
+    le modele de la maison a sa propre definition et sa propre cadence -- et
+    c'est voulu : le client choisit OU, pas quel modele."""
     qualite = payload.get("qualite") or "rapide"
-    if qualite not in MODELES:
+    if qualite not in MODELES or qualite == "maison":
         qualite = "rapide"
+    if maison:
+        qualite = "maison"
     modele = MODELES[qualite]
+    table_durees = DUREES_MAISON if maison else DUREES
 
     duree = str(payload.get("duree") or "5")
-    if duree not in DUREES:
+    if duree not in table_durees:
+        if maison:
+            raise ValueError(
+                "La duree de %s s n'a pas encore ete mesuree sur la carte d'ici. "
+                "Ce clip ne peut pas etre fabrique a la maison." % duree
+            )
         duree = "5"
 
     description = str(payload.get("description") or "").strip()
@@ -408,14 +521,16 @@ def preparer(payload: dict, pour_modal: bool = True) -> dict:
 
     demande = {
         "modele": modele["hf"],
+        "famille": modele.get("famille", "vace"),
         "description": description,
         "negatif": NEGATIF,
         "largeur": modele["largeur"],
         "hauteur": modele["hauteur"],
         "flow_shift": modele["flow_shift"],
         "etapes": modele["etapes"],
-        "images": DUREES[duree]["images"],
-        "cache": CACHE_MODAL if pour_modal else "",
+        "images": table_durees[duree]["images"],
+        "images_par_seconde": modele.get("images_par_seconde", 16),
+        "cache": CACHE_MAISON if maison else (CACHE_MODAL if pour_modal else ""),
     }
     for cle_page, cle_demande in (
         ("image_depart", "image_depart"),
@@ -425,6 +540,23 @@ def preparer(payload: dict, pour_modal: bool = True) -> dict:
         brut = payload.get(cle_page)
         if brut:
             demande[cle_demande] = _nettoyer_image(brut, cle_page)
+
+    # Le modele de la maison n'a pas de VACE : il ne SAIT PAS poser une image de
+    # fin ni une image de reference. `diffusers` ne s'en plaindrait pas -- il
+    # accepte l'argument et l'ignore en silence (mesure du 19/09 sur la 5B, ou
+    # `last_image` est accepte puis jamais utilise). Un clip qui ignore la
+    # consigne sans rien dire est pire qu'un clip paye : on refuse ici, fort.
+    # L'image de DEPART est refusee pour une autre raison : le modele sait la
+    # poser, mais par `WanImageToVideoPipeline`, pas par `WanPipeline` que ce
+    # script emploie -- laquelle n'accepte meme pas l'argument. Non mesure ici,
+    # donc non offert : le silence serait le meme.
+    if maison:
+        ignorees = [n for n in ("image_depart", "image_fin", "image_reference") if demande.get(n)]
+        if ignorees:
+            raise ValueError(
+                "Le modele de la maison ne sait pas poser %s. Ce clip doit partir "
+                "chez Modal." % " ni ".join(n.replace("_", " de ") for n in ignorees)
+            )
 
     return {
         "qualite": qualite,
@@ -437,7 +569,9 @@ def preparer(payload: dict, pour_modal: bool = True) -> dict:
             "licence": modele["licence"],
             "carte": modele["gpu"],
             "definition": f"{modele['largeur']}x{modele['hauteur']}",
-            "secondes_video": DUREES[duree]["secondes"],
+            "secondes_video": table_durees[duree]["secondes"],
+            "images_par_seconde": demande["images_par_seconde"],
+            "maison": maison,
             "image_depart": bool(demande.get("image_depart")),
             "image_fin": bool(demande.get("image_fin")),
             "image_reference": bool(demande.get("image_reference")),
@@ -502,6 +636,11 @@ video{width:100%;border-radius:12px;margin-top:12px;background:#000}
 .avert{font-size:.86rem;opacity:.75}
 .jauge{height:9px;border-radius:999px;background:#e6e6e6;overflow:hidden;margin:6px 0 2px}
 .jauge span{display:block;height:100%;background:#5b8c5a}
+/* La boite qui s'ouvre quand la carte de la maison est prise. Jaune et non
+   rouge : rien n'est en panne, on attend une reponse. */
+.attente{padding:14px 16px;border-radius:14px;margin:16px 0;border:1px solid #d6b45a;background:#fdf6e3}
+.attente h3{margin:0 0 6px;font-size:1rem}
+.attente .chiffres{font-size:.88rem;opacity:.85;margin:6px 0 12px}
 .pied{margin-top:26px;padding-top:16px;border-top:1px solid #ddd;font-size:.9rem;opacity:.8}
 </style></head><body>
 <h1>🎬 Fabriquer une vidéo</h1>
@@ -525,6 +664,21 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
   <button id="lancer" class="primaire">Fabriquer</button>
 </div>
 <p id="licence" class="avert"></p>
+
+<!-- N'apparait QUE si cet ordinateur a une carte branchee au Studio. Celui qui
+     n'en a pas ne doit pas voir un reglage qui ne le concerne pas. -->
+<div id="ouCalculer" class="ligne" hidden>
+  <label>Carte de cet ordinateur
+    <select id="reglage">
+      <option value="maison-si-libre">À la maison si la carte est libre (défaut)</option>
+      <option value="toujours-modal">Toujours sur une machine louée</option>
+      <option value="toujours-maison">Toujours à la maison, quitte à attendre</option>
+    </select>
+  </label>
+  <span class="avert" id="reglageNote"></span>
+</div>
+
+<div id="carteprise" class="attente" hidden></div>
 
 <div class="images">
   <div class="case"><h3>Image de départ</h3>
@@ -700,8 +854,14 @@ function suivre(id){
         afficherJournal([j.stdout, j.stderr].filter(Boolean).join("\n"));
         rafraichirBudget();
         if(j.video_url){
-          etat.innerHTML = '<span class="ok">✔ Vidéo prête</span> — ' + (j.resume ?
-            (j.resume.secondes_calcul + " s de calcul, " + Math.round(j.resume.octets/1024) + " Ko") : "");
+          // Deux mots suffisent : fait ici, ou loué. Et le prix s'il y en a un.
+          const maison = j.ou_calculer && j.ou_calculer.ou === "maison";
+          const ouFait = maison
+            ? "fait à la maison, 0 $"
+            : ("loué" + (j.ou_calculer && j.ou_calculer.prix_estime_usd != null
+                         ? (" — environ " + j.ou_calculer.prix_estime_usd.toFixed(3) + " $") : ""));
+          etat.innerHTML = '<span class="ok">✔ Vidéo prête</span> — ' + ouFait + (j.resume ?
+            (", " + j.resume.secondes_calcul + " s de calcul, " + Math.round(j.resume.octets/1024) + " Ko") : "");
           const nom = nomDeFichier();
           const lienTelecharger = j.video_url + "&telecharger=1&nom=" + encodeURIComponent(nom);
           document.getElementById("resultat").innerHTML =
@@ -722,7 +882,107 @@ function suivre(id){
   }, 4000);
 }
 
-document.getElementById("lancer").addEventListener("click", () => {
+// --- Où le clip se fabrique --------------------------------------------------
+//
+// Le service tranche ce qui est factuel — ce que la carte d'ici sait faire, la
+// place qu'il faut, ce qui reste de libre — et REND LA QUESTION dès qu'il ne
+// reste qu'un arbitrage de goût : attendre ne coûte rien, louer coûte de
+// l'argent, et personne d'autre que le client ne sait s'il est pressé.
+// Un 409 n'est donc pas une panne : c'est une question.
+
+let ATTENTE_DEPUIS = null;      // l'heure où le client a dit « j'attends »
+let ATTENTE_MINUTEUR = null;
+
+function reglageActuel(){
+  const s = document.getElementById("reglage");
+  return s ? s.value : null;
+}
+
+function chargerReglage(){
+  return fetch("/video/ou-calculer", {headers:{"Authorization":"Bearer "+CLE}})
+    .then(r => r.json())
+    .then(d => {
+      if(!d.carte_possible) return d;   // pas de carte ici : rien à régler
+      document.getElementById("ouCalculer").hidden = false;
+      document.getElementById("reglage").value = d.reglage;
+      const durees = Object.keys(d.durees_maison || {}).join(" et ");
+      document.getElementById("reglageNote").textContent =
+        "Fabriquer ici ne coûte rien. La carte est partagée : le Studio ne prend "
+        + "jamais la place d'un calcul en cours."
+        + (durees ? (" Durées mesurées ici : " + durees + " secondes.") : "");
+      return d;
+    })
+    .catch(() => null);
+}
+
+const selReglage = document.getElementById("reglage");
+if(selReglage){
+  selReglage.addEventListener("change", () => {
+    fetch("/video/ou-calculer", {method:"POST", headers:ENTETES,
+                                 body:JSON.stringify({reglage: selReglage.value})})
+      .catch(() => {});
+  });
+}
+
+function fermerAttente(){
+  if(ATTENTE_MINUTEUR){ clearTimeout(ATTENTE_MINUTEUR); ATTENTE_MINUTEUR = null; }
+  ATTENTE_DEPUIS = null;
+  document.getElementById("carteprise").hidden = true;
+  document.getElementById("carteprise").innerHTML = "";
+}
+
+function prix(d){
+  return d.prix_estime_usd == null ? "" : (" — environ " + d.prix_estime_usd.toFixed(3) + " $");
+}
+
+// La carte est prise. On montre CE QUI BLOQUE avec ses nombres, puis on attend
+// une réponse. Jamais « indisponible » tout seul : un refus sans chiffre envoie
+// chercher une panne qui n'existe pas.
+function demanderAuClient(d){
+  const boite = document.getElementById("carteprise");
+  const c = d.carte || {};
+  const chiffres = (c.libre_mo != null && c.totale_mo != null)
+    ? (c.nom + " : " + (c.libre_mo/1024).toFixed(1) + " Go libres sur "
+       + (c.totale_mo/1024).toFixed(1) + ", il en faut " + (d.besoin_mo/1024).toFixed(1) + ".")
+    : (d.pourquoi || "");
+  boite.hidden = false;
+
+  if(d.ou === "attente"){
+    const depuis = ATTENTE_DEPUIS ? Math.round((Date.now() - ATTENTE_DEPUIS)/1000) : 0;
+    boite.innerHTML = "<h3>⏸ J’attends la carte</h3>"
+      + '<div class="chiffres">' + chiffres + " Nouvel essai toutes les 30 secondes ; "
+      + "j’attends depuis " + depuis + " s. On n’arrête jamais le calcul qui tient la carte.</div>"
+      + '<div class="ligne">'
+      + '<button class="primaire" id="btLouer">Louer chez ' + (document.getElementById("ou").value === "kaggle" ? "Kaggle" : "Modal") + prix(d) + '</button>'
+      + '<button id="btAnnuler">Annuler</button></div>';
+    document.getElementById("btLouer").onclick = () => { fermerAttente(); envoyer({ou_calculer:"toujours-modal"}); };
+    document.getElementById("btAnnuler").onclick = () => {
+      fermerAttente();
+      document.getElementById("lancer").disabled = false;
+      document.getElementById("etat").textContent = "Abandonné. Rien n’a été fabriqué, rien n’a été facturé.";
+    };
+    if(!ATTENTE_DEPUIS) ATTENTE_DEPUIS = Date.now();
+    ATTENTE_MINUTEUR = setTimeout(() => envoyer({attendre:true}), 30000);
+    return;
+  }
+
+  // « on-demande » : trois sorties, et le prix AVANT, pas après.
+  boite.innerHTML = "<h3>La carte de cet ordinateur est prise</h3>"
+    + '<div class="chiffres">' + chiffres + " Attendre ne coûte rien ; louer, si.</div>"
+    + '<div class="ligne">'
+    + '<button class="primaire" id="btAttendre">J’attends</button>'
+    + '<button id="btLouer">Louer chez ' + (document.getElementById("ou").value === "kaggle" ? "Kaggle" : "Modal") + prix(d) + '</button>'
+    + '<button id="btAnnuler">Annuler</button></div>';
+  document.getElementById("btAttendre").onclick = () => { ATTENTE_DEPUIS = Date.now(); envoyer({attendre:true}); };
+  document.getElementById("btLouer").onclick = () => { fermerAttente(); envoyer({ou_calculer:"toujours-modal"}); };
+  document.getElementById("btAnnuler").onclick = () => {
+    fermerAttente();
+    document.getElementById("lancer").disabled = false;
+    document.getElementById("etat").textContent = "Abandonné. Rien n’a été fabriqué, rien n’a été facturé.";
+  };
+}
+
+function envoyer(extra){
   const bouton = document.getElementById("lancer");
   const etat = document.getElementById("etat");
   const corps = Object.assign({
@@ -730,24 +990,41 @@ document.getElementById("lancer").addEventListener("click", () => {
     duree: document.getElementById("duree").value,
     qualite: document.getElementById("qualite").value,
     ou: document.getElementById("ou").value,
-  }, IMAGES);
+    ou_calculer: reglageActuel(),
+  }, IMAGES, extra || {});
   bouton.disabled = true;
-  etat.textContent = "Envoi…";
-  document.getElementById("resultat").innerHTML = "";
-  afficherJournal("");
+  if(!extra || !extra.attendre){
+    etat.textContent = "Envoi…";
+    document.getElementById("resultat").innerHTML = "";
+    afficherJournal("");
+  }
   fetch("/video/creer", {method:"POST", headers:ENTETES, body:JSON.stringify(corps)})
     .then(async r => {
       const d = await r.json().catch(() => ({}));
-      if(!r.ok){ throw new Error(d.detail || ("HTTP " + r.status)); }
+      // 409 : rien n'est cassé, la carte est prise et c'est au client de dire.
+      if(r.status === 409 && d.detail && d.detail.ou){ demanderAuClient(d.detail); return null; }
+      if(!r.ok){ throw new Error(typeof d.detail === "string" ? d.detail : ("HTTP " + r.status)); }
       return d;
     })
-    .then(d => { etat.textContent = "⏳ Lancé."; suivre(d.id); })
+    .then(d => {
+      if(!d) return;
+      fermerAttente();
+      const ouFait = (d.ou_calculer && d.ou_calculer.ou === "maison")
+        ? "⏳ Lancé sur la carte de cet ordinateur — gratuit."
+        : "⏳ Lancé sur une machine louée.";
+      etat.textContent = ouFait;
+      suivre(d.id);
+    })
     .catch(e => {
+      fermerAttente();
       bouton.disabled = false;
       etat.innerHTML = '<span class="ko">✖ ' + e.message + '</span>';
     });
-});
+}
+
+document.getElementById("lancer").addEventListener("click", () => { ATTENTE_DEPUIS = null; envoyer(null); });
 
 rafraichirBudget();
+chargerReglage();
 </script>
 </body></html>"""

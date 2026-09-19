@@ -30,6 +30,7 @@ import garde_exposition
 # tomber bruyamment au demarrage plutot que degrader en silence un nettoyage
 # annonce comme systematique. Bibliotheque standard seulement, rien a installer.
 import nettoyage_dialogue
+import ou_calculer
 import video
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -40,6 +41,11 @@ app = FastAPI(title="Free AI Studio Sandbox Manager", version="2.0.0")
 KEY = os.getenv("SANDBOX_MANAGER_KEY", "").strip()
 WORKER_KEY = os.getenv("SANDBOX_WORKER_KEY", "").strip()
 WORKER_URL = os.getenv("SANDBOX_WORKER_URL", "http://sandbox-worker:8000").rstrip("/")
+# Le bac a sable de la MAISON : le meme code, sur la carte graphique. Il
+# n'existe que si la surcouche docker-compose.gpu.yml a ete appliquee, donc
+# seulement si la machine a une carte. Vide = pas de carte, et le routage part
+# chez Modal comme avant ce chantier.
+WORKER_GPU_URL = os.getenv("SANDBOX_WORKER_GPU_URL", "").rstrip("/")
 # /workspace dans le conteneur ; configurable pour charger le service hors
 # conteneur (CI : scripts/verifier-imports.py, tests/).
 ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace"))
@@ -389,6 +395,35 @@ def local_execute(jid: str, code: str) -> dict:
     except Exception as exc:
         raise BackendUnavailable(f"Local worker unavailable: {type(exc).__name__}: {exc}") from exc
     data["artifacts"] = collect_local_artifacts(jid, "local")
+    return data
+
+
+def maison_execute(jid: str, code: str) -> dict:
+    """Le meme appel que local_execute, vers le bac a sable qui a la carte.
+
+    Deux differences, toutes les deux mesurees le 19/09/2026 :
+      - l'attente. Un clip de 3 s a demande 412 s de calcul plus 24 s de
+        chargement du modele ; le PREMIER clip ajoute le telechargement des
+        34 Go. D'ou VIDEO_TIMEOUT_SECONDS (2400 s par defaut) et non les 120 s
+        du bac a sable sur processeur ;
+      - la source ecrite dans la fiche du fichier : << maison >>, pour que la
+        page sache dire d'ou vient le clip.
+    """
+    if not WORKER_GPU_URL:
+        raise BackendUnavailable("Aucun bac a sable GPU : la surcouche docker-compose.gpu.yml n'est pas appliquee.")
+    attente = int(os.getenv("VIDEO_TIMEOUT_SECONDS", "2400")) + 60
+    try:
+        with httpx.Client(timeout=attente) as c:
+            r = c.post(
+                WORKER_GPU_URL + "/run",
+                headers={"Authorization": f"Bearer {WORKER_KEY}"},
+                json={"job_id": jid, "code": code},
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        raise BackendUnavailable(f"Maison worker unavailable: {type(exc).__name__}: {exc}") from exc
+    data["artifacts"] = collect_local_artifacts(jid, "maison")
     return data
 
 
@@ -1842,6 +1877,12 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
     job.update({"status": "running", "started_at": debut, "provider_effective": ou})
     write_job(jid, job)
     try:
+        if ou == "maison":
+            # La carte de cet ordinateur. Rien a encaisser : elle ne facture
+            # rien. Le `finally` plus bas ne compte que la location, et c'est
+            # pourquoi il teste `ou == "modal"` et non l'inverse.
+            finish_execution(jid, "maison", maison_execute(jid, code))
+            return
         if ou == "kaggle":
             # Kaggle ne facture rien : pas de compteur, mais un GPU plus petit et
             # un modele a retelecharger a chaque fois.
@@ -1870,6 +1911,44 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
             write_job(jid, job)
 
 
+def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
+    """Ou ce clip se fabrique : la carte d'ici, ou la machine louee choisie.
+
+    Trois choses arrivent de la page et n'ont rien a faire dans le module de
+    decision, qui doit rester jugeable sans service autour :
+      - `ou_calculer` : le reglage, quand le client vient de le changer dans la
+        boite de dialogue sans le rendre permanent ;
+      - `attendre` : le client a repondu << j'attends >> a une carte prise ; la
+        demande revient ici avec cette marque et se comporte comme
+        << toujours a la maison >>, c'est-a-dire qu'elle attend la carte ;
+      - l'absence de bac a sable GPU : sans la surcouche compose, il n'y a rien
+        a router, et la question ne se pose meme pas.
+    """
+    if not WORKER_GPU_URL:
+        return {
+            "ou": ou_calculer.MODAL,
+            "reglage": ou_calculer.TOUJOURS_MODAL,
+            "pourquoi": "Cet ordinateur n'a pas de carte branchee au Studio : le clip part chez %s."
+                        % loueur.capitalize(),
+            "besoin_mo": None,
+            "carte": {"vue": False, "motif": "pas de bac a sable GPU"},
+            "prix_estime_usd": video.prix_estime(plan["qualite"], plan["duree"]),
+            "sorties": [],
+        }
+    reglage = str(payload.get("ou_calculer") or "").strip() or None
+    if payload.get("attendre"):
+        # << J'attends >> vaut, pour CETTE demande seulement, le reglage le plus
+        # ferme : on reste sur la carte d'ici, quoi qu'il en coute en minutes.
+        reglage = ou_calculer.TOUJOURS_MAISON
+    return ou_calculer.decider(
+        plan["resume_public"],
+        video.images_maison(plan["duree"]),
+        prix_estime_usd=video.prix_estime(plan["qualite"], plan["duree"]),
+        reglage=reglage,
+        loueur=loueur.capitalize(),
+    )
+
+
 @app.get("/video/budget")
 def video_budget(request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
@@ -1885,10 +1964,39 @@ def video_budget(request: Request, authorization: Optional[str] = Header(default
     }
 
 
+@app.get("/video/ou-calculer")
+def video_ou_calculer_lire(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le reglage du client, et de quoi le lui montrer sans qu'il devine."""
+    auth(authorization)
+    return {
+        "reglage": ou_calculer.reglage_lu(),
+        "reglages": list(ou_calculer.REGLAGES),
+        "defaut": ou_calculer.REGLAGE_DEFAUT,
+        "carte_possible": bool(WORKER_GPU_URL),
+        "durees_maison": video.DUREES_MAISON,
+    }
+
+
+@app.post("/video/ou-calculer")
+async def video_ou_calculer_ecrire(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    exiger_json(request)
+    exiger_page_du_studio(request)
+    payload = await corps_json(request)
+    try:
+        pose = ou_calculer.reglage_ecrit(str(payload.get("reglage") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"reglage": pose}
+
+
 @app.post("/video/creer")
 async def video_creer(request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
     payload = await request.json()
+    # `ou` ne dit plus OU le clip se fabrique : il dit quelle machine on LOUE si
+    # la maison ne le prend pas. C'est `ou_calculer.decider()` qui tranche entre
+    # la carte d'ici et cette location -- ou qui rend la question au client.
     ou = str(payload.get("ou") or "modal")
     if ou not in ("modal", "kaggle"):
         ou = "modal"
@@ -1901,6 +2009,25 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
+    decision = decider_ou_fabriquer(plan, ou, payload)
+    if decision["ou"] in (ou_calculer.ON_DEMANDE, ou_calculer.ATTENTE):
+        # 409 et non 503 : rien n'est en panne. La carte est prise, et c'est le
+        # client qui dit quoi faire -- attendre, louer, ou renoncer. La page
+        # renvoie la meme demande avec `attendre: true` ou avec
+        # `ou_calculer: "toujours-modal"`. L'attente vit dans la page et non
+        # dans le service : une file cote serveur n'a pas ete chiffree, et on
+        # ne promet pas ce qu'on n'a pas mesure.
+        raise HTTPException(409, detail=decision)
+
+    if decision["ou"] == ou_calculer.MAISON:
+        try:
+            plan = video.preparer(payload, pour_modal=False, maison=True)
+        except ValueError as exc:
+            # La maison a ete choisie puis s'est revelee incapable : on le dit,
+            # on ne bascule pas en silence sur une location payante.
+            raise HTTPException(400, str(exc)) from exc
+        ou = "maison"
+
     if ou == "modal":
         if not modal_configured():
             raise HTTPException(503, "Modal n'est pas branche. Ouvrez la page « Brancher Modal "
@@ -1909,7 +2036,7 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
             video.budget_verifier(plan["gpu"], video.DUREE_MAX_S)
         except video.BudgetDepasse as exc:
             raise HTTPException(429, str(exc)) from exc
-    elif not kaggle_configured():
+    elif ou == "kaggle" and not kaggle_configured():
         raise HTTPException(503, "Kaggle n'est pas branche. Ouvrez la page « Brancher Modal "
                                  "ou Kaggle » et collez votre nom d'utilisateur et votre cle Kaggle.")
 
@@ -1925,6 +2052,10 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
         "created_at": time.time(),
         "artifacts": [],
         "video": plan["resume_public"],
+        # Pourquoi ce clip part la plutot qu'ailleurs, garde avec le travail :
+        # la page le montre en deux mots, et un journal le relit six mois plus
+        # tard sans avoir a refaire le raisonnement.
+        "ou_calculer": decision,
     })
     threading.Thread(target=run_video, args=(jid, code, plan["gpu"], ou), daemon=True).start()
     return read_job(jid)
@@ -1943,6 +2074,9 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "stderr": job.get("stderr", ""),
         "message": job.get("error") or "",
         "video": job.get("video"),
+        # Ou ce clip a ete fabrique, et pourquoi la. Deux mots sur la page,
+        # et de quoi ne pas refaire le raisonnement six mois plus tard.
+        "ou_calculer": job.get("ou_calculer"),
     }
     if fichiers.get("video"):
         sortie["video_url"] = f"/video/jobs/{jid}/fichier?cle={jeton_video(jid)}"

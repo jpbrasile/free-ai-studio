@@ -11,6 +11,13 @@ KEY = os.getenv("SANDBOX_WORKER_KEY", "").strip()
 # conteneur (CI : scripts/verifier-imports.py, tests/).
 ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace")) / "jobs"
 ROOT.mkdir(parents=True, exist_ok=True)
+# Variables de l'environnement du conteneur laissees passer au script.
+# VIDE par defaut, et c'est le point : le bac a sable sur processeur n'en a
+# besoin d'aucune, et chacune est une chose de plus que le code utilisateur
+# peut lire. Le worker GPU, lui, en declare quelques-unes dans sa surcouche :
+# sans ce que le runtime NVIDIA pose dans le conteneur le script ne trouve pas
+# la carte, et sans HF_HOME il retelechargerait 34 Go de modele a chaque clip.
+PASSANTES = tuple(n.strip() for n in os.getenv("SANDBOX_ENV_PASSTHROUGH", "").split(",") if n.strip())
 MAX_CODE = int(os.getenv("SANDBOX_MAX_CODE_BYTES", "500000"))
 MAX_OUTPUT = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "200000"))
 TIMEOUT = int(os.getenv("SANDBOX_TIMEOUT_SECONDS", "120"))
@@ -49,6 +56,10 @@ def run(req: RunRequest, authorization: Optional[str] = Header(default=None)):
         "HOME": str(job_dir),
         "FREE_AI_OUTPUT_DIR": str(out_dir),
     }
+    for nom in PASSANTES:
+        valeur = os.environ.get(nom)
+        if valeur is not None:
+            env[nom] = valeur
     try:
         proc = subprocess.run(
             ["python", "-I", str(script)], cwd=job_dir, env=env,
