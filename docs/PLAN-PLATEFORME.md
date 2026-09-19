@@ -18,8 +18,11 @@
 > des deux situations s'applique.
 >
 > **Un compte qui bouge, dit comme tel.** Les deux nombres ci-dessus sont relevés sur
-> `edb2b56`. **L'avance sur `main` croît à chaque commit de cette branche** — elle était
-> de 41 le 18/09 et de 45 le 19/09 au soir. **Ce qui ne bouge pas, et qui est le fait
+> `edb2b56`. **L'avance sur `main` croît à chaque commit de cette branche** — elle était de **41 le 18/09**,
+> et le 19/09 elle a changé cinq fois dans la journée. ~~de 45 le 19/09 au soir.~~
+> **Ce document n'écrit plus ce nombre-là** : il est faux à l'instant où on l'écrit
+> — la phrase que celle-ci remplace annonçait « 45 » **dans le commit qui était
+> lui-même le 46ᵉ**. La commande est donnée plus haut ; le lecteur la relance. **Ce qui ne bouge pas, et qui est le fait
 > utile, c'est le 0 de gauche** : `main` reste un ancêtre, la fusion reste une avance
 > directe. Un lecteur qui rejoue la commande aujourd'hui obtiendra un autre nombre à
 > droite : ce n'est pas une contradiction, c'est la raison d'être du contrôle de fraîcheur
@@ -119,6 +122,9 @@ exception au gel (`PLAN.md:184`), sans passer par P9 ni par aucun registre. Le p
 prévoyait cette brique à la fin d'une chaîne de neuf phases ; elle est arrivée par une
 demande d'utilisateur, un jeudi.
 
+> **→ Tranché le 19/09 au soir — §8, point 13 : **oui**, et le contrôle devient une dixième étape nommée de la CI.** La question ci-dessous reste écrite
+> telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
+>
 > **Décision demandée.** Ce tableau devient-il la référence d'état du projet — donc relu à
 > chaque étape franchie — ou reste-t-il une photographie datée du 19/09/2026 ? Sans
 > réponse, il vieillira en silence et deviendra une septième copie de la vérité (§5).
@@ -276,6 +282,9 @@ un seul auteur**. Il n'y a aucune contribution extérieure à engager. C'est la 
 plus large qu'aura jamais ce projet pour choisir sa licence — elle se refermera au premier
 contributeur.
 
+> **→ Tranché le 19/09 au soir — §8, décision 4 de l'utilisateur : **MIT pour le dépôt client**, la part critique en privé.** La question ci-dessous reste écrite
+> telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
+>
 > **Décision demandée, et elle a une échéance réelle** : ce point bloque le §5, étape 4
 > (« la base de mesures est-elle la douve, et peut-elle l'être dans un dépôt MIT ? »).
 > Reporté en §7.
@@ -358,7 +367,7 @@ matin mort-né (`PLAN.md:310`) ; la CI rouge pendant des jours, masquée en loca
 `.env` (`PLAN.md:19`) ; l'essai LoRA dont le code dit lui-même ce qu'il n'établit pas ; la
 prédiction démentie le soir même et laissée en place, barrée.
 
-Sauf qu'elle est en prose, dans un fichier de **152 191 octets**, et qu'elle n'est pas
+Sauf qu'elle est en prose, dans un fichier de **152 191 octets au relevé `edb2b56`, 18/09** *(il en fait davantage aujourd'hui — ce document l'a lui-même allongé ; un poids sans son commit est un nombre nu)*, et qu'elle n'est pas
 dénombrable. C'est pourquoi le projet ne peut produire **aucun** des indicateurs que le plan
 réclame (l. 139-140) : `autonomy_rate`, `bad_merges`, `rejections_by_reason`.
 
@@ -372,12 +381,15 @@ Rétrospectif, sans GPU, sans dollar. Coût : une demi-journée de lecture, aucu
 infrastructure. **Et c'est le premier chiffre d'autonomie de l'histoire du projet.** Il sera
 petit et il sera mesuré.
 
+> **→ Tranché le 19/09 au soir — §8, point 1 : **suspendue**, avec le comptage rétrospectif des treize exceptions comme premier chiffre.** La question ci-dessous reste écrite
+> telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
+>
 > **Décision demandée, et c'est la plus structurante du document.**
 > (a) La thèse d'origine est **reprise** — et les treize exceptions deviennent des dettes
 > datées ; (b) elle est **enterrée**, avec sa date et son motif, et le projet assume d'être
 > un studio pour débutants plutôt qu'une plateforme d'intégration autonome ; (c) elle est
 > **suspendue** jusqu'au résultat de la relecture des treize exceptions.
-> Sans cette décision, l'étape « autonomie » du §5 est orpheline : elle sert une thèse que
+> Sans cette décision, l'étape « autonomie » du §5 *(renvoi vide, relevé le 19/09 au soir : le §5 n'a que quatre étapes et aucune ne porte ce nom. Ce que la thèse commande est le comptage rétrospectif du §8, point 1)* est orpheline : elle sert une thèse que
 > personne n'a confirmée depuis treize arbitrages contraires.
 
 ---
@@ -456,6 +468,13 @@ n'a pas.
 
 #### Ajout 1 — il y a plus de copies de la vérité que le journal ne le croit
 
+> **Sept, et non six — ajout du 19/09 au soir.** La relecture adverse en a trouvé une
+> de plus que ce tableau : **`docs/MODAL_CATALOG.md`**, 7 136 octets, suivi par git,
+> qui donne le routage à l'envers du code. Elle n'est pas ajoutée au tableau ci-dessous
+> — on n'efface rien, et le tableau vaut pour ce qu'il a trouvé — mais **elle compte**,
+> et le §9.5 dit pourquoi elle avait échappé au relevé : ce tableau cherchait les copies
+> de la **liste des modèles**, celle-là est une copie de la **règle de routage**.
+
 Le journal en compte trois (`PLAN.md:319-323`, point 3 : « le tableau du README en est une
 troisième copie »). Relevé le 19/09, **il y en a six, et quatre divergent** :
 
@@ -500,6 +519,9 @@ pas 2.2 ».** L'écart n'est pas un mensonge : c'est une décision qui n'a pas �
 **Le pire état n'est donc pas « pas de registre ». C'est six vérités, aucune autorité, et
 aucune trace des arbitrages.**
 
+> **→ Tranché le 19/09 au soir — §8, point 8 : **supprimé** — et le §9.5 montre que l'arbitrage n'était pas petit.** La question ci-dessous reste écrite
+> telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
+>
 > **Premier arbitrage du chantier, et il est petit :** `modal/profiles.json` devient une
 > source réellement lue, ou il se supprime et `AGENTS.md:111` avec lui. Le laisser tel quel
 > est pire que les deux options, parce qu'il envoie activement les agents vers une
@@ -627,7 +649,16 @@ en silence. C'est le test qui distingue un registre d'un fichier de documentatio
 19/09 : une dixième étape de CI qui échoue quand une description a vieilli.** Concrètement,
 dans l'ordre de difficulté croissante :
 
-1. **Les deux tableaux du `README.md` et `modal/profiles.json` passent en zone engendrée**,
+> **Recousu le 19/09 au soir.** `modal/profiles.json` est **supprimé** par la
+> décision 8 du §8 : il ne peut donc pas passer en zone engendrée, et la pièce 1
+> ci-dessous ne vaut plus que pour les deux tableaux du `README.md`. **À sa place
+> entre `docs/MODAL_CATALOG.md`** — 7 136 octets, **suivi par git**, la **septième**
+> copie de la vérité, trouvée le même soir, et qui donne le routage à l'envers du
+> code. **Voir §9.5 : exécuter la décision 8 telle quelle retirerait le seul
+> pointeur vers ce jumeau non compté.**
+
+1. **Les deux tableaux du `README.md` ~~et `modal/profiles.json`~~ *et
+   `docs/MODAL_CATALOG.md`* passent en zone engendrée**,
    entre marqueurs, avec la ligne « engendré, ne pas modifier à la main », la date, le
    commit et le nom du programme qui les écrit.
 2. **La source unique est le code qui tourne** — `PROVIDERS`, `LIMITES_PUBLIEES`, les
@@ -717,7 +748,8 @@ C'est le bout de la chaîne, et la demande explicite de l'utilisateur (19/09/202
 
 **Attention à ne pas surévaluer la CI.** Elle est solide, mais son bilan doit être écrit
 exactement : le critère « ruff voit ce que `py_compile` laisse passer » a été prouvé par
-une **faute introduite exprès** dans une copie de `video.py` (`PLAN.md:380-384`), pas par
+une **faute introduite exprès** dans une copie de `video.py` (`PLAN.md:394-398` — *c'était `:380-384` jusqu'au 19/09 au soir ; les cinq commits
+du jour ont décalé le passage de 14 lignes, voir §9.12*), pas par
 une prise en conditions réelles ; et le `\n` mal échappé qui cassait tout le JavaScript de
 `/studio` depuis `ed3e71d` a été **trouvé à la main** en vérifiant P0-1, après quoi
 `node --check` a été ajouté pour qu'il ne repasse pas (`PLAN.md:27`). **La seule prise
@@ -739,6 +771,9 @@ l'utilisateur : « pas de barre desserrée ».
 et **cela interdit exactement l'usage que cette étape lui assigne** : un agent qui essaie un
 outil SOTA doit télécharger un modèle, un paquet, une fiche.
 
+> **→ Tranché le 19/09 au soir — §8, point 7 : **jamais de sortie réseau**, la récupération se fait avant.** La question ci-dessous reste écrite
+> telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
+>
 > **Décision demandée, et elle est préalable à toute l'étape 3.** (a) Une phase de
 > préparation **hors** du bac à sable, qui télécharge et vérifie les empreintes, puis passe
 > les fichiers par le volume — l'isolement reste total pendant l'exécution ; (b) une liste
@@ -762,6 +797,9 @@ Précisé par l'utilisateur le 19/09/2026. Il n'y a donc **pas** de serveur mult
 Le stockage des clés en clair (§2.1) reste un défaut à corriger, mais il **cesse d'être un
 blocage** pour les contributions.
 
+> **→ Tranché le 19/09 au soir — §8, point 6 : **fixée** par la décision 4 — pré-validation locale, décision finale chez l'administrateur.** La question ci-dessous reste écrite
+> telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
+>
 > **Décision demandée : avec quelle clé l'agent validateur tourne-t-il ?**
 > (a) Le contributeur valide chez lui, sur son propre quota, **avant** de proposer ;
 > (b) le projet a un compte dédié, avec un budget de maintenance plafonné et séparé du
@@ -815,7 +853,7 @@ C'est le verrou du §3 : sans cette base, ni taux d'autonomie, ni comparaison en
 modèles, ni aucun des indicateurs du plan d'origine. La remontée vers l'administrateur vient
 **ensuite**, et **seulement si le client dit oui** : interrupteur visible, éteint par
 défaut. C'est la règle dure du plan d'origine (l. 33 : « explicit opt-in consent + visible
-reward », « Never covert »), et elle est bonne.
+reward »), complétée par « Never covert » — qui est en **l. 19**, dans le tronc stratégique et non dans les règles dures : *attribution corrigée le 19/09 au soir*. Et elle est bonne.
 
 - **Contenu : les mesures seules** — date, fonction, endroit d'exécution, durée, coût,
   refus, qui a décidé. **Aucune phrase écrite par une personne.** Un commentaire libre
@@ -999,7 +1037,7 @@ elle sera levée par l'inaction, comme les treize fois précédentes.
 bout de l'installation, le registre et les évaluations servent un produit que personne
 n'atteint. Et on ne le saura pas autrement : les trois passages du 11/09 tournent dans un
 `docker:dind` **sous Linux**, et le journal le dit lui-même — « ce passage ne dit rien de
-Windows » (`PLAN.md:453`).
+Windows » (`PLAN.md:467` — *était `:453`, même cause*).
 
 **La cible primaire du dépôt — Windows, débutant, 906 lignes de scripts écrites pour elle —
 n'a jamais été mesurée une seule fois.**
@@ -1021,6 +1059,9 @@ Ce que le §6 porte, et qui se décide maintenant :
    d'exception à redouter — c'est l'absence totale de contrainte qui rend cette date
    nécessaire. Elle est désormais le seul levier.**
 
+> **→ Tranché le 19/09 au soir — §8, point 9 : **butoir au 31/10/2026**, après quoi le document écrit « mesure abandonnée ».** La question ci-dessous reste écrite
+> telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
+>
 > **Décision demandée.** Une date, ou l'aveu écrit qu'il n'y en aura pas avant telle
 > échéance. **Les deux sont acceptables ; le silence ne l'est pas.**
 
@@ -1045,7 +1086,7 @@ Ce que le §6 porte, et qui se décide maintenant :
 | 15 | **Les sauvegardes** — décision prise le 19/09 : **local + VPS**. Restent : la troisième copie, **le VPS est-il lui-même sauvegardé (non vérifié)**, et **la localisation européenne du VPS, exigée par le plan et non vérifiée** | §5 étape 4 | une date pour le **premier essai de restauration**, qui est le seul critère (« DoD : restore-from-backup test passes ») |
 | 16 | **Où vivent les coordonnées du VPS.** Répondu au §5 étape 4 : ni public, ni privé — **en variables**, valeurs dans l'environnement. Ce qui reste à trancher est la **forme** : un `.env.example` de plus dans le dépôt privé, ou des *secrets* de dépôt côté CI ? | §5 étape 4 | **les deux : `.env.example` pour la lisibilité, secrets de CI pour l'exécution** · seulement l'un · rien tant que la validation ne tourne pas sur le VPS |
 | 7 | **La sortie réseau du bac à sable**, préalable à l'étape 3 | §5 étape 3 | préparation hors bac à sable · liste blanche · essai sur Modal/Kaggle |
-| 8 | **`modal/profiles.json`** | §5 étape 1 | source réellement lue · supprimé, avec `AGENTS.md:111` · **passé en zone engendrée sous contrôle de fraîcheur** (ajout 3) |
+| 8 | **`modal/profiles.json`** | §5 étape 1 | source réellement lue · **supprimé** · ~~passé en zone engendrée sous contrôle de fraîcheur~~ *(le gras désigne l'option retenue au §8 ; il désignait la mauvaise jusqu'au 19/09 au soir. Et l'option retenue a une suite : §9.5)* |
 | 13 | **Le contrôle de fraîcheur des descriptions**, position de l'utilisateur du 19/09 : « risque inacceptable pour un fonctionnement automatique ». Le mécanisme existe et tourne dans `plasma-digital-twin` ; le Studio a en plus la CI qui manque là-bas | §5 étape 1, ajout 3 | **dixième étape de CI qui échoue si une description a vieilli** · zone engendrée seulement, sans barrière · ne rien faire et documenter le risque |
 | 9 | **La date de l'essai machine neuve** | §6 | une date · l'impossibilité écrite, avec son échéance |
 | 10 | **La branche `audit-20260911`** | en-tête | **`main` est ancêtre : la fusion est une avance directe, sans conflit possible.** fusionner · écrire pourquoi on ne fusionne pas |
@@ -1130,6 +1171,12 @@ que la copie est sans valeur sans les mesures.** Un clone parti aujourd'hui a z�
 
 ### Les treize que j'ai tranchées
 
+> **Douze, corrigé le 19/09 au soir.** La ligne 14 ci-dessous (« deux dépôts ») est
+> un **acte de l'utilisateur** — « il faut créer le github privé », 19/09 au matin —
+> exécuté le jour même, et non un arbitrage de ma part. Elle reste dans le tableau
+> pour que la numérotation des dix-sept points du §7 reste lisible, **mais elle ne
+> m'appartient pas.**
+
 | # | Point | Ce que je tranche | Pourquoi |
 |---|---|---|---|
 | 1 | **La thèse d'autonomie** | **Suspendue** — et un chiffre d'ici là : reprendre les treize exceptions et compter, cas par cas, ce qu'un agent aurait pu mener seul | Ni la reprendre ni l'enterrer sans mesure. Le comptage est rétrospectif, gratuit, faisable en une séance — et ce serait **le premier chiffre d'autonomie du projet** |
@@ -1137,12 +1184,12 @@ que la copie est sans valeur sans les mesures.** Un clone parti aujourd'hui a z�
 | 5 | **Les modèles CC BY-NC déjà en service** | **Les garder**, et porter la restriction **au point de choix**, pas en note de bas de page | C'est déjà ce que le dépôt pratique sans l'écrire (`dialogue.py:130-141`, montré en `:732-735`). La règle juste distingue **ce que le Studio fait tourner à la demande** de **ce qu'il distribue**. Deux obligations viennent avec : `commercial_ok: false` dans le registre, et **épingler la révision de la LoRA**, aujourd'hui `None` (`chanson.py:126-133`) |
 | 6 | **La clé de l'agent validateur** | **Déjà fixée** par la décision 4 de l'utilisateur : **pré-validation locale obligatoire** chez le contributeur, **décision finale** chez l'administrateur | On ne peut pas avoir à la fois « le client valide chez lui » et « la barre est secrète ». Le contributeur sait s'il a une chance ; il ne sait pas où est la barre |
 | 7 | **La sortie réseau du bac à sable** | **Jamais de sortie réseau.** La récupération se fait **avant**, par une étape séparée qui télécharge, empreinte et dépose l'artefact ; le bac à sable reste `internal: true` | C'est la propriété la plus dure du dépôt, et le plan d'origine en demandait **moins**. Ouvrir la sortie pour la commodité d'un agent échangerait la seule garantie réelle contre du confort |
-| 8 | **`modal/profiles.json`** | **Supprimé**, et la ligne `AGENTS.md:111` retirée avec lui | Lu par **aucun** code, déjà faux sur trois fonctions, et `AGENTS.md` y envoie les agents comme « la version lisible par machine ». **Le laisser est pire que les deux autres options** : une vérité concurrente que personne ne maintient. Le registre prendra la place |
+| 8 | **`modal/profiles.json`** | **Supprimé**, et la ligne `AGENTS.md:111` retirée avec lui | Lu par **aucun** code, et **sa section `policy` est fausse** — c'est bien ce grief-là, et non l'écart Chatterbox-contre-Piper que le §5 a explicitement rétracté *(précisé le 19/09 au soir)*, et `AGENTS.md` y envoie les agents comme « la version lisible par machine ». **Le laisser est pire que les deux autres options** : une vérité concurrente que personne ne maintient. Le registre prendra la place |
 | 9 | **La date de l'essai machine neuve** | **Butoir au 31/10/2026.** Passé ce jour sans verdicts, le document écrit **« mesure abandonnée »**, pas « en attente » | L'utilisateur peut **déplacer** cette date ; il ne peut pas la laisser vide. **Le gel étant levé, c'est le seul levier qui reste.** Une échéance qu'on peut manquer et qui le dit vaut mieux qu'une « obligation permanente », qui est une épitaphe |
 | 10 | **La branche `audit-20260911`** | **Fusionner dans `main`** | **0 de retard**, et `main` est un **ancêtre** : avance directe, aucun conflit possible. Et `main` est ce que le monde voit d'un dépôt public — il est aujourd'hui **trompeur** |
 | 12 | **`FREE_ONLY=false` est-il un état admis ?** | **Oui — mais jamais par défaut, jamais silencieux** : choix explicite, plafonné, qui **expire**. La forme du Boost | Interdire un état que le code sait produire, c'est se mentir. L'encadrer le rend visible |
 | 13 | **Le contrôle de fraîcheur des descriptions** | **Oui**, et il devient **une dixième étape nommée de la CI** | Position de l'utilisateur du 19/09 : une description périmée est un risque inacceptable pour un fonctionnement automatique. Les cinq pièces sont au §5 étape 1 — zone engendrée, provenance, **`PÉRIMÉ`** plutôt qu'un nombre vieilli, fonction d'empreinte **importée** et jamais réécrite, `--check` qui sort en 1 |
-| 14 | **Deux dépôts** | **Fait** le matin du 19/09 | — |
+| 14 | **Deux dépôts** | **Fait** le matin du 19/09 | **Décision de l'utilisateur, pas la mienne** — voir l'avertissement ci-dessus |
 | 15 | **Les sauvegardes** | **Même butoir : premier essai de restauration avant le 31/10/2026** | Une sauvegarde compte le jour où elle a été **remise en place**. Les trois questions non vérifiées — troisième copie, sauvegarde du VPS lui-même, localisation européenne — se répondent en la jouant |
 | 16 | **Où vivent les coordonnées du VPS** | **Les deux** : `.env.example` dans le dépôt privé pour lire, **secrets de CI** pour exécuter | L'un documente, l'autre exécute ; **aucun des deux ne porte de valeur en clair** |
 
@@ -1161,9 +1208,18 @@ ce qui est le pire des trois états.** Ils sont tranchés ici.
 | **La barrière de reproductibilité** : « *reproducible (2 runs within tolerance)* » (l. 87) | **absente**, et c'est une omission de ma part | **Reprise telle quelle.** C'est la seule barrière qui attrape **un candidat qui passe par chance**, et elle ne coûte qu'un second passage. Elle a de plus un jumeau déjà inventé dans ce document sans être relié à elle : le **rejeu à code changé sur entrées réelles** (§5 étape 2). Même mécanique, deux usages |
 | **Deux décisions ouvertes de l'original** (l. 148-152) : la licence de **FreeLLMAPI** avant tout fork, et les **conditions d'utilisation de Kaggle** à vérifier avant P3 | **jamais reprises** | La seconde **est déjà tenue par le code** — `contexte_partage()` coupe Kaggle automatique hors Studio personnel, et `AGENTS.md:157` cite la politique d'usage. **Close.** La première **tombe** : aucun fork de FreeLLMAPI n'est au programme de ce dépôt |
 
-**Et deux outils de la pile d'origine ne sont nommés nulle part** : `promptfoo` et
-`Crawl4AI`. **Écartés sans cérémonie**, comme Temporal et Forgejo : le dépôt a déjà sa CI,
-son bac à sable et ses carnets. Les nommer pour les écarter vaut mieux que de les taire.
+~~**Et deux outils de la pile d'origine ne sont nommés nulle part** : `promptfoo` et
+`Crawl4AI`.~~ **Faux, corrigé le 19/09 au soir : ils sont six.** En séparant le corps de
+l'annexe, `uv`, `Bifrost`, `OpenHands` et `Inspect AI` (l. 143 du plan d'origine) sont
+eux aussi à **zéro dans le corps** — les trois derniers n'existent que dans la citation
+verbatim de l'annexe, ce qui n'est pas un traitement, et `uv` n'apparaît nulle part.
+**Quatre sont écartés sans cérémonie**, comme Temporal et Forgejo : `promptfoo`,
+`Crawl4AI`, `uv` et `Bifrost` — le dépôt a déjà sa CI, son bac à sable, ses carnets et
+sa propre passerelle. **Les deux autres ne sont pas écartés, ils sont absents, et ils
+bouchent chacun un trou de ce document** : `Inspect AI` le cadre d'évaluation de
+l'étape 2, `OpenHands` l'agent d'intégration de l'étape 3. **Voir §9.11.** Les nommer
+pour les écarter vaut mieux que de les taire ; les taire les a fait passer pour
+écartés.
 
 > **Ce que ce contrôle enseigne, au-delà des quatre lignes.** Un document qui confronte un
 > autre document **doit se relire section contre section**, pas thème par thème : les quatre
@@ -1188,10 +1244,430 @@ procédure, c'est un classement par **coût du retard** :
 
 ---
 
+## §9 — Ce que la relecture adverse a trouvé, 19/09/2026 au soir
+
+Deux relecteurs, **mandats disjoints** : l'un cherchait **ce qui manque** — le plan
+d'origine relu section par section contre ce document ; l'autre **ce qui se contredit** —
+le document contre lui-même, et chacune de ses citations contre sa source. Tous deux ont
+été lancés **après** le §8, donc contre la version la plus décidée du document.
+
+**Chaque point ci-dessous a été remesuré à la main avant d'être écrit**, avec sa commande.
+Ceux des deux rapports qui n'ont pas résisté à la vérification ne sont pas repris. Ceux
+qui ont résisté le sont — y compris, et surtout, quand ils démentent une phrase que
+j'avais écrite comme un fait.
+
+> **Avertissement sur les « zéro » de ce paragraphe, et il est de la même famille que
+> les deux autres.** Ces comptes ont été relevés **avant l'écriture de ce
+> paragraphe**, le 19/09 au soir, sur le commit `fda30b9`. Depuis, ce paragraphe
+> écrit lui-même « RGPD », « C2PA », « Art. 50 », « `retired_reason` » et les cinq
+> rôles manquants : **un lecteur qui rejoue les commandes aujourd'hui ne retrouvera
+> aucun de ces zéros.** Ils se rejouent sur `fda30b9`, pas sur la tête de branche.
+> C'est la **troisième** fois que ce document bute sur la même chose — après le
+> compte de commits de l'en-tête et le poids du journal au §3 — et c'est précisément
+> ce que le contrôle de fraîcheur du §8, point 13, doit rendre automatique : **un
+> nombre entre avec sa commande et son commit, ou il n'entre pas.**
+
+> **La mesure la plus utile de ce paragraphe n'est aucune de ses onze lignes.** Le §8 se
+> termine par un contrôle de couverture qui se croyait complet : « ce que le plan
+> d'origine demande et que ce document avait omis », quatre angles morts, écrit le matin
+> même. **Il en restait onze.** Un contrôle de couverture fait par celui qui a écrit le
+> document en trouve quatre ; deux relecteurs qui ne l'ont pas écrit en trouvent onze de
+> plus, dont un bloquant. **On ne relit pas son propre texte pour ce qui n'y est pas** —
+> et c'est exactement pour cela que l'étape 3 fait valider les contributions par un agent
+> qui n'est pas celui qui les a écrites.
+
+### 9.1 — Aucun contrôle de sécurité nulle part, et l'étape 3 en dépend (bloquant)
+
+Le plan d'origine pose **six barrières obligatoires** (l. 79) ; la cinquième est
+« *security scan clean* ». Il ajoute, l. 81 : « *Security issue = immediate removal* ».
+Il ajoute encore, l. 30, que **les agents ne peuvent modifier ni les barrières, ni les
+règles, ni l'authentification de la passerelle, ni le plan lui-même**.
+
+**État mesuré le 19/09 :**
+
+| Ce qu'on cherche | Où l'on cherche | Résultat |
+|---|---|---|
+| « scan de sécurité », « security scan » | corps de ce document | **0** — la seule occurrence est dans la citation verbatim de l'annexe |
+| une étape de sécurité | `.github/workflows/validate.yml` | **0 sur 9 étapes nommées** (`grep -c '^      - name:'`, 19/09) : syntaxe, `ruff`, dépendances, imports, JS, tests, bash, free-only, compose |
+| « *Agents cannot modify* » | corps de ce document | **0** — l'étape 3 n'en garde qu'une moitié (« l'agent qui valide ne doit jamais pouvoir modifier la barre ») |
+
+**Pourquoi c'est bloquant, et pas un oubli de confort.** L'étape 3 propose exactement
+ceci : *un client propose un outil → un agent gratuit l'essaie → s'il passe la barre,
+**la CI l'intègre***. Le bac à sable, dont ce document est fier à juste titre
+(`internal: true`, `read_only`, `cap_drop: ALL`, `pids_limit: 128`), protège la machine
+qui **exécute** le code d'un inconnu. **Il ne protège rien contre du code qu'on
+fusionne** : une fois fusionné, ce code ne tourne plus dans le bac à sable, il tourne
+dans `free-tier-manager` — le service qui détient les clés **en clair** (§2.1). Le
+document a donc décrit une chaîne d'intégration de code étranger **dont la seule barrière
+de sécurité est celle qu'il n'a pas écrite**.
+
+> **Tranché : le contrôle de sécurité devient la onzième étape nommée de la CI** — la
+> dixième étant le contrôle de fraîcheur du §8, point 13 — et **c'est une barrière, pas un
+> avertissement** : elle fait échouer la construction. Contenu minimal, et rien d'inventé
+> au-delà de ce que le plan d'origine demande déjà :
+>
+> 1. **les dépendances ajoutées par la contribution sont confrontées à une base publique
+>    d'avis de sécurité** ; une entrée ouverte de gravité haute = refus ;
+> 2. **tout `diff` qui touche `config/`, `.env`, `.github/workflows/`, ou les seuils est
+>    refusé d'office** — c'est la règle l. 30 du plan d'origine, écrite ici pour la
+>    première fois : *l'agent qui valide ne peut modifier ni la barre, ni la CI qui la
+>    tient, ni les clés* ;
+> 3. **« problème de sécurité = retrait immédiat »** a besoin d'un endroit pour
+>    s'exécuter : c'est la colonne `statut` de l'étape 1, avec le champ `retired_reason`
+>    du schéma d'origine (voir 9.9). Sans cette colonne, « retrait immédiat » est une
+>    intention.
+>
+> **Ordre : avant l'ouverture aux clients, et seulement là.** Tant que le dépôt n'intègre
+> que du code écrit par son auteur, cette étape ne trouve rien. Le jour où l'étape 3
+> s'ouvre, elle est le préalable dur — au même titre que la barre du §5.
+
+### 9.2 — « No secrets in sandbox » : tenu, mais par énumération et non par règle
+
+Le plan d'origine, l. 29 : « *Sandbox all new code. **No secrets in sandbox.*** » Ce
+document ne le reprend nulle part.
+
+**Vérifié le 19/09, et la bonne nouvelle d'abord : c'est tenu.** `sandbox-worker` n'a
+**pas** de `env_file` — l'unique `env_file: .env` du fichier est à
+`docker-compose.yml:131-132`, et il appartient à `free-tier-manager`. Le worker reçoit
+**quatre variables nommées une à une** : `SANDBOX_WORKER_KEY`,
+`SANDBOX_TIMEOUT_SECONDS`, `SANDBOX_MAX_CODE_BYTES`, `SANDBOX_MAX_OUTPUT_BYTES`. **Aucune
+clé de fournisseur.** La seule qui soit un secret est la clé d'authentification du bac à
+sable lui-même, c'est-à-dire la sienne.
+
+**La mauvaise : rien ne le maintient.** La règle tient parce que quelqu'un a énuméré
+quatre variables, pas parce qu'une règle l'exige. **Ajouter `env_file: .env` à ce service
+est une ligne**, et c'est précisément ce que fait le service d'à côté. Aucun test, aucune
+étape de CI, aucune phrase de ce document ne s'y oppose.
+
+> **Tranché : la règle s'écrit, et elle se vérifie dans la même étape que 9.1.** « Le
+> service du bac à sable ne reçoit aucune variable qu'il n'ait nommée » — un contrôle de
+> quatre lignes sur `docker-compose.yml`, qui échoue si `env_file` apparaît sous
+> `sandbox-worker`. C'est le type même de règle que ce dépôt sait déjà tenir : l'étape
+> *free-only* de la CI a exactement cette forme.
+
+### 9.3 — Les sept rôles du MVP : cinq n'existent que dans une citation
+
+Le plan d'origine, l. 72 : « *Roles MVP: `llm_planner`, `llm_coder`, `stt`, `tts`,
+`image_gen`, `ocr`, `scraper`.* » L'étape 1 de ce document décide que le registre aura
+**une colonne `role`** — et ne dit **jamais** quelles valeurs cette colonne accepte.
+
+**Mesuré le 19/09** (`grep -rInw` sur tout le dépôt, `.git` exclu) :
+
+| Rôle | Où il existe réellement |
+|---|---|
+| `stt`, `tts` | **du code vivant** : `free-tier-manager/app.py:1265-1266`, `:1500-1501` — ce sont les clés de configuration d'Open WebUI que le routeur réécrit |
+| `llm_planner`, `llm_coder`, `image_gen`, `ocr`, `scraper` | **une seule ligne dans tout le dépôt**, et c'est **l'annexe de ce document** : la recopie verbatim de la l. 72 du plan d'origine. Zéro occurrence dans du code, zéro dans un autre fichier |
+
+Cinq rôles sur sept n'existent donc nulle part ailleurs que dans le texte qu'on est en
+train de confronter. **Une colonne sans vocabulaire est une colonne vide**, et c'est le
+genre de décision qu'un schéma prend une fois.
+
+> **Tranché : le vocabulaire de la colonne `role` s'écrit à l'étape 1, et il part du
+> réel.** Les rôles que le Studio sert aujourd'hui sont les valeurs de départ ; les rôles
+> du plan d'origine qu'il ne sert pas entrent **comme rôles vides**, pas comme absents.
+> Motif : la première barrière utile décidée au §5 est « **chaque fonction a ≥ 2 entrées
+> vivantes** », et le document y précise déjà que le code sait **constater** un rôle vide
+> sans le **refuser**. Un rôle vide déclaré est une dette visible ; un rôle absent est une
+> dette invisible. `ocr` et `scraper` sont les deux premiers.
+
+### 9.4 — La règle de promotion, restée en annexe
+
+Le plan d'origine, l. 79, dans la même ligne de barrières que 9.1 : « *score ≥ current
+fallback **(and ≥ champion to promote)*** ». C'est la règle qui distingue **entrer dans le
+registre** de **devenir le choix par défaut**.
+
+**Mesuré : le mot `champion` apparaît 4 fois dans ce document, dont 3 dans l'annexe.**
+L'unique occurrence du corps ne porte pas la règle. L'étape 2 définit donc une mesure (le
+taux d'erreur de mots) **sans dire ce qu'on en fait** : à partir de quel écart un moteur
+remplace-t-il celui qui sert aujourd'hui ?
+
+> **Tranché : les deux seuils entrent dans `seuils/` du dépôt privé en même temps que les
+> trois du §8** — et avec le même marquage « valeur de départ à confirmer », puisqu'ils
+> viennent du plan et non d'une mesure. **Battre le repli suffit à entrer au registre ;
+> battre le champion est nécessaire pour devenir le défaut.** C'est aussi la première
+> règle qui donne un sens opérationnel au cycle de vie `candidat → challenger → champion →
+> repli` que ce document cite sans jamais l'employer.
+
+### 9.5 — La septième copie de la vérité : `docs/MODAL_CATALOG.md`
+
+Le §5, étape 1, compte **six copies** de la vérité — dont **quatre divergent** — là où
+le journal n'en voyait que trois, et prévient qu'une fusion mal faite en produirait
+une de plus. **Il y en a déjà une septième, et elle est suivie par git.**
+
+`docs/MODAL_CATALOG.md` — **7 136 octets**, `git ls-files -s` le rend (blob
+`2af4eacc`), relevé le 19/09. Il énonce le routage ainsi (`:12-16`) :
+
+> ```text
+> GPU local suffisant
+> → utiliser le GPU local
+>
+> sinon
+> → Modal si configuré et si l'usage reste couvert par le crédit gratuit
+> ```
+
+**Le code fait l'inverse.** `sandbox-manager/app.py:879` pose
+`"fallback_order": ["modal", "local", "kaggle", "colab"]`, et la ligne suivante est
+`if modal_configured():`. **Modal passe en premier.** C'est la même erreur que celle déjà
+reprochée à `modal/profiles.json` — dans un fichier **plus gros, suivi par git, et que
+`AGENTS.md:111` nomme en premier** : « *Le catalogue de profils Modal est dans
+`docs/MODAL_CATALOG.md` et sa version lisible par machine dans `modal/profiles.json`.* »
+
+**Conséquence directe sur une décision déjà prise.** Le §8, point 8, supprime
+`modal/profiles.json` **et la ligne `AGENTS.md:111` avec lui**. Exécuté tel quel, cet
+arbitrage **supprime le seul pointeur vers le jumeau non compté** : le catalogue faux
+reste, et plus rien n'y envoie personne — donc plus rien ne le maintient. **On aurait
+retiré le panneau et laissé le trou.**
+
+> **Tranché : `docs/MODAL_CATALOG.md` entre en zone engendrée sous contrôle de fraîcheur**
+> (§8, point 13), avec les deux tableaux du `README.md`. Il n'est pas supprimé : contrairement
+> à `profiles.json`, il porte des informations que rien d'autre ne porte — les exemples
+> officiels Modal par fonction. **Ce qui se supprime est sa section de routage**, qui
+> double le code en le contredisant. Et la ligne `AGENTS.md:111` **ne se retire pas, elle
+> se réécrit** : elle cesse de nommer `profiles.json`, elle continue de nommer le
+> catalogue.
+>
+> **Et le compte du §5 passe de six copies à sept**, plus la huitième que la fusion
+> produirait. Le chiffre n'était pas faux par négligence : **il a été obtenu en cherchant
+> les copies de la liste des modèles**, et celle-ci est une copie de la **règle de
+> routage**. Une vérité se duplique sous plusieurs formes ; **les chercher par forme en
+> manque une à chaque fois** — le journal en voyait trois, le §5 en a trouvé six, la
+> relecture adverse une septième. *Le chiffre de ce paragraphe n'est donc pas donné
+> pour définitif : il est donné avec la méthode qui l'a manqué deux fois.*
+
+### 9.6 — P9 : j'ai confondu deux projets, et une décision repose sur cette confusion
+
+Le §1 range **P9 en « écarté par décision »**, au motif que le dépôt a choisi de **ne pas
+reconstruire NotebookLM** et de renvoyer vers celui de Google (`docs/NOTEBOOKLM.md`, route
+`/notebooklm`).
+
+**Le plan d'origine ne demande pas de reconstruire NotebookLM.** Il écrit, l. 125 :
+« *Base: integrate/fork **Open Notebook (MIT; API; Ollama)** OR build on own roles.* » —
+et l. 123 : « *Teach (**NotebookLM-parity, open**)* ». **Open Notebook est un projet MIT
+auto-hébergeable, distinct du produit de Google** ; « NotebookLM-parity » y désigne un
+niveau de fonctionnalité visé, pas un produit à cloner. La même ligne écarte d'ailleurs
+explicitement une autre option pour sa licence (« *Avoid InsightsLM (n8n Sustainable Use
+License)* »), ce qui montre que l'auteur choisissait entre des bases **ouvertes**.
+
+**Donc la décision du dépôt n'est pas « P9 est écarté ».** Elle est : *renvoyer vers un
+service fermé et tiers plutôt qu'intégrer une base ouverte* — **l'exact contraire de ce
+que P9 demandait**, puisque P9 existait précisément pour ne pas dépendre de Google. Le
+document a présenté ce choix comme un écartement de phase ; c'en est un **retournement**.
+
+> **Tranché : P9 reste écarté — la décision ne change pas, son motif change.** Ce n'est
+> pas « la fonction ne nous intéresse pas », c'est **« nous n'intégrons pas Open Notebook,
+> et nous acceptons une dépendance externe fermée sur cette fonction »**. Écrit ainsi,
+> l'arbitrage redevient révisable : le jour où le Studio veut un chat sourcé sans envoyer
+> les documents d'un client chez un tiers, la base MIT existe et le §1 ne prétendra plus
+> que la question a été réglée.
+>
+> **Et l'ironie déjà notée au §1 se corrige aussi.** Le dialogue FireRedTTS-2 n'est pas
+> « la brique audio de P9 construite par accident » : c'est **la brique audio de P9
+> construite conformément à ce que P9 demandait** — un équivalent ouvert, chez soi. La
+> douzième exception au gel a fait du P9 sans le nommer.
+
+### 9.7 — Ce que le plan d'origine interdit, et que ce document ne redit pas
+
+Le plan d'origine, l. 26 : « *Kaggle/Colab = **batch JOBS only**. No web services, no
+tunnels, no SSH, no distributed workers, no multi-account. Agent + model colocated in same
+job, model on localhost.* » Et l. 27 : « *Modal = only platform allowed to serve
+endpoints.* »
+
+Ce document **ne le reprend ni ne le conteste**. Or c'est la règle qui **explique** l'ordre
+de repli du code (`modal` en premier, `kaggle` ensuite), et c'est celle que le Studio tient
+déjà sans le dire — `contexte_partage()` coupe Kaggle automatique hors Studio personnel.
+
+> **Tranché : la règle est reprise telle quelle**, et rangée où elle sert : à côté de la
+> décision 7 du §8 (« jamais de sortie réseau du bac à sable »), dont elle est le
+> pendant. « **Kaggle et Colab exécutent des travaux qui finissent ; seul Modal sert une
+> adresse** » est, de plus, la formulation la plus courte du motif : un service permanent
+> sur un quota gratuit personnel est ce qui fait fermer les comptes.
+
+### 9.8 — Le droit : RGPD, AI Act, C2PA, « deux produits jamais mêlés » — zéro partout
+
+Mesuré le 19/09, sur **tout** le document, annexe comprise :
+
+| Ce que le plan d'origine écrit | Occurrences dans ce document |
+|---|---|
+| « *GDPR: purpose, retention, export, deletion* » (l. 34) | **0** |
+| « *Two products, never mixed* » : studio gratuit BYOK **contre** flux payants hébergés (l. 102) | **0** |
+| « *AI-generated label + metadata (C2PA if feasible)* » et « *EU AI Act transparency obligations (Art. 50)* » (l. 111) | **0** |
+| « *Billing: prepaid credits per flow (Stripe)* » (l. 112) | **0** |
+| « *avoid AI Act Annex III high-risk* », « *Adults only at launch* » (l. 116), « *Every claim cited; uncited content blocked* » (l. 119) | **0** |
+
+**Deux de ces lignes ne peuvent pas attendre P8, parce qu'elles sont déjà engagées.**
+
+1. **« Deux produits, jamais mêlés » est déjà contredit** — le §2, point 6, le constate
+   sans le nommer : le Boost et les trois budgets Modal sont des fonctions payantes dans
+   le produit gratuit. La règle d'origine n'interdit pas de vendre ; elle interdit de
+   **mélanger** — comptes, conditions d'utilisation, et responsabilité juridique.
+2. **Le RGPD est engagé le jour où la base de mesures de l'étape 4 existe**, pas le jour
+   des ventes. Le §5 a déjà pris les deux décisions qui comptent (*mesures seules, aucune
+   phrase écrite par une personne* ; *remontée seulement si le client dit oui, éteinte par
+   défaut*) — **mais il n'a pas écrit les quatre mots qui les rendent opposables** :
+   finalité, conservation, export, effacement. « Rien n'est jamais effacé » (décision de
+   rotation du §5) **et** « effacement » sont à concilier explicitement, et c'est le seul
+   endroit du document où deux décisions déjà prises se heurtent en droit.
+
+> **Tranché, et l'ordre compte.**
+> - **Maintenant** : les quatre mots du RGPD s'écrivent dans le schéma de la base de
+>   mesures (§5, étape 4), avec la conciliation « on n'efface rien / effacement sur
+>   demande » — la réponse tenable étant que **les mesures anonymes ne sont pas des
+>   données personnelles**, ce qui doit alors être vrai par construction et pas par
+>   déclaration.
+> - **Maintenant aussi, parce que c'est gratuit** : « deux produits, jamais mêlés » entre
+>   au §7 comme **contradiction ouverte n° 8**, puisque le dépôt est déjà du mauvais côté.
+> - **À l'entrée de P8, pas avant** : AI Act art. 50, C2PA, marquage des sorties,
+>   capture du consentement, Stripe. Les inscrire ici comme travail à faire aujourd'hui
+>   serait fabriquer une charge qui n'existe pas encore. **Les taire serait pire** : ce
+>   sont les conditions d'entrée de la phase, et une phase dont les conditions d'entrée ne
+>   sont écrites nulle part se franchit sans s'en apercevoir.
+
+### 9.9 — Le schéma de registre : treize champs tombés en silence
+
+Le §5 dit reprendre le schéma du plan d'origine « en partie », et nomme trois champs
+jugés structurants — `role`, `statut`, `commercial_ok` — plus le territoire, que le plan
+d'origine n'a pas. **Ce qu'il ne dit pas, c'est ce qui est tombé.** Mesuré le 19/09, ces
+champs sont à **0 dans le corps** et n'existent que dans la citation de l'annexe :
+
+`official`, `publisher`, `source_url`, `size_params`, `vram_gb_q4`, `runs_on`,
+`hardware_tested`, `languages`, `modalities`, `eval_suite_version`, `scores`,
+`retired_reason`, `provenance{submitter, run_id, date, signed_hash}`.
+
+**Trois d'entre eux ne sont pas des colonnes de confort :**
+
+- **`retired_reason`** est ce qui fait exister « problème de sécurité = retrait immédiat »
+  (9.1) et le « rejet journalisé qui empêche la reproposition » que le §5 réclame déjà
+  sans lui donner de champ ;
+- **`provenance{submitter, run_id, date, signed_hash}`** est **le format des
+  contributions de l'étape 3**, que ce document laisse entièrement indéfini. Le plan
+  d'origine est plus précis que lui sur ce point : P7, l. 97, écrit « *user eval
+  submissions (Inspect YAML, **signed**, hardware/version)* ». Le §5 dit « les
+  contributions arrivent par git, avec auteur, date et signature » — **c'est la même
+  chose, dite sans le champ qui la porte** ;
+- **`vram_gb_q4` et `hardware_tested`** sont ce sans quoi la barrière « *vram/speed within
+  role limits* » ne peut pas s'évaluer, et ce sont exactement les grandeurs que le dépôt
+  mesure déjà à la main depuis le 15/09.
+
+> **Tranché : le schéma se décide en une fois, à l'étape 1, et il part du schéma d'origine
+> plutôt que d'une liste refaite.** Chaque champ écarté l'est **nommément, avec son
+> motif**, dans le fichier de schéma lui-même. Motif de la règle : un champ absent d'un
+> schéma ne se remarque jamais ; un champ marqué « écarté parce que X » se conteste. C'est
+> la leçon de 9.1 à 9.8 appliquée à un fichier au lieu d'un document.
+
+### 9.10 — Les décisions ouvertes de l'original : six sur huit restent ouvertes
+
+Le plan d'origine a **huit** décisions ouvertes (l. 149-156). Le §8 en traite **deux** —
+la licence de FreeLLMAPI (l. 150, tombe) et les conditions d'utilisation de Kaggle
+(l. 152, close, déjà tenue par le code). *Sa citation « l. 148-152 » désigne au passage le
+titre de section et non les deux lignes : ce sont **l. 150 et 152**.*
+
+Les six autres, avec leur sort :
+
+| Décision d'origine | Sort |
+|---|---|
+| **LiteLLM contre Bifrost** (l. 149) | **Sans objet** : le dépôt n'a ni l'un ni l'autre — il a écrit sa propre passerelle (`free-tier-manager`). C'est un fait du §1, jamais relié à cette décision. **Close, par le réel.** |
+| **Licence de Qwen3.8 pour l'usage commercial** (l. 151) | **Ouverte, et elle a un jumeau vivant** : c'est la même question que Piper et que les modèles CC BY-NC (§8, points 3 et 5). Elle rejoint le même travail de vérification, **sans priorité propre** tant qu'aucun Qwen3.8 ne tourne dans ce dépôt. |
+| **Fournisseurs dont les conditions permettent l'usage commercial** en production (l. 153) | **Ouverte**, et elle devient la question centrale le jour de P8 — pas avant. Rangée avec 9.8. |
+| **Choix du GPU pour P8, 24 ou 32 Gio** (l. 154) | **Sans objet aujourd'hui**, et elle porte sa propre condition d'entrée : « *decide from measured VRAM of launch flows* ». Il n'y a pas de flux, donc pas de mesure, donc pas de décision. **À ne pas trancher.** |
+| **P9 : fork d'Open Notebook ou construction propre ; mineurs plus tard** (l. 155) | **Tranchée à revers, voir 9.6** : ni l'un ni l'autre, dépendance externe fermée. Le volet « mineurs » (consentement parental, RGPD mineurs, filtres) **rejoint 9.8** et reste entier. |
+| **Revue juridique avant les ventes P8** (l. 156) | **Ouverte, et c'est la condition d'entrée de P8**, au même titre que l'art. 50. Rangée avec 9.8. |
+
+> **Tranché : aucune de ces six ne devient un travail de cette semaine.** Ce qui change
+> est qu'elles cessent d'être invisibles : deux sont **closes par le réel**, deux sont
+> **sans objet avec leur condition de réveil écrite**, deux sont des **conditions d'entrée
+> de P8**. Une décision qu'on n'a pas prise et qu'on ne voit plus est une décision prise
+> par défaut.
+
+### 9.11 — Quatre outils de la pile, dont deux structurants
+
+La ligne 143 du plan d'origine liste la pile. Ce document en écartait deux « sans
+cérémonie » ; **la phrase était fausse et elle est corrigée en place au §8** (`promptfoo`,
+`Crawl4AI`, `uv` et `Bifrost` sont écartés ; `OpenHands` et `Inspect AI` ne l'étaient
+pas, ils étaient seulement absents).
+
+Le point qui appartient à ce paragraphe est celui-ci : **deux trous du document portent le
+nom d'un outil que le plan d'origine avait déjà choisi.**
+
+- L'étape 2 définit un taux d'erreur de mots « rejouable hors réseau » **sans dire dans
+  quel cadre il se rejoue**. Le plan d'origine répond : `Inspect AI`, et il le répète
+  trois fois (l. 53, l. 94, l. 97).
+- L'étape 3 parle d'« un agent gratuit » qui essaie la contribution **sans jamais dire
+  lequel**. Le plan d'origine répond : `OpenHands` (l. 50).
+
+> **Tranché : ni l'un ni l'autre n'est adopté par défaut, et les deux trous sont nommés
+> comme trous.** Motif : le dépôt a déjà écrit sa passerelle plutôt que d'adopter LiteLLM,
+> et il a eu raison (9.10) — adopter un cadre parce qu'un plan le nomme est le même défaut
+> que l'écarter sans le nommer. **Ce qui est décidé, c'est que le choix se fasse au moment
+> d'écrire l'étape 2, explicitement, entre « `Inspect AI` » et « un format à nous », avec
+> la raison écrite.** Un trou nommé se comble ; un trou anonyme se contourne.
+
+### 9.12 — Les corrections faites ailleurs dans le document, le même soir
+
+Celles-ci ne méritaient pas de section : elles sont appliquées **sur place**, texte
+d'origine barré et non effacé.
+
+| Endroit | Ce qui était écrit | Ce qui est vrai |
+|---|---|---|
+| §5, étape 3 | citation `PLAN.md:380-384` | **`PLAN.md:394-398`** — les cinq commits du 19/09 ont décalé le passage de 14 lignes |
+| §6 | citation `PLAN.md:453` | **`PLAN.md:467`**, même cause |
+| en-tête | « de 45 le 19/09 au soir » | **faux au moment même de l'écrire** : le commit qui portait cette phrase était le 46ᵉ. Le nombre est retiré, la commande reste |
+| §5 | « Never covert », attribué aux règles dures (l. 33) | **l. 19**, dans le tronc stratégique |
+| §8 | « les treize que j'ai tranchées » | **douze** : la ligne 14 (deux dépôts) est un acte de l'utilisateur |
+| §8 | `modal/profiles.json` « déjà faux sur trois fonctions » | **le grief exact est sa section `policy`** ; l'écart Chatterbox-contre-Piper avait été explicitement rétracté au §5 |
+| §5 étape 1 · §7 point 8 | `profiles.json` « passe en zone engendrée » | **contredisait la décision 8 du §8** (supprimé). Recousu, et `docs/MODAL_CATALOG.md` prend la place (9.5) |
+| « Ordre de marche recommandé » | « la mesure est première pour décider, le registre est premier pour coder » | **contredit l'ordre du §8**, où le registre est sixième sur sept. Barré ; **le §8 l'emporte** |
+| §3 | renvoi à « l'étape *autonomie* du §5 » | **le §5 n'a que quatre étapes et aucune ne porte ce nom** |
+| §3 | « un fichier de 152 191 octets » | vrai **au relevé `edb2b56`** ; écrit nu, c'était un nombre sans instrument |
+| §1, §3, §5, §6 | sept encadrés « Décision demandée » | **toutes tranchées au §8** ; chacun porte désormais sa réponse en tête, la question restant écrite |
+
+### 9.13 — Ce que ce paragraphe ajoute à l'ordre du §8
+
+L'ordre du §8 classe par coût du retard. Ces onze points s'y insèrent sans le
+bouleverser, parce que **neuf des onze ne coûtent rien tant que l'étape 3 n'est pas
+ouverte** — les deux autres étant ses conditions d'entrée :
+
+1. **Avant toute ouverture de l'étape 3 aux clients** : le contrôle de sécurité (9.1) et
+   la règle des secrets du bac à sable (9.2). **Ce sont des conditions d'entrée, pas des
+   tâches.** L'étape 3 sans elles est une porte ouverte sur le service qui détient les
+   clés.
+2. **En même temps que l'étape 1, parce qu'un schéma se décide une fois** : le vocabulaire
+   des rôles (9.3), les champs du schéma d'origine et leurs motifs d'écartement (9.9), la
+   règle de promotion dans `seuils/` (9.4).
+3. **Avec la suppression de `profiles.json`, déjà au quatrième rang du §8** : le sort de
+   `docs/MODAL_CATALOG.md` et la réécriture de `AGENTS.md:111` (9.5) — **sinon cet
+   arbitrage empire la situation qu'il corrige.**
+4. **Coût nul, valeur immédiate** : les quatre mots du RGPD dans le schéma des mesures,
+   « deux produits jamais mêlés » en huitième contradiction ouverte (9.8), la règle
+   Kaggle/Colab (9.7), le motif corrigé de P9 (9.6), et les six décisions d'origine
+   rangées avec leur condition de réveil (9.10).
+5. **Au moment d'écrire l'étape 2, pas avant** : le choix de cadre d'évaluation et celui
+   de l'agent d'intégration (9.11).
+
+> **Et la règle que ce paragraphe laisse au dépôt.** Un document qui confronte un autre
+> document se relit **deux fois et par deux lecteurs différents** : une fois pour ce qui
+> est faux, une fois pour ce qui manque. Les deux passes ne trouvent pas les mêmes choses,
+> et **celui qui a écrit ne peut faire ni l'une ni l'autre correctement** — il a trouvé
+> quatre angles morts le matin, il en restait onze le soir. C'est mesuré, sur ce document,
+> aujourd'hui.
+
+---
+
 ## Ordre de marche recommandé
 
-**La mesure est première pour *décider*, le registre est premier pour *coder*.** Deux
-chemins distincts qui avancent en parallèle, avec trois garde-fous :
+~~**La mesure est première pour *décider*, le registre est premier pour *coder*.** Deux
+chemins distincts qui avancent en parallèle, avec trois garde-fous :~~
+
+> **Caduc le 19/09 au soir, et c'est le §8 qui l'emporte.** Il n'y a plus deux chemins
+> parallèles à arbitrer : le gel étant levé, rien ne bloque rien. Le §8 classe par
+> **coût du retard**, et le registre y est **sixième sur sept** — derrière le budget
+> Modal unique, le refus au démarrage, les deux dates du 31/10 et la suppression de
+> `profiles.json`. **En cas de désaccord entre cette section et le §8, le §8 l'emporte**
+> (il est plus récent et il porte les décisions de l'utilisateur), et le §9.13 dit où
+> s'insèrent les onze points de la relecture adverse. Cette section reste écrite : ses
+> trois garde-fous sont barrés un à un ci-dessous, et son dernier paragraphe — *ce qui
+> ferait changer cet ordre* — reste juste.
+
+Les trois garde-fous, tels qu'ils étaient écrits :
 
 1. **Le §6 se date cette semaine** — une date d'essai, ou l'aveu écrit de son impossibilité
    avec son échéance.
@@ -1207,7 +1683,7 @@ chemins distincts qui avancent en parallèle, avec trois garde-fous :
 
 - si l'utilisateur ne peut fournir **ni machine ni personne** avant une date lointaine,
   cette date et cette impossibilité **s'écrivent — elles ne se taisent pas** ;
-- si la fusion des six copies révèle une contradiction **matérielle** de licence, le
+- si la fusion des six copies *(sept — voir §9.5)* révèle une contradiction **matérielle** de licence, le
   registre devient urgent **pour le risque**, pas pour l'hygiène ;
 - ~~si une quatorzième demande touche la vidéo, la chanson ou le dialogue, la priorité devient
   le trou des budgets Modal (§7, point 11) : c'est le seul défaut qui coûte de l'argent.~~
