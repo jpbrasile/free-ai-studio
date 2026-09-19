@@ -78,7 +78,7 @@ décision** · **à faire**.
 | Une application utilisable existe | 4 services Docker Compose et **onze pages** — 5 servies par le routeur, 6 par le bac à sable (`grep -c "response_class=HTMLResponse"` sur les deux `app.py`) | `docker-compose.yml` | fait | les services oui ; deux pages sur onze (chanson, dialogue) non |
 | Elle couvre neuf fonctions | chat, image, recherche web, dictée, voix, dessins SVG, vidéo, chanson, dialogue. **Aucun fichier du dépôt ne porte cette liste** : elle est reconstituée à la main, page par page | `free-tier-manager/app.py`, `sandbox-manager/app.py` | fait, **mais non dénombré par le dépôt** — c'est déjà un symptôme du §5 | sept sur neuf |
 | Elle est testée | **209** fonctions `def test_` dans **12** fichiers portant des tests (`tests/*.py` en compte 13, `conftest.py` n'en porte aucune) — `grep -rh "def test_" tests/*.py \| wc -l`, 19/09. Le journal écrit « **214 tests passent** » au 18/09 (`PLAN.md:315`) : c'est le compte **collecté** par pytest, reproduit le 19/09 par `pytest --collect-only -q`. Deux instruments, deux nombres justes | `tests/` | fait | **non** : `main` ne porte que 5 fichiers de test sur 13 |
-| Une CI la vérifie | **9 étapes nommées** (`grep -c "^      - name:" .github/workflows/validate.yml`), plus **trois** actions sans nom (`checkout`, `setup-python`, `setup-node`, l. 11, 14, 49). Déclencheurs : `push` et `pull_request`, sans filtre de chemin | `.github/workflows/validate.yml` | fait | oui |
+| Une CI la vérifie | **10 étapes nommées** (`grep -c "^      - name:" .github/workflows/validate.yml`) — ~~9~~ le matin du 19/09, la dixième est « Échéances », posée le soir même par `176878c` —, plus **trois** actions sans nom (`checkout`, `setup-python`, `setup-node`, l. 11, 14, 49). Déclencheurs : `push` et `pull_request`, sans filtre de chemin | `.github/workflows/validate.yml` | fait | oui |
 | Un bac à sable isole le code étranger | `read_only`, `cap_drop: ALL`, `no-new-privileges`, `pids_limit: 128`, `mem_limit: 1g`, réseau `sandbox-internal` déclaré `internal: true` (`docker-compose.yml:211-213`) : **aucune sortie réseau** | `docker-compose.yml` | fait | **oui, déjà sur `main`** |
 
 ### Les phases du plan d'origine
@@ -122,7 +122,7 @@ exception au gel (`PLAN.md:184`), sans passer par P9 ni par aucun registre. Le p
 prévoyait cette brique à la fin d'une chaîne de neuf phases ; elle est arrivée par une
 demande d'utilisateur, un jeudi.
 
-> **→ Tranché le 19/09 au soir — §8, point 13 : **oui**, et le contrôle devient une dixième étape nommée de la CI.** La question ci-dessous reste écrite
+> **→ Tranché le 19/09 au soir — §8, point 13 : **oui**, et le contrôle devient une ~~dixième~~ **onzième** étape nommée de la CI** (le dixième rang est pris depuis `176878c` par l'étape « Échéances » ; c'est le rang qui bouge, pas la décision). La question ci-dessous reste écrite
 > telle quelle : on n'efface rien, et l'option écartée explique celle qui est prise.
 >
 > **Décision demandée.** Ce tableau devient-il la référence d'état du projet — donc relu à
@@ -617,7 +617,7 @@ son propre code (`generate_status_block.py:671-683`) :
 > **Et c'est précisément là que Free AI Studio peut faire mieux que le dépôt dont il
 > s'inspire.** Le Studio a **une vraie CI, déclenchée sur chaque `push` et chaque
 > `pull_request`, sans filtre de chemin** (`.github/workflows/validate.yml`). Le drapeau
-> `--check` y devient une **dixième étape nommée** — ce que `plasma-digital-twin` n'a
+> `--check` y devient une **~~dixième~~ onzième étape nommée** — ce que `plasma-digital-twin` n'a
 > jamais pu faire. La pièce manquante là-bas est la seule que le Studio possède déjà.
 
 #### Trois idées du plan d'origine à porter dans le schéma, maintenant
@@ -646,7 +646,7 @@ Parce qu'un schéma se décide **une fois** :
 en silence. C'est le test qui distingue un registre d'un fichier de documentation.
 
 **Et un second livrable, qui est le vrai remède au risque nommé par l'utilisateur le
-19/09 : une dixième étape de CI qui échoue quand une description a vieilli.** Concrètement,
+19/09 : une ~~dixième~~ **onzième** étape de CI qui échoue quand une description a vieilli.** Concrètement,
 dans l'ordre de difficulté croissante :
 
 > **Recousu le 19/09 au soir.** `modal/profiles.json` est **supprimé** par la
@@ -1248,7 +1248,7 @@ que la copie est sans valeur sans les mesures.** Un clone parti aujourd'hui a z�
 | 9 | **La date de l'essai machine neuve** | **Butoir au 31/10/2026.** Passé ce jour sans verdicts, le document écrit **« mesure abandonnée »**, pas « en attente » | L'utilisateur peut **déplacer** cette date ; il ne peut pas la laisser vide. **Le gel étant levé, c'est le seul levier qui reste.** Une échéance qu'on peut manquer et qui le dit vaut mieux qu'une « obligation permanente », qui est une épitaphe |
 | 10 | **La branche `audit-20260911`** | **Fusionner dans `main`** | **0 de retard**, et `main` est un **ancêtre** : avance directe, aucun conflit possible. Et `main` est ce que le monde voit d'un dépôt public — il est aujourd'hui **trompeur** |
 | 12 | **`FREE_ONLY=false` est-il un état admis ?** | **Oui — mais jamais par défaut, jamais silencieux** : choix explicite, plafonné, qui **expire**. La forme du Boost | Interdire un état que le code sait produire, c'est se mentir. L'encadrer le rend visible |
-| 13 | **Le contrôle de fraîcheur des descriptions** | **Oui**, et il devient **une dixième étape nommée de la CI** | Position de l'utilisateur du 19/09 : une description périmée est un risque inacceptable pour un fonctionnement automatique. Les cinq pièces sont au §5 étape 1 — zone engendrée, provenance, **`PÉRIMÉ`** plutôt qu'un nombre vieilli, fonction d'empreinte **importée** et jamais réécrite, `--check` qui sort en 1 |
+| 13 | **Le contrôle de fraîcheur des descriptions** | **Oui**, et il devient **une ~~dixième~~ onzième étape nommée de la CI** (rang décalé le soir même par « Échéances », `176878c`) | Position de l'utilisateur du 19/09 : une description périmée est un risque inacceptable pour un fonctionnement automatique. Les cinq pièces sont au §5 étape 1 — zone engendrée, provenance, **`PÉRIMÉ`** plutôt qu'un nombre vieilli, fonction d'empreinte **importée** et jamais réécrite, `--check` qui sort en 1 |
 | 14 | **Deux dépôts** | **Fait** le matin du 19/09 | **Décision de l'utilisateur, pas la mienne** — voir l'avertissement ci-dessus |
 | 15 | **Les sauvegardes** | **Même butoir : premier essai de restauration avant le 31/10/2026** | Une sauvegarde compte le jour où elle a été **remise en place**. Les trois questions non vérifiées — troisième copie, sauvegarde du VPS lui-même, localisation européenne — se répondent en la jouant |
 | 16 | **Où vivent les coordonnées du VPS** | **Les deux** : `.env.example` dans le dépôt privé pour lire, **secrets de CI** pour exécuter | L'un documente, l'autre exécute ; **aucun des deux ne porte de valeur en clair** |
@@ -1299,7 +1299,11 @@ procédure, c'est un classement par **coût du retard** :
 2. ~~**Le refus au démarrage** — trois conditions, et il tient sans chiffrement.~~
    **FAIT le 19/09/2026 au soir, `4b67ba6`** — et **deux** magasins de clés en clair,
    pas un : voir la décision 3 ci-dessus.
-3. **Les deux dates du 31/10** — elles ne coûtent rien à poser et tout à oublier.
+3. ~~**Les deux dates du 31/10** — elles ne coûtent rien à poser et tout à oublier.~~
+   **FAIT le 19/09/2026 au soir, `176878c`** — et elles ne sont plus seulement écrites,
+   elles sont **relues** : `scripts/verifier-echeances.py`, dixième étape nommée de la CI,
+   sort en 1 le 1er novembre si l'un des deux documents dit encore « en attente ».
+   `docs/SAUVEGARDES.md` est né avec sa date — il n'existait pas.
 4. **`modal/profiles.json` supprimé, `AGENTS.md:111` retirée** — une vérité fausse de
    moins, avant que le registre n'en hérite.
 5. **La fusion dans `main`** — pour que le dépôt public cesse de mentir sur lui-même.
@@ -1352,7 +1356,7 @@ règles, ni l'authentification de la passerelle, ni le plan lui-même**.
 | Ce qu'on cherche | Où l'on cherche | Résultat |
 |---|---|---|
 | « scan de sécurité », « security scan » | corps de ce document | **0** — la seule occurrence est dans la citation verbatim de l'annexe |
-| une étape de sécurité | `.github/workflows/validate.yml` | **0 sur 9 étapes nommées** (`grep -c '^      - name:'`, 19/09) : syntaxe, `ruff`, dépendances, imports, JS, tests, bash, free-only, compose |
+| une étape de sécurité | `.github/workflows/validate.yml` | **0 sur 10 étapes nommées** (`grep -c '^      - name:'`, 19/09 au soir) : syntaxe, `ruff`, dépendances, imports, JS, tests, bash, free-only, **échéances**, compose |
 | « *Agents cannot modify* » | corps de ce document | **0** — l'étape 3 n'en garde qu'une moitié (« l'agent qui valide ne doit jamais pouvoir modifier la barre ») |
 
 **Pourquoi c'est bloquant, et pas un oubli de confort.** L'étape 3 propose exactement
@@ -1365,8 +1369,9 @@ dans `free-tier-manager` — le service qui détient les clés **en clair** (§2
 document a donc décrit une chaîne d'intégration de code étranger **dont la seule barrière
 de sécurité est celle qu'il n'a pas écrite**.
 
-> **Tranché : le contrôle de sécurité devient la onzième étape nommée de la CI** — la
-> dixième étant le contrôle de fraîcheur du §8, point 13 — et **c'est une barrière, pas un
+> **Tranché : le contrôle de sécurité devient la ~~onzième~~ douzième étape nommée de la
+> CI** — la dixième est « Échéances » depuis `176878c`, la onzième étant le contrôle de
+> fraîcheur du §8, point 13 — et **c'est une barrière, pas un
 > avertissement** : elle fait échouer la construction. Contenu minimal, et rien d'inventé
 > au-delà de ce que le plan d'origine demande déjà :
 >
