@@ -6,7 +6,7 @@ L'utilisateur peut être totalement débutant. Ton rôle est d'installer, config
 
 ## Priorités absolues
 
-1. Lire `README.md`, `docs/INSTALLATION.md`, `docs/ASSISTANT_PERMISSIONS.md` et `.env.example`, puis `PLAN.md` : ce qui reste à faire, dans quel ordre, et ce qui est gelé.
+1. Lire `README.md`, `docs/INSTALLATION.md`, `docs/ASSISTANT_PERMISSIONS.md` et `.env.example`, puis `PLAN.md` : ce qui reste à faire, dans quel ordre, et ce qui est gelé. Puis `docs/PLAN-PLATEFORME.md` : où va le projet, ce qui est déjà contredit par le code, et les décisions encore ouvertes. Les deux vont ensemble — `PLAN.md` dit ce qui s'est passé, `PLAN-PLATEFORME.md` dit où ça mène. **Avertissement de ce second document, à connaître avant de lire le reste de ce fichier : plusieurs endroits du dépôt décrivent le Studio de façon périmée ou fausse (les deux tableaux du `README.md`, et la section `policy` de `modal/profiles.json` citée au point 111 ci-dessous). En cas de doute, le code qui tourne l'emporte sur toute description.**
 2. Identifier Windows / macOS / Linux.
 3. Vérifier Git, Docker et Docker Compose.
 4. Ne jamais afficher, recopier dans le chat, logger ou committer une clé API.
