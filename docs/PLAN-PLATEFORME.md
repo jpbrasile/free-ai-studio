@@ -74,7 +74,7 @@ décision** · **à faire**.
 
 | Phase | État réel | Preuve | Verdict | Sur `main` |
 |---|---|---|---|---|
-| **P0** Setup (VPS EU, Postgres, Forgejo+CI, sauvegardes, arrêt d'urgence) | Aucun VPS, aucun Postgres, aucun Forgejo. L'arrêt d'urgence existe mais **par travail**, pas global : `POST /jobs/{jid}/arreter` | `sandbox-manager/app.py:1598` | partiel — et la partie faite ne répond pas à la règle « Kill switch must stop **all** pipelines » | non |
+| **P0** Setup (VPS EU, Postgres, Forgejo+CI, sauvegardes, arrêt d'urgence) | **Rien dans ce dépôt** — et c'était la seule lecture d'une version antérieure de ce document. **Mais l'utilisateur possède déjà un VPS qui tourne**, avec Docker, Coolify, un **PostgreSQL** (Supabase auto-hébergé) et nginx, relevé le 19/09 dans les procédures d'un autre projet. **Il n'est simplement relié à rien ici.** L'arrêt d'urgence, lui, existe mais **par travail**, pas global : `POST /jobs/{jid}/arreter` | `sandbox-manager/app.py:1598` ; pour le VPS : `agentic-flow-fresh/.claude/skills/vps-claude/SKILL.md`, `pv-supabase/SKILL.md` | **partiel, et bien plus avancé qu'il n'y paraît** : le matériel de P0 existe, l'arrêt d'urgence ne répond pas à « Kill switch must stop **all** pipelines », et **la localisation européenne du VPS reste non vérifiée** alors que le plan l'exige | non |
 | **P1** Registry + Scan | `registry/` et `scan/` n'existent pas. Aucun schéma, aucune graine, aucune source de balayage | relevé de racine, 19/09 | à faire | — |
 | **P2** Gateway | La passerelle existe : chaîne `gemini → openrouter → groq`, bascule annoncée et non silencieuse, pause jusqu'à minuit Pacifique. Ce qui manque : elle **ne lit aucun registre**, et elle **ne compte rien d'avance** | `free-tier-manager/app.py:52` (`PROVIDERS`), `:141` (`LIMITES_PUBLIEES`), `:618` (`apply_rate_limit_cooldown`) | partiel — **et sur un point le réel réfute le plan** (ci-dessous) | en partie |
 | **P3** Runners | Quatre endroits d'exécution réels, dans cet ordre : `modal → local → kaggle → colab` (`sandbox-manager/app.py:879`, `:1451`). Pas de `llama.cpp`, **pas un seul LLM auto-hébergé** | `sandbox-manager/` | partiel | en partie |
@@ -786,11 +786,136 @@ en local par le vrai `.env`, `PLAN.md:19`) :
 - **Ignoré** : les mesures qui s'accumulent, les clés, les compteurs — tout ce qui grossit
   seul. C'est déjà exactement le régime de `config/` et de `.env`.
 
+#### Où vivent les trois choses — et pourquoi ce n'est pas « client contre administrateur »
+
+Question posée par l'utilisateur le 19/09 : **faut-il deux dépôts, un pour le déploiement
+client et un privé pour le socle d'administration ?**
+
+**Oui, deux dépôts — mais la frontière « client / administrateur » ne tient pas.** La
+décision du 19/09 fait du client l'administrateur de son propre Studio : il lui faut la
+mise à jour, le diagnostic, la page Clés. **Ce que le client ne doit pas avoir, ce n'est pas
+l'administration : c'est le jugement.**
+
+La frontière juste est **ce qui tourne** contre **ce qui juge**. Et il y a **trois**
+endroits, pas deux :
+
+| | Quoi | Où | Pourquoi là |
+|---|---|---|---|
+| **Public** | le Studio, les pages, les services, le schéma du registre, le **lanceur** d'évals, un petit jeu d'évals de fumée | `github.com/jpbrasile/free-ai-studio`, public depuis le 09/09/2026, MIT | le produit doit s'installer en un geste ; le cacher tuerait la thèse débutant, qui **est** le produit |
+| **Privé** | les **définitions d'évaluations**, les **seuils**, les résultats de référence | un dépôt privé | c'est du texte qui change par relecture, petit, dont l'historique sert : l'usage exact d'un dépôt git |
+| **Sauvegardé** | la **base de mesures** | **pas dans git** — un fichier par mois, copié ailleurs | ça s'empile, ça ne se relit pas, et git n'oublie jamais |
+
+**Ce n'est pas le code qui a de la valeur.** Le plan d'origine le dit lui-même (l. 35) :
+« Public registry snapshot may be scraped by others ; **do not rely on hiding it. Protect
+the flow**, not the snapshot. » Ce qui ne se copie pas, ce sont les mesures accumulées et
+**le fait de savoir juger**.
+
+**Et l'argument le plus fort pour la séparation n'est pas la propriété intellectuelle.**
+C'est la règle dure que le plan porte déjà (l. 30) : l'agent qui valide ne doit jamais
+pouvoir modifier la barre contre laquelle il valide. **Aujourd'hui c'est une promesse ; avec
+deux dépôts, c'est structurel** — la barre vit là où l'agent lit sans pouvoir écrire. C'est
+gratuit, et ça vaut plus que le secret.
+
+**La forme : jeu public de fumée, jeu privé qui décide.** Le contributeur pré-valide chez
+lui, sur **son** quota — la plupart des refus tombent là et ne coûtent rien. Le jeu privé
+décide. Se régler sur le jeu public ne fait pas passer, **et l'écart entre les deux scores
+est un signal que seul l'administrateur possède.**
+
+**Traiter la fuite du jeu privé comme certaine, pas comme possible.** Il fuit par les
+contributions acceptées et par déduction. Deux conséquences à écrire dans les règles :
+- **le jeu se renouvelle** — c'est le « Value = FLOW, not snapshot » du plan d'origine ;
+- **on ne publie jamais un score, seulement un verdict et un motif pris dans une liste
+  fermée.** Un nombre livre le pouvoir discriminant de l'éval ; « refusé — licence non
+  commerciale » n'en livre rien. Le plan a déjà l'idée sous le nom de « rejet journalisé » ;
+  il suffit que le vocabulaire soit clos.
+
+**Le couplage que personne n'avait vu, et il tranche une autre décision.** Le choix du
+dépôt privé **force** la réponse à « avec quelle clé tourne l'agent validateur » (§5,
+étape 3) :
+
+- **barre privée** ⇒ la validation finale tourne chez l'administrateur, sur son budget. Le
+  budget de maintenance devient **obligatoire**, plus optionnel ;
+- **validation entièrement chez le client** ⇒ les évals sont sur sa machine, **donc elles ne
+  sont pas privées**, et la douve se réduit à la base de mesures.
+
+**On ne peut pas avoir « le client valide chez lui » et « la barre est secrète ».** L'option
+(c) — pré-validation locale obligatoire, décision finale chez l'administrateur — est la
+seule qui tienne les deux bouts, **et elle est aussi la protection du quota** : sans
+pré-validation obligatoire, n'importe qui peut brûler le budget de maintenance en soumettant
+des déchets, ce qui retourne la règle « never resell/share quota » contre le projet.
+
+#### Les sauvegardes, et le matériel qui existe déjà
+
+**L'utilisateur possède un VPS qui tourne** (Docker, Coolify, PostgreSQL via un Supabase
+auto-hébergé, nginx), relevé le 19/09 dans les procédures d'un autre de ses projets.
+**Son nom de domaine n'est pas écrit ici ; le paragraphe qui suit la répartition dit
+pourquoi.** **Le plan d'origine réclamait exactement cela en P0** — « VPS
+(private) : Postgres (registry + eval results + provenance), scheduler (cron), registry API
+[…] **Off-site daily encrypted backups** ». Ce n'est donc pas à construire : c'est à relier.
+
+**Décision de l'utilisateur, 19/09 : les sauvegardes se font en local et sur le VPS.**
+
+- **Local + VPS, c'est deux copies dans deux lieux** — le « hors site » de la règle des
+  trois copies est tenu. La troisième copie (disque externe ou espace en ligne) reste à
+  décider, et pour quelques méga-octets par mois elle coûte presque rien.
+- **Une question ouverte à ne pas sauter : le VPS est-il lui-même sauvegardé ?** S'il meurt
+  et qu'il portait la seule copie hors site, il n'en reste qu'une. **Non vérifié.**
+- **Et le critère qui fait la différence entre une sauvegarde et un espoir est déjà écrit
+  dans le plan d'origine, pour P0** : « **DoD : restore-from-backup test passes.** » Une
+  sauvegarde compte le jour où elle a été **remise en place**, pas le jour où elle a été
+  configurée. Daté, comme tout le reste.
+
+**Ce qui ne doit pas aller sur le VPS, et c'est important.** Le VPS héberge déjà un autre
+produit en service, avec sa base. **Le code inconnu d'un contributeur ne doit pas s'exécuter
+à côté.** Répartition :
+
+- **VPS** : la base de mesures, les seuils, l'API de registre, l'ordonnanceur. **Aucun code
+  étranger.**
+- **Modal, Kaggle, ou le bac à sable local** : l'exécution des candidats.
+- **Le PC de l'utilisateur** : le développement.
+
+#### Les coordonnées du VPS ne vont dans aucun dépôt — même privé
+
+Question de l'utilisateur, 19/09 : « les infos sur le VPS partent sur le dépôt privé ? »
+**Non — et la bonne coupure n'est pas « public ou privé », c'est « trois natures
+d'information qui n'ont pas le même domicile ».** Un dépôt privé n'est pas un coffre : il
+se clone sur des portables, il s'ouvre au premier collaborateur, il est sauvegardé par
+l'hébergeur, et **son historique est définitif** — un secret poussé une fois y reste après
+la correction. C'est la règle que l'utilisateur s'est déjà donnée pour ce VPS précis, dans
+ses propres procédures : « *Never read, print, or expose keys from `.env`, container env
+vars, or Coolify configs.* »
+
+| Nature | Exemples | Domicile | Pourquoi |
+| --- | --- | --- | --- |
+| **Les secrets** | clé SSH, mot de passe Postgres, jetons Coolify, clés Supabase | **l'environnement seul** : `.env` non suivi, gestionnaire de mots de passe | irréversible une fois poussé, dans le privé **comme** dans le public |
+| **Les coordonnées** | nom de domaine, IP, noms de conteneurs, ports, chemins | **des variables**, dont les valeurs ne sont écrites nulle part dans git ; le dépôt privé au pire | ce n'est pas un secret au sens strict, c'est de la **surface d'attaque offerte** : un nom plus une pile connue font une cible |
+| **La forme** | ce qui est sauvegardé, à quelle cadence, la procédure de restauration écrite **contre des variables** | **le dépôt privé** — et la partie sans coordonnées pourrait même être publique | c'est elle qu'il faut relire, versionner et rejouer |
+
+**Le régime existe déjà dans ce dépôt ; il suffit de l'étendre.** `.env` est ignoré,
+`.env.example` porte les noms des variables et **aucune valeur**. Une procédure de
+sauvegarde s'écrit donc `ssh $VPS_UTILISATEUR@$VPS_HOTE` et jamais l'adresse en clair :
+**le dépôt privé porte le script, la machine porte les valeurs.**
+
+**Appliqué à ce document, le jour même.** Une première version de ce paragraphe portait le
+nom de domaine du VPS en toutes lettres — **dans un dépôt public depuis le 09/09**. Il a
+été retiré d'ici et de `PLAN.md` le 19/09. **Vérifié : `git grep` sur tous les objets
+commités (`git rev-list --all`) ne rend aucune ligne — le nom n'a jamais été commité**,
+donc la correction est complète et ne demande aucune réécriture d'historique. C'est la
+démonstration du risque en une demi-journée : la fuite ne vient pas d'une attaque, elle
+vient d'une phrase utile écrite au bon endroit du mauvais dépôt.
+
+> **Conséquence pour l'étape 3.** Le jour où la validation tourne sur le VPS, son adresse
+> devient une variable de la CI (un *secret* de dépôt), pas une ligne d'un fichier. Et le
+> dépôt public ne doit contenir **aucun** indice du chemin réseau menant à la machine qui
+> détient la barre — sinon la séparation du « produit » et du « jugement », décidée
+> ci-dessus, se contourne par le réseau au lieu de se contourner par le code.
+
 > **Décision.** La base de mesures est-elle **la douve du projet** (le plan d'origine le
-> veut, l. 10 et 31) alors que le dépôt est MIT et publie tout ? **`.gitignore` règle « la
-> base n'est pas dans le dépôt public » ; il ne règle pas « n'importe qui peut reprendre la
-> méthode ».** Cette question est la même que le §2.5, et elle se tranche une seule fois —
-> voir §7.
+> veut, l. 10 et 31) alors que le dépôt public est MIT ? La réponse proposée ici est
+> **oui, et elle ne dépend pas de la licence** : ce qui protège n'est pas le secret du
+> code, c'est que **la copie est sans valeur sans les mesures**. Un clone parti aujourd'hui
+> a zéro ligne. La licence reste à trancher au §7 pour d'autres raisons — mais elle cesse
+> d'être ce qui protège la douve.
 
 ---
 
@@ -842,9 +967,12 @@ Ce que le §6 porte, et qui se décide maintenant :
 | 1 | **La thèse d'autonomie** : reprise, enterrée ou suspendue ? | §3 | reprise (les 13 exceptions deviennent des dettes) · enterrée, datée · suspendue jusqu'à la relecture des 13 |
 | 2 | **Le gel** : amendé ou non, et la 14ᵉ exception | §4 | lever l'exception · attendre le §6 · amender puis lever |
 | 3 | **Piper (GPL) dans un dépôt MIT** | §2.3 | isoler en service HTTP · changer la licence · assumer par écrit — après avoir vérifié la licence réelle du paquet |
-| 4 | **La licence du dépôt, et la douve** : MIT publie tout ; le plan veut une base privée. `.gitignore` déplace le conflit, il ne le résout pas. **73 commits, un seul auteur : le coût du changement est nul aujourd'hui** | §2.5, §5 étape 4 | rester MIT et abandonner la douve · passer en AGPL · séparer le dépôt public de la base |
+| 4 | **La licence du dépôt public.** Le dépôt est **public sur GitHub depuis le 09/09/2026**, MIT, **0 fork, 0 étoile** : rien n'est perdu à ce jour, et l'auteur unique (73 commits) peut encore relicencier les versions à venir. **Mais la fenêtre ne se ferme pas à une date : elle se ferme au premier contributeur extérieur** — donc avant l'ouverture des contributions (§5, étape 3). *La douve, elle, ne dépend plus de cette décision : voir §5, étape 4* | §2.5, §5 étape 4 | rester MIT (adoption maximale, forme « noyau ouvert ») · passer en AGPL · relicencier avant la première contribution |
 | 5 | **Les modèles non conformes déjà en service** (YuE2-3B et sa LoRA, CC BY-NC 4.0) | §2.3 | les retirer · **amender la règle en distinguant « ce que le Studio fait tourner à la demande » de « ce que le Studio distribue »** — plus juste, et déjà ce que le dépôt pratique sans l'écrire |
-| 6 | **La clé de l'agent validateur** | §5 étape 3 | chez le contributeur · compte dédié plafonné · les deux |
+| 6 | **La clé de l'agent validateur.** **Cette décision n'est plus libre** : elle est fixée par la n° 14. Barre privée ⇒ décision finale chez l'administrateur. Et la pré-validation obligatoire chez le contributeur n'est pas un confort, c'est **la protection du budget de maintenance** | §5 étapes 3 et 4 | **(c) les deux — pré-validation locale obligatoire, décision finale chez l'administrateur** · (a) · (b) |
+| 14 | **Deux dépôts : public = le produit, privé = le jugement.** Pas « client / administrateur » — le client est l'administrateur de son Studio. La frontière est *ce qui tourne* contre *ce qui juge*. Bénéfice principal : la règle « l'agent ne modifie pas la barre » cesse d'être une promesse et devient structurelle | §5 étape 4 | **créer le dépôt privé (évals, seuils, références)** · tout garder public et n'avoir que la base pour douve · ne rien changer |
+| 15 | **Les sauvegardes** — décision prise le 19/09 : **local + VPS**. Restent : la troisième copie, **le VPS est-il lui-même sauvegardé (non vérifié)**, et **la localisation européenne du VPS, exigée par le plan et non vérifiée** | §5 étape 4 | une date pour le **premier essai de restauration**, qui est le seul critère (« DoD : restore-from-backup test passes ») |
+| 16 | **Où vivent les coordonnées du VPS.** Répondu au §5 étape 4 : ni public, ni privé — **en variables**, valeurs dans l'environnement. Ce qui reste à trancher est la **forme** : un `.env.example` de plus dans le dépôt privé, ou des *secrets* de dépôt côté CI ? | §5 étape 4 | **les deux : `.env.example` pour la lisibilité, secrets de CI pour l'exécution** · seulement l'un · rien tant que la validation ne tourne pas sur le VPS |
 | 7 | **La sortie réseau du bac à sable**, préalable à l'étape 3 | §5 étape 3 | préparation hors bac à sable · liste blanche · essai sur Modal/Kaggle |
 | 8 | **`modal/profiles.json`** | §5 étape 1 | source réellement lue · supprimé, avec `AGENTS.md:111` · **passé en zone engendrée sous contrôle de fraîcheur** (ajout 3) |
 | 13 | **Le contrôle de fraîcheur des descriptions**, position de l'utilisateur du 19/09 : « risque inacceptable pour un fonctionnement automatique ». Le mécanisme existe et tourne dans `plasma-digital-twin` ; le Studio a en plus la CI qui manque là-bas | §5 étape 1, ajout 3 | **dixième étape de CI qui échoue si une description a vieilli** · zone engendrée seulement, sans barrière · ne rien faire et documenter le risque |
