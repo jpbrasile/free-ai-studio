@@ -17,6 +17,14 @@
 > treize fichiers de test. La colonne « sur `main` » du §1 dit, ligne par ligne, laquelle
 > des deux situations s'applique.
 >
+> **Un compte qui bouge, dit comme tel.** Les deux nombres ci-dessus sont relevés sur
+> `edb2b56`. **L'avance sur `main` croît à chaque commit de cette branche** — elle était
+> de 41 le 18/09 et de 45 le 19/09 au soir. **Ce qui ne bouge pas, et qui est le fait
+> utile, c'est le 0 de gauche** : `main` reste un ancêtre, la fusion reste une avance
+> directe. Un lecteur qui rejoue la commande aujourd'hui obtiendra un autre nombre à
+> droite : ce n'est pas une contradiction, c'est la raison d'être du contrôle de fraîcheur
+> retenu au §8, point 13.
+>
 > **Convention, reprise de `PLAN.md:35`** : « Un “fait” cite sa preuve ; sans preuve, c'est
 > “non vérifié”. » Chaque nombre entre avec son instrument, jamais nu. Chaque section finit
 > par une décision à prendre.
@@ -378,6 +386,13 @@ petit et il sera mesuré.
 
 ### Le gel, et l'amendement qu'il réclame
 
+> **État du matin du 19/09. Tranché le soir même, et plus largement que ce qui suit : le
+> gel est **levé**, les fonctions nouvelles sont permises à nouveau (§8, décision 1 de
+> l'utilisateur). Cette section reste écrite telle quelle — on n'efface rien — parce que
+> son analyse tient : c'est elle qui explique **pourquoi** un gel binaire n'a pas survécu,
+> et ce que sa levée coûte.**
+
+
 La règle (`PLAN.md:31`) : « Gel des fonctions. Aucune nouvelle fonction tant que P0-1 et
 P0-2 ne sont pas vérifiés **en réel**. »
 
@@ -414,10 +429,14 @@ ont toutes été **levées par l'utilisateur**, jamais par un agent. L'amendemen
 ci-dessus suit la même règle : **il ne vaut que levé par l'utilisateur, et daté.** Sans
 cette précision, « amender le gel » serait une porte aussi petite que celle qu'il dénonce.
 
-> **Décision demandée.** (a) Lever la quatorzième exception pour le registre, avec sa
+> ~~**Décision demandée.** (a) Lever la quatorzième exception pour le registre, avec sa
 > section « ce qu'elle ne couvre pas » ; (b) attendre l'essai machine neuve (§6) avant
-> toute ligne de code ; (c) amender le gel comme proposé, **puis** lever l'exception.
-> *(c) est cohérent : on répare la règle avant de s'en servir.*
+> toute ligne de code ; (c) amender le gel comme proposé, **puis** lever l'exception.~~
+>
+> **Tranché le 19/09 : aucune des trois. L'utilisateur a levé le gel** — « fonction
+> nouvelle permise dorénavant ». Ni exception à lever, ni règle à amender : il n'y a plus
+> de porte. **Ce que cela coûte est écrit au §8** : la pression qui rappelait la dette de
+> l'essai machine neuve disparaît avec la règle, et il ne reste que la date butoir.
 
 ---
 
@@ -995,8 +1014,12 @@ Ce que le §6 porte, et qui se décide maintenant :
 3. **Sa jauge** : le compteur de fonctions nouvelles ajoutées depuis le 13/09, qui mesure
    exactement l'écart entre le produit essayé et le produit actuel.
 4. **À partir de quand une mesure repoussée devient une mesure abandonnée** — écrit en
-   toutes lettres, avec sa date. Sans cette phrase, la quatorzième exception au gel
-   arrivera avant l'essai, comme les treize précédentes.
+   toutes lettres, avec sa date. ~~Sans cette phrase, la quatorzième exception au gel
+   arrivera avant l'essai, comme les treize précédentes.~~ **Répondu le 19/09 (§8,
+   point 9) : butoir au 31/10/2026, après quoi le document écrit « mesure abandonnée ».
+   Et le motif de la phrase a changé de nature : le gel étant levé, il n'y a plus
+   d'exception à redouter — c'est l'absence totale de contrainte qui rend cette date
+   nécessaire. Elle est désormais le seul levier.**
 
 > **Décision demandée.** Une date, ou l'aveu écrit qu'il n'y en aura pas avant telle
 > échéance. **Les deux sont acceptables ; le silence ne l'est pas.**
@@ -1116,12 +1139,38 @@ que la copie est sans valeur sans les mesures.** Un clone parti aujourd'hui a z�
 | 7 | **La sortie réseau du bac à sable** | **Jamais de sortie réseau.** La récupération se fait **avant**, par une étape séparée qui télécharge, empreinte et dépose l'artefact ; le bac à sable reste `internal: true` | C'est la propriété la plus dure du dépôt, et le plan d'origine en demandait **moins**. Ouvrir la sortie pour la commodité d'un agent échangerait la seule garantie réelle contre du confort |
 | 8 | **`modal/profiles.json`** | **Supprimé**, et la ligne `AGENTS.md:111` retirée avec lui | Lu par **aucun** code, déjà faux sur trois fonctions, et `AGENTS.md` y envoie les agents comme « la version lisible par machine ». **Le laisser est pire que les deux autres options** : une vérité concurrente que personne ne maintient. Le registre prendra la place |
 | 9 | **La date de l'essai machine neuve** | **Butoir au 31/10/2026.** Passé ce jour sans verdicts, le document écrit **« mesure abandonnée »**, pas « en attente » | L'utilisateur peut **déplacer** cette date ; il ne peut pas la laisser vide. **Le gel étant levé, c'est le seul levier qui reste.** Une échéance qu'on peut manquer et qui le dit vaut mieux qu'une « obligation permanente », qui est une épitaphe |
-| 10 | **La branche `audit-20260911`** | **Fusionner dans `main`** | 0 de retard, 44 d'avance, `main` est un **ancêtre** : avance directe, aucun conflit possible. Et `main` est ce que le monde voit d'un dépôt public — il est aujourd'hui **trompeur** |
+| 10 | **La branche `audit-20260911`** | **Fusionner dans `main`** | **0 de retard**, et `main` est un **ancêtre** : avance directe, aucun conflit possible. Et `main` est ce que le monde voit d'un dépôt public — il est aujourd'hui **trompeur** |
 | 12 | **`FREE_ONLY=false` est-il un état admis ?** | **Oui — mais jamais par défaut, jamais silencieux** : choix explicite, plafonné, qui **expire**. La forme du Boost | Interdire un état que le code sait produire, c'est se mentir. L'encadrer le rend visible |
 | 13 | **Le contrôle de fraîcheur des descriptions** | **Oui**, et il devient **une dixième étape nommée de la CI** | Position de l'utilisateur du 19/09 : une description périmée est un risque inacceptable pour un fonctionnement automatique. Les cinq pièces sont au §5 étape 1 — zone engendrée, provenance, **`PÉRIMÉ`** plutôt qu'un nombre vieilli, fonction d'empreinte **importée** et jamais réécrite, `--check` qui sort en 1 |
 | 14 | **Deux dépôts** | **Fait** le matin du 19/09 | — |
 | 15 | **Les sauvegardes** | **Même butoir : premier essai de restauration avant le 31/10/2026** | Une sauvegarde compte le jour où elle a été **remise en place**. Les trois questions non vérifiées — troisième copie, sauvegarde du VPS lui-même, localisation européenne — se répondent en la jouant |
 | 16 | **Où vivent les coordonnées du VPS** | **Les deux** : `.env.example` dans le dépôt privé pour lire, **secrets de CI** pour exécuter | L'un documente, l'autre exécute ; **aucun des deux ne porte de valeur en clair** |
+
+### Ce que le plan d'origine demande et que ce document avait omis
+
+**Contrôle de couverture fait le 19/09 au soir**, en relisant le plan d'origine section par
+section contre ce document. Les dix phases P0→P9 y sont, les sept contradictions aussi, le
+schéma de registre est repris en partie. **Mais quatre éléments du plan d'origine n'étaient
+traités nulle part — ni repris, ni contredits, ni écartés. Ils étaient simplement absents,
+ce qui est le pire des trois états.** Ils sont tranchés ici.
+
+| Élément du plan d'origine | État avant | Ce que j'en fais |
+|---|---|---|
+| **Les treize mesures du tableau de bord** (l. 138-140), dont les **cinq mesures de douve** : taille du jeu de mesures, délai sortie→validé, taux de contribution **et** d'acceptation, nombre de contributeurs, conversion apprenant→Studio | **trois seulement étaient citées** (`autonomy_rate`, `bad_merges`, `rejections_by_reason`), et en passant | **À porter dans le schéma de la base de mesures** (§5 étape 4). Ce n'est pas un détail de tableau de bord : **les cinq mesures de douve sont exactement ce que la base doit produire.** Sans elles, la phrase « la copie est sans valeur sans les mesures » n'est pas vérifiable — c'est une conviction, pas un fait |
+| **Les quatre seuils chiffrés** (`thresholds.yaml`, l. 83-88) : tolérance de reproductibilité ±3 %, retour arrière si le taux d'erreur monte de 2 points ou la qualité baisse de 3 %, **300 appels et 2 GPU-h par candidat**, 5 h/semaine de GPU de maintenance | **aucun repris** | Les trois premiers **entrent dans `seuils/` du dépôt privé dès la première évaluation** — avec la règle du dépôt privé : un seuil porte la mesure qui l'a posé, sinon c'est un nombre inventé. **Ceux-là viennent du plan d'origine, pas d'une mesure : ils entrent donc comme « valeurs de départ à confirmer », marquées comme telles.** Le quatrième (5 h/semaine Kaggle) **est remplacé** par le budget Modal unique décidé le 19/09 |
+| **La barrière de reproductibilité** : « *reproducible (2 runs within tolerance)* » (l. 87) | **absente**, et c'est une omission de ma part | **Reprise telle quelle.** C'est la seule barrière qui attrape **un candidat qui passe par chance**, et elle ne coûte qu'un second passage. Elle a de plus un jumeau déjà inventé dans ce document sans être relié à elle : le **rejeu à code changé sur entrées réelles** (§5 étape 2). Même mécanique, deux usages |
+| **Deux décisions ouvertes de l'original** (l. 148-152) : la licence de **FreeLLMAPI** avant tout fork, et les **conditions d'utilisation de Kaggle** à vérifier avant P3 | **jamais reprises** | La seconde **est déjà tenue par le code** — `contexte_partage()` coupe Kaggle automatique hors Studio personnel, et `AGENTS.md:157` cite la politique d'usage. **Close.** La première **tombe** : aucun fork de FreeLLMAPI n'est au programme de ce dépôt |
+
+**Et deux outils de la pile d'origine ne sont nommés nulle part** : `promptfoo` et
+`Crawl4AI`. **Écartés sans cérémonie**, comme Temporal et Forgejo : le dépôt a déjà sa CI,
+son bac à sable et ses carnets. Les nommer pour les écarter vaut mieux que de les taire.
+
+> **Ce que ce contrôle enseigne, au-delà des quatre lignes.** Un document qui confronte un
+> autre document **doit se relire section contre section**, pas thème par thème : les quatre
+> omissions ci-dessus ne sont pas des désaccords, ce sont des **angles morts** — elles ont
+> survécu à une relecture adverse hors modèle et à quatre passes de rédaction, parce que
+> personne ne cherchait ce qui **manquait**. C'est exactement l'argument du contrôle de
+> fraîcheur retenu au point 13, appliqué à la couverture plutôt qu'à l'âge.
 
 ### L'ordre dans lequel cela se fait
 
