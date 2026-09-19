@@ -54,6 +54,9 @@ def studio(sandbox, monkeypatch):
     un test qui ne peut pas allumer une carte."""
     monkeypatch.setattr(sandbox, "WORKER_GPU_URL", GPU_URL)
     monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    # Le bac a sable de la carte repond et porte ses 34 Go. Son absence et ses
+    # poids manquants ont leurs propres tests, plus bas.
+    monkeypatch.setattr(sandbox, "maison_prete", lambda: (True, ""))
     partis = []
     monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: partis.append(a))
     sandbox.partis = partis
@@ -189,6 +192,52 @@ def test_un_reglage_inconnu_est_refuse_en_nommant_les_trois(studio, monkeypatch,
 
 
 # --- 6. Le bac a sable de la maison ------------------------------------------
+
+def test_sans_poids_le_clip_part_chez_le_loueur_au_lieu_d_echouer_dix_minutes_plus_tard(
+        sandbox, monkeypatch):
+    """Le defaut trouve le 19/09 en passant enfin par la pile complete.
+
+    Le bac a sable de la carte n'a pas internet : si les 34 Go manquent, il ne
+    les trouvera JAMAIS. Router quand meme << maison >> donnerait un echec au
+    bout de dix minutes, pour une raison que personne ne lit. On le sait avant
+    de lancer, et on le dit."""
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", GPU_URL)
+    monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: None)
+    monkeypatch.setattr(sandbox, "maison_prete",
+                        lambda: (False, "Les 34 Go du modele video ne sont pas encore telecharges"))
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "utilisable",
+                        lambda *a, **k: pytest.fail("la carte ne doit pas etre sondee"))
+    fiche = creer(sandbox).json()
+    assert fiche["provider"] == "modal"
+    assert "34 Go" in fiche["ou_calculer"]["pourquoi"]
+
+
+def test_maison_prete_lit_ce_que_le_bac_a_sable_repond(sandbox, monkeypatch):
+    """Trois reponses possibles, trois verdicts, aucun devine."""
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "")
+    assert sandbox.maison_prete()[0] is False
+
+    class FausseReponse:
+        def __init__(self, charge): self._charge = charge
+        def json(self): return self._charge
+
+    class FauxClient:
+        def __init__(self, charge): self._charge = charge
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def get(self, url): return FausseReponse(self._charge)
+
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", GPU_URL)
+    monkeypatch.setattr(sandbox.httpx, "Client",
+                        lambda **k: FauxClient({"ok": True, "poids_presents": True}))
+    assert sandbox.maison_prete() == (True, "")
+
+    monkeypatch.setattr(sandbox.httpx, "Client",
+                        lambda **k: FauxClient({"ok": True, "poids_presents": False}))
+    prete, motif = sandbox.maison_prete()
+    assert prete is False and "telecharger-modele-video" in motif
+
 
 def test_sans_bac_a_sable_gpu_l_execution_maison_refuse_clairement(sandbox):
     """Le cas ne doit pas arriver ; s'il arrive, il le dit au lieu d'appeler

@@ -387,6 +387,17 @@ if ($carte) {
         $env:GPU_MODELES_DIR = $cacheHF
         Note "Modeles deja telecharges reutilises : $cacheHF"
     }
+
+    # Les poids du modele video sont-ils la ? Le bac a sable qui fabrique les
+    # clips n'a pas internet -- par construction -- donc il ne pourra pas les
+    # chercher tout seul. On le dit ici, une fois, au lieu de laisser un clip
+    # echouer plus tard sur un message incomprehensible.
+    $poids = Join-Path $cacheHF "hub\models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"
+    if (-not (Test-Path $poids)) {
+        Note "Carte presente, mais le modele video (34 Go) n'est pas telecharge."
+        Note "Les clips partiront sur une machine louee tant qu'il manque."
+        Note "Pour le descendre une fois : scripts\telecharger-modele-video.ps1"
+    }
 }
 $argsCompose += @("up", "-d", "--build")
 $up = Executer "docker" $argsCompose "compose-up"

@@ -194,7 +194,11 @@ dans les 24 564 Mo de la carte, et il tiendrait encore si un tiers en occupait 1
 
 ## Phase 3 — router
 
-- `run_auto` et la vidéo demandent à `gpu_local.utilisable(besoin)` avant de louer.
+- ~~`run_auto` et la vidéo~~ **la vidéo seule** demande à `gpu_local.utilisable(besoin)` avant
+  de louer. **`run_auto` est laissé dehors, et c'est mesuré, pas oublié** : il exécute du
+  code quelconque, dont personne ne connaît le besoin mémoire. La sonde exige un nombre
+  (`utilisable(besoin_mo)`) ; lui en donner un inventé serait exactement le chiffre supposé
+  que ce chantier refuse. La vidéo, elle, a deux besoins relevés sur cette carte.
 - **La mémoire libre n'est pas le seul critère.** La vidéo regarde d'abord *ce qui est
   demandé* : une image de fin ou une image de référence part chez Modal même si la carte
   est libre, parce que le modèle de la maison ne sait pas les faire (voir le tableau de la
@@ -271,6 +275,42 @@ d'argument `image` (c'est `WanImageToVideoPipeline` qui l'a). Le clip serait sor
 l'image demandée, sans un mot** — exactement la panne silencieuse que la phase 2 avait
 documentée pour l'image de fin. Les trois images jointes partent donc chez le loueur, et
 trois gardes le disent : le routage, `preparer(maison=True)`, et le script lui-même.
+
+### Ce que seule la pile complète a montré — 19/09/2026, 20:0x
+
+Les 32 tests remplacent la sonde et le lancement : ils jugent la décision, pas la fabrication.
+**Un clip est donc parti par la vraie pile** — page → gestionnaire → décision → bac à sable de
+la carte → fichier. Il est sorti : `succeeded`, **73 images, 1280 × 704, 24 im/s, 1 901 468
+octets**, et la décision écrite dans la fiche du travail dit « Fabriqué ici, gratuitement.
+NVIDIA GeForce RTX 4090 : 24 138 Mo libres pour 12 841 demandés (marge 1 024) ».
+
+**Trois inconnues tombent d'un coup** : le bac à sable GPU **se construit** ; il **voit la
+carte** depuis `docker compose` (24 138 MiB) ; et le compte non privilégié (uid 10001) **lit
+les 34 Go** montés depuis `C:\Users\…\.cache\huggingface`.
+
+**Et deux défauts que rien d'autre ne pouvait montrer :**
+
+- **40 secondes perdues par clip, et vingt lignes rouges.** Le journal ouvre sur cinq
+  `Temporary failure in name resolution` avant un `Will try to load from local cache`.
+  Le bac à sable est sur un réseau clos ; `diffusers` demande quand même à Hugging Face si
+  les poids ont changé, échoue, et **recommence cinq fois**. Réparé par `HF_HUB_OFFLINE=1`.
+  Pour un débutant, c'était un mur de rouge devant un clip qui allait réussir.
+- **Sans les poids, « à la maison » ne peut pas marcher — et le disait dix minutes trop
+  tard.** Le bac à sable n'a pas internet : si les 34 Go manquent, il ne les trouvera
+  jamais. Trois pièces maintenant : le worker **déclare** ses poids sur `/health`, le
+  gestionnaire **regarde avant de router** (une demi-seconde contre dix minutes perdues), et
+  `scripts/telecharger-modele-video.ps1` les descend **une fois** depuis un conteneur qui,
+  lui, a le droit d'aller sur le réseau.
+
+**Correction de ma propre phrase, faite par l'utilisateur le 19/09 au soir** : j'avais écrit
+« le worker GPU est sur un réseau sans internet » comme si c'était une contrainte. **C'est
+ma ligne**, posée le jour même dans `docker-compose.gpu.yml` par recopie du bac à sable
+processeur ; `- default` suffirait à l'ouvrir. Ce que la mesure dit, elle : depuis ce
+conteneur, `gethostbyname('huggingface.co')` rend `[Errno -3] Temporary failure in name
+resolution`, parce que `sandbox-internal` porte `internal: true`. **Ce que l'ouvrir ne
+réglerait pas** : les 34 Go ont demandé environ une heure le 19/09, et un travail est coupé
+à 2 400 s — le premier clip expirerait avant la fin. Le préchargement reste nécessaire dans
+les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouverture.
 
 ## Ce qui est refusé d'avance
 

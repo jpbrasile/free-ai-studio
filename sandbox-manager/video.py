@@ -245,6 +245,21 @@ os.makedirs(SORTIE, exist_ok=True)
 if D.get("cache"):
     os.makedirs(D["cache"], exist_ok=True)
     os.environ["HF_HOME"] = D["cache"]
+    # Le bac a sable de la maison n'a PAS internet (reseau `internal: true`,
+    # comme celui sur processeur). Si les poids ne sont pas deja dans le cache,
+    # il ne pourra pas aller les chercher -- et le message brut serait une pile
+    # d'erreurs de resolution de nom, ou personne ne lit << il manque le
+    # modele >>. On regarde donc AVANT, et on dit quoi faire.
+    if os.environ.get("HF_HUB_OFFLINE") == "1":
+        dossier = os.path.join(D["cache"], "hub", "models--" + D["modele"].replace("/", "--"))
+        if not os.path.isdir(dossier):
+            print("ECHEC : les poids du modele %s ne sont pas sur cet ordinateur.\n"
+                  "Ce bac a sable n'a pas internet, par construction : il ne peut pas les\n"
+                  "telecharger lui-meme. Lancez UNE FOIS, dans le dossier du Studio :\n"
+                  "    powershell -ExecutionPolicy Bypass -File scripts\\telecharger-modele-video.ps1\n"
+                  "C'est environ 34 Go, une seule fois, et le clip repartira ensuite tout seul."
+                  % D["modele"], file=sys.stderr)
+            sys.exit(5)
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 # La memoire de la carte se morcelle au fil du calcul : il reste de la place au

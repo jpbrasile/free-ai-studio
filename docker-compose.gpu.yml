@@ -50,21 +50,44 @@ services:
       # Sans ces variables-la, le script ne trouve pas la carte -- le runtime
       # NVIDIA les pose dans le conteneur, et le worker construit un
       # environnement nu -- et il retelechargerait 34 Go a chaque clip.
-      SANDBOX_ENV_PASSTHROUGH: "LD_LIBRARY_PATH,NVIDIA_VISIBLE_DEVICES,NVIDIA_DRIVER_CAPABILITIES,CUDA_VISIBLE_DEVICES,HF_HOME,HF_HUB_DISABLE_XET"
+      SANDBOX_ENV_PASSTHROUGH: "LD_LIBRARY_PATH,NVIDIA_VISIBLE_DEVICES,NVIDIA_DRIVER_CAPABILITIES,CUDA_VISIBLE_DEVICES,HF_HOME,HF_HUB_DISABLE_XET,HF_HUB_OFFLINE"
       HF_HOME: /cache/huggingface
+      # Ce bac a sable est sur un reseau SANS internet (`internal: true`), comme
+      # celui sur processeur. Sans cette ligne, `diffusers` demande quand meme
+      # a Hugging Face si les poids ont change, echoue sur la resolution de nom,
+      # et RECOMMENCE cinq fois : mesure du 19/09 au premier clip passe par la
+      # pile -- environ quarante secondes perdues par clip, et vingt lignes de
+      # rouge dans le journal d'un debutant pour un clip qui va reussir.
+      # Coupe, il lit directement le cache local.
+      HF_HUB_OFFLINE: "1"
       # Mesure du 19/09 : la couche de transfert << Xet >> de huggingface_hub
       # 1.9.2 s'est bloquee treize minutes sans ecrire un octet, a 14 067 Mo sur
       # 34 200. Coupee, les memes fichiers sont descendus en quatre-vingts
       # secondes. Ce n'est pas une precaution de style.
       HF_HUB_DISABLE_XET: "1"
+      # Ce que ce bac a sable doit AVOIR pour servir a quelque chose. /health le
+      # rapporte, et le gestionnaire route ailleurs -- AVANT de lancer -- si les
+      # poids manquent, au lieu de laisser un clip echouer dix minutes plus tard.
+      SANDBOX_POIDS_REQUIS: /cache/huggingface/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers
+    # Le meme reseau clos que le bac a sable sur processeur. C'est un CHOIX,
+    # pas une loi de Docker, et il se defait en une ligne (`- default`). La
+    # mesure du 19/09 depuis CE conteneur : `gethostbyname('huggingface.co')`
+    # rend << Temporary failure in name resolution >>, parce que
+    # `sandbox-internal` porte `internal: true` dans docker-compose.yml.
+    # Ce que l'ouvrir ne reglerait PAS : les 34 Go ont demande environ une heure
+    # le 19/09 et un travail est coupe a 2 400 s -- le premier clip expirerait
+    # avant la fin du telechargement. Le prechargement
+    # (scripts/telecharger-modele-video.ps1) est donc necessaire dans les deux
+    # cas, et le reseau clos reste le defaut tant que rien ne le paie.
     networks:
       - sandbox-internal
     volumes:
       - sandbox-data:/workspace
-      # Les 34 Go de poids. Par defaut un volume Docker, qui se remplit au
-      # premier clip. Sur une machine qui a deja le modele dans le cache du
-      # profil, `scripts/demarrer.ps1` pose GPU_MODELES_DIR sur ce cache et rien
-      # n'est retelecharge.
+      # Les 34 Go de poids, telecharges une fois par
+      # scripts/telecharger-modele-video.ps1. Par defaut un volume Docker ; sur
+      # une machine qui a deja le modele dans le cache du profil,
+      # `scripts/demarrer.ps1` pose GPU_MODELES_DIR sur ce cache et rien n'est
+      # retelecharge.
       - ${GPU_MODELES_DIR:-modeles-gpu}:/cache/huggingface
     # PAS de `read_only` ici, contrairement au bac a sable sur processeur : le
     # cache des modeles s'ecrit, et les bibliotheques CUDA posent leurs fichiers

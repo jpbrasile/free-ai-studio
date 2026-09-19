@@ -18,6 +18,9 @@ ROOT.mkdir(parents=True, exist_ok=True)
 # sans ce que le runtime NVIDIA pose dans le conteneur le script ne trouve pas
 # la carte, et sans HF_HOME il retelechargerait 34 Go de modele a chaque clip.
 PASSANTES = tuple(n.strip() for n in os.getenv("SANDBOX_ENV_PASSTHROUGH", "").split(",") if n.strip())
+# Dossier dont la presence est exigee pour que ce bac a sable soit utile. Vide
+# par defaut ; /health le rapporte quand il est pose (voir health()).
+POIDS = os.getenv("SANDBOX_POIDS_REQUIS", "").strip()
 MAX_CODE = int(os.getenv("SANDBOX_MAX_CODE_BYTES", "500000"))
 MAX_OUTPUT = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "200000"))
 TIMEOUT = int(os.getenv("SANDBOX_TIMEOUT_SECONDS", "120"))
@@ -33,7 +36,16 @@ def auth(value: Optional[str]):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "network_policy": "compose-internal-only"}
+    etat = {"ok": True, "network_policy": "compose-internal-only"}
+    # Ce que ce bac a sable doit AVOIR pour servir a quelque chose. Vide par
+    # defaut -- celui sur processeur n'exige rien. Celui de la carte, lui,
+    # declare les 34 Go de poids du modele video : il n'a pas internet, donc
+    # s'ils manquent il ne les trouvera jamais, et le gestionnaire doit router
+    # ailleurs AVANT de lancer un clip qui echouerait dix minutes plus tard.
+    if POIDS:
+        etat["poids_chemin"] = POIDS
+        etat["poids_presents"] = Path(POIDS).is_dir()
+    return etat
 
 @app.post("/run")
 def run(req: RunRequest, authorization: Optional[str] = Header(default=None)):

@@ -1911,6 +1911,27 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
             write_job(jid, job)
 
 
+def maison_prete() -> tuple[bool, str]:
+    """Le bac a sable de la carte a-t-il de quoi travailler, a cette seconde ?
+
+    Il repond sur /health, qui dit aussi si les 34 Go de poids sont la. Ce
+    detour vaut son appel : sans les poids, un clip routé << maison >>
+    s'arrêterait au bout de dix minutes au lieu de partir tout de suite chez le
+    loueur. Une demi-seconde d'attente contre dix minutes perdues."""
+    if not WORKER_GPU_URL:
+        return False, "Cet ordinateur n'a pas de carte branchee au Studio"
+    try:
+        with httpx.Client(timeout=2.0) as c:
+            etat = c.get(WORKER_GPU_URL + "/health").json()
+    except Exception as exc:
+        return False, "Le bac a sable de la carte ne repond pas (%s)" % type(exc).__name__
+    if etat.get("poids_presents") is False:
+        return False, ("Les 34 Go du modele video ne sont pas encore telecharges sur cet "
+                       "ordinateur. Une seule fois, dans le dossier du Studio : "
+                       "scripts\\telecharger-modele-video.ps1")
+    return True, ""
+
+
 def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
     """Ou ce clip se fabrique : la carte d'ici, ou la machine louee choisie.
 
@@ -1924,14 +1945,14 @@ def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
       - l'absence de bac a sable GPU : sans la surcouche compose, il n'y a rien
         a router, et la question ne se pose meme pas.
     """
-    if not WORKER_GPU_URL:
+    prete, motif = maison_prete()
+    if not prete:
         return {
             "ou": ou_calculer.MODAL,
             "reglage": ou_calculer.TOUJOURS_MODAL,
-            "pourquoi": "Cet ordinateur n'a pas de carte branchee au Studio : le clip part chez %s."
-                        % loueur.capitalize(),
+            "pourquoi": "%s : le clip part chez %s." % (motif, loueur.capitalize()),
             "besoin_mo": None,
-            "carte": {"vue": False, "motif": "pas de bac a sable GPU"},
+            "carte": {"vue": False, "motif": motif},
             "prix_estime_usd": video.prix_estime(plan["qualite"], plan["duree"]),
             "sorties": [],
         }
