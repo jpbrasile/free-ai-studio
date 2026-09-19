@@ -41,7 +41,24 @@ répond seulement à « peut-on, là, tout de suite ». Sans elle, la phase 2 d�
 
 ## Phase 2 — faire tourner un modèle dessus
 
-Le coût, sans l'arrondir :
+> **Arrêt posé par l'utilisateur le 19/09/2026 au soir : « 2.1 deprecated »**, avec
+> <https://blog.fal.ai/wan-2-2-vs-wan-2-1-whats-new-and-how-to-upgrade-your-video-pipeline/>.
+> **La phase 2 ne se construit donc pas sur Wan 2.1.** Ce que le Studio fait tourner
+> aujourd'hui, chez Modal : `Wan-AI/Wan2.1-VACE-1.3B-diffusers` (rapide) et
+> `Wan-AI/Wan2.1-VACE-14B-diffusers` (soigné, 75 Go, A100) — `sandbox-manager/video.py:62`.
+> Et `notebooks/SOTA_LINKS.md` recommandait **déjà** la 2.2 pendant que le code tournait en
+> 2.1, sans qu'aucun fichier ne porte la décision : c'est la contradiction relevée au §9.
+>
+> **À vérifier avant d'écrire une ligne, et non supposé** : (1) quelle variante de la 2.2
+> tient sur une carte de 24 Go ; (2) si elle garde les commandes que la page `/video`
+> utilise réellement — image de **fin** (`mask` + `video=`, `video.py:308`) et
+> `reference_images` pour la cohérence d'un personnage (`:322`) —, car les perdre serait
+> une régression du produit, pas une mise à jour ; (3) sa licence et sa restriction de
+> territoire. Tant que ces trois réponses ne sont pas écrites ici, la phase 2 n'a pas de
+> modèle.
+
+Le coût ci-dessous est celui **mesuré pour la 2.1** ; il donne l'ordre de grandeur, et il
+sera refait pour le modèle retenu :
 
 - **torch + CUDA dans une image** : environ 3 Go, en plus des ~6 Go que le débutant
   télécharge déjà. Donc **une image séparée**, construite seulement quand une carte est
