@@ -293,8 +293,11 @@ les 34 Go** montés depuis `C:\Users\…\.cache\huggingface`.
 - **40 secondes perdues par clip, et vingt lignes rouges.** Le journal ouvre sur cinq
   `Temporary failure in name resolution` avant un `Will try to load from local cache`.
   Le bac à sable est sur un réseau clos ; `diffusers` demande quand même à Hugging Face si
-  les poids ont changé, échoue, et **recommence cinq fois**. Réparé par `HF_HUB_OFFLINE=1`.
-  Pour un débutant, c'était un mur de rouge devant un clip qui allait réussir.
+  les poids ont changé, échoue, et **recommence cinq fois**. Réparé par `HF_HUB_OFFLINE=1`,
+  **et le deuxième clip le mesure : 416,5 s → 390,0 s**, soit **26,5 s rendues**, pour un
+  calcul rigoureusement identique (4:07 à 4,95 s/it les deux fois). Les vingt lignes rouges
+  sont remplacées par une seule, claire : `offline mode is enabled`. Pour un débutant,
+  c'était un mur de rouge devant un clip qui allait réussir.
 - **Sans les poids, « à la maison » ne peut pas marcher — et le disait dix minutes trop
   tard.** Le bac à sable n'a pas internet : si les 34 Go manquent, il ne les trouvera
   jamais. Trois pièces maintenant : le worker **déclare** ses poids sur `/health`, le
@@ -333,10 +336,13 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   libre à l'instant, et un manque en cours de route est un repli chez Modal, pas une panne.
 - La qualité comparée : personne n'a encore vu côte à côte un clip de la 1.3B 480p et un
   de la 5B 720p sur le même texte.
-- **Le routage de la phase 3 n'a jamais tourné dans la pile Docker complète.** Il est tenu
-  par 32 tests (`tests/test_ou_calculer.py`, `tests/test_video_maison.py`) qui remplacent la
-  sonde et le lancement : ils jugent la décision, pas la fabrication. **Restent non
-  vérifiés** : que `sandbox-worker-gpu` se construise, qu'il voie la carte depuis
-  `docker compose`, que le compte non privilégié (uid 10001) puisse lire les 34 Go montés
-  depuis `C:\Users\…\.cache\huggingface`, et qu'un clip aille de la page au fichier par ce
-  chemin. Tant que ce n'est pas fait, la phase 3 est **écrite**, pas **livrée**.
+- ~~**Le routage de la phase 3 n'a jamais tourné dans la pile Docker complète.**~~
+  **Vérifié le 19/09 au soir, deux clips de bout en bout** (`succeeded`, 73 images,
+  1280 × 704, fichier récupéré par l'adresse à jeton de la page). Construction du worker
+  GPU, carte vue depuis `docker compose`, lecture des 34 Go par le compte non privilégié,
+  page → fichier : les quatre sont mesurés. **Ce qui reste non vérifié**, et qui n'est pas
+  la même chose : le chemin **« les poids manquent »** sur une machine qui ne les a pas
+  (tenu par un test, jamais vu en vrai), le script de téléchargement `telecharger-modele-
+  video.ps1` **jamais exécuté** — les 34 Go étaient déjà là —, et la boîte « la carte est
+  prise » **vue dans un navigateur** : son code est jugé par les tests, son rendu par
+  personne.
