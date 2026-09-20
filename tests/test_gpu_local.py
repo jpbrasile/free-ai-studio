@@ -276,3 +276,33 @@ def test_la_suppression_des_34_go_se_demande_et_ne_vise_que_le_modele():
     # 4. et le chemin du retour est nomme, pour que le choix soit reversible
     assert "telecharger-modele-video.sh" in sh
     assert "telecharger-modele-video.ps1" in ps1
+
+
+def test_les_lanceurs_n_ecrasent_pas_un_dossier_de_poids_deja_choisi():
+    """La variable d'abord, le cache du profil ensuite -- comme le compose.
+
+    Trouve le 20/09/2026 en cherchant a lancer la pile depuis un shell Linux.
+    `docker-compose.gpu.yml` monte `${GPU_MODELES_DIR:-<cache du profil>}` : la
+    variable D'ABORD. Les six autres scripts suivent cette regle. Les deux
+    LANCEURS faisaient l'inverse : ils ecrasaient une valeur deja posee.
+
+    Le degat n'est pas theorique -- le compose prevoit noir sur blanc le cas
+    << garder les poids hors du profil >>. Celui qui pose la variable voyait son
+    choix remplace sans un mot, et le Studio annoncait << les 34 Go ne sont pas
+    telecharges >> avec les 34 Go sur son disque : une heure de ligne pour rien,
+    et les clips partis sur une machine louee entre-temps.
+
+    Le controle des poids doit viser le dossier EFFECTIF, sinon le message
+    annonce le contraire de ce qui va se passer.
+    """
+    sh = (RACINE / "start.sh").read_text(encoding="utf-8")
+    ps1 = (RACINE / "scripts" / "demarrer.ps1").read_text(encoding="utf-8")
+
+    assert '[ -n "${GPU_MODELES_DIR:-}" ]' in sh
+    assert "if ($env:GPU_MODELES_DIR) {" in ps1
+
+    assert 'poids="$modeles/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"' in sh
+    assert r'$poids = Join-Path $modeles "hub\models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"' in ps1
+    # L'ancienne forme, celle qui regardait a cote du montage.
+    assert 'poids="$cache_hf/hub' not in sh
+    assert r'$poids = Join-Path $cacheHF "hub' not in ps1

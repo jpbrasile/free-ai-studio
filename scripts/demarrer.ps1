@@ -390,17 +390,33 @@ if ($carte) {
     # une reprise apres blocage ; le refaire pour rien serait de la peine pure.
     # GPU_MODELES_DIR est passe par l'environnement de CE processus : le .env de
     # l'utilisateur n'est jamais modifie.
+    #
+    # LA VARIABLE PASSE D'ABORD (20/09/2026). docker-compose.gpu.yml monte
+    # ${GPU_MODELES_DIR:-<cache du profil>} : la variable d'abord, le cache
+    # ensuite. Ce lanceur faisait l'inverse -- il ECRASAIT une valeur deja
+    # posee. Quelqu'un qui garde ses 34 Go hors du profil, ce que le compose
+    # prevoit noir sur blanc, voyait son choix remplace sans un mot, et le clip
+    # partait sur une machine louee en annoncant des poids absents qui etaient
+    # sur son disque.
     $cacheHF = Join-Path $env:USERPROFILE ".cache\huggingface"
-    if (Test-Path (Join-Path $cacheHF "hub")) {
+    if ($env:GPU_MODELES_DIR) {
+        $modeles = $env:GPU_MODELES_DIR
+        Note "Modeles pris la ou vous les gardez : $modeles"
+    } elseif (Test-Path (Join-Path $cacheHF "hub")) {
+        $modeles = $cacheHF
         $env:GPU_MODELES_DIR = $cacheHF
         Note "Modeles deja telecharges reutilises : $cacheHF"
+    } else {
+        $modeles = $cacheHF
     }
 
     # Les poids du modele video sont-ils la ? Le bac a sable qui fabrique les
     # clips n'a pas internet -- par construction -- donc il ne pourra pas les
     # chercher tout seul. On le dit ici, une fois, au lieu de laisser un clip
-    # echouer plus tard sur un message incomprehensible.
-    $poids = Join-Path $cacheHF "hub\models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"
+    # echouer plus tard sur un message incomprehensible. Cherches LA OU ILS
+    # SERONT MONTES, et non dans le cache du profil : sinon le message dit le
+    # contraire de ce qui va se passer.
+    $poids = Join-Path $modeles "hub\models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"
     if (-not (Test-Path $poids)) {
         Note "Carte presente, mais le modele video (34 Go) n'est pas telecharge."
         Note "Les clips partiront sur une machine louee tant qu'il manque."
