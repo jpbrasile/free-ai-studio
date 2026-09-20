@@ -6,7 +6,7 @@ L'utilisateur peut être totalement débutant. Ton rôle est d'installer, config
 
 ## Priorités absolues
 
-1. Lire `README.md`, `docs/INSTALLATION.md`, `docs/ASSISTANT_PERMISSIONS.md` et `.env.example`, puis `PLAN.md` : ce qui reste à faire, dans quel ordre, et ce qui est gelé. Puis `docs/PLAN-PLATEFORME.md` : où va le projet, ce qui est déjà contredit par le code, et les décisions encore ouvertes. Les deux vont ensemble — `PLAN.md` dit ce qui s'est passé, `PLAN-PLATEFORME.md` dit où ça mène. **Avertissement de ce second document, à connaître avant de lire le reste de ce fichier : plusieurs endroits du dépôt décrivent le Studio de façon périmée ou fausse (les deux tableaux du `README.md`, et la section `policy` de `modal/profiles.json` citée au point 111 ci-dessous). En cas de doute, le code qui tourne l'emporte sur toute description.**
+1. Lire `README.md`, `docs/INSTALLATION.md`, `docs/ASSISTANT_PERMISSIONS.md` et `.env.example`, puis `PLAN.md` : ce qui reste à faire, dans quel ordre, et ce qui est gelé. Puis `docs/PLAN-PLATEFORME.md` : où va le projet, ce qui est déjà contredit par le code, et les décisions encore ouvertes. Les deux vont ensemble — `PLAN.md` dit ce qui s'est passé, `PLAN-PLATEFORME.md` dit où ça mène. ~~**Avertissement de ce second document : plusieurs endroits du dépôt décrivent le Studio de façon périmée ou fausse (les deux tableaux du `README.md`, et la section `policy` de `modal/profiles.json`).**~~ **Les trois sont réparés le 20/09/2026, et autrement qu'à la main : le tableau des licences du `README.md` est désormais ENGENDRÉ depuis `registry/apps.json`, et la section `policy` de `modal/profiles.json` est ÉPINGLÉE au code (`tests/test_descriptions.py`). Une correction vieillit, une épingle non. **En cas de doute, le code qui tourne l'emporte toujours sur toute description** — mais une description qui diverge fait maintenant rougir la suite de tests au lieu de se taire.**
 2. Identifier Windows / macOS / Linux.
 3. Vérifier Git, Docker et Docker Compose.
 4. Ne jamais afficher, recopier dans le chat, logger ou committer une clé API.
@@ -119,13 +119,14 @@ Kaggle, puis Colab — AUTOMATIQUEMENT, pas en secours cliquable
 > configuré ↓ sinon Colab / Kaggle en **secours manuel cliquable** ».~~ Inversé, et le
 > secours n'est pas manuel : `run_auto` pose `fallback_order = ["modal", "local", "kaggle",
 > "colab"]` et enchaîne tout seul. **Il n'existe aucun chemin GPU local** pour la vidéo.
-> C'est le même défaut que `docs/MODAL_CATALOG.md` et que la section `policy` de
+> C'était le même défaut que `docs/MODAL_CATALOG.md` et que la section `policy` de
 > `modal/profiles.json` : trois descriptions de la même règle, toutes fausses dans le même
-> sens, dans les fichiers qu'un agent lit en premier.
+> sens, dans les fichiers qu'un agent lit en premier. **Les trois sont corrigées ; celle de
+> `modal/profiles.json` est en outre épinglée au code, et huit mutations la font sonner.**
 
 ### Modal
 
-Le catalogue de profils Modal est dans `docs/MODAL_CATALOG.md` et sa version lisible par machine dans `modal/profiles.json`.
+Le catalogue de profils Modal est dans `docs/MODAL_CATALOG.md` et sa version lisible par machine dans `modal/profiles.json`. **Ce sont des CANDIDATS, pas la configuration du Studio** : aucun code ne lit ce fichier, et son en-tête `_lisez_moi` le dit. Ce qui tourne réellement est dans `registry/apps.json`, nommé dans le tableau engendré du `README.md` et dans « Ce que le Studio sert aujourd'hui » de `notebooks/SOTA_LINKS.md`.
 
 Modal est le backend cloud automatique préféré lorsqu'il est configuré.
 

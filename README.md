@@ -396,7 +396,7 @@ Free AI Studio **assemble des paliers gratuits** ; il n’est pas un studio open
 chaque fonction, qui fait le travail, et pourriez-vous le faire tourner vous-même ?
 Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 
-<!-- TABLEAU-LICENCES: engendre par scripts/generer-tableau-readme.py -->
+<!-- TABLEAU-LICENCES: engendre par scripts/engendrer-depuis-registre.py -->
 
 | Fonction | Fournisseur, modèle | Nature | Licence, territoire |
 |---|---|---|---|
@@ -423,7 +423,7 @@ Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 2. **Chanson** — Anglais et chinois. Version instrumentale : la LoRA `Mothersuperior/YuE2-instrumental-cot-full-loras`, CC BY-NC 4.0 elle aussi. Correctifs T4 repris du carnet Kaggle d'AIQUEST Academy, Apache 2.0, et attribués.
 3. **Dialogue à plusieurs voix** — RÉSERVE DES AUTEURS, qui n'est pas dans la licence : leur README écrit que cette capacité est « intended solely for academic research purposes ». Une licence Apache 2.0 et cette phrase ne disent pas la même chose ; le Studio affiche LES DEUX, là où le modèle se choisit. « Territoire : aucune restriction TROUVÉE » n'est pas « aucune restriction » : deux vérifications indépendantes n'ont rien montré, le fichier de licence brut n'a pas été lu ligne à ligne. Anglais, chinois, japonais, coréen, français, allemand et russe ; 4 locuteurs, 3 minutes au plus.
 
-*Tableau engendré depuis `registry/apps.json` ; la date de la dernière lecture de chaque licence y est écrite, champ `verifie_le`. Ne pas le modifier à la main : `python scripts/generer-tableau-readme.py`.*
+*Tableau engendré depuis `registry/apps.json` ; la date de la dernière lecture de chaque licence y est écrite, champ `verifie_le`. Ne pas le modifier à la main : `python scripts/engendrer-depuis-registre.py`.*
 
 <!-- FIN-TABLEAU-LICENCES -->
 

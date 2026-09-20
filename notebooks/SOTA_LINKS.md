@@ -60,6 +60,27 @@ TTS
 → Qwen3-TTS
 ```
 
+<!-- EN-SERVICE: engendre par scripts/engendrer-depuis-registre.py -->
+
+## Ce que le Studio sert aujourd'hui
+
+Les sections ci-dessus listent des **candidats** pour les carnets Colab/Kaggle. Le tableau qui suit dit ce qui tourne **réellement** dans le Studio, et il est engendré : il ne peut pas vieillir sans que la suite de tests le dise.
+
+| Fonction | Modèle | Où il tourne | Place sur la carte |
+|---|---|---|---|
+| Lire à haute voix, français | `fr_FR-siwis-medium` | local | **non mesurée** |
+| Lire à haute voix, anglais | `en_US-norman-medium` | local | **non mesurée** |
+| Dictée « sur cet ordinateur », et repli quand Groq refuse | `small` | local | **non mesurée** |
+| Vidéo, qualité « Rapide » (si on loue) | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | modal, kaggle, colab | **non mesurée** |
+| Vidéo, qualité « Soignée » (si on loue) | `Wan-AI/Wan2.1-VACE-14B-diffusers` | modal | **non mesurée** |
+| Vidéo fabriquée À LA MAISON, sur la carte de ce PC | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | local | 12,5 Go mesurés |
+| Chanson | `m-a-p/YuE2-3B` | modal, kaggle, colab | **non mesurée** |
+| Dialogue à plusieurs voix | `FireRedTeam/FireRedTTS2` | modal, kaggle | **non mesurée** |
+
+*Engendré depuis `registry/apps.json` par `python scripts/engendrer-depuis-registre.py`. Un modèle change dans le code, ce tableau change ici ; il n'y a plus de version recopiée à la main.*
+
+<!-- FIN-EN-SERVICE -->
+
 ## Important
 
 « SOTA » ne veut pas dire « exécutable gratuitement sur n'importe quel GPU ».

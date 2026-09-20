@@ -228,33 +228,46 @@ def test_le_readme_nomme_chaque_application(registre):
     assert not absents, "au registre, jamais nomme dans le README : %s" % absents
 
 
-def test_le_tableau_du_readme_suit_encore_le_registre():
+GENERATEUR = "scripts/engendrer-depuis-registre.py"
+
+# (fichier, repere de debut, repere de fin)
+BLOCS_ENGENDRES = [
+    ("README.md",
+     "<!-- TABLEAU-LICENCES: engendre par %s -->" % GENERATEUR,
+     "<!-- FIN-TABLEAU-LICENCES -->"),
+    ("notebooks/SOTA_LINKS.md",
+     "<!-- EN-SERVICE: engendre par %s -->" % GENERATEUR,
+     "<!-- FIN-EN-SERVICE -->"),
+]
+
+
+def test_les_blocs_engendres_suivent_encore_le_registre():
     """Le controle qui empeche la septieme copie de renaitre.
 
-    Le tableau des licences du README est ENGENDRE depuis le registre, entre
-    deux reperes. Sans ce test, plus rien n'obligerait a relancer le
-    generateur : le README redeviendrait, en quelques semaines, une copie
-    manuscrite qui a diverge -- exactement le defaut repare le 20/09/2026.
+    Deux blocs sont ENGENDRES depuis le registre, entre deux reperes : le
+    tableau des licences du README, et << ce que le Studio sert aujourd'hui >>
+    dans notebooks/SOTA_LINKS.md. Sans ce test, plus rien n'obligerait a
+    relancer le generateur : ces documents redeviendraient, en quelques
+    semaines, des copies manuscrites qui ont diverge -- exactement le defaut
+    repare le 20/09/2026.
 
-    L'echec se repare par une commande, ecrite dans le message :
-        python scripts/generer-tableau-readme.py
+    L'echec se repare par une commande, ecrite dans le message.
     """
-    fait = subprocess.run(
-        [sys.executable, "scripts/generer-tableau-readme.py", "--verifier"],
-        cwd=RACINE, capture_output=True, text=True)
+    fait = subprocess.run([sys.executable, GENERATEUR, "--verifier"],
+                          cwd=RACINE, capture_output=True, text=True)
     assert fait.returncode == 0, (
-        "%s\nReparer par : python scripts/generer-tableau-readme.py"
-        % (fait.stdout + fait.stderr).strip())
+        "%s\nReparer par : python %s"
+        % ((fait.stdout + fait.stderr).strip(), GENERATEUR))
 
 
-def test_les_reperes_du_tableau_sont_toujours_dans_le_readme():
+@pytest.mark.parametrize("fichier,debut,fin", BLOCS_ENGENDRES,
+                         ids=[b[0] for b in BLOCS_ENGENDRES])
+def test_les_reperes_des_blocs_engendres_sont_toujours_la(fichier, debut, fin):
     """Sans eux, le generateur n'a plus ou ecrire -- et se taire serait pire.
 
     Quelqu'un qui reecrit la section a la main les efface sans le vouloir. Le
     test precedent leverait alors une erreur brute ; celui-ci dit ce qui manque.
     """
-    readme = (RACINE / "README.md").read_text(encoding="utf-8")
-    for repere in ("<!-- TABLEAU-LICENCES: engendre par "
-                   "scripts/generer-tableau-readme.py -->",
-                   "<!-- FIN-TABLEAU-LICENCES -->"):
-        assert repere in readme, "repere absent du README : %s" % repere
+    texte = (RACINE / fichier).read_text(encoding="utf-8")
+    for repere in (debut, fin):
+        assert repere in texte, "repere absent de %s : %s" % (fichier, repere)

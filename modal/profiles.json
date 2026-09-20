@@ -1,13 +1,22 @@
 {
+  "_lisez_moi": {
+    "ce_que_ce_fichier_est": "Un catalogue de CANDIDATS Modal : des exemples officiels et des pistes à explorer, avec leur lien. Version lisible par machine de docs/MODAL_CATALOG.md.",
+    "ce_que_ce_fichier_n_est_pas": "La configuration du Studio. Aucun code ne lit ce fichier — vérifié le 20/09/2026, son nom ne paraît dans aucun .py, .sh, .ps1, .yml ni .cmd. Les modèles réellement servis sont dans registry/apps.json, et le tableau engendré du README les nomme tous.",
+    "pourquoi_cet_en_tete": "Le 19/09/2026, la section `policy` annonçait `fallback_manual: [colab, kaggle]` quand le code enchaîne modal, local, kaggle, colab tout seul. AGENTS.md envoie les agents ici : une règle fausse dans un fichier lu en premier ne se trompe pas par hasard, c'est le dépôt qui l'a dite. `policy` est désormais épinglée au code par tests/test_descriptions.py.",
+    "verified_couvre": "Le champ `verified` date la dernière lecture des LIENS de la section `profiles`, et rien d'autre. Il n'a pas été rafraîchi le 20/09/2026 : les liens n'ont pas été rouverts ce jour-là."
+  },
   "verified": "2026-09-09",
   "policy": {
     "automatic_backend": "modal",
-    "fallback_manual": [
-      "colab",
-      "kaggle"
+    "fallback_order": [
+      "modal",
+      "local",
+      "kaggle",
+      "colab"
     ],
+    "fallback_is_automatic": true,
     "allow_paid_gpu_default": false,
-    "notes": "Use Modal only while usage is expected to remain covered by free credit; never assume unlimited free compute."
+    "notes": "Use Modal only while usage is expected to remain covered by free credit; never assume unlimited free compute. `fallback_order` mirrors sandbox-manager/app.py run_auto and is pinned by tests/test_descriptions.py; Kaggle is attempted only for gpu=true jobs."
   },
   "profiles": {
     "IMAGE_FAST": {
