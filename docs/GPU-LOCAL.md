@@ -324,6 +324,14 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
 
 ## Non vérifié à ce jour
 
+> **Les trois manques qui sont des chantiers sont ouverts dans le plan**, pas seulement
+> listés ici : `PLAN.md`, étape 9 — **GPU-1** (la surcouche ne marche que sous Windows),
+> **GPU-2** (la comparaison de qualité, dont la moitié louée coûte ≈ 0,114 $ et appartient
+> au propriétaire), **GPU-3** (les deux trajets vus par bouts). Chacun y porte son rayon
+> mesuré, qui décide, et la preuve qui le ferme. Une ligne « non vérifié » qui reste ici
+> sans entrée là-bas est un manque nommé mais jamais ouvert : c'est exactement le défaut
+> relevé par le propriétaire le 19/09 au soir.
+
 - ~~De combien la 4090 bat la L4 louée.~~ **Mesuré le 19/09** : 412 s contre 422 s pour un
   clip de 3 s, mais en 720p au lieu de 480p et 50 passes au lieu de 30 — voir le tableau.
   Reste non mesuré : la **même** tâche des deux côtés, qui seule comparerait les cartes.
