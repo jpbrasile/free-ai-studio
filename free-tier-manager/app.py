@@ -1828,12 +1828,26 @@ async def quotas_etat():
 @app.get("/cles/etat")
 async def cles_etat():
     fournisseurs = []
+    cles_deja_demandees: set = set()
     for name in provider_order():
+        # UNE CARTE PAR CLÉ, pas par service (20/09/2026). Free AI Max partage la
+        # clé de Gemini : même `key_env`, même projet Google, seul le quota
+        # diffère. Un `FREE_PROVIDER_ORDER` contenant `gemini_max` posait donc
+        # une deuxième carte sur /cles, sans titre ni mode d'emploi — parce que
+        # `PROVIDER_HELP` ne le connaît pas — qui redemandait la clé saisie
+        # juste au-dessus. Un débutant à qui l'on demande deux fois la même clé
+        # croit s'être trompé la première fois.
+        cle_env = PROVIDERS[name]["key_env"]
+        if cle_env in cles_deja_demandees:
+            continue
+        cles_deja_demandees.add(cle_env)
         aide = PROVIDER_HELP.get(name, {})
         key = provider_key(name)
         fournisseurs.append({
             "nom": name,
-            "titre": aide.get("titre", name),
+            # `titre_de` et non l'aide seule : un service sans carte d'aide
+            # s'affichait sous son nom de code, `gemini_max`.
+            "titre": titre_de(name),
             "role": aide.get("role", ""),
             "url": aide.get("url", ""),
             "repere": aide.get("repere", ""),
@@ -2138,8 +2152,17 @@ async def etat_liaison() -> Dict[str, Any]:
 async def diagnostic_etat():
     return {
         "version": version_locale(),
+        # `ordre_affiche()` et non `PROVIDERS` (20/09/2026), pour deux raisons.
+        # D'abord l'ordre : le dictionnaire les rend dans l'ordre où ils sont
+        # écrits dans le code, la page les montre dans l'ordre d'essai, et la
+        # ligne du diagnostic ne coïncidait donc avec rien. Ensuite, et c'est
+        # plus qu'un détail d'affichage : `PROVIDERS` contient AUSSI les
+        # services absents de `FREE_PROVIDER_ORDER`. Une clé Groq laissée là
+        # après avoir retiré Groq de l'ordre faisait annoncer « un service
+        # gratuit est branché » pour un service que le chat n'appelle jamais.
         # gemini_max porte la cle de gemini : la compter serait compter une cle deux fois.
-        "fournisseurs_branches": [n for n in PROVIDERS if n != "gemini_max" and configured(n)],
+        "fournisseurs_branches": [n for n in ordre_affiche()
+                                  if n != "gemini_max" and configured(n)],
         "quotas": etat_quotas(),
         "liaison": await etat_liaison(),
     }
@@ -2227,8 +2250,14 @@ function rendre(d) {
     "cote chat : " + (L.cle_du_chat || "inconnue")));
   zone.appendChild(ligne(modeles.length > 0, "Un modele est proposable dans le chat",
     modeles.length ? modeles.join(", ") : "la liste est vide"));
-  zone.appendChild(ligne(d.fournisseurs_branches.length > 0, "Au moins un service gratuit est branche",
-    d.fournisseurs_branches.length ? d.fournisseurs_branches.join(", ") : "aucune cle enregistree"));
+  // Les noms de code (« gemini_max ») ne veulent rien dire pour qui lit cette
+  // page ; le reste du Studio dit « Gemini Max (Google) ». Le titre vient de la
+  // meme source que partout ailleurs, et le nom de code sert de repli.
+  var titres = {};
+  ((d.quotas && d.quotas.fournisseurs) || []).forEach(function (f) { titres[f.nom] = f.titre; });
+  var branches = d.fournisseurs_branches.map(function (n) { return titres[n] || n; });
+  zone.appendChild(ligne(branches.length > 0, "Au moins un service gratuit est branche",
+    branches.length ? branches.join(", ") : "aucune cle enregistree"));
 
   // Quotas : quel service repond, lequel est en pause, jusqu'a quand.
   var actifs = ((d.quotas && d.quotas.fournisseurs) || []).filter(function (f) { return f.eligible; });
