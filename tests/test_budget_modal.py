@@ -294,3 +294,32 @@ def test_le_module_dit_de_combien_il_sous_compte(budget):
     assert "09/09/2026" in doc                       # le t0 qui rend l'egalite vraie
     # Et l'interdiction de << corriger >> en multipliant par le rapport mesure.
     assert "2,74" in doc and "pas un coefficient" in doc
+
+
+def test_la_cause_de_l_ecart_est_celle_qui_a_ete_mesuree(budget):
+    """Question du proprietaire : << mauvaise lecture de notre part ou latence ? >>
+
+    Les deux branches ont ete verifiees le 20/09/2026 plutot que departagees au
+    raisonnement, et la premiere explication que j'avais ecrite -- le stockage --
+    etait FAUSSE. Ce test grave les trois reponses mesurees :
+
+    1. Pas la latence : Modal ecrit dans son API que les donnees arrivent
+       << within minutes >>, et un retard ferait afficher MOINS, alors que c'est
+       notre chiffre qui est le plus petit.
+    2. Pas le stockage : le tableau de bord dit << Deployed Apps: $3.80 >>,
+       stockage zero, egress non facture.
+    3. C'est le prix a la seconde : Modal facture GPU 1,97 $ / memoire 1,37 $ /
+       processeur 0,46 $ quand notre modele suppose 82 / 13 / 5 %. Nous traitons
+       comme marginal ce que Modal facture presque a moitie.
+
+    Et la precaution qui va avec : le 2,74 porte sur tout septembre, alors que ce
+    compteur n'existe que depuis le 19/09 -- sur la seule fenetre qui lui
+    appartient, le rapport mesure est 1,44 sur UN evenement.
+    """
+    doc = budget.__doc__
+    assert "within minutes" in doc                   # la latence, ecartee par leur API
+    assert "Deployed Apps: $3.80" in doc             # le stockage, ecarte par le releve
+    assert "FAUSSE" in doc                           # l'erreur precedente, gardee visible
+    for part in ("1,97", "1,37", "0,46"):            # la decomposition mesuree
+        assert part in doc, part
+    assert "1,44" in doc and "19/09" in doc          # la fenetre qui appartient a ce compteur

@@ -50,11 +50,34 @@ n'avait tourne depuis le 1er septembre -- les 6 jours factures du mois portent
 tous le nom `free-ai-studio-sandbox`. Les deux compteurs couvrent donc la MEME
 fenetre et le MEME travail. Ce n'est pas un decalage de perimetre.
 
-La cause n'est pas entierement attribuee ici, et il ne faut pas faire semblant.
-Une part au moins est du stockage : le releve du 16/09/2026 conserve dans
-depenses.py porte une ligne `volumes 0.38346824` que ce compteur, qui ne compte
-que des secondes de calcul, ne voit pas. Le temps de conteneur d'une application
-deployee et les constructions d'image sont les autres candidats, non mesures.
+D'OU VIENT L'ECART -- et ce n'est ni un retard d'affichage, ni le stockage.
+Question du proprietaire le meme jour : << c'est une mauvaise lecture de notre
+part ou un temps de latence a afficher une consommation ? >>. Les deux branches
+ont ete verifiees, et c'est la premiere.
+
+  Pas la latence. Modal l'ecrit dans son API (`modal/_billing.py`) : les
+  donnees arrivent << within minutes, although there may be collection
+  delays >>. Des minutes, pas des jours -- et surtout un retard ferait afficher
+  MOINS que la realite, alors que c'est NOTRE chiffre qui est le plus petit.
+
+  Pas le stockage. C'etait ma premiere explication, et elle etait FAUSSE : je
+  l'avais tiree d'un releve du 16/09 sans regarder ce que ce mois-la contenait.
+  Le tableau de bord donne la decomposition -- << Deployed Apps: $3.80 >>,
+  stockage zero, et la ligne << Network Egress >> non facturee (1,05 Gio sur
+  1 Tio inclus).
+
+  C'est le PRIX A LA SECONDE, et l'ecart est localise. Modal, septembre :
+
+    GPU ....... 1,97 $   52 %
+    memoire ... 1,37 $   36 %
+    processeur  0,46 $   12 %
+
+  Notre modele, pour un clip video sur L4 : 82 % de carte, 13 % de memoire,
+  5 % de processeur. Nous traitons comme marginal ce que Modal facture presque
+  a moitie. Deux causes nommees : `coeurs` vaut 1,0 par defaut (`MODAL_CPU`)
+  alors que la facture correspond a plusieurs coeurs, et la memoire est comptee
+  sur ce que le code DEMANDE (`VIDEO_MEMORY_MB`, `CHANSON_MEMORY_MB`) et non
+  sur ce que Modal reserve.
 
 CE QU'IL NE FAUT PAS EN FAIRE : multiplier l'estimation par 2,74. Ce rapport est
 UNE mesure, sur UN mois, sur UN melange de travaux ; ce n'est pas un coefficient.
@@ -64,6 +87,16 @@ le plafond de 30 $ ne se declenche qu'aux alentours de 82 $ reellement factures,
 donc APRES le credit. La reparation est de lire le vrai chiffre -- depenses.py
 le sait deja faire -- et elle est ouverte en sous-plan GPU-7 dans PLAN.md, parce
 qu'elle touche le garde appele dans 5 fichiers et 67 endroits.
+
+UNE PRECAUTION SUR LE 2,74 LUI-MEME. Il porte sur TOUT septembre, alors que ce
+compteur-ci n'existe que depuis le 19/09 : avant cette date, le quatrieme
+depensier (run_auto) n'etait compte NULLE PART, ce qui est precisement le defaut
+repare ce jour-la. Le rapport melange donc deux compteurs. Sur la seule fenetre
+ou celui d'aujourd'hui etait aux commandes -- du 19/09 a maintenant -- Modal ne
+porte qu'une depense, 0,1579 $ dans l'heure de 06 h le 20/09, en face de 0,1097 $
+comptes ici a 06 h 08 : un rapport de 1,44 sur UN evenement. Le sens est le meme,
+l'ampleur non. Les deux chiffres sont ecrits parce qu'ils disent deux choses
+differentes, et qu'en garder un seul serait choisir celui qui arrange.
 """
 
 import json

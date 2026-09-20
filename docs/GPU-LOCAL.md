@@ -1069,11 +1069,49 @@ fin du crédit, donc sur un moyen de paiement. `budget_modal.py` écrivait déj�
 des prix des cartes : « *se tromper vers le bas est exactement ce qu'un compteur de refus
 ne doit jamais faire* ». Il le faisait sur lui-même.
 
-La cause n'est pas entièrement attribuée, et je ne la devine pas. Une part au moins est
-du **stockage** : le relevé du 16/09/2026 conservé dans `depenses.py` porte une ligne
-`volumes 0.383` que ce compteur, qui n'additionne que des secondes de calcul, ne voit
-pas. Le temps de conteneur d'une application déployée et les constructions d'image sont
-les autres candidats — **non mesurés**.
+### D'où vient l'écart — la question du propriétaire, et ma première réponse fausse
+
+« *C'est une mauvaise lecture de notre part ou un temps de latence à afficher une
+consommation ?* » Les deux branches ont été vérifiées plutôt que départagées au
+raisonnement, et **ma première explication — le stockage — était fausse** : je l'avais
+tirée d'un relevé du 16/09 sans regarder ce que ce mois-là contenait.
+
+**Ce n'est pas la latence.** Modal l'écrit dans son propre code (`modal/_billing.py`) :
+les données arrivent « *within minutes, although there may be collection delays* ». Des
+minutes, pas des jours — et surtout, un retard ferait afficher **moins** que la réalité,
+alors que c'est *notre* chiffre qui est le plus petit. La dépense tombe d'ailleurs par
+rafales et non en continu : le 16/09, **sept** heures facturées sur vingt-quatre ; le
+17/09, **huit**. Ce n'est pas un conteneur oublié qui tourne, ce sont des séances de
+travail.
+
+**Ce n'est pas le stockage.** Le tableau de bord donne la décomposition : « Deployed
+Apps: **$3.80** », stockage **zéro**, et la ligne « Network Egress » **non facturée**
+(1,05 Gio sur 1 Tio inclus).
+
+**C'est le prix à la seconde, et l'écart est localisé.**
+
+| poste | Modal, septembre | notre modèle (clip L4) |
+|---|---|---|
+| carte | 1,97 $ — **52 %** | **82 %** |
+| mémoire | 1,37 $ — **36 %** | **13 %** |
+| processeur | 0,46 $ — **12 %** | **5 %** |
+
+Nous traitons comme marginal ce que Modal facture presque à moitié. Deux causes
+nommées, toutes deux dans `prix_seconde()` : `coeurs` vaut **1,0** par défaut
+(`MODAL_CPU`) alors que la facture correspond à plusieurs cœurs, et la mémoire est
+comptée sur ce que le code **demande** (`VIDEO_MEMORY_MB`, `CHANSON_MEMORY_MB`) et non
+sur ce que Modal **réserve**.
+
+### Une précaution sur le 2,74 lui-même
+
+Ce rapport porte sur **tout** septembre, alors que ce compteur-ci n'existe que depuis le
+**19/09** : avant cette date, le quatrième dépensier (`run_auto`) n'était compté nulle
+part — c'est précisément le défaut réparé ce jour-là. Le rapport mélange donc deux
+compteurs. Sur la seule fenêtre qui appartient à celui d'aujourd'hui, du 19/09 à
+maintenant, Modal ne porte **qu'une** dépense : **0,1579 $** dans l'heure de 6 h le
+20/09, en face de **0,1097 $** comptés ici à 6 h 08 — un rapport de **1,44 sur un seul
+événement**. Le sens est le même, l'ampleur non. Les deux chiffres restent écrits :
+n'en garder qu'un serait choisir celui qui arrange.
 
 ### Ce qui est fait, et ce qui ne l'est pas
 
