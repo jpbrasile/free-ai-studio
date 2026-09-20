@@ -579,6 +579,14 @@ def preparer(payload: dict, pour_modal: bool = True, maison: bool = False) -> di
         "gpu": modele["gpu"],
         "demande": demande,
         "resume_public": {
+            # La phrase tapee par le client. Elle manquait jusqu'au 19/09/2026,
+            # et son absence se mesure : des deux clips fabriques ce soir-la,
+            # l'un pese 1 901 468 octets et l'autre 390 313 -- personne ne peut
+            # plus dire sur quel texte, ni refaire le meme clip, ni comparer
+            # deux modeles << sur le meme texte >> comme le plan le demande.
+            # Elle ne quitte pas cet ordinateur : elle est ecrite dans la fiche
+            # du travail, a cote du reste.
+            "description": description,
             "modele": modele["hf"],
             "titre_modele": modele["titre"],
             "licence": modele["licence"],
@@ -733,6 +741,15 @@ const IMAGES = {};
 let minuteur = null;
 let MODELES = null;
 let CARTE_POSSIBLE = false;   // cet ordinateur a-t-il une carte branchée au Studio
+
+// Du texte libre qui repasse dans du HTML redevient du code si on le laisse
+// faire. Une seule ligne, et elle sert partout où l'on affiche ce que le
+// client a tapé.
+function enTexte(s){
+  const d = document.createElement("div");
+  d.textContent = String(s == null ? "" : s);
+  return d.innerHTML;
+}
 
 // La licence s'affiche LA OU l'on choisit, pas dans une note en bas de page.
 //
@@ -929,7 +946,14 @@ function suivre(id){
             + 'rel="noopener">Ouvrir dans un onglet</a>'
             + '<span class="avert">Le fichier s’appellera <code>' + nom + '</code> et ira '
             + 'dans votre dossier Téléchargements.</span>'
-            + '</div>';
+            + '</div>'
+            // Le texte qui a fait ce clip, sous le clip. Sans lui, deux clips
+            // côte à côte ne se distinguent plus dès le lendemain. Échappé :
+            // c'est du texte libre, et il ne doit jamais redevenir du code en
+            // revenant du serveur.
+            + ((j.video && j.video.description)
+                ? ('<p class="avert">Texte : « ' + enTexte(j.video.description) + ' »</p>')
+                : "");
         } else {
           etat.innerHTML = '<span class="ko">✖ Échec</span> — ' + (j.message || "voir le journal ci-dessous.");
         }

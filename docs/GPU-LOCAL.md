@@ -427,3 +427,25 @@ prouve **pas** que les 34 Go arrivent au bout. À 25 Mo/s ce serait ~23 min, mai
 d'une ligne ne se tient pas une demi-heure — le 19/09, le téléchargement complet avait
 demandé environ une heure **avec une reprise après blocage**. Une seule ligne d'avertissement
 au passage, notée telle quelle : `You are sending unauthenticated requests to the HF Hub`.
+
+## La fiche du travail ne gardait pas le texte du clip (19/09, 22:2x)
+
+Trouvé en préparant la comparaison de qualité que ce document réclame depuis la phase 2 :
+« un clip de la 1.3B 480p et un de la 5B 720p **sur le même texte** ». Les fiches des trois
+clips déjà fabriqués ont été relues une par une — elles gardent le modèle, la carte, la
+définition, la précision, le temps de calcul, le prix et **le motif du routage**, et pas la
+phrase tapée. Les deux clips du 19/09 pèsent **1 901 468 et 390 313 octets** : plus personne
+ne peut dire sur quel texte, ni refaire le même clip, ni donc comparer deux modèles sur le
+même. Le clip loué du 09/09 (`b16ee2c1`, Wan 2.1 VACE 1.3B, 832 × 480, 49 images, 422,4 s)
+est dans le même cas — sa moitié de comparaison est inutilisable.
+
+Réparé : `resume_public` porte la description, la fiche la rend, et la page l'écrit sous le
+clip (échappée — du texte libre qui revient dans du HTML redevient du code si on le laisse
+faire). Tenu par `test_la_fiche_du_travail_garde_le_texte_du_clip`. **Ce que ça ne répare
+pas** : les trois clips déjà fabriqués restent sans texte, et aucune invention ne le leur
+rendra.
+
+**Reste donc à faire pour clore la comparaison** : un clip loué et un clip local sur le
+texte que la page propose elle-même. Le local est gratuit ; le loué coûte **environ
+0,114 $** et attend l'accord du propriétaire — une dépense ne se décide pas toute seule,
+c'est la règle du chantier.

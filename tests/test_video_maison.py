@@ -270,3 +270,19 @@ def test_la_page_nomme_le_modele_de_la_maison(studio):
     page = client.get("/video", headers=CLE).text
     assert 'MODELES["maison"]' in page          # la ligne de licence la nomme
     assert "Qualité si on loue" in page         # le menu ne promet plus l'autre
+
+
+# --- 6. Le texte tape reste avec le clip -------------------------------------
+
+def test_la_fiche_du_travail_garde_le_texte_du_clip(studio, monkeypatch):
+    """Sans lui, deux clips ne se distinguent plus des le lendemain.
+
+    Mesure du 19/09 : les deux clips fabriques ce soir-la pesent 1 901 468 et
+    390 313 octets, et aucune des deux fiches ne dit sur quel texte. On ne peut
+    donc ni refaire le meme clip, ni comparer deux modeles << sur le meme
+    texte >> comme le plan le demande."""
+    monkeypatch.setattr(studio.ou_calculer.gpu_local, "utilisable", sonde_libre)
+    phrase = "un phare breton sous la pluie, la mer se souleve"
+    r = creer(studio, description=phrase)
+    assert r.status_code == 200
+    assert r.json()["video"]["description"] == phrase
