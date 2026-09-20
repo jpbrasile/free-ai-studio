@@ -1183,3 +1183,70 @@ injoignable. Elle ne se corrige pas en multipliant par 2,74.
 **Pour que ce soit actif dans la pile qui tourne**, le code étant copié dans l'image :
 `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build sandbox-manager`.
 Ce redémarrage n'a **pas** été fait — c'est un service en marche que je n'ai pas lancé.
+
+### L'image reconstruite l'a dit tout de suite : le compteur restait à 1,39 $
+
+Le propriétaire a autorisé les deux gestes d'un coup — « *pousse et rebuild
+sandbox-manager* ». Poussé (`6e10317..7596c66`), reconstruit, service sain en 21 s.
+Et la première vérification après le redémarrage a montré que **la réparation
+n'était qu'à moitié faite** :
+
+```
+usd        : 1.3878      <- ce que le garde utilisait pour refuser
+usd_estime : 1.3878
+usd_reel   : null        <- rien, alors que Modal en compte 3,7971
+```
+
+Le code neuf était bien dans l'image (`_releve_reel` présent trois fois dans
+`/app/budget_modal.py`). Mais `usd_reel` n'apparaît dans le fichier **qu'au premier
+`consommer()`** — c'est-à-dire **après** la première dépense. Entre un redémarrage et
+la dépense suivante, le garde décidait donc encore sur l'estimation locale. La fenêtre
+est étroite, et elle contient exactement **un travail : celui qu'il aurait fallu
+refuser**. C'est le défaut de GPU-7, rétréci, pas supprimé.
+
+**Réparé dans le même tour.** `amorcer()` prend **un** relevé au démarrage et le range
+par le même chemin que `consommer()` : elle n'encaisse rien, ne touche ni au temps, ni
+aux appels, ni aux totaux par usage — sinon chaque redémarrage gonflerait le compteur
+sans qu'aucune carte ait été louée. `app.py` l'appelle **dans un fil `daemon`** : le
+relevé dure 0,85 s quand Modal répond et jusqu'à son délai d'attente quand il se tait,
+et un démarrage de conteneur ne doit jamais attendre un service distant.
+
+**Après la seconde reconstruction**, sans aucune dépense entre-temps :
+
+```
+usd        : 3.7971       usd_reel  : 3.7971 le 2026-09-20 09:47:50
+usd_estime : 1.3878       reste_usd : 26.2029
+```
+
+Le montant a triplé d'un coup, comme annoncé — et **26,2029 $** est, au centime,
+le crédit restant que le tableau de bord de Modal affiche (**26,20 $**). Deux chemins
+indépendants, le même nombre : c'est la vérification que la comparaison du matin
+appelait.
+
+### La bannière disait encore « estimation locale, pas une facture »
+
+Sous un chiffre qui **est** la facture, la phrase devenait fausse — et c'est la seule
+ligne que le client lit sur le seul nombre qui l'engage. Les trois pages (clip, chanson,
+dialogue) branchent maintenant sur la provenance du montant affiché :
+
+- **relevé présent** → « Dépensé sur Modal ce mois-ci **selon Modal** … Chiffre
+  **relevé chez Modal** le *(date)* : leur compte, pas le nôtre. Notre estimation
+  locale … dit 1,39 $ — elle sous-compte. »
+- **Modal muet** → « … **selon le Studio** … Estimation locale …, pas une facture :
+  Modal n'a pas répondu, et notre estimation **sous-compte**. »
+
+La seconde moitié est celle qui protège : un chiffre trop petit présenté sans réserve
+laisserait croire qu'il reste du crédit là où il n'y en a plus.
+
+Six tests de plus, et ils ne lisent pas le code — ils **exécutent la fonction dans
+node** et lisent la phrase qui sort, pour les trois pages et les deux cas. Un test de
+texte dirait seulement que les deux branches sont écrites ; celui-ci dit **laquelle
+sort**, et qu'aucune ne casse la bannière (une faute de JS l'efface entière, sans un mot
+dans les journaux du serveur). Piège rencontré et écrit dans le test : `subprocess` avec
+`text=True` décode en **cp1252** sur cette machine, alors que node écrit de l'UTF-8 —
+« relevé » devenait « relevÃ© » et le test cherchait un mot qui n'existait nulle part.
+
+**Quatre gardes neufs cassés exprès**, chacun *avec la faute 1 échoué, fichier remis
+1 passé* : l'amorce qui n'écrit pas son relevé · le démarrage qui appelle l'amorce sans
+fil · la bannière qui redit « selon le Studio » · la bannière qui ne prévient plus du
+sous-compte. Suite complète **366 passés**, ruff propre.

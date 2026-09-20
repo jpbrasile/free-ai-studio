@@ -548,3 +548,34 @@ def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int) 
             etat["usd_reel_le"] = time.strftime("%Y-%m-%d %H:%M:%S")
         _ecrire(etat)
     return vue(usage)
+
+
+def amorcer() -> Optional[float]:
+    """Prend UN releve au demarrage, pour que le premier refus soit deja juste.
+
+    DEFAUT MESURE LE 20/09/2026, juste apres la reconstruction de l'image : le
+    code neuf etait bien en place, et pourtant `lire()` rendait encore
+    1,3878 $ -- parce que `usd_reel` n'apparait dans le fichier qu'au premier
+    `consommer()`. Entre le redemarrage et la premiere depense, le garde
+    decidait donc encore sur l'estimation locale : exactement le defaut que
+    GPU-7 nomme, reduit a une fenetre, mais une fenetre qui contient UN travail
+    -- celui qu'il aurait fallu refuser.
+
+    Le releve est pris ici, puis range par le meme chemin que dans
+    `consommer()`. Rien d'autre n'est touche : ni `usd`, ni les compteurs par
+    usage. Hors ligne, la fonction rend None sans rien ecrire, et le garde
+    repart sur son plancher local comme avant.
+
+    A APPELER DANS UN FIL, JAMAIS DANS LA REQUETE : environ 0,85 s quand Modal
+    repond, et jusqu'au delai d'attente de `depenses.py` quand il ne repond
+    pas. Un demarrage de conteneur ne doit pas attendre un service distant.
+    """
+    reel = _releve_reel()
+    if reel is None:
+        return None
+    with _VERROU:
+        etat = _relire()
+        etat["usd_reel"] = reel
+        etat["usd_reel_le"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _ecrire(etat)
+    return reel

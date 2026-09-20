@@ -372,6 +372,17 @@ def backend_automatique() -> str:
 # Au demarrage : ce qui a ete saisi lors d'une session precedente redevient actif.
 apply_stored_secrets()
 
+# Puis, DANS UN FIL, le compteur Modal va chercher le vrai chiffre une fois.
+# Sans cela il garde l'estimation locale jusqu'a la premiere depense, et le
+# premier refus d'apres redemarrage se decide sur un nombre trop petit -- mesure
+# le 20/09/2026 : `lire()` rendait encore 1,3878 $ alors que Modal en comptait
+# 3,7971. Dans un fil parce que le releve dure environ 0,85 s quand Modal repond
+# et jusqu'au delai d'attente quand il ne repond pas : le demarrage n'attend
+# jamais un service distant. apply_stored_secrets() a deja pose le jeton, et si
+# rien ne repond amorcer() rend None sans rien ecrire.
+threading.Thread(target=budget_modal.amorcer, name="amorce-budget",
+                 daemon=True).start()
+
 
 def collect_local_artifacts(jid: str, source: str) -> list[dict]:
     out = JOBS / jid / "output"
@@ -1537,8 +1548,12 @@ def budget_modal_etat(authorization: Optional[str] = Header(default=None)):
     depensier devient visible.
 
     Authentifiee, comme /depenses/etat et contrairement a /etat : elle rend
-    des montants, pas des booleens. Et comme /depenses/etat, elle ne dit que
-    l'ESTIMATION locale ; le compte qui fait foi est celui de Modal.
+    des montants, pas des booleens.
+
+    Depuis le 20/09/2026 elle ne dit plus seulement l'estimation locale : `usd`
+    est le plus grand de l'estimation (`usd_estime`) et du releve pris chez
+    Modal (`usd_reel`, date dans `usd_reel_le`). Quand Modal ne repond pas,
+    `usd_reel` vaut null et tout se passe comme avant, sur le plancher local.
     """
     auth(authorization)
     return budget_modal.lire()

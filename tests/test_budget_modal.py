@@ -15,6 +15,7 @@ Aucun appel reseau : Modal n'est jamais touche.
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 
 import pytest
@@ -409,3 +410,153 @@ def test_le_releve_ne_fait_jamais_baisser_le_compteur(budget, monkeypatch):
     assert etat["usd_reel"] == pytest.approx(0.5)    # le releve est garde tel quel...
     assert etat["usd"] > 12.0                        # ...mais il ne fait pas reculer le total
     assert etat["usd"] == pytest.approx(etat["usd_estime"])
+
+
+# --- 8. L'amorce : le premier refus d'apres redemarrage --------------------
+
+def test_l_amorce_pose_le_chiffre_de_modal_des_le_demarrage(budget, monkeypatch):
+    """LE defaut mesure le 20/09/2026, une fois l'image reconstruite.
+
+    Le code neuf etait en place et `lire()` rendait pourtant encore 1,3878 $ :
+    `usd_reel` n'apparait qu'au premier `consommer()`. Entre le redemarrage et
+    la premiere depense, le garde decidait donc sur l'estimation locale -- une
+    fenetre etroite, mais qui contient UN travail, celui qu'il aurait fallu
+    refuser.
+    """
+    budget.poser("video", secondes=4996.2, usd=1.3878, appels=29)
+    assert budget.lire()["usd"] == pytest.approx(1.3878)     # le defaut, avant
+    _faux_depenses(monkeypatch, {"calcul": 3.79706491})
+    assert budget.amorcer() == pytest.approx(3.79706491)
+    etat = budget.lire()
+    assert etat["usd"] == pytest.approx(3.7971, abs=1e-4)    # repare, sans depense
+    assert etat["usd_estime"] == pytest.approx(1.3878)       # l'estimation reste lisible
+    assert etat["usd_reel_le"]
+
+
+def test_l_amorce_ne_touche_ni_au_temps_ni_aux_usages(budget, monkeypatch):
+    """Elle range un releve, elle n'encaisse rien.
+
+    Si elle ajoutait au total local, chaque redemarrage du conteneur ferait
+    monter le compteur sans qu'aucune carte ait ete louee -- un compteur qui
+    grossit tout seul finirait par refuser tout.
+    """
+    budget.poser("chanson", secondes=100.0, usd=0.5, appels=2)
+    avant = budget.lire()
+    _faux_depenses(monkeypatch, {"calcul": 3.79706491})
+    budget.amorcer()
+    apres = budget.lire()
+    assert apres["secondes"] == avant["secondes"]
+    assert apres["appels"] == avant["appels"]
+    assert apres["usd_par_usage"] == avant["usd_par_usage"]
+    assert apres["usd_estime"] == pytest.approx(avant["usd_estime"])
+
+
+def test_sans_reponse_l_amorce_n_ecrit_rien(budget, monkeypatch):
+    """Modal injoignable : le demarrage se passe comme avant, sur le plancher local."""
+    budget.poser("video", secondes=100.0, usd=0.5, appels=1)
+    _faux_depenses(monkeypatch, {}, disponible=False)
+    assert budget.amorcer() is None
+    etat = budget.lire()
+    assert etat["usd_reel"] is None
+    assert etat["usd"] == pytest.approx(etat["usd_estime"])
+
+
+def test_le_demarrage_lance_l_amorce_dans_un_fil(sandbox):
+    """Le releve dure 0,85 s quand Modal repond -- et jusqu'au delai d'attente
+    quand il ne repond pas. Appele tel quel, il ferait attendre le demarrage du
+    conteneur sur un service distant, et un Modal muet retarderait la page de
+    vingt-cinq secondes. Le fil est donc la moitie de la reparation, pas un
+    detail de style.
+    """
+    from conftest import RACINE
+    source = (RACINE / "sandbox-manager" / "app.py").read_text(encoding="utf-8")
+    assert "budget_modal.amorcer" in source, "l'amorce n'est plus appelee au demarrage"
+    debut = source.index("budget_modal.amorcer")
+    autour = source[debut - 200:debut + 200]
+    assert "threading.Thread" in autour, "l'amorce bloquerait le demarrage"
+    assert "daemon=True" in autour, "un fil non daemon retiendrait l'arret du conteneur"
+
+
+# --- 9. Ce que la banniere dit au client, joue dans un vrai moteur JS --------
+
+PAGES = [("chanson", "chansons"), ("video", "clips"), ("dialogue", "dialogues")]
+
+
+def _budget_texte_js(nom_module: str) -> str:
+    """Sort `budgetTexte` de la page, telle qu'elle part dans le navigateur."""
+    from conftest import RACINE
+    source = (RACINE / "sandbox-manager" / (nom_module + ".py")).read_text(encoding="utf-8")
+    debut = source.index("function budgetTexte(b){")
+    profondeur = 0
+    for fin in range(source.index("{", debut), len(source)):
+        if source[fin] == "{":
+            profondeur += 1
+        elif source[fin] == "}":
+            profondeur -= 1
+            if profondeur == 0:
+                return source[debut:fin + 1]
+    raise AssertionError("budgetTexte n'est pas refermee dans " + nom_module)
+
+
+def _rendu(tmp_path, nom_module, etat):
+    """Execute la fonction dans node et rend la phrase vue par le client.
+
+    Un test de texte dirait seulement que les deux branches sont ECRITES ; on
+    veut savoir laquelle SORT, et qu'aucune des deux ne casse la page -- une
+    faute de JS ici efface la banniere entiere, sans un mot dans les journaux
+    du serveur.
+    """
+    programme = (_budget_texte_js(nom_module)
+                 + "\nconsole.log(budgetTexte(" + json.dumps(etat) + "));\n")
+    fichier = tmp_path / ("banniere_" + nom_module + ".js")
+    fichier.write_text(programme, encoding="utf-8")
+    # encoding= explicite : node ecrit de l'UTF-8, et sur cette machine Python
+    # decoderait en cp1252. Sans cette ligne, << releve >> devient << relevÃ© >>
+    # et le test cherche un mot qui n'existe nulle part -- mesure le 20/09/2026.
+    fait = subprocess.run(["node", str(fichier)], capture_output=True,
+                          text=True, encoding="utf-8")
+    assert fait.returncode == 0, fait.stderr
+    return fait.stdout
+
+
+@pytest.mark.parametrize("nom_module,champ", PAGES)
+def test_la_banniere_dit_selon_modal_quand_le_chiffre_vient_de_modal(
+        budget, monkeypatch, tmp_path, nom_module, champ):
+    """<< Estimation locale, pas une facture >> etait vrai jusqu'au 20/09/2026.
+
+    Le compteur porte maintenant le releve de Modal quand il l'a. Laisser la
+    vieille phrase sous un chiffre qui EST la facture, c'est dire au client
+    quelque chose de faux sur le seul nombre qui l'engage.
+    """
+    budget.poser(nom_module if nom_module != "video" else "video",
+                 secondes=4996.2, usd=1.3878, appels=29)
+    _faux_depenses(monkeypatch, {"calcul": 3.79706491})
+    budget.amorcer()
+    etat = budget.vue(nom_module)
+    etat[champ] = 2
+    texte = _rendu(tmp_path, nom_module, etat)
+    assert "selon Modal" in texte
+    assert "relevé chez Modal" in texte
+    assert "1.39" in texte, "l'estimation locale doit rester lisible a cote"
+    assert "3.80" in texte
+    assert "pas une facture" not in texte
+
+
+@pytest.mark.parametrize("nom_module,champ", PAGES)
+def test_la_banniere_avoue_sous_compter_quand_modal_se_tait(
+        budget, monkeypatch, tmp_path, nom_module, champ):
+    """Hors ligne, le client doit savoir que le nombre est un PLANCHER.
+
+    C'est la moitie qui protege : un chiffre trop petit presente sans reserve
+    laisserait croire qu'il reste du credit la ou il n'y en a plus.
+    """
+    budget.poser(nom_module if nom_module != "video" else "video",
+                 secondes=4996.2, usd=1.3878, appels=29)
+    _faux_depenses(monkeypatch, {}, disponible=False)
+    budget.amorcer()
+    etat = budget.vue(nom_module)
+    etat[champ] = 2
+    texte = _rendu(tmp_path, nom_module, etat)
+    assert "selon le Studio" in texte
+    assert "sous-compte" in texte
+    assert "relevé chez Modal" not in texte

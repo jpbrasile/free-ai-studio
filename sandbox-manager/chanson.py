@@ -922,12 +922,24 @@ document.getElementById("modele").addEventListener("change", majModele);
 
 function budgetTexte(b){
   const part = Math.min(100, 100 * b.usd / b.plafond_usd);
-  return "Dépensé sur Modal ce mois-ci selon le Studio, tous usages confondus : <b>"
+  // Le nombre affiché vient de Modal dès que leur relevé est là et qu'il est le
+  // plus grand des deux. Le dire, parce que « estimation » et « relevé » ne se
+  // discutent pas de la même façon.
+  const reel = (b.usd_reel !== null && b.usd_reel !== undefined
+                && b.usd_reel >= b.usd_estime);
+  return "Dépensé sur Modal ce mois-ci " + (reel ? "selon Modal" : "selon le Studio")
+    + ", tous usages confondus : <b>"
     + b.usd.toFixed(2) + " $</b> sur les " + b.plafond_usd.toFixed(2)
     + " $ ouverts aux demandes. " + b.chansons + " chanson(s) sur cette page."
     + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
-    + '<span class="avert">Estimation locale d’après les prix relevés le ' + b.prix_releve_le
-    + ', pas une facture. Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
+    + '<span class="avert">'
+    + (reel
+       ? 'Chiffre <b>relevé chez Modal</b> le ' + b.usd_reel_le + ' : leur compte, pas '
+         + 'le nôtre. Notre estimation locale, d’après les prix relevés le '
+         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $ — elle sous-compte. '
+       : 'Estimation locale d’après les prix relevés le ' + b.prix_releve_le
+         + ', pas une facture : Modal n’a pas répondu, et notre estimation <b>sous-compte</b>. ')
+    + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
     + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
     + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '
     + b.reserve_autonome_usd.toFixed(2) + ' $ sont réservés au Sandbox et ne peuvent pas '
