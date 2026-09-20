@@ -343,8 +343,15 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   page → fichier : les quatre sont mesurés. **Ce qui reste non vérifié**, et qui n'est pas
   la même chose : le chemin **« les poids manquent »** sur une machine qui ne les a pas
   (tenu par un test, jamais vu en vrai), le script de téléchargement `telecharger-modele-
-  video.ps1` **jamais exécuté** — les 34 Go étaient déjà là —, et ~~la boîte « la carte est
-  prise » **vue dans un navigateur**~~ (ligne suivante).
+  video.ps1` ~~**jamais exécuté**~~ (exécuté le 19/09 à 21:5x, voir plus bas), et ~~la boîte
+  « la carte est prise » **vue dans un navigateur**~~ (ligne suivante).
+- **Le chantier ne marche que sous Windows aujourd'hui, et ce n'est écrit nulle part
+  ailleurs.** Seul `scripts/demarrer.ps1` ajoute `-f docker-compose.gpu.yml` ; `start.sh` ne
+  le fait pas, et il n'existe pas de jumeau `.sh` du script de téléchargement. Un débutant
+  sous Linux avec une carte obtient donc le comportement d'avant le chantier — tout est
+  loué — **sans un mot**. Mesuré par `grep -rn docker-compose.gpu.yml` : sept fichiers le
+  nomment, aucun n'est un `.sh`. Ce n'est pas réparé ici : c'est un chantier (lanceur,
+  script de téléchargement, message qui nomme le bon script), pas une demi-ligne.
 - ~~La boîte « la carte est prise » vue à l'écran.~~ **Vue le 19/09 vers 21:10.** Elle
   affiche « NVIDIA GeForce RTX 4090 : 3.2 Go libres sur 24.0, il en faut 12.5 », puis les
   trois sorties « J'attends », « Louer chez Modal — environ 0,114 $ » et « Annuler ».
@@ -377,3 +384,46 @@ dictionnaire déjà servi par `/video/budget`, qui contient l'entrée `maison`.
 La seconde ligne disparaît sous « toujours sur une machine louée » : elle ne décrit alors
 plus rien. Tenu par `test_la_page_nomme_le_modele_de_la_maison` (317 tests verts), relu
 dans Chrome le 19/09 à 21:1x.
+
+## Le chemin « les 34 Go ne sont pas là », vu en vrai (19/09, 21:4x → 22:0x)
+
+Il n'était tenu que par un test. Trois mesures l'ont pris en charge pour de bon, et l'une
+d'elles a trouvé un défaut que personne ne cherchait.
+
+**1. Le bac à sable déclare des poids absents, le gestionnaire le voit en une demi-seconde.**
+On n'a rien supprimé : une surcouche d'essai, hors dépôt, a fait pointer
+`SANDBOX_POIDS_REQUIS` sur un dossier qui n'existe pas — exactement le fait que le contrôle
+regarde. Le worker réel a répondu `poids_presents: false`, et `maison_prete()` a rendu
+« Les 34 Go du modèle vidéo ne sont pas encore téléchargés sur cet ordinateur. Une seule
+fois, dans le dossier du Studio : `scripts\telecharger-modele-video.ps1` ». Aucun travail
+n'a été créé : un travail routé chez le loueur est une dépense, et la dépense se demande.
+
+**2. Le défaut trouvé en remettant la vraie configuration : le montage des 34 Go tenait à
+une variable de shell.** `docker-compose.gpu.yml` montait
+`${GPU_MODELES_DIR:-modeles-gpu}`, et **seul** `scripts/demarrer.ps1` posait cette variable
+sur le cache du profil. Un `docker compose up -d sandbox-worker-gpu` tapé à la main — ce que
+fait n'importe qui après une mise à jour — remontait donc le **volume Docker vide, en
+silence** : mesuré ici, `poids_presents` est passé à `false` alors que les 34 Go étaient sur
+le disque, à un dossier près. Le Studio aurait alors dit « téléchargez-les », et un débutant
+aurait repris une heure de ligne pour rien.
+
+Réparé dans le même tour : le défaut est désormais le cache du profil lui-même,
+`${GPU_MODELES_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/huggingface}`. Vérifié par
+`docker compose config` — sans variable, la source rendue est `C:\Users\test/.cache/hugging
+face` ; avec `GPU_MODELES_DIR=D:\poids-ailleurs`, c'est ce dossier-là — puis en recréant le
+conteneur **dans un shell où la variable est vide** : montage
+`/run/desktop/mnt/host/c/Users/test/.cache/huggingface`, `poids_presents: true`.
+
+**3. Le script de téléchargement a été exécuté pour la première fois.** Deux essais :
+
+| | destination | résultat |
+|---|---|---|
+| poids déjà là | `C:\Users\test\.cache\huggingface` | **2 s**, « Fait en 0 s », 29 fichiers reconnus, sortie 0 |
+| dossier vide | un dossier temporaire à moi | **1 901,5 Mo descendus en 75 s**, soit ≈ 25 Mo/s |
+
+Le second essai a été **arrêté volontairement** après 75 s et son dossier supprimé : il
+prouve que le téléchargement part, écrit dans le dossier monté et sort du réseau ; il ne
+prouve **pas** que les 34 Go arrivent au bout. À 25 Mo/s ce serait ~23 min, mais le débit
+d'une ligne ne se tient pas une demi-heure — le 19/09, le téléchargement complet avait
+demandé environ une heure **avec une reprise après blocage**. Une seule ligne d'avertissement
+au passage, notée telle quelle : `You are sending unauthenticated requests to the HF Hub`.

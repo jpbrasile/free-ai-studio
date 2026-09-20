@@ -84,11 +84,17 @@ services:
     volumes:
       - sandbox-data:/workspace
       # Les 34 Go de poids, telecharges une fois par
-      # scripts/telecharger-modele-video.ps1. Par defaut un volume Docker ; sur
-      # une machine qui a deja le modele dans le cache du profil,
-      # `scripts/demarrer.ps1` pose GPU_MODELES_DIR sur ce cache et rien n'est
-      # retelecharge.
-      - ${GPU_MODELES_DIR:-modeles-gpu}:/cache/huggingface
+      # scripts/telecharger-modele-video.ps1 (ou son jumeau .sh).
+      #
+      # Le defaut etait `modeles-gpu`, un volume Docker VIDE, et seul
+      # `scripts/demarrer.ps1` posait GPU_MODELES_DIR sur le cache du profil.
+      # MESURE le 19/09 au soir : un `docker compose up -d sandbox-worker-gpu`
+      # tape a la main, dans un shell ou la variable n'est pas posee, remonte le
+      # volume vide EN SILENCE -- le Studio repond alors << les 34 Go ne sont pas
+      # telecharges >> alors qu'ils sont sur le disque, et un debutant
+      # retelecharge une heure pour rien. Le defaut est donc le cache du profil
+      # lui-meme : n'importe quel shell, Windows ou Linux, le resout.
+      - ${GPU_MODELES_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/huggingface}:/cache/huggingface
     # PAS de `read_only` ici, contrairement au bac a sable sur processeur : le
     # cache des modeles s'ecrit, et les bibliotheques CUDA posent leurs fichiers
     # de compilation. Tout le reste du cloisonnement est garde, y compris le
