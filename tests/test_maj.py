@@ -220,12 +220,39 @@ def test_deux_histoires_separees_sont_dites_telles_quelles(routeur, monkeypatch)
     assert reponse["a_jour"] is None
 
 
-def test_la_page_sait_dire_les_trois_nouveaux_etats(routeur):
-    """Un etat rendu par la route et muet dans la page ne sert a rien."""
+def _page_de_maj() -> str:
     source = (RACINE / "free-tier-manager" / "app.py").read_text(encoding="utf-8")
     debut = source.index("majBouton.disabled = false;")
-    page = source[debut:debut + 3000]
+    return source[debut:debut + 3200]
+
+
+def test_la_page_sait_dire_les_trois_nouveaux_etats(routeur):
+    """Un etat rendu par la route et muet dans la page ne sert a rien."""
+    page = _page_de_maj()
     for etiquette in ("en_avance", "divergee", "commit_local_inconnu"):
         assert '"' + etiquette + '"' in page, etiquette
     assert "en avance" in page
-    assert "perdre" in page
+
+
+def test_la_page_n_annonce_pas_une_perte_que_le_bouton_ne_peut_pas_faire():
+    """La premiere reparation avait remplace une fausse alarme par une autre.
+
+    Ecrit d'abord le 20/09/2026 : << Mettre a jour vous les ferait perdre >> et
+    << le bouton mettrait votre travail de cote >>. Lu ensuite dans
+    `scripts/mettre-a-jour.ps1` : la mise a jour est un `git pull --ff-only`,
+    qui n'avance qu'en ligne droite et sort en erreur sinon. Aucun commit, aucune
+    modification locale ne peut etre perdue. Effrayer un debutant sur un danger
+    qui n'existe pas le bloque aussi surement qu'un faux feu vert le pousse.
+
+    Ce test tient les deux bouts : le mot de la page ET le fait du script. Si
+    quelqu'un remplace un jour `--ff-only` par un `reset --hard`, la page redirait
+    faux, et ce test tombe.
+    """
+    maj = (RACINE / "scripts" / "mettre-a-jour.ps1").read_text(encoding="utf-8")
+    assert "'pull', '--ff-only'" in maj, "la mise a jour n'avance plus en ligne droite"
+    for destructeur in ("reset', '--hard", "checkout', '-f", "clean', '-fd", "stash"):
+        assert destructeur not in maj, destructeur
+    page = _page_de_maj()
+    assert "perdre" not in page
+    assert "travail de côté" not in page
+    assert "ligne droite" in page

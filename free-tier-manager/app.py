@@ -2933,23 +2933,28 @@ function majAfficher(d){
     majCase.textContent = "Dépôt privé : je ne peux pas comparer avec GitHub sans identifiants ("
       + version + "). Le bouton met quand même à jour.";
   } else if(d.comparaison === "en_avance"){
-    // Ce dossier est DEVANT sa branche. Lui proposer une mise à jour, c'est lui
-    // proposer de perdre ce qu'il a en plus : la page le dit au lieu de le taire.
+    // Ce dossier est DEVANT sa branche : il n'y a rien à récupérer. Ce que le
+    // bouton fait vraiment, lu dans scripts/mettre-a-jour.ps1 le 20/09/2026 :
+    // `git pull --ff-only`, qui n'avance qu'en ligne droite et refuse sinon —
+    // il ne peut donc PAS ramener ce dossier en arrière. La page dit les deux :
+    // ni retard, ni danger.
     majCase.className = "etat pret";
     majCase.textContent = "À jour, et même en avance : ce dossier porte "
       + (d.avance_de ? d.avance_de + " commit(s)" : "des commits")
       + " que « " + (d.branche || "?") + " » n’a pas encore (" + version + "). "
-      + "Mettre à jour vous les ferait perdre.";
+      + "Le bouton n’a rien à récupérer ; il ne ferait que reconstruire les services.";
   } else if(d.comparaison === "divergee"){
     majCase.className = "etat";
     majCase.textContent = "Ce dossier et « " + (d.branche || "?") + " » ont avancé chacun de "
       + "leur côté (" + version + ") : " + (d.avance_de || 0) + " commit(s) ici que la branche "
-      + "n’a pas, " + (d.retard_de || 0) + " là-bas que vous n’avez pas. À trancher à la main.";
+      + "n’a pas, " + (d.retard_de || 0) + " là-bas que vous n’avez pas. À trancher à la main : "
+      + "le bouton refusera, sans rien effacer.";
   } else if(d.comparaison === "commit_local_inconnu"){
     majCase.className = "etat";
     majCase.textContent = "Votre version (" + version + ") n’existe pas sur GitHub : "
-      + "elle n’a pas encore été poussée, ou elle est modifiée sur place. Rien à comparer, "
-      + "et le bouton mettrait votre travail de côté.";
+      + "elle n’a pas encore été poussée, ou elle est modifiée sur place. Rien à comparer. "
+      + "Le bouton ne peut pas effacer ce travail : il ne sait qu’avancer en ligne droite, "
+      + "et s’il ne peut pas, il le dit.";
   } else {
     majCase.className = "etat";
     majCase.textContent = "Comparaison impossible pour l’instant (" + version + "). Le bouton met quand même à jour.";
