@@ -24,6 +24,10 @@ import chanson
 import depenses
 import dialogue
 import garde_exposition
+# La sonde de la carte. Elle ne leve jamais : `vue` dit si une carte a ete
+# MESUREE, `motif` dit pourquoi quand elle ne l'a pas ete. C'est ce qui permet
+# a /essai de demander au lieu d'affirmer (releve du proprietaire, 20/09/2026).
+import gpu_local
 # Nettoyage du rendu de /dialogue. Au niveau du module, PAS au moment de
 # l'appel : le Dockerfile prend tout le dossier (COPY *.py), donc un module
 # absent serait une erreur de livraison, pas un alea d'execution -- et elle doit
@@ -1392,8 +1396,15 @@ backend choisi, la reponse revient ici.</p>
   <label><input type="checkbox" id="gpu"> carte graphique</label>
   <button id="lancer" class="primaire">Lancer</button>
 </div>
-<p class="avert">La carte graphique n'existe pas sur le backend local. Sur Modal, elle
-consomme l'offre gratuite beaucoup plus vite qu'un calcul sur processeur.</p>
+<!-- Cette phrase AFFIRMAIT << La carte graphique n'existe pas sur le backend
+     local >>. Faux sur cet ordinateur depuis le 19/09/2026 : la carte y est, le
+     bac a sable GPU tourne, et la page Video s'en sert. Releve du proprietaire
+     le 20/09 : << affirmation fausse sur ce pc >>, puis << fais en sorte que le
+     test soit fait, le client a ou pas de gpu >>. La page VERIFIE donc sur la
+     machine (/essai/carte, sonde nvidia-smi reelle) au lieu de decreter. On ne
+     DEMANDE a personne : un debutant ne sait pas si son PC a une carte, et
+     c'est precisement pour lui que le Studio existe. -->
+<p class="avert" id="carte">Carte graphique : verification en cours...</p>
 
 <textarea id="code" spellcheck="false"></textarea>
 
@@ -1457,6 +1468,54 @@ fetch("/budget/modal", {headers: ENTETES}).then(r => r.json()).then(d => {
 }).catch(() => {
   document.getElementById("budget").textContent =
     "Budget non verifiable : le service Sandbox ne repond pas.";
+});
+
+// La carte de CET ordinateur. La phrase d'avant decretait qu'il n'y en a pas ;
+// celle-ci vient d'un nvidia-smi lance a l'instant.
+const MODAL_PLUS_VITE = "Sur Modal, la carte consomme l'offre gratuite beaucoup "
+  + "plus vite qu'un calcul sur processeur.";
+
+function carteTexte(d){
+  const c = (d && d.carte) || {};
+  if(!c.vue){
+    return "Cet ordinateur n'a pas de carte graphique utilisable par le Studio"
+      + (c.motif ? " (" + c.motif + ")" : "")
+      + ". Sur << Votre ordinateur >>, le code tourne sur le processeur. "
+      + MODAL_PLUS_VITE;
+  }
+  return "Cet ordinateur a une carte : " + c.nom
+    + (c.libre_mo !== null && c.libre_mo !== undefined
+       ? " (" + c.libre_mo + " Mo libres sur " + c.totale_mo + ")" : "")
+    + ". La page Video s'en sert pour fabriquer des clips gratuitement. "
+    // Le point honnete : la carte existe, et cette page ne s'en sert pas.
+    // Le dire est la seule facon de ne pas remplacer une phrase fausse par
+    // une autre.
+    + "Ici, le code tourne quand meme sur le processeur : la place qu'un code "
+    + "quelconque prendrait sur la carte n'est pas connue d'avance, et la carte "
+    + "est partagee. Le Studio ne lance pas un travail sur un chiffre suppose. "
+    + MODAL_PLUS_VITE;
+}
+
+// La case etait IGNOREE en silence pour << Votre ordinateur >> : run_local ne
+// recoit meme pas `gpu`. Une case qui ne fait rien doit se voir, pas se taire.
+function accorderLaCase(){
+  const local = document.getElementById("backend").value === "local";
+  const case_ = document.getElementById("gpu");
+  case_.disabled = local;
+  if(local){ case_.checked = false; }
+  case_.parentElement.title = local
+    ? "Sans effet sur votre ordinateur : le code y tourne sur le processeur."
+    : "";
+}
+
+document.getElementById("backend").addEventListener("change", accorderLaCase);
+accorderLaCase();
+
+fetch("/essai/carte", {headers: ENTETES}).then(r => r.json()).then(d => {
+  document.getElementById("carte").textContent = carteTexte(d);
+}).catch(() => {
+  document.getElementById("carte").textContent =
+    "Carte graphique non verifiable : le service Sandbox ne repond pas.";
 });
 
 function afficher(d){
@@ -1543,6 +1602,34 @@ document.getElementById("lancer").addEventListener("click", async () => {
 </script>
 </body></html>
 """
+
+
+@app.get("/essai/carte")
+def essai_carte(authorization: Optional[str] = Header(default=None)):
+    """Cet ordinateur a-t-il une carte graphique ? Mesure, pas decret.
+
+    La page AFFIRMAIT << La carte graphique n'existe pas sur le backend local >>.
+    C'etait vrai le jour ou la phrase a ete ecrite, et faux depuis le 19/09/2026
+    sur toute machine equipee : la surcouche `docker-compose.gpu.yml` donne la
+    carte au gestionnaire ET un deuxieme bac a sable qui sait s'en servir. Un
+    debutant lisait donc, sur un PC muni d'une 4090, que sa carte n'existe pas.
+
+    Ce que cette route rend, et qui n'est pas la meme chose :
+      - `carte` : le releve REEL de `nvidia-smi` a cette seconde (`vue` faux et
+        `motif` rempli sur une machine sans carte -- jamais d'exception) ;
+      - `bac_a_sable_gpu` : le deuxieme bac a sable est-il monte ;
+      - `utilisee_par_cette_page` : faux, et c'est le point honnete. Cette page
+        envoie du code QUELCONQUE ; la place qu'il prendrait sur la carte n'est
+        pas connue d'avance, et la carte est partagee. Le Studio ne lance pas un
+        travail sur un chiffre suppose -- c'est la meme regle qui fait partir
+        chez le loueur un clip dont la duree n'a pas ete mesuree.
+    """
+    auth(authorization)
+    return {
+        "carte": gpu_local.releve(),
+        "bac_a_sable_gpu": bool(WORKER_GPU_URL),
+        "utilisee_par_cette_page": False,
+    }
 
 
 @app.get("/essai", response_class=HTMLResponse)
