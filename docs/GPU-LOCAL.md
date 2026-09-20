@@ -372,8 +372,11 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   Mesuré par `grep -rn docker-compose.gpu.yml` : sept fichiers le nommaient, aucun n'était
   un `.sh`. ~~**Ce qui reste non vérifié** : rien de tout cela n'a jamais tourné SOUS
   Linux — cette machine est sous Windows.~~ **Exécuté sous Linux le 20/09** dans un
-  conteneur de cette machine, carte comprise (section « GPU-1 (suite) »). Reste : un hôte
-  Linux dont le shell et le moteur Docker partagent le disque.
+  conteneur de cette machine, carte comprise (section « GPU-1 (suite) »). ~~Reste : un hôte
+  Linux dont le shell et le moteur Docker partagent le disque.~~ **Obtenu le même jour,
+  depuis WSL2 Ubuntu** : les cinq services montés, et un clip fabriqué à la maison depuis
+  ce shell — `video.mp4`, 2 537 785 octets, 446,8 s sur la 4090, `prix_estime_usd: null`
+  (dernière section de ce document).
 - ~~La boîte « la carte est prise » vue à l'écran.~~ **Vue le 19/09 vers 21:10.** Elle
   affiche « NVIDIA GeForce RTX 4090 : 3.2 Go libres sur 24.0, il en faut 12.5 », puis les
   trois sorties « J'attends », « Louer chez Modal — environ 0,114 $ » et « Annuler ».
@@ -386,8 +389,9 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   ~~Le trajet « carte vraiment prise → 409 → boîte » reste mesuré par bouts, pas d'un
   tenant.~~ **Parcouru d'un seul tenant le 20/09 vers 08:25** — section « GPU-3 (a) » en
   bas de ce document : occupation réelle par un clip de la maison, 409 réel à 9 351 Mo
-  libres, boîte affichée par la page. Reste non obtenu : **la capture d'écran**, la
-  fenêtre Chrome de cet onglet rendant un viewport de 0 × 0.
+  libres, boîte affichée par la page. ~~Reste non obtenu : **la capture d'écran**, la
+  fenêtre Chrome de cet onglet rendant un viewport de 0 × 0.~~ **Prise le 20/09**, fenêtre
+  **1707 × 847** : les trois sorties sont lisibles, « Annuler » cliqué, « Louer » jamais.
 
 ## Le modèle de la maison ne se voyait nulle part sur la page (19/09, 21:0x)
 
@@ -1448,3 +1452,110 @@ n'avait bougé. Ils lisent désormais la table ; ils gardent la formule, pas les
 
 **Suite complète : 376 passés, ruff propre.** Image `sandbox-manager` reconstruite et
 service sain.
+## Le vrai départ sous Linux, et le clip fait à la maison depuis ce shell (20/09/2026)
+
+Ce qui manquait n'était pas « Linux » : le moteur Docker en est un, un conteneur aussi, et
+les deux scripts y avaient déjà tourné le matin même. Ce qui manquait, c'était **un shell
+et un moteur qui voient le même disque**. Depuis un conteneur, le moteur ne sait pas
+résoudre les dossiers à monter : ceux qu'on lui nomme sont ceux du conteneur, pas les
+siens, et `compose up` monte alors des dossiers vides sans un mot. **WSL2 Ubuntu est
+exactement cet hôte-là** : un vrai Linux, dont le shell et le moteur Docker partagent le
+disque de la machine.
+
+### Ce qui a été exécuté, et ce que le moteur a réellement monté
+
+```
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+Les **cinq services** montent. Les montages, relus chez le moteur et non dans le fichier
+qui les demande — c'est la seule lecture qui prouve que le disque est partagé :
+
+```
+sandbox-manager     /mnt/c/Users/test/Documents/free-ai-studio/config -> /config
+                    /mnt/c/Users/test/.cache/huggingface              -> /cache/huggingface
+                    free-ai-studio_sandbox-data                       -> /workspace
+sandbox-worker-gpu  <bind WSL Ubuntu>                                 -> /cache/huggingface
+                    free-ai-studio_sandbox-data                       -> /workspace
+```
+
+Le bac à sable GPU voit la carte, et la décision le dit avec ses nombres :
+**« NVIDIA GeForce RTX 4090 : 24 138 Mo libres pour 12 841 demandés (marge 1024) »**.
+
+### Le clip, fabriqué à la maison
+
+Travail `3c2b43b4e3fb48fcb6fe0885e805da05`, lancé depuis ce shell Linux, `status:
+succeeded`, `carte: maison`, **`prix_estime_usd: null`** — rien n'est parti chez un loueur.
+
+| | |
+|---|---|
+| Fichier | `video.mp4`, **2 537 785 octets** |
+| Images | 73, à 24 images/s, soit **3,0 s** |
+| Définition | 1280 × 704, `bfloat16` |
+| Modèle | `Wan-AI/Wan2.2-TI2V-5B-Diffusers`, chargé **pièce par pièce** en 25 s |
+| Calcul | **446,8 s**, dont 416 s de diffusion (50 étapes) |
+
+Le fichier a été **récupéré**, et non seulement annoncé : `GET /video/jobs/<id>/fichier`
+rend **HTTP 200, `video/mp4`, 2 537 785 octets** — le même nombre que le résumé du travail.
+
+### Deux lignes rouges sans conséquence, écrites telles quelles
+
+```
+Ignoring corrupted tree cache file
+/cache/huggingface/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers/trees/b8fff731....json:
+[Errno 13] Permission denied
+```
+
+Deux fois. Le fichier est un index du cache Hugging Face **écrit par Windows** et relu à
+travers `/mnt/c` sous un autre identifiant. Hugging Face retombe sur le cache local, les
+34 Go sont trouvés, le clip sort. Rien n'est réparé ici : ce serait toucher aux droits du
+profil de la personne pour un message qui n'empêche rien. C'est écrit parce que quelqu'un
+le lira dans son terminal.
+
+### Deux défauts trouvés en passant, réparés le même jour
+
+**GPU-8 — les deux lanceurs écrasaient le dossier de poids choisi.** `docker-compose.gpu.yml`
+monte `${GPU_MODELES_DIR:-<cache du profil>}` : **la variable d'abord**, le cache ensuite.
+Les deux lanceurs faisaient l'inverse. Quelqu'un qui garde ses 34 Go ailleurs que dans son
+profil — ce que le compose prévoit noir sur blanc — voyait son choix remplacé sans un mot,
+et son clip partait sur une **machine louée** en annonçant des poids absents qui étaient
+sur son disque. Le contrôle des 34 Go cherchait au même endroit faux, si bien que le
+message disait le contraire de ce qui allait se passer. Réparé dans `start.sh` et
+`scripts/demarrer.ps1`, blocs jumeaux ; le contrôle repart désormais de l'endroit où les
+poids **seront montés**. Gardé par
+`test_les_lanceurs_n_ecrasent_pas_un_dossier_de_poids_deja_choisi`, **4 mutations sur 4
+tombent**.
+
+**GPU-9 — la bannière du budget accrochait les 8 % au total affiché.** Elle disait : le
+total est de 3,80 $, et « *elle* sous-compte d'environ 8 % ». On comprend « le vrai chiffre
+est 3,80 × 1,08 ». Les 8 % mesurent l'écart entre le cœur **réservé** et le processeur
+réellement utilisé, sur **un travail** ; le total, lui, court sur tout le mois et contient
+des travaux comptés **avant** la correction des tarifs du 20/09. Mesure du jour même, sur
+ce compteur : **1,39 $ estimé contre 3,80 $ facturés, soit 37 %** — annoncer 8 % sur ce
+nombre-là est faux de loin, et faux dans le sens qui rassure. Les 8 % qualifient désormais
+**la méthode**, et le total porte sa réserve : « ce total peut contenir des travaux comptés
+avant le `<date du relevé>`, à des tarifs plus bas ». Aucun nombre n'a bougé ; le calcul du
+compteur n'est pas touché.
+
+La garde est écrite sur les **occurrences** et non sur une phrase : `test_budget_modal.py`
+section 12 exécute les quatre bannières dans un vrai `node`, **dans les deux branches**
+(Modal répond / Modal se tait), et vérifie que **chaque** « sous-compte » est précédé de
+« la méthode ». C'est la seule forme qui tienne encore le jour où une cinquième bannière
+apparaît. **12 mutations sur 12 tombent.**
+
+### Ce qui a été revu dans un navigateur, après reconstruction
+
+`sandbox-manager` reconstruit depuis le même shell Linux, puis `/video` et `/essai`
+rouvertes : la phrase corrigée s'affiche, dans sa branche « Modal a répondu », avec la date
+du relevé. La boîte **« La carte de cet ordinateur est prise »** a enfin sa capture — fenêtre
+**1707 × 847**, le viewport de 0 × 0 des jours précédents a disparu ; ses trois sorties sont
+lisibles, « Annuler » a été cliqué, « Louer » jamais.
+
+**Suite complète : 410 passés, ruff propre, 14 scripts de page sans échec.**
+
+### Ce qui reste ouvert, et pourquoi on n'y touche pas
+
+Le **résidu de cœurs** : Modal facture le plus grand de ce qu'on réserve et de ce qu'on
+utilise, le Studio réserve 1 cœur, la facture en montre de 1,0 à 3,2 — **au plus 8 %**, et
+cela ne se sait qu'après le travail. Un coefficient moyen ferait passer une moyenne pour
+une mesure, et rendrait le compteur faux dans les deux sens au lieu d'un seul.
