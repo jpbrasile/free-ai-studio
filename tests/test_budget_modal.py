@@ -248,20 +248,49 @@ def test_la_date_de_remise_a_zero_est_dite_et_franchit_l_annee(budget):
 
 
 def test_le_champ_ne_se_fait_pas_passer_pour_la_date_de_modal(budget):
-    """Le 1er du mois est a NOUS, pas a Modal -- verifie le 20/09/2026.
+    """Le 1er du mois est a NOUS -- et le 20/09/2026 on a su d'ou vient le sien.
 
-    Leurs pages disent << $30 / month free compute >> et << All Workspaces are
-    billed monthly >> ; le JOUR de remise a zero n'est ecrit nulle part, ni
-    dans les tarifs, ni dans la facturation, ni dans les budgets. Un
-    << 1er du mois >> avait ete affiche au client : il venait d'un resume de
-    moteur de recherche, pas de Modal. Le nom du champ porte desormais ce
-    qu'il mesure, et ce test empeche de le renommer en quelque chose qui
-    promet plus qu'on ne sait.
+    Premier temps (correction du 20/09) : un << 1er du mois >> etait affiche a
+    cote du nom de Modal sur la foi d'un resume de moteur de recherche. Leurs
+    pages publiques disent << $30 / month free compute >> et << All Workspaces
+    are billed monthly >>, sans jamais nommer un jour. Il a ete retire.
+
+    Second temps, le meme jour, sur << mesure Modal pour moi >> : le tableau de
+    bord de l'espace de travail, lui, l'ecrit -- << Billing Cycle: Sep 1 -
+    Oct 1, 2026 >>. Le cycle est donc bien le mois civil ICI. Le champ garde
+    pourtant son nom, parce qu'il mesure NOTRE compteur et que le cycle
+    s'affiche par espace de travail : celui d'un autre client peut tomber
+    ailleurs. Ce test empeche de le renommer en quelque chose qui promet plus
+    qu'on ne sait, et empeche aussi d'effacer la source maintenant qu'on l'a.
     """
     etat = budget.lire()
     assert "renouvele_le" not in etat
     assert "compteur_remis_a_zero_le" in etat
     # Et la raison est ecrite la ou on la cherchera : dans le module.
     doc = budget.premier_du_mois_suivant.__doc__
-    assert "PAS LA DATE DES 30 $ DE MODAL" in doc
-    assert "tableau de bord Modal" in doc
+    assert "Billing Cycle: Sep 1 - Oct 1, 2026" in doc     # la source, citee
+    assert "20/09/2026" in doc                             # la date du releve
+    assert "SON tableau de bord" in doc                    # qui fait foi
+
+
+def test_le_module_dit_de_combien_il_sous_compte(budget):
+    """Mesure du 20/09/2026 : le compteur voit moins de la moitie de la facture.
+
+    La comparaison est possible parce que le proprietaire l'a remarque : les
+    30 $ etaient intacts juste avant le premier usage de Modal par le Studio,
+    le 09/09/2026 a 11 h. Rien d'autre n'avait tourne depuis le 1er, et les six
+    jours factures du mois portent tous le nom `free-ai-studio-sandbox`. Meme
+    fenetre, meme travail, deux chiffres : 1,3878 $ ici, 3,7971 $ chez Modal.
+
+    Pourquoi un test et pas une note : un compteur qui se trompe VERS LE BAS
+    laisse passer ce qu'il devrait refuser. Le module l'affirme deja pour les
+    prix GPU (<< Se tromper vers le bas est exactement ce qu'un compteur de
+    refus ne doit jamais faire >>) ; il le mesure maintenant sur lui-meme. Si
+    quelqu'un efface l'aveu, ce test tombe.
+    """
+    doc = budget.__doc__
+    assert "1,3878" in doc and "3,7971" in doc       # les deux chiffres compares
+    assert "26,20" in doc                            # le reste reellement annonce
+    assert "09/09/2026" in doc                       # le t0 qui rend l'egalite vraie
+    # Et l'interdiction de << corriger >> en multipliant par le rapport mesure.
+    assert "2,74" in doc and "pas un coefficient" in doc

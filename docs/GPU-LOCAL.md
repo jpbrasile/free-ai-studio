@@ -866,11 +866,14 @@ un calcul qui sera refusé.
 ```
   Modal (machines louées)   1.39 $ dépensés sur 30 $ ce mois-ci, reste 28.61 $
                             NOTRE compteur repart le 01/10/2026, et tous les 1ers.
-                            Modal ne publie PAS le jour de ses 30 $ : il dit
-                            « facturé au mois », sans dire lequel. La date qui
-                            fait foi est celle de VOTRE cycle, sur modal.com.
-                            (nos chiffres : estimation d'après les prix publics,
-                             pas votre facture)
+                            Le crédit Modal aussi : « Billing Cycle: Sep 1 - Oct 1 »,
+                            lu le 20/09/2026 sur VOTRE tableau de bord. Leur page
+                            publique, elle, ne publie PAS le jour ; le tableau de
+                            bord si, et c'est VOTRE cycle qui fait foi (modal.com).
+                            ATTENTION, notre chiffre compte MOINS que la vraie
+                            facture : mesuré le 20/09/2026 sur la même période,
+                            1,39 $ ici contre 3,80 $ chez Modal. Le reste exact
+                            est sur leur page « Usage & billing », pas ici.
   Gemini                    quota du JOUR, remis à zéro à minuit heure du
                             Pacifique, soit 9 h chez nous — écrit par Google
   OpenRouter                quota du JOUR ; l'heure n'est pas publiée
@@ -895,8 +898,9 @@ jours exacts* ». Vérification faite, page par page :
 
 Le « 1er du mois » venait d'un **résumé de moteur de recherche**, pas de Modal. Il est
 vrai de *notre* compteur, dont la clé est `%Y-%m` ; il ne l'est pas du crédit du client,
-dont le cycle n'est écrit nulle part publiquement. Un client qui compte sur une date
-inventée lance un calcul qui sera refusé. Le champ rendu par le service s'appelle
+dont le cycle n'est écrit nulle part **dans la documentation publique**. Un client qui
+compte sur une date inventée lance un calcul qui sera refusé. Le champ rendu par le
+service s'appelle
 maintenant `compteur_remis_a_zero_le` et non `renouvele_le` — il dit ce qu'il mesure — et
 deux tests l'empêchent de reprendre du galon : l'un exige que toute ligne parlant du
 « 1er » dise **de qui** il est, l'autre que les trois fournisseurs soient distingués au
@@ -1003,3 +1007,85 @@ demander un clip depuis la page, et le voir sortir après le téléchargement. I
 de la machine — c'est précisément ce que GPU-4 a tranché. Ce qui est mesuré, c'est chaque
 morceau du chemin, dont le seul qui n'était pas testable autrement : les octets qui
 arrivent au bon endroit.
+
+## GPU-7 — ce que Modal facture vraiment, à côté de ce que nous comptons
+
+Demande du propriétaire, le 20/09/2026 : « *mesure modal pour moi, date du premier cas où
+le budget de 30 € a commencé à être débité est probablement le t0* ». Puis, dans le même
+tour : « *on avait 30 € de crédit modal juste avant le premier usage de modal par studio ;
+c'est le t0 du compteur* ».
+
+**Les deux phrases sont vérifiées — et la seconde est ce qui rend la mesure concluante.**
+
+### Ce que Modal dit de lui-même
+
+Le client `modal` est installé sur le poste et déjà authentifié (espace de travail
+`jp-brasile`). `modal billing report` rend la facture jour par jour ; aucun chiffre
+ci-dessous n'a été saisi à la main.
+
+| question | réponse, relevée le 20/09/2026 |
+|---|---|
+| premier jour facturé, toutes applications confondues | **09/04/2026** — du fine-tuning (`gemma4-lora`, `qwen36-codegen-lora`), un autre chantier |
+| ce qu'avril a coûté | **23,68 $** sur les 30 $ du mois |
+| premier jour facturé au nom du Studio | **09/09/2026, 11 h** (Paris), 0,2382 $ |
+| septembre, tel que Modal le facture | **3,7971 $**, six jours, tous `free-ai-studio-sandbox` |
+| cycle de facturation | **« Billing Cycle: Sep 1 - Oct 1, 2026 »** |
+| plan | Starter, « $30.00 included compute credits per month » |
+| crédit restant annoncé | **26,20 $** |
+
+Mai, juin, juillet, août : **zéro ligne**. De septembre 2025 à mars 2026 : **zéro ligne**.
+Modal refuse de remonter au-delà d'un an — c'est la limite de la mesure, pas une absence
+prouvée, et c'est dit ici plutôt que tu.
+
+### La réponse à la question posée
+
+Le t0 du **cycle** n'est pas le premier débit. Le cycle est le **mois civil**, et il est
+écrit — non pas dans la documentation publique, mais sur le tableau de bord de l'espace
+de travail, page « Usage & billing ». Le « 1er du mois » retiré la veille faute de source
+**était juste** ; ce qui lui manquait, c'était sa source, qui existait ailleurs que là où
+je l'avais cherchée. Une leçon de méthode plutôt qu'un chiffre : *pas publié dans la doc*
+ne veut pas dire *pas publié*.
+
+Le t0 du **compteur**, lui, est bien celui que le propriétaire nomme : **le 09/09/2026 à
+11 h**, les 30 $ intacts.
+
+### Et c'est cette remarque-là qui fait tomber le vrai défaut
+
+Si les 30 $ étaient intacts juste avant, alors les deux compteurs couvrent exactement la
+même fenêtre et exactement le même travail — rien d'autre n'a tourné en septembre, les
+six jours facturés portent tous le nom du Studio. La comparaison est donc légitime :
+
+| | montant sur la même période |
+|---|---|
+| `config/modal-budget.json` (nous) | **1,3878 $** |
+| `modal billing report` (eux) | **3,7971 $** |
+| tableau de bord (eux) | **3,80 $** |
+| crédit restant réel | **26,20 $** — et non 28,61 $ |
+
+**Notre compteur voit 37 % de la facture.** Ce n'est pas un défaut d'affichage : ce
+compteur sert à *refuser* avant de lancer. Au rythme mesuré, le plafond de 30 $ ne se
+déclenche qu'aux alentours de **82 $ réellement facturés** — c'est-à-dire bien après la
+fin du crédit, donc sur un moyen de paiement. `budget_modal.py` écrivait déjà, à propos
+des prix des cartes : « *se tromper vers le bas est exactement ce qu'un compteur de refus
+ne doit jamais faire* ». Il le faisait sur lui-même.
+
+La cause n'est pas entièrement attribuée, et je ne la devine pas. Une part au moins est
+du **stockage** : le relevé du 16/09/2026 conservé dans `depenses.py` porte une ligne
+`volumes 0.383` que ce compteur, qui n'additionne que des secondes de calcul, ne voit
+pas. Le temps de conteneur d'une application déployée et les constructions d'image sont
+les autres candidats — **non mesurés**.
+
+### Ce qui est fait, et ce qui ne l'est pas
+
+**Fait dans le même tour, parce que ça ne déplace aucun nombre :** l'écart est écrit là
+où le client le lit — la ligne du script (les deux jumeaux), la note déposée dans
+`config/modal-budget.json`, et le module — avec ses deux chiffres et l'adresse du vrai.
+Deux tests le gardent ; ils ont été **cassés exprès** pour vérifier qu'ils tombent (sans
+la faute : 2 passés ; avec la faute : 2 échoués ; fichiers remis : 2 passés).
+
+**Pas fait, et pas à moitié :** multiplier l'estimation par 2,74 remplacerait un nombre
+faux par un nombre inventé — ce rapport est *une* mesure, sur *un* mois, sur *un* mélange
+de travaux, pas un coefficient. La réparation est de lire le vrai chiffre et de le donner
+au garde ; `depenses.py` sait déjà appeler `modal billing summary`. Rayon **mesuré** : le
+garde est appelé dans **5 fichiers et 67 endroits**. C'est un chantier, donc un
+sous-plan — **GPU-7 dans `PLAN.md`**, avec ses cinq champs.

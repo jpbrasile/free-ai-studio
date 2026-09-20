@@ -197,29 +197,43 @@ if (Test-Path -LiteralPath $fichierBudget) {
 $reste = $credit - $depense
 if ($reste -lt 0) { $reste = 0 }
 
-# CE QUI EST SOURCE ET CE QUI NE L'EST PAS. Verifie sur les pages officielles
-# le 20/09/2026, apres que le proprietaire a demande << les jours exacts >> :
-#   - Modal publie << $30 / month free compute >> (modal.com/pricing) et
-#     << All Workspaces are billed monthly >> (docs/guide/billing). Le JOUR de
-#     remise a zero n'est ecrit NULLE PART chez eux -- ni tarifs, ni
-#     facturation, ni budgets. Le << 1er du mois >> qu'on affichait venait d'un
-#     resume de moteur de recherche, pas de Modal.
+# CE QUI EST SOURCE ET CE QUI NE L'EST PAS. Verifie le 20/09/2026, apres que le
+# proprietaire a demande << les jours exacts >>, puis << mesure Modal pour moi >> :
+#   - Modal, pages PUBLIQUES : << $30 / month free compute >> (modal.com/pricing)
+#     et << All Workspaces are billed monthly >> (docs/guide/billing). Le JOUR
+#     n'y est ecrit NULLE PART. Le << 1er du mois >> qu'on avait affiche venait
+#     d'un resume de moteur de recherche, pas de Modal : il a ete retire.
+#   - Modal, TABLEAU DE BORD de l'espace de travail : lui l'ecrit. Releve le
+#     20/09/2026 sur `jp-brasile`, page << Usage & billing >> : plan Starter,
+#     << $30.00 included compute credits per month >>, << Billing Cycle:
+#     Sep 1 - Oct 1, 2026 >>. Le cycle EST donc le mois civil ici -- mesure, pas
+#     suppose -- et il s'affiche par espace de travail : celui d'un autre client
+#     peut tomber ailleurs dans le mois.
 #   - Gemini : << Requests per day (RPD) quotas reset at midnight Pacific
 #     time >> (ai.google.dev/gemini-api/docs/rate-limits). Seule date ecrite
-#     par un fournisseur.
+#     par un fournisseur dans sa documentation publique.
 #   - OpenRouter : la page des limites donne les comptes par jour, pas l'heure.
 #   - Groq : pas d'heure fixe publiee ; l'API rend un COMPTE A REBOURS dans
 #     l'en-tete `x-ratelimit-reset-requests`.
-# D'ou la regle de ce bloc : le 1er du mois est a NOUS, pas a Modal.
+#
+# ET L'ECART, MESURE LE MEME JOUR. Notre chiffre n'est pas seulement << une
+# estimation >> : il compte MOINS que la facture. Sur la meme periode (premier
+# usage le 09/09/2026, rien d'autre n'avait tourne depuis le 1er), ce compteur
+# disait 1,39 $ quand Modal en facturait 3,80 $. Le credit restant annonce par
+# Modal est 26,20 $, pas 28,61 $. Un plafond qui se trompe vers le bas se
+# declenche trop tard : c'est pourquoi la ligne le dit au lieu de le taire.
 Write-Host "  Ce qui se remet a zero tout seul" -ForegroundColor Cyan
 Write-Host ""
 Write-Host ("  Modal (machines louees)   {0:N2} `$ depenses sur {1:N0} `$ ce mois-ci, reste {2:N2} `$" -f $depense, $credit, $reste)
 Write-Host ("                            NOTRE compteur repart le {0}, et tous les 1ers." -f (PremierDuMoisSuivant $moisCourant))
-Write-Host "                            Modal ne publie PAS le jour de ses 30 `$ : il dit"
-Write-Host "                            << facture au mois >>, sans dire lequel. La date qui"
-Write-Host "                            fait foi est celle de VOTRE cycle, sur modal.com."
-Write-Host "                            (nos chiffres : estimation d'apres les prix publics,"
-Write-Host "                             pas votre facture)"
+Write-Host "                            Le credit Modal aussi : << Billing Cycle: Sep 1 - Oct 1 >>,"
+Write-Host "                            lu le 20/09/2026 sur VOTRE tableau de bord. Leur page"
+Write-Host "                            publique, elle, ne publie PAS le jour ; le tableau de"
+Write-Host "                            bord si, et c'est VOTRE cycle qui fait foi (modal.com)."
+Write-Host "                            ATTENTION, notre chiffre compte MOINS que la vraie"
+Write-Host "                            facture : mesure le 20/09/2026 sur la meme periode,"
+Write-Host "                            1,39 `$ ici contre 3,80 `$ chez Modal. Le reste exact"
+Write-Host "                            est sur leur page << Usage & billing >>, pas ici."
 Write-Host "  Gemini                    quota du JOUR, remis a zero a minuit heure du"
 Write-Host "                            Pacifique, soit 9 h chez nous -- ecrit par Google"
 Write-Host "  OpenRouter                quota du JOUR ; l'heure n'est pas publiee"

@@ -211,29 +211,43 @@ depense="$(json_nombre "$BUDGET_MODAL" usd)"
 [ "$(json_texte "$BUDGET_MODAL" mois)" = "$MOIS" ] || depense=""
 [ -n "$depense" ] || depense=0
 
-# CE QUI EST SOURCÉ ET CE QUI NE L'EST PAS. Vérifié sur les pages officielles
-# le 20/09/2026, après que le propriétaire a demandé « les jours exacts » :
-#   - Modal publie « $30 / month free compute » (modal.com/pricing) et
-#     « All Workspaces are billed monthly » (docs/guide/billing). Le JOUR de
-#     remise à zéro n'est écrit NULLE PART chez eux -- ni tarifs, ni
-#     facturation, ni budgets. Le « 1er du mois » qu'on affichait venait d'un
-#     résumé de moteur de recherche, pas de Modal.
+# CE QUI EST SOURCÉ ET CE QUI NE L'EST PAS. Vérifié le 20/09/2026, après que le
+# propriétaire a demandé « les jours exacts », puis « mesure Modal pour moi » :
+#   - Modal, pages PUBLIQUES : « $30 / month free compute » (modal.com/pricing)
+#     et « All Workspaces are billed monthly » (docs/guide/billing). Le JOUR
+#     n'y est écrit NULLE PART. Le « 1er du mois » qu'on avait affiché venait
+#     d'un résumé de moteur de recherche, pas de Modal : il a été retiré.
+#   - Modal, TABLEAU DE BORD de l'espace de travail : lui l'écrit. Relevé le
+#     20/09/2026 sur `jp-brasile`, page « Usage & billing » : plan Starter,
+#     « $30.00 included compute credits per month », « Billing Cycle:
+#     Sep 1 - Oct 1, 2026 ». Le cycle EST donc le mois civil ici -- mesuré, pas
+#     supposé -- et il s'affiche par espace de travail : celui d'un autre
+#     client peut tomber ailleurs dans le mois.
 #   - Gemini : « Requests per day (RPD) quotas reset at midnight Pacific time »
 #     (ai.google.dev/gemini-api/docs/rate-limits). Seule date écrite par un
-#     fournisseur.
+#     fournisseur dans sa documentation publique.
 #   - OpenRouter : la page des limites donne les comptes par jour, pas l'heure.
 #   - Groq : pas d'heure fixe publiée ; l'API rend un COMPTE À REBOURS dans
 #     l'en-tête `x-ratelimit-reset-requests`.
-# D'où la règle de ce bloc : le 1er du mois est à NOUS, pas à Modal.
+#
+# ET L'ÉCART, MESURÉ LE MÊME JOUR. Notre chiffre n'est pas seulement « une
+# estimation » : il compte MOINS que la facture. Sur la même période (premier
+# usage le 09/09/2026, rien d'autre n'avait tourné depuis le 1er), ce compteur
+# disait 1,39 $ quand Modal en facturait 3,80 $. Le crédit restant annoncé par
+# Modal est 26,20 $, pas 28,61 $. Un plafond qui se trompe vers le bas se
+# déclenche trop tard : c'est pourquoi la ligne le dit au lieu de le taire.
 echo "  Ce qui se remet à zéro tout seul"
 echo
 printf "  %s\n" "Modal (machines louées)   $(awk -v d="$depense" -v c="$credit" 'BEGIN{printf "%.2f $ dépensés sur %.0f $ ce mois-ci, reste %.2f $", d, c, (c-d<0?0:c-d)}')"
 printf "  %s\n" "                          NOTRE compteur repart le $(premier_du_mois_suivant "$MOIS"), et tous les 1ers."
-echo "                            Modal ne publie PAS le jour de ses 30 \$ : il dit"
-echo "                            « facturé au mois », sans dire lequel. La date qui"
-echo "                            fait foi est celle de VOTRE cycle, sur modal.com."
-echo "                            (nos chiffres : estimation d'après les prix publics,"
-echo "                             pas votre facture)"
+echo "                            Le crédit Modal aussi : « Billing Cycle: Sep 1 - Oct 1 »,"
+echo "                            lu le 20/09/2026 sur VOTRE tableau de bord. Leur page"
+echo "                            publique, elle, ne publie PAS le jour ; le tableau de"
+echo "                            bord si, et c'est VOTRE cycle qui fait foi (modal.com)."
+echo "                            ATTENTION, notre chiffre compte MOINS que la vraie"
+echo "                            facture : mesuré le 20/09/2026 sur la même période,"
+echo "                            1,39 \$ ici contre 3,80 \$ chez Modal. Le reste exact"
+echo "                            est sur leur page « Usage & billing », pas ici."
 echo "  Gemini                    quota du JOUR, remis à zéro à minuit heure du"
 echo "                            Pacifique, soit 9 h chez nous — écrit par Google"
 echo "  OpenRouter                quota du JOUR ; l'heure n'est pas publiée"

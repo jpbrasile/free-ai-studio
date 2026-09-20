@@ -160,16 +160,48 @@ def test_le_premier_du_mois_est_le_notre_et_jamais_celui_de_modal():
     NOTRE compteur, dont la cle est `%Y-%m` ; il ne l'est pas du credit du
     client. Un client qui compte sur une date inventee lance un calcul qui sera
     refuse.
+
+    SUITE DU MEME JOUR, sur << mesure Modal pour moi >> : la source manquante
+    n'etait pas absente, elle etait AILLEURS. Le tableau de bord de l'espace de
+    travail ecrit << Billing Cycle: Sep 1 - Oct 1, 2026 >>. Le cycle est donc
+    le mois civil ici -- et le bloc doit maintenant citer cette source au lieu
+    de s'arreter a << ils ne le disent pas >>, tout en gardant que la page
+    publique, elle, ne le dit toujours pas, et que le cycle qui fait foi est
+    celui de VOTRE tableau de bord.
     """
     for source in (SH, PS1):
         # Toute ligne qui parle du 1er doit dire de QUI il est.
         for ligne in source.splitlines():
             if "1ers" in ligne and not ligne.strip().startswith("#"):
                 assert "NOTRE" in ligne, ligne
+        # Ce que la page publique ne donne pas...
         assert "ne publie PAS le jour" in source
+        # ...et ce que le tableau de bord donne, cite mot pour mot.
+        assert "Billing Cycle: Sep 1 - Oct 1" in source
+        assert "tableau de bord" in source
         # Et la date qui fait foi est nommee : celle du client, chez eux.
         assert "VOTRE cycle" in source
         assert "modal.com" in source
+
+
+def test_la_ligne_modal_avoue_qu_elle_compte_moins_que_la_facture():
+    """Le defaut trouve en mesurant, le 20/09/2026 -- et le pire des deux.
+
+    Le proprietaire a remarque que les 30 $ etaient intacts juste avant le
+    premier usage de Modal par le Studio. C'est ce qui rend la comparaison
+    exacte : meme fenetre (a partir du 09/09/2026 11 h), meme travail, les six
+    jours factures du mois portant tous le nom `free-ai-studio-sandbox`. Notre
+    compteur disait 1,39 $, Modal facturait 3,80 $, et le credit restant reel
+    etait 26,20 $ et non 28,61 $.
+
+    Une ligne qui affiche un budget SANS dire qu'elle sous-compte est pire
+    qu'une ligne absente : elle donne une confiance que le chiffre ne merite
+    pas. Ce test garde l'aveu, ses deux nombres et l'adresse du vrai chiffre.
+    """
+    for source in (SH, PS1):
+        assert "MOINS que la vraie" in source
+        assert "1,39" in source and "3,80" in source
+        assert "Usage & billing" in source
 
 
 def test_chaque_fournisseur_dit_ce_qui_est_publie_et_ce_qui_ne_l_est_pas():

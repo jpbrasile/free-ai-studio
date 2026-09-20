@@ -34,6 +34,36 @@ connait la facture. Il ESTIME a partir des prix publics releves a la main, pour
 pouvoir REFUSER avant de lancer. Le compte qui fait foi reste celui de Modal, et
 la seule limite qui arrete vraiment la facture est celle reglee chez eux. Les
 pages le disent, et doivent continuer de le dire.
+
+DE COMBIEN IL SE TROMPE, MESURE LE 20/09/2026. L'ecart n'etait jusqu'ici qu'une
+precaution de redaction ; il a ete mesure, et il va dans le mauvais sens.
+
+  ce fichier, mois 2026-09 ........  1,3878 $
+  Modal, meme periode ............  3,7971 $   (`modal billing report`, somme
+                                               des 6 jours factures)
+  tableau de bord, meme periode ..  3,80 $     (<< $3.80 in credits >>)
+  credit restant annonce .........  26,20 $    (et non 28,61 $)
+
+La comparaison est exacte, et elle l'est pour une raison : le premier usage de
+Modal par le Studio est le 09/09/2026 a 11 h (heure de Paris), et rien d'autre
+n'avait tourne depuis le 1er septembre -- les 6 jours factures du mois portent
+tous le nom `free-ai-studio-sandbox`. Les deux compteurs couvrent donc la MEME
+fenetre et le MEME travail. Ce n'est pas un decalage de perimetre.
+
+La cause n'est pas entierement attribuee ici, et il ne faut pas faire semblant.
+Une part au moins est du stockage : le releve du 16/09/2026 conserve dans
+depenses.py porte une ligne `volumes 0.38346824` que ce compteur, qui ne compte
+que des secondes de calcul, ne voit pas. Le temps de conteneur d'une application
+deployee et les constructions d'image sont les autres candidats, non mesures.
+
+CE QU'IL NE FAUT PAS EN FAIRE : multiplier l'estimation par 2,74. Ce rapport est
+UNE mesure, sur UN mois, sur UN melange de travaux ; ce n'est pas un coefficient.
+Le corriger en le multipliant serait remplacer un nombre faux par un nombre
+invente. La consequence, elle, est un fait et doit etre dite : au rythme mesure,
+le plafond de 30 $ ne se declenche qu'aux alentours de 82 $ reellement factures,
+donc APRES le credit. La reparation est de lire le vrai chiffre -- depenses.py
+le sait deja faire -- et elle est ouverte en sous-plan GPU-7 dans PLAN.md, parce
+qu'elle touche le garde appele dans 5 fichiers et 67 endroits.
 """
 
 import json
@@ -128,15 +158,24 @@ def premier_du_mois_suivant(mois: str) -> str:
     un client qui attend une remise a zero deja faite, ou qui lance un calcul
     qui sera refuse.
 
-    ET CE N'EST PAS LA DATE DES 30 $ DE MODAL. Verifie le 20/09/2026 sur leurs
-    pages : modal.com/pricing dit << $30 / month free compute >>,
-    docs/guide/billing dit << All Workspaces are billed monthly >>, et le JOUR
-    de remise a zero n'est ecrit nulle part -- ni tarifs, ni facturation, ni
-    budgets. Un << 1er du mois >> avait ete affiche ici : il venait d'un resume
-    de moteur de recherche, pas de Modal. Le champ s'appelle donc
-    `compteur_remis_a_zero_le` et non `renouvele_le` : il dit ce qu'il mesure.
-    La date qui fait foi pour le credit reste celle du cycle du client, sur son
-    tableau de bord Modal.
+    CE N'EST PAS, EN SOI, LA DATE DES 30 $ DE MODAL -- et les deux coincident
+    quand meme ici, ce qui a ete MESURE le 20/09/2026, pas suppose.
+
+    Les pages publiques ne donnent pas le jour : modal.com/pricing dit
+    << $30 / month free compute >>, docs/guide/billing dit << All Workspaces
+    are billed monthly >>, aucune ne nomme une date. Un << 1er du mois >> avait
+    ete affiche ici sur la foi d'un resume de moteur de recherche ; il a ete
+    retire faute de source. La source existe, mais ailleurs : le tableau de
+    bord de l'espace de travail. Releve le 20/09/2026 sur `jp-brasile`, page
+    << Usage & billing >> : plan Starter, << $30.00 included compute credits
+    per month >>, et << Billing Cycle: Sep 1 - Oct 1, 2026 >>. Le cycle est
+    donc le mois civil, et notre remise a zero tombe le meme jour.
+
+    Ce qui reste vrai malgre la coincidence : le champ mesure NOTRE compteur,
+    d'ou son nom `compteur_remis_a_zero_le` et non `renouvele_le`. Le cycle
+    s'affiche par espace de travail et un autre client peut avoir le sien
+    ailleurs dans le mois -- la date qui fait foi pour SON credit est celle que
+    SON tableau de bord affiche, jamais celle que ce fichier calcule.
     """
     annee, mois_n = int(mois[:4]), int(mois[5:7])
     mois_n += 1
@@ -224,7 +263,11 @@ def _ecrire(etat: dict) -> None:
         "note": "Compteur UNIQUE des depenses Modal, tous usages confondus : la "
                 "video, la chanson, le dialogue et le mode autonome du bac a "
                 "sable. Estimation locale, pas une facture : le compte qui fait "
-                "foi est celui de Modal. Supprimez ce fichier pour repartir de "
+                "foi est celui de Modal. ET IL COMPTE MOINS QUE LA VRAIE "
+                "FACTURE : mesure le 20/09/2026 sur la meme periode, ce fichier "
+                "disait 1,39 $ quand Modal en facturait 3,80 $. Le chiffre a "
+                "regarder est celui de votre tableau de bord Modal, page "
+                "<< Usage & billing >>. Supprimez ce fichier pour repartir de "
                 "zero.",
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(FICHIER)
