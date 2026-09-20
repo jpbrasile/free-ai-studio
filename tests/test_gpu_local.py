@@ -140,3 +140,27 @@ def test_aucune_carte_refuse_avec_son_motif(monkeypatch):
     oui, phrase, _ = gpu_local.utilisable(1000)
     assert oui is False
     assert "nvidia-smi absent" in phrase
+
+
+def test_le_compose_et_le_script_visent_le_meme_dossier_de_poids():
+    """Les 34 Go doivent atterrir la ou le bac a sable ira les lire.
+
+    Defaut mesure le 19/09 : le compose montait un volume Docker vide des que
+    GPU_MODELES_DIR n'etait pas pose par le lanceur, et le Studio repondait
+    << les poids ne sont pas telecharges >> avec les 34 Go sur le disque. Le
+    defaut est maintenant le cache du profil, des DEUX cotes -- et ce test est
+    la pour que les deux ne puissent plus diverger en silence : diverger
+    coute une heure de ligne a celui qui telecharge dans le mauvais dossier."""
+    compose = (RACINE / "docker-compose.gpu.yml").read_text(encoding="utf-8")
+    script = (RACINE / "scripts" / "telecharger-modele-video.ps1").read_text(encoding="utf-8")
+
+    montage = [l for l in compose.splitlines() if "/cache/huggingface" in l and "- $" in l]
+    assert len(montage) == 1, montage
+    assert "GPU_MODELES_DIR" in montage[0]
+    assert ".cache/huggingface" in montage[0]
+
+    assert "$env:GPU_MODELES_DIR" in script
+    assert r'".cache\huggingface"' in script
+    # Le volume Docker n'est plus un dernier recours du script : il ne serait
+    # lu par personne.
+    assert '$cible = "modeles-gpu"' not in script

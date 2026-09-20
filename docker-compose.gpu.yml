@@ -113,4 +113,10 @@ services:
               capabilities: [gpu]
 
 volumes:
+  # Plus personne ne le monte par defaut depuis le 19/09 (voir le commentaire du
+  # montage /cache/huggingface). Il reste declare pour qui pose
+  # GPU_MODELES_DIR=modeles-gpu a la main -- par exemple pour garder les poids
+  # hors du profil. Le script de telechargement suit la meme regle que ce
+  # fichier : les deux doivent viser le meme dossier, sinon les 34 Go
+  # atterrissent la ou personne ne les lit.
   modeles-gpu:
