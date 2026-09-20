@@ -217,3 +217,47 @@ def test_le_lanceur_linux_applique_la_surcouche_comme_celui_de_windows():
     assert "STUDIO_LANCEUR=linux" in sh
     assert '$env:STUDIO_LANCEUR = "windows"' in ps1
     assert "STUDIO_LANCEUR" in (RACINE / "docker-compose.yml").read_text(encoding="utf-8")
+
+
+def test_la_suppression_des_34_go_se_demande_et_ne_vise_que_le_modele():
+    """Rendre les 34 Go ne doit jamais etre un geste automatique.
+
+    Deux choses sont gardees ici, et la seconde est celle qui ferait mal.
+
+    1. Le script DEMANDE. Pas de suppression silencieuse : le dossier vise est
+       le cache Hugging Face du compte, pas un dossier du Studio, et revenir en
+       arriere coute 22 minutes de ligne (mesure du 20/09).
+    2. Il ne supprime que `hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers`.
+       Supprimer la RACINE du cache emporterait les modeles que la personne a
+       telecharges pour ses autres outils -- ComfyUI, un carnet, un autre
+       studio. C'est l'erreur qu'une simplification bien intentionnee
+       ecrirait un jour, et ce test est ce qui l'arrete."""
+    sh = (RACINE / "scripts" / "supprimer-modele-video.sh").read_text(encoding="utf-8")
+    ps1 = (RACINE / "scripts" / "supprimer-modele-video.ps1").read_text(encoding="utf-8")
+
+    # 1. la question est posee, et attend un mot ecrit
+    assert "read -r reponse" in sh
+    assert "Read-Host" in ps1
+    # un appelant peut la sauter, mais seulement en le disant
+    assert "--oui" in sh and "-Oui" in ps1
+    # sans terminal, le .sh refuse plutot que de supposer
+    assert "[ ! -t 0 ]" in sh
+
+    # 2. LE garde-fou : ce qui est efface est le sous-dossier du modele
+    for source, efface in ((sh, "rm -rf"), (ps1, "Remove-Item")):
+        lignes = [l for l in source.splitlines()
+                  if efface in l and not l.lstrip().startswith("#")]
+        assert len(lignes) == 1, lignes
+        assert "modele" in lignes[0].lower(), lignes[0]
+        # jamais la racine du cache, sous aucune de ses trois ecritures
+        for racine_cache in ("$cible", "$HOME/.cache/huggingface",
+                             "GPU_MODELES_DIR", "$cacheHF"):
+            assert racine_cache not in lignes[0], lignes[0]
+
+    # 3. la variable du modele est bien construite sur le cache + le sous-dossier
+    assert 'modele="$cible/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"' in sh
+    assert 'Join-Path $cible "hub\\models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"' in ps1
+
+    # 4. et le chemin du retour est nomme, pour que le choix soit reversible
+    assert "telecharger-modele-video.sh" in sh
+    assert "telecharger-modele-video.ps1" in ps1

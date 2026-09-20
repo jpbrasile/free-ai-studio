@@ -332,7 +332,7 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
 > sans entrée là-bas est un manque nommé mais jamais ouvert : c'est exactement le défaut
 > relevé par le propriétaire le 19/09 au soir.
 >
-> **Les trois sont fermés le 20/09/2026.** J'avais écrit ici, le même jour, que « rien
+> **Les trois sont fermés le 20/09/2026** — et un quatrième, GPU-4, ouvert et fermé le même jour : rendre les 34 Go se demande, section « Rendre les 34 Go » en bas. J'avais écrit ici, le même jour, que « rien
 > n'a jamais tourné sous Linux » ; le propriétaire a relevé que **le moteur Docker de
 > cette machine EST un Linux**. Les deux scripts y ont donc été exécutés depuis —
 > section « GPU-1 (suite) » en bas. Ce qui reste non mesuré se dit maintenant plus
@@ -703,3 +703,65 @@ moteur un chemin qui n'existe pas chez lui. **Le téléchargement réel et le `c
 réel n'ont donc pas été lancés depuis Linux** — ce sont les deux seules lignes du trajet
 qui attendent encore une machine dont le shell et le moteur partagent le disque. Tout ce
 qui précède, lui, est mesuré.
+
+## Rendre les 34 Go : demandé, jamais automatique (20/09/2026)
+
+Question du propriétaire, après l'effacement de la copie d'essai : « *l'effacement sera
+automatique ou demandé au client pour son pc* ». **Demandé.** Trois raisons, dans l'ordre
+où elles pèsent :
+
+1. **Le dossier n'appartient pas au Studio.** Les 34 Go vont dans
+   `~/.cache/huggingface`, le cache Hugging Face **du compte** — celui que lisent aussi
+   ComfyUI, un carnet Jupyter, n'importe quel autre outil d'IA de la personne. Un ménage
+   automatique n'effacerait pas « nos » fichiers, il effacerait ceux de quelqu'un d'autre
+   sur sa propre machine. C'est ce que l'essai vérifie : deux modèles voisins
+   (`models--stabilityai--sdxl`, `models--openai--whisper-large`) sont posés à côté, et
+   ils sont **intacts** après la suppression.
+2. **Le retour coûte 22 minutes.** Mesuré le 20/09 sur cette ligne : 34,20 Go à
+   24,9 Mio/s. Un geste de trois secondes qui en coûte vingt-deux se demande.
+3. **Rien n'est en danger.** 34 Go sur un disque de 1 862 Go. Il n'y a aucune urgence qui
+   justifierait de décider à la place du propriétaire de la machine.
+
+Ce qui est écrit à la place, `scripts/supprimer-modele-video.{ps1,sh}` — jumeaux, comme
+les deux autres paires :
+
+- il **pose la question** et attend un mot tapé (`oui`), pas une touche ;
+- sans terminal pour poser la question, **il refuse** au lieu de supposer (le `.sh` teste
+  `[ -t 0 ]`) ; un script appelant doit dire `--oui` / `-Oui` explicitement ;
+- il ne supprime **que** `hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers`, jamais la racine
+  du cache ;
+- il dit ce qui change après (« les clips repartiront sur une machine louée, payante »)
+  et **comment revenir** (le script de téléchargement, 22 minutes).
+
+Et le message de fin du téléchargement nomme maintenant le chemin du retour : celui qui
+vient d'attendre 22 minutes est exactement celui à qui il faut dire comment rendre la
+place — rien d'autre ne le lui dirait.
+
+**Le garde-fou est dans les tests, pas dans l'intention.**
+`test_la_suppression_des_34_go_se_demande_et_ne_vise_que_le_modele` vérifie qu'il n'y a
+qu'**une** ligne qui efface dans chaque script, qu'elle porte le sous-dossier du modèle,
+et qu'elle ne contient **aucune** des trois écritures de la racine du cache (`$cible`,
+`$HOME/.cache/huggingface`, `GPU_MODELES_DIR`, `$cacheHF`). C'est l'erreur qu'une
+simplification bien intentionnée écrirait un jour.
+
+### Ce qui a vraiment été exécuté
+
+Sous Windows (`.ps1`) et sous Linux dans un conteneur de cette machine (`.sh`, avec
+`script` pour fabriquer un vrai terminal et jouer la question) :
+
+| chemin | résultat |
+|---|---|
+| modèle absent | « Rien à supprimer : … n'existe pas », code 0 |
+| question posée, réponse `non` | « Annulé. Rien n'a été touché », modèle **encore là** |
+| question posée, réponse vide (juste Entrée) | idem — **annulé** |
+| question posée, réponse `oui` | supprimé, **voisin intact** |
+| pas de terminal, sans `--oui` (`.sh`) | refus, modèle encore là, code 1 |
+| `--oui` / `-Oui` | supprimé sans question, voisin intact |
+
+Défaut trouvé à l'essai et réparé dans le même tour : sur un petit dossier, le `.ps1`
+annonçait « **0 Go rendus** » — un message de suppression qui a l'air de n'avoir rien
+fait. Il affiche maintenant les Mo en dessous du Go (« 1,9 Mo rendus »).
+
+La copie d'essai de GPU-3(b), elle, a été **effacée le 20/09 sur ordre du propriétaire** :
+31,9 Go rendus, disque de 346,9 à **378,7 Go libres**, la copie lue par le Studio vérifiée
+intacte avant et après (32 fichiers, 31,85 Go).

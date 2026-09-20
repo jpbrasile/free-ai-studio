@@ -58,6 +58,12 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""
     Write-Host "  Fait. Le prochain clip partira sur la carte de cet ordinateur, gratuitement." -ForegroundColor Green
+    # Celui qui vient d'attendre 22 minutes est exactement celui a qui il faut
+    # dire comment rendre la place. Rien d'autre ne le lui dira : le Studio ne
+    # supprime jamais rien tout seul dans le cache du profil.
+    Write-Host ""
+    Write-Host "  Les 34 Go sont dans $cible -- ils y restent tant que vous ne les rendez pas :"
+    Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\supprimer-modele-video.ps1"
 } else {
     Write-Host ""
     Write-Host "  Le telechargement a echoue (code $LASTEXITCODE). Relancez : il reprend ou il s'est arrete." -ForegroundColor Red

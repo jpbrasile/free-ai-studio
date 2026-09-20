@@ -80,6 +80,12 @@ docker run --rm \
 if [ "$code" -eq 0 ]; then
   echo
   echo "  Fait. Le prochain clip partira sur la carte de cet ordinateur, gratuitement."
+  # Celui qui vient d'attendre 22 minutes est exactement celui à qui il faut
+  # dire comment rendre la place. Rien d'autre ne le lui dira : le Studio ne
+  # supprime jamais rien tout seul dans le cache du compte.
+  echo
+  echo "  Les 34 Go sont dans ${cible} -- ils y restent tant que vous ne les rendez pas :"
+  echo "  ./scripts/supprimer-modele-video.sh"
 else
   echo
   echo "  Le téléchargement a échoué (code $code). Relancez : il reprend où il s'est arrêté."
