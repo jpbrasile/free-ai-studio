@@ -77,6 +77,55 @@ taille_volume() {
   [ -n "$t" ] && en_octets "$t" || echo 0
 }
 
+# --- dates -----------------------------------------------------------------
+# « Renouvelé le » = la date où la chose est arrivée SUR CETTE MACHINE, pas
+# celle où son auteur l'a publiée. C'est elle qui répond à la question du
+# client : depuis quand est-ce que ça dort là. Vider puis réutiliser la remet à
+# aujourd'hui -- c'est exactement ce que « renouvelé » veut dire ici.
+jour() {                      # secondes depuis 1970 -> 19/09/2026
+  case "${1:-}" in
+    ''|*[!0-9]*) printf -- "-"; return ;;
+  esac
+  date -d "@$1" +%d/%m/%Y 2>/dev/null || printf -- "-"
+}
+jour_iso() {                  # 2026-09-19T21:10:33Z -> 19/09/2026
+  case "${1:-}" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*) echo "${1:8:2}/${1:5:2}/${1:0:4}" ;;
+    *) printf -- "-" ;;
+  esac
+}
+# Le fichier le plus récemment écrit, et non la date du dossier : un
+# téléchargement repris ajoute des fichiers sans toucher au dossier du dessus.
+date_dossier() {
+  [ -d "$1" ] || { printf -- "-"; return; }
+  local e
+  e="$(find "$1" -type f -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1)"
+  [ -n "$e" ] || e="$(stat -c %Y "$1" 2>/dev/null)"
+  jour "$e"
+}
+# `LastTagTime` est la date où l'image a atterri ici (construite ou tirée).
+# `.Created` est celle de son auteur : c'est le repli, et il est moins bon.
+# Rend AAAA-MM-JJ et rien d'autre : `LastTagTime` sort avec des espaces
+# (« 2026-09-20 08:19:56.278 +0000 UTC »), et un mot coupé sur un espace fait
+# comparer « UTC » à une date -- c'est ce qui affichait un tiret sur la ligne
+# du Studio, mesuré le 20/09.
+iso_image() {
+  local t
+  t="$(docker image inspect "$1" --format '{{.Metadata.LastTagTime}}' 2>/dev/null)"
+  case "$t" in ''|0001-01-01*) t="$(docker image inspect "$1" --format '{{.Created}}' 2>/dev/null)" ;; esac
+  # Le retour à la ligne compte : sans lui les trois dates du Studio se
+  # collaient en un seul mot et la ligne affichait la date de la PREMIÈRE
+  # image, pas la plus récente. Vu le 20/09 -- une date plausible et fausse.
+  printf '%s\n' "${t:0:10}"
+}
+iso_max() {                   # la plus récente : l'ISO se compare comme du texte
+  local m="" t
+  for t in "$@"; do [ "$t" \> "$m" ] && m="$t"; done
+  echo "$m"
+}
+date_image()  { jour_iso "$(iso_image "$1")"; }
+date_volume() { jour_iso "$(docker volume inspect "$1" --format '{{.CreatedAt}}' 2>/dev/null)"; }
+
 # --- où sont les choses ----------------------------------------------------
 cache="${GPU_MODELES_DIR:-$HOME/.cache/huggingface}"
 POIDS_VIDEO="$cache/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"
@@ -84,18 +133,28 @@ POIDS_VIDEO="$cache/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers"
 # le fabrique. On ne devine pas : on demande à docker.
 PROJET="$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
 
+IDS_CHAT="$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/open-webui/{print $2}' | sort -u)"
+LOT_STUDIO="free-ai-studio-free-tier-manager free-ai-studio-sandbox-manager free-ai-studio-sandbox-worker"
+
 o_poids=$(taille_dossier "$POIDS_VIDEO")
 o_img_gpu=$(taille_image free-ai-studio-sandbox-worker-gpu)
-o_img_chat=$(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/open-webui/{print $2}' | sort -u \
-             | while read -r id; do docker image inspect "$id" --format '{{.Size}}' 2>/dev/null; done \
-             | awk '{s+=$1} END{print s+0}')
+o_img_chat=$(for id in $IDS_CHAT; do taille_image "$id"; done | awk '{s+=$1} END{print s+0}')
 o_img_studio=0
-for i in free-ai-studio-free-tier-manager free-ai-studio-sandbox-manager free-ai-studio-sandbox-worker; do
+for i in $LOT_STUDIO; do
   o_img_studio=$(( o_img_studio + $(taille_image "$i") ))
 done
 o_whisper=$(taille_volume "${PROJET}_whisper-modeles")
 o_travail=$(taille_volume "${PROJET}_sandbox-data")
 o_convers=$(taille_volume "${PROJET}_open-webui-data")
+
+# Plusieurs images sur une ligne : c'est la plus récente qui date la ligne.
+d_poids=$(date_dossier "$POIDS_VIDEO")
+d_img_gpu=$(date_image free-ai-studio-sandbox-worker-gpu)
+d_img_chat=$(jour_iso "$(iso_max $(for id in $IDS_CHAT; do iso_image "$id"; done))")
+d_img_studio=$(jour_iso "$(iso_max $(for i in $LOT_STUDIO; do iso_image "$i"; done))")
+d_whisper=$(date_volume "${PROJET}_whisper-modeles")
+d_travail=$(date_volume "${PROJET}_sandbox-data")
+d_convers=$(date_volume "${PROJET}_open-webui-data")
 
 total_telecharge=$(( o_poids + o_img_gpu + o_img_chat + o_img_studio + o_whisper ))
 total_travail=$(( o_travail + o_convers ))
@@ -104,24 +163,63 @@ total_travail=$(( o_travail + o_convers ))
 echo
 echo "  Place occupée par le Studio sur cet ordinateur"
 echo
-ligne() { printf "  "; col "$1" 22; printf " "; col "$2" 42; printf "%10s%s\n" "$3" "$4"; }
-ligne "APPLICATION" "CE QUI EST SUR LE DISQUE" "TAILLE" ""
-ligne "----------------------" "------------------------------------------" "----------" ""
-ligne "Vidéo à la maison"  "les 34 Go du modèle vidéo"                 "$(lisible $o_poids)"     "   [video-poids]"
-ligne "Vidéo à la maison"  "le bac à sable qui sait parler à la carte" "$(lisible $o_img_gpu)"   "   [video-image]"
-ligne "Chat (Open WebUI)"  "l'application de conversation"             "$(lisible $o_img_chat)"  "   [chat]"
-ligne "Écoute des voix"    "les modèles qui transcrivent"              "$(lisible $o_whisper)"   "   [whisper]"
-ligne "Le Studio lui-même" "ses trois services"                        "$(lisible $o_img_studio)" "   [studio]"
+ligne() { printf "  "; col "$1" 22; printf " "; col "$2" 42; printf "%10s    " "$3"; col "$4" 12; printf "%s\n" "$5"; }
+ligne "APPLICATION" "CE QUI EST SUR LE DISQUE" "TAILLE" "RENOUVELÉ LE" ""
+ligne "----------------------" "------------------------------------------" "----------" "------------" ""
+ligne "Vidéo à la maison"  "les 34 Go du modèle vidéo"                 "$(lisible $o_poids)"     "$d_poids"     "   [video-poids]"
+ligne "Vidéo à la maison"  "le bac à sable qui sait parler à la carte" "$(lisible $o_img_gpu)"   "$d_img_gpu"   "   [video-image]"
+ligne "Chat (Open WebUI)"  "l'application de conversation"             "$(lisible $o_img_chat)"  "$d_img_chat"  "   [chat]"
+ligne "Écoute des voix"    "les modèles qui transcrivent"              "$(lisible $o_whisper)"   "$d_whisper"   "   [whisper]"
+ligne "Le Studio lui-même" "ses trois services"                        "$(lisible $o_img_studio)" "$d_img_studio" "   [studio]"
 echo
-ligne "VOTRE TRAVAIL" "jamais proposé à la suppression ici" "" ""
-ligne "Vos fichiers" "l'espace de travail du bac à sable" "$(lisible $o_travail)" ""
-ligne "Vos conversations" "l'historique du chat" "$(lisible $o_convers)" ""
+ligne "VOTRE TRAVAIL" "jamais proposé à la suppression ici" "" "" ""
+ligne "Vos fichiers" "l'espace de travail du bac à sable" "$(lisible $o_travail)" "$d_travail" ""
+ligne "Vos conversations" "l'historique du chat" "$(lisible $o_convers)" "$d_convers" ""
 echo
 echo "  Téléchargé : $(lisible $total_telecharge)     Votre travail : $(lisible $total_travail)"
 echo "  (les images Docker partagent des morceaux : le total téléchargé est une borne haute)"
+echo "  « Renouvelé le » = arrivé sur cette machine à cette date. Pour un volume, c'est sa"
+echo "  date de création : ce qu'il contient a pu être ajouté plus tard."
 if command -v df >/dev/null 2>&1; then
   echo "  Disque : $(df -h . | awk 'NR==2{print $4" libres sur "$2}')"
 fi
+echo
+
+# --- ce qui se remet à zéro tout seul --------------------------------------
+# Les lignes du dessus dorment sur le disque : elles ne bougent que si on les
+# vide. Celles-ci sont des DROITS D'USAGE, et elles repartent à une date. Ne
+# pas la connaître, c'est soit attendre pour rien alors que le crédit est
+# revenu, soit lancer un calcul qui sera refusé.
+#
+# Le compteur Modal se lit dans `config/`, qui est monté depuis ce dépôt : ni
+# clé, ni docker, ni service à démarrer.
+json_nombre() { [ -f "$1" ] && sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*\([0-9.]*\).*/\1/p' "$1" | head -1 || true; }
+json_texte()  { [ -f "$1" ] && sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" | head -1 || true; }
+premier_du_mois_suivant() {   # 2026-09 -> 01/10/2026
+  local a="${1%%-*}" m="${1##*-}"
+  m=$((10#$m + 1))
+  if [ "$m" -gt 12 ]; then m=1; a=$((a + 1)); fi
+  printf '01/%02d/%d' "$m" "$a"
+}
+
+MOIS="$(date +%Y-%m)"
+BUDGET_MODAL="config/modal-budget.json"
+credit="${MODAL_CREDIT_MENSUEL_USD:-30}"
+depense="$(json_nombre "$BUDGET_MODAL" usd)"
+# Un compteur d'un mois clos ne dit rien du mois en cours : il est déjà reparti
+# de zéro, et l'afficher serait un chiffre faux présenté comme à jour.
+[ "$(json_texte "$BUDGET_MODAL" mois)" = "$MOIS" ] || depense=""
+[ -n "$depense" ] || depense=0
+
+echo "  Ce qui se remet à zéro tout seul"
+echo
+printf "  %s\n" "Modal (machines louées)   $(awk -v d="$depense" -v c="$credit" 'BEGIN{printf "%.2f $ dépensés sur %.0f $ ce mois-ci, reste %.2f $", d, c, (c-d<0?0:c-d)}')"
+printf "  %s\n" "                          remis à zéro le $(premier_du_mois_suivant "$MOIS"), et tous les 1ers du mois"
+echo "                            (estimation d'après les prix publics, PAS votre facture :"
+echo "                             le compte qui fait foi est celui de Modal)"
+echo "  Routes LLM gratuites      quotas par JOUR, remis à zéro chaque jour"
+echo "                            (Gemini : à minuit heure du Pacifique, soit 9 h chez nous)"
+echo "                            le compte du jour est sur la page Clés du Studio"
 echo
 
 if [ -z "$cle" ]; then
@@ -194,15 +292,15 @@ code=0
 case "$cle" in
   video-poids) vider_poids || code=1 ;;
   video-image) vider_image free-ai-studio-sandbox-worker-gpu || code=1 ;;
-  chat)        for id in $(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/open-webui/{print $2}' | sort -u); do vider_image "$id" || code=1; done ;;
+  chat)        for id in $IDS_CHAT; do vider_image "$id" || code=1; done ;;
   whisper)     vider_volume "${PROJET}_whisper-modeles" || code=1 ;;
-  studio)      for i in free-ai-studio-free-tier-manager free-ai-studio-sandbox-manager free-ai-studio-sandbox-worker; do vider_image "$i" || code=1; done ;;
+  studio)      for i in $LOT_STUDIO; do vider_image "$i" || code=1; done ;;
   tout)
     vider_poids || code=1
     vider_image free-ai-studio-sandbox-worker-gpu || code=1
-    for id in $(docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | awk '/open-webui/{print $2}' | sort -u); do vider_image "$id" || code=1; done
+    for id in $IDS_CHAT; do vider_image "$id" || code=1; done
     vider_volume "${PROJET}_whisper-modeles" || code=1
-    for i in free-ai-studio-free-tier-manager free-ai-studio-sandbox-manager free-ai-studio-sandbox-worker; do vider_image "$i" || code=1; done
+    for i in $LOT_STUDIO; do vider_image "$i" || code=1; done
     ;;
 esac
 

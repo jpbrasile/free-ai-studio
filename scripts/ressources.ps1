@@ -64,6 +64,55 @@ try {
 } catch { }
 function TailleVolume([string]$nom) { if ($volumes.ContainsKey($nom)) { return [int64]$volumes[$nom] } return [int64]0 }
 
+# --- dates ------------------------------------------------------------------
+# << Renouvele le >> = la date ou la chose est arrivee SUR CETTE MACHINE, pas
+# celle ou son auteur l'a publiee. C'est elle qui repond a la question du
+# client : depuis quand est-ce que ca dort la. Vider puis reutiliser la remet a
+# aujourd'hui -- c'est exactement ce que << renouvele >> veut dire ici.
+function JourIso([string]$t) {
+    if ($t -match '^(\d{4})-(\d{2})-(\d{2})') {
+        return ("{0}/{1}/{2}" -f $Matches[3], $Matches[2], $Matches[1])
+    }
+    return "-"
+}
+# Rend AAAA-MM-JJ et rien d'autre : `LastTagTime` sort avec des espaces
+# (<< 2026-09-20 08:19:56.278 +0000 UTC >>), et un mot coupe sur un espace fait
+# comparer << UTC >> a une date. `LastTagTime` est le jour ou l'image a atterri
+# ici, construite ou tiree ; `.Created` est celui de son auteur, c'est le repli
+# et il est moins bon.
+function IsoImage([string]$nom) {
+    $t = [string](& docker image inspect $nom --format '{{.Metadata.LastTagTime}}' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $t -or $t.StartsWith("0001-01-01")) {
+        $t = [string](& docker image inspect $nom --format '{{.Created}}' 2>$null)
+    }
+    if (-not $t) { return "" }
+    return $t.Substring(0, [Math]::Min(10, $t.Length))
+}
+function IsoMax([string[]]$liste) {
+    $m = ""
+    foreach ($t in $liste) { if ($t -gt $m) { $m = $t } }
+    return $m
+}
+function DateImage([string]$nom) { return (JourIso (IsoImage $nom)) }
+# Le fichier le plus recemment ecrit, et non la date du dossier : un
+# telechargement repris ajoute des fichiers sans toucher au dossier du dessus.
+function DateDossier([string]$chemin) {
+    if (-not (Test-Path -LiteralPath $chemin)) { return "-" }
+    $f = Get-ChildItem -LiteralPath $chemin -Recurse -File -Force -ErrorAction SilentlyContinue |
+         Sort-Object LastWriteTime | Select-Object -Last 1
+    if (-not $f) { return "-" }
+    return $f.LastWriteTime.ToString("dd/MM/yyyy")
+}
+function DateVolume([string]$nom) {
+    $t = [string](& docker volume inspect $nom --format '{{.CreatedAt}}' 2>$null)
+    if ($LASTEXITCODE -ne 0) { return "-" }
+    return (JourIso $t)
+}
+function ImagesChat {
+    & docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | Where-Object { $_ -match 'open-webui' } | ForEach-Object { ($_ -split ' ')[1] } | Sort-Object -Unique
+}
+$lotStudio = @("free-ai-studio-free-tier-manager", "free-ai-studio-sandbox-manager", "free-ai-studio-sandbox-worker")
+
 # --- ou sont les choses -----------------------------------------------------
 if ($env:GPU_MODELES_DIR) { $cache = $env:GPU_MODELES_DIR }
 else { $cache = Join-Path $env:USERPROFILE ".cache\huggingface" }
@@ -72,17 +121,23 @@ $projet = (Split-Path -Leaf $Racine).ToLower() -replace '[^a-z0-9_-]', ''
 
 $oPoids  = TailleDossier $poidsVideo
 $oImgGpu = TailleImage "free-ai-studio-sandbox-worker-gpu"
+$idsChat = @(ImagesChat)
 $oImgChat = [int64]0
-foreach ($id in (& docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | Where-Object { $_ -match 'open-webui' } | ForEach-Object { ($_ -split ' ')[1] } | Sort-Object -Unique)) {
-    $oImgChat += TailleImage $id
-}
+foreach ($id in $idsChat) { $oImgChat += TailleImage $id }
 $oImgStudio = [int64]0
-foreach ($i in @("free-ai-studio-free-tier-manager", "free-ai-studio-sandbox-manager", "free-ai-studio-sandbox-worker")) {
-    $oImgStudio += TailleImage $i
-}
+foreach ($i in $lotStudio) { $oImgStudio += TailleImage $i }
 $oWhisper = TailleVolume "${projet}_whisper-modeles"
 $oTravail = TailleVolume "${projet}_sandbox-data"
 $oConvers = TailleVolume "${projet}_open-webui-data"
+
+# Plusieurs images sur une ligne : c'est la plus recente qui date la ligne.
+$dPoids = DateDossier $poidsVideo
+$dImgGpu = DateImage "free-ai-studio-sandbox-worker-gpu"
+$dImgChat = JourIso (IsoMax @($idsChat | ForEach-Object { IsoImage $_ }))
+$dImgStudio = JourIso (IsoMax @($lotStudio | ForEach-Object { IsoImage $_ }))
+$dWhisper = DateVolume "${projet}_whisper-modeles"
+$dTravail = DateVolume "${projet}_sandbox-data"
+$dConvers = DateVolume "${projet}_open-webui-data"
 
 $totalTelecharge = $oPoids + $oImgGpu + $oImgChat + $oImgStudio + $oWhisper
 $totalTravail = $oTravail + $oConvers
@@ -91,22 +146,66 @@ $totalTravail = $oTravail + $oConvers
 Write-Host ""
 Write-Host "  Place occupee par le Studio sur cet ordinateur" -ForegroundColor Cyan
 Write-Host ""
-"  {0,-22} {1,-42} {2,10}" -f "APPLICATION", "CE QUI EST SUR LE DISQUE", "TAILLE"
-"  {0,-22} {1,-42} {2,10}" -f "----------------------", "------------------------------------------", "----------"
-"  {0,-22} {1,-42} {2,10}   [video-poids]" -f "Video a la maison", "les 34 Go du modele video", (Lisible $oPoids)
-"  {0,-22} {1,-42} {2,10}   [video-image]" -f "Video a la maison", "le bac a sable qui sait parler a la carte", (Lisible $oImgGpu)
-"  {0,-22} {1,-42} {2,10}   [chat]" -f "Chat (Open WebUI)", "l'application de conversation", (Lisible $oImgChat)
-"  {0,-22} {1,-42} {2,10}   [whisper]" -f "Ecoute des voix", "les modeles qui transcrivent", (Lisible $oWhisper)
-"  {0,-22} {1,-42} {2,10}   [studio]" -f "Le Studio lui-meme", "ses trois services", (Lisible $oImgStudio)
+"  {0,-22} {1,-42} {2,10}    {3,-12}" -f "APPLICATION", "CE QUI EST SUR LE DISQUE", "TAILLE", "RENOUVELE LE"
+"  {0,-22} {1,-42} {2,10}    {3,-12}" -f "----------------------", "------------------------------------------", "----------", "------------"
+"  {0,-22} {1,-42} {2,10}    {3,-12}   [video-poids]" -f "Video a la maison", "les 34 Go du modele video", (Lisible $oPoids), $dPoids
+"  {0,-22} {1,-42} {2,10}    {3,-12}   [video-image]" -f "Video a la maison", "le bac a sable qui sait parler a la carte", (Lisible $oImgGpu), $dImgGpu
+"  {0,-22} {1,-42} {2,10}    {3,-12}   [chat]" -f "Chat (Open WebUI)", "l'application de conversation", (Lisible $oImgChat), $dImgChat
+"  {0,-22} {1,-42} {2,10}    {3,-12}   [whisper]" -f "Ecoute des voix", "les modeles qui transcrivent", (Lisible $oWhisper), $dWhisper
+"  {0,-22} {1,-42} {2,10}    {3,-12}   [studio]" -f "Le Studio lui-meme", "ses trois services", (Lisible $oImgStudio), $dImgStudio
 Write-Host ""
 "  {0,-22} {1,-42}" -f "VOTRE TRAVAIL", "jamais propose a la suppression ici"
-"  {0,-22} {1,-42} {2,10}" -f "Vos fichiers", "l'espace de travail du bac a sable", (Lisible $oTravail)
-"  {0,-22} {1,-42} {2,10}" -f "Vos conversations", "l'historique du chat", (Lisible $oConvers)
+"  {0,-22} {1,-42} {2,10}    {3,-12}" -f "Vos fichiers", "l'espace de travail du bac a sable", (Lisible $oTravail), $dTravail
+"  {0,-22} {1,-42} {2,10}    {3,-12}" -f "Vos conversations", "l'historique du chat", (Lisible $oConvers), $dConvers
 Write-Host ""
 Write-Host ("  Telecharge : {0}     Votre travail : {1}" -f (Lisible $totalTelecharge), (Lisible $totalTravail))
 Write-Host "  (les images Docker partagent des morceaux : le total telecharge est une borne haute)"
+Write-Host "  << Renouvele le >> = arrive sur cette machine a cette date. Pour un volume, c'est sa"
+Write-Host "  date de creation : ce qu'il contient a pu etre ajoute plus tard."
 $d = Get-PSDrive -Name ($env:SystemDrive.TrimEnd(":"))
 Write-Host ("  Disque : {0:N1} Go libres sur {1:N0} Go" -f ($d.Free/1GB), (($d.Free + $d.Used)/1GB))
+Write-Host ""
+
+# --- ce qui se remet a zero tout seul ---------------------------------------
+# Les lignes du dessus dorment sur le disque : elles ne bougent que si on les
+# vide. Celles-ci sont des DROITS D'USAGE, et elles repartent a une date. Ne pas
+# la connaitre, c'est soit attendre pour rien alors que le credit est revenu,
+# soit lancer un calcul qui sera refuse.
+#
+# Le compteur Modal se lit dans `config/`, monte depuis ce depot : ni cle, ni
+# docker, ni service a demarrer.
+function PremierDuMoisSuivant([string]$mois) {     # 2026-09 -> 01/10/2026
+    $a = [int]$mois.Substring(0, 4)
+    $m = [int]$mois.Substring(5, 2) + 1
+    if ($m -gt 12) { $m = 1; $a = $a + 1 }
+    return ("01/{0:D2}/{1}" -f $m, $a)
+}
+$moisCourant = Get-Date -Format "yyyy-MM"
+$credit = 30.0
+if ($env:MODAL_CREDIT_MENSUEL_USD) { $credit = [double]$env:MODAL_CREDIT_MENSUEL_USD }
+$depense = 0.0
+$fichierBudget = Join-Path $Racine "config\modal-budget.json"
+if (Test-Path -LiteralPath $fichierBudget) {
+    try {
+        $b = Get-Content -LiteralPath $fichierBudget -Raw -Encoding UTF8 | ConvertFrom-Json
+        # Un compteur d'un mois clos ne dit rien du mois en cours : il est deja
+        # reparti de zero, et l'afficher serait un chiffre faux presente comme
+        # a jour.
+        if ($b.mois -eq $moisCourant) { $depense = [double]$b.usd }
+    } catch { }
+}
+$reste = $credit - $depense
+if ($reste -lt 0) { $reste = 0 }
+
+Write-Host "  Ce qui se remet a zero tout seul" -ForegroundColor Cyan
+Write-Host ""
+Write-Host ("  Modal (machines louees)   {0:N2} `$ depenses sur {1:N0} `$ ce mois-ci, reste {2:N2} `$" -f $depense, $credit, $reste)
+Write-Host ("                            remis a zero le {0}, et tous les 1ers du mois" -f (PremierDuMoisSuivant $moisCourant))
+Write-Host "                            (estimation d'apres les prix publics, PAS votre facture :"
+Write-Host "                             le compte qui fait foi est celui de Modal)"
+Write-Host "  Routes LLM gratuites      quotas par JOUR, remis a zero chaque jour"
+Write-Host "                            (Gemini : a minuit heure du Pacifique, soit 9 h chez nous)"
+Write-Host "                            le compte du jour est sur la page Cles du Studio"
 Write-Host ""
 
 if (-not $Vider) {
@@ -175,22 +274,18 @@ function ViderVolume([string]$nom) {
     $sortie = & docker volume rm $nom 2>&1
     if ($LASTEXITCODE -ne 0) { Refus ($sortie -join " ") } else { Write-Host "  Rendu : $nom" -ForegroundColor Green }
 }
-function ImagesChat {
-    & docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' | Where-Object { $_ -match 'open-webui' } | ForEach-Object { ($_ -split ' ')[1] } | Sort-Object -Unique
-}
-
 switch ($Vider) {
     "video-poids" { ViderPoids }
     "video-image" { ViderImage "free-ai-studio-sandbox-worker-gpu" }
     "chat"        { foreach ($id in (ImagesChat)) { ViderImage $id } }
     "whisper"     { ViderVolume "${projet}_whisper-modeles" }
-    "studio"      { foreach ($i in @("free-ai-studio-free-tier-manager", "free-ai-studio-sandbox-manager", "free-ai-studio-sandbox-worker")) { ViderImage $i } }
+    "studio"      { foreach ($i in $lotStudio) { ViderImage $i } }
     "tout" {
         ViderPoids
         ViderImage "free-ai-studio-sandbox-worker-gpu"
         foreach ($id in (ImagesChat)) { ViderImage $id }
         ViderVolume "${projet}_whisper-modeles"
-        foreach ($i in @("free-ai-studio-free-tier-manager", "free-ai-studio-sandbox-manager", "free-ai-studio-sandbox-worker")) { ViderImage $i }
+        foreach ($i in $lotStudio) { ViderImage $i }
     }
 }
 

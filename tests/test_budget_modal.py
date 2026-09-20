@@ -226,3 +226,22 @@ def test_un_usage_inconnu_est_refuse(budget):
                   lambda: budget.poser("mystere", 0, 1, 1)):
         with pytest.raises(ValueError):
             appel()
+
+
+def test_la_date_de_remise_a_zero_est_dite_et_franchit_l_annee(budget):
+    """Demande du proprietaire, 20/09/2026 : noter la date de renouvellement.
+
+    Un credit mensuel sans sa date, c'est soit attendre pour rien alors qu'il
+    est deja revenu, soit lancer un calcul qui sera refuse. La date est rendue
+    par le module et non recalculee par chaque page : deux dates differentes
+    sur le meme compteur seraient pires que pas de date du tout.
+    """
+    assert budget.premier_du_mois_suivant("2026-09") == "2026-10-01"
+    # Decembre franchit l'annee : la faute que tout calcul de date oublie.
+    assert budget.premier_du_mois_suivant("2026-12") == "2027-01-01"
+    assert budget.premier_du_mois_suivant("2026-01") == "2026-02-01"
+
+    etat = budget.lire()
+    assert etat["renouvele_le"] == budget.premier_du_mois_suivant(etat["mois"])
+    # Et c'est bien une date posterieure au mois compte.
+    assert etat["renouvele_le"] > etat["mois"]

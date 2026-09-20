@@ -829,6 +829,73 @@ les définitions de fonctions. Rejoué des deux côtés :
 Un test qui n'a jamais échoué n'est pas une garde, c'est une décoration. Celui-ci
 protégeait la seule chose irremplaçable de la machine.
 
+### Les dates : celle du dépôt, et celle du crédit
+
+Demande du propriétaire, le même jour : « *note aussi la date de renouvellement des
+ressources (modal en particulier)* », puis « *mais ok pour les dépôts aussi* ». Deux
+choses différentes portent ce mot, et les deux sont affichées.
+
+**Les dépôts : depuis quand ça dort là.** Une taille seule ne dit pas s'il faut s'en
+occuper — 34 Go arrivés hier et 34 Go qui dorment depuis six mois ne mènent pas à la
+même décision. Colonne « RENOUVELÉ LE », qui est la date d'arrivée **sur cette
+machine** et non celle où l'auteur a publié :
+
+| ligne | ce qui date la ligne |
+|---|---|
+| les 34 Go | le fichier le plus récemment écrit — un téléchargement repris ajoute des fichiers sans toucher au dossier du dessus |
+| une image | `LastTagTime` (construite ou tirée ici) ; `.Created`, la date de l'auteur, n'est que le repli |
+| un volume | sa date de création — et le tableau le dit : *ce qu'il contient a pu être ajouté plus tard* |
+
+Vider puis réutiliser remet la date à aujourd'hui : c'est exactement ce que
+« renouvelé » veut dire ici, et c'est le lien avec GPU-6.
+
+**Deux fautes attrapées en regardant l'écran, pas le code.** La ligne du Studio affichait
+d'abord un tiret : `LastTagTime` sort avec des espaces (« 2026-09-20 08:19:56.278 +0000
+UTC ») et le mot `UTC` se comparait aux dates. Corrigé, elle affichait **19/09** — et
+c'était encore faux : sans retour à la ligne, les trois dates des trois images se
+collaient en un seul mot et la ligne montrait la date de la **première**, pas la plus
+récente. Contrôle indépendant (`docker image inspect | cut | sort | tail -1`) :
+**20/09/2026**, ce qu'elle affiche maintenant. Une date plausible et fausse ne se voit
+pas ; c'est pour ça qu'on la recoupe.
+
+**Les crédits : ce qui repart tout seul, et quand.** Les lignes du dessus ne bougent que
+si on les vide. Celles-ci sont des droits d'usage, et elles reviennent à une date. Ne pas
+la connaître, c'est soit attendre pour rien alors que le crédit est revenu, soit lancer
+un calcul qui sera refusé.
+
+```
+  Modal (machines louées)   1.39 $ dépensés sur 30 $ ce mois-ci, reste 28.61 $
+                            remis à zéro le 01/10/2026, et tous les 1ers du mois
+                            (estimation d'après les prix publics, PAS votre facture :
+                             le compte qui fait foi est celui de Modal)
+  Routes LLM gratuites      quotas par JOUR, remis à zéro chaque jour
+                            (Gemini : à minuit heure du Pacifique, soit 9 h chez nous)
+                            le compte du jour est sur la page Clés du Studio
+```
+
+Le compteur se lit dans `config/modal-budget.json`, monté depuis le dépôt : **ni clé, ni
+Docker, ni service à démarrer**. La mise en garde de `budget_modal.py` remonte jusqu'au
+client — personne ici ne lit le compte Modal, c'est une estimation d'après les prix
+publics, et la seule limite qui arrête vraiment la facture est celle réglée chez eux.
+
+**La date est calculée à un seul endroit.** `budget_modal.premier_du_mois_suivant()` la
+rend dans `lire()`, pour que la page et le script annoncent la **même** — deux dates
+différentes sur le même compteur seraient pires que pas de date du tout. Un test garde
+le passage de décembre à janvier, la faute que tout calcul de date oublie. Et un test
+interdit d'écrire une date en clair dans les scripts : juste une fois, fausse pour
+toujours.
+
+**Ce qui a vraiment été exécuté.** Le fichier du compteur reculé d'un mois, puis remis :
+
+| `config/modal-budget.json` | ligne affichée |
+|---|---|
+| `"mois": "2026-09"` (le mois en cours) | `1.39 $ dépensés sur 30 $, reste 28.61 $` |
+| `"mois": "2026-08"` (un mois clos) | **`0.00 $ dépensés sur 30 $, reste 30.00 $`** |
+| remis à l'identique | `1.39 $` |
+
+Un total d'un mois clos affiché comme courant serait un chiffre faux présenté comme à
+jour. Les deux jumeaux rendent les mêmes tailles, les mêmes dates et les mêmes montants.
+
 ## GPU-6 — vider ne doit pas fermer une porte
 
 Ordre du propriétaire, dans le même tour : « *si on supprime, l'usage de la ressource

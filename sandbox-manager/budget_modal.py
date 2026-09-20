@@ -118,6 +118,23 @@ def _mois_courant() -> str:
     return time.strftime("%Y-%m")
 
 
+def premier_du_mois_suivant(mois: str) -> str:
+    """La date ou le compteur repart de zero, en AAAA-MM-JJ.
+
+    Ce n'est pas une politique de Modal : c'est la consequence de la cle
+    `%Y-%m`, un mois neuf ne relisant pas l'ancien. Elle est rendue ICI pour
+    que les pages et `scripts/ressources.{sh,ps1}` annoncent la MEME date et
+    non chacune la sienne -- deux dates differentes sur le meme compteur, c'est
+    un client qui attend une remise a zero deja faite, ou qui lance un calcul
+    qui sera refuse.
+    """
+    annee, mois_n = int(mois[:4]), int(mois[5:7])
+    mois_n += 1
+    if mois_n > 12:
+        mois_n, annee = 1, annee + 1
+    return "%04d-%02d-01" % (annee, mois_n)
+
+
 def _vide() -> dict:
     return {
         "mois": _mois_courant(),
@@ -214,6 +231,7 @@ def lire() -> dict:
     etat["plafond_usd"] = PLAFOND_USD
     etat["credit_offert_usd"] = CREDIT_OFFERT_USD
     etat["prix_releve_le"] = PRIX_RELEVE_LE
+    etat["renouvele_le"] = premier_du_mois_suivant(etat["mois"])
     etat["reste_usd"] = max(0.0, PLAFOND_USD - etat["usd"])
     etat["reserve_autonome_usd"] = RESERVE_AUTONOME_USD
     etat["part_reservee_autonome"] = PART_RESERVEE_AUTONOME

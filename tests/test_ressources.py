@@ -115,3 +115,64 @@ def test_le_total_ne_se_fait_pas_passer_pour_exact():
     """Les images Docker partagent des couches : additionner majore."""
     assert "borne haute" in SH
     assert "borne haute" in PS1
+
+
+# --- Les dates : celle du depot, et celle du credit ---------------------------
+
+def test_chaque_ligne_dit_depuis_quand_elle_dort_la():
+    """Demande du proprietaire, 20/09/2026 : noter la date de renouvellement.
+
+    Une taille seule ne dit pas s'il faut s'en occuper. 34 Go arrives hier et
+    34 Go qui dorment depuis six mois, ce n'est pas la meme decision."""
+    assert "RENOUVELÉ LE" in SH
+    assert "RENOUVELE LE" in PS1
+    # La date d'une IMAGE est celle ou elle a atterri ici (`LastTagTime`), pas
+    # celle ou son auteur l'a publiee (`.Created`, qui n'est que le repli).
+    for source in (SH, PS1):
+        assert "LastTagTime" in source
+        assert ".Created" in source
+    # Celle des POIDS est le fichier le plus recemment ecrit : un
+    # telechargement repris ajoute des fichiers sans toucher au dossier.
+    assert "LastWriteTime" in PS1
+    assert "-printf '%T@" in SH
+
+
+def test_le_credit_modal_est_dit_avec_sa_date_de_remise_a_zero():
+    """Un credit mensuel sans sa date fait attendre pour rien, ou lancer un
+    calcul qui sera refuse. Modal en particulier : c'est le seul qui coute."""
+    for source in (SH, PS1):
+        assert "Modal" in source
+        assert "modal-budget.json" in source
+        # La cadence des routes gratuites est le jour, pas le mois : les
+        # confondre, c'est promettre un quota qui ne reviendra pas ce soir.
+        assert "JOUR" in source
+    assert "1ers du mois" in SH and "1ers du mois" in PS1
+
+
+def test_la_date_de_remise_a_zero_est_calculee_et_jamais_ecrite_en_dur():
+    """Une date ecrite en clair est juste une fois, puis fausse pour toujours."""
+    for source, calcul in ((SH, "premier_du_mois_suivant"), (PS1, "PremierDuMoisSuivant")):
+        assert calcul in source
+        for ligne in source.splitlines():
+            # Les deux langages commentent avec `#`. On coupe a la premiere :
+            # cela laisse passer un `#` dans une chaine, il n'y en a pas ici,
+            # et le jour ou il y en aura ce test le dira.
+            code = ligne.split("#")[0]
+            assert "/2026" not in code, ligne
+            assert "/2027" not in code, ligne
+
+
+def test_le_compteur_d_un_mois_clos_n_est_jamais_affiche_comme_a_jour():
+    """Le fichier garde le mois qu'il compte. Un mois plus ancien est deja
+    reparti de zero cote service : afficher son total serait un chiffre faux
+    presente comme courant."""
+    assert '"$(json_texte "$BUDGET_MODAL" mois)" = "$MOIS"' in SH
+    assert '$b.mois -eq $moisCourant' in PS1
+
+
+def test_l_estimation_ne_se_fait_jamais_passer_pour_une_facture():
+    """Le module le dit depuis le debut, la page du client doit le dire aussi :
+    personne ici ne lit le compte Modal."""
+    for source in (SH, PS1):
+        assert "facture" in source
+        assert "fait foi" in source
