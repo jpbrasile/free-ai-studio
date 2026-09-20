@@ -22,11 +22,18 @@ export STUDIO_LANCEUR=linux
 # `scripts/demarrer.ps1` ; les deux lanceurs doivent rester copie conforme, et
 # `tests/test_gpu_local.py` le vérifie.
 #
-# JAMAIS EXÉCUTÉ SOUS LINUX à ce jour (20/09/2026) : cette machine est sous
-# Windows. Ce qui est vérifié, c'est que ce fichier applique la surcouche au
-# même endroit et qu'il vise le même dossier de poids que le compose et que le
-# `.ps1`. Le trajet complet -- carte Linux, clip qui sort à la maison -- reste
-# à mesurer (PLAN.md, étape 9, GPU-1).
+# EXÉCUTÉ SOUS LINUX le 20/09/2026, dans un conteneur de cette machine
+# (`Linux 6.18.33.2-microsoft-standard-WSL2`, `--gpus all`) : `nvidia-smi` y
+# répond « NVIDIA GeForce RTX 4090 », la surcouche est ajoutée, les poids
+# absents donnent les trois bonnes lignes, et une carte muette laisse le
+# lanceur sur le seul `docker-compose.yml`. Reste à mesurer : un hôte Linux
+# dont le shell et le moteur Docker partagent le disque -- de là seulement, le
+# `compose up` réel et le clip fait à la maison (PLAN.md, étape 9, GPU-1).
+#
+# ATTENTION, mesuré le même jour : le runtime NVIDIA injecte `nvidia-smi` dans
+# l'image, mais en musl (Alpine) le binaire ne s'exécute pas. D'où le test du
+# CODE DE RETOUR ci-dessous, et jamais de la présence du fichier : tester la
+# présence donnerait une machine qui se croit équipée et qui échoue au clip.
 compose_args=(-f docker-compose.yml)
 carte=""
 if command -v nvidia-smi >/dev/null 2>&1; then

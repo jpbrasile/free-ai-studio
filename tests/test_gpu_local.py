@@ -185,9 +185,12 @@ def test_le_lanceur_linux_applique_la_surcouche_comme_celui_de_windows():
     memes quatre choses, et ce test est ce qui les empeche de diverger
     pendant qu'on ne regarde que celui de Windows.
 
-    JAMAIS EXECUTE SOUS LINUX : ce test lit les fichiers, il ne lance rien.
-    Le trajet reel -- carte Linux, clip fabrique a la maison -- reste ouvert
-    dans PLAN.md, etape 9, GPU-1."""
+    Ce test lit les fichiers, il ne lance rien. Ce que lui ne voit pas a ete
+    joue le 20/09 dans un conteneur Linux de cette machine avec `--gpus all` :
+    carte vue, surcouche ajoutee, poids absents annonces, carte muette sans
+    surcouche. Reste ouvert dans PLAN.md, etape 9, GPU-1 : un hote Linux dont
+    le shell et le moteur Docker partagent le disque, pour le `compose up`
+    reel et le clip fabrique a la maison."""
     sh = (RACINE / "start.sh").read_text(encoding="utf-8")
     ps1 = (RACINE / "scripts" / "demarrer.ps1").read_text(encoding="utf-8")
 

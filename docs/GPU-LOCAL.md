@@ -332,11 +332,14 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
 > sans entrée là-bas est un manque nommé mais jamais ouvert : c'est exactement le défaut
 > relevé par le propriétaire le 19/09 au soir.
 >
-> **Les trois sont fermés le 20/09/2026.** Ce qui reste non mesuré, et qui est écrit tel
-> quel partout où il apparaît : **rien n'a jamais tourné sous Linux** (cette machine est
-> sous Windows), et la boîte « carte prise » n'a **pas de capture d'écran** — la fenêtre
-> Chrome qui porte l'onglet rend un viewport de 0 × 0. Le reste des lignes ci-dessous
-> tient toujours.
+> **Les trois sont fermés le 20/09/2026.** J'avais écrit ici, le même jour, que « rien
+> n'a jamais tourné sous Linux » ; le propriétaire a relevé que **le moteur Docker de
+> cette machine EST un Linux**. Les deux scripts y ont donc été exécutés depuis —
+> section « GPU-1 (suite) » en bas. Ce qui reste non mesuré se dit maintenant plus
+> étroitement : **le `compose up` réel et le clip à la maison depuis un hôte Linux** dont
+> le shell et le moteur partagent le disque ; et la boîte « carte prise » n'a **pas de
+> capture d'écran** — la fenêtre Chrome qui porte l'onglet rend un viewport de 0 × 0. Le
+> reste des lignes ci-dessous tient toujours.
 
 - ~~De combien la 4090 bat la L4 louée.~~ **Mesuré le 19/09** : 412 s contre 422 s pour un
   clip de 3 s, mais en 720p au lieu de 480p et 50 passes au lieu de 30 — voir le tableau.
@@ -367,8 +370,10 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   de jumeau `.sh` du script de téléchargement. Un débutant sous Linux avec une carte
   obtenait donc le comportement d'avant le chantier — tout est loué — **sans un mot**.
   Mesuré par `grep -rn docker-compose.gpu.yml` : sept fichiers le nommaient, aucun n'était
-  un `.sh`. **Ce qui reste non vérifié, et qui n'est pas la même chose** : rien de tout
-  cela n'a jamais tourné SOUS Linux — cette machine est sous Windows.
+  un `.sh`. ~~**Ce qui reste non vérifié** : rien de tout cela n'a jamais tourné SOUS
+  Linux — cette machine est sous Windows.~~ **Exécuté sous Linux le 20/09** dans un
+  conteneur de cette machine, carte comprise (section « GPU-1 (suite) »). Reste : un hôte
+  Linux dont le shell et le moteur Docker partagent le disque.
 - ~~La boîte « la carte est prise » vue à l'écran.~~ **Vue le 19/09 vers 21:10.** Elle
   affiche « NVIDIA GeForce RTX 4090 : 3.2 Go libres sur 24.0, il en faut 12.5 », puis les
   trois sorties « J'attends », « Louer chez Modal — environ 0,114 $ » et « Annuler ».
@@ -540,10 +545,12 @@ Deux différences assumées entre les jumeaux, toutes deux écrites dans les fic
 
 ### Ce qui a vraiment été exécuté, et ce qui ne l'a pas été
 
-**Jamais exécuté sous Linux. Cette machine est sous Windows.** Ce qui a été fait à la
-place : `start.sh` et son jumeau ont tourné **pour de vrai** sous bash, avec un faux
-`docker` qui écrit ses arguments au lieu d'agir — donc sans toucher aux conteneurs. Les
-quatre chemins ont été parcourus :
+~~**Jamais exécuté sous Linux. Cette machine est sous Windows.**~~ *Écrit le 20/09 au
+matin, faux le 20/09 à midi : le moteur Docker de cette machine est lui-même un Linux, et
+les deux scripts y ont été exécutés — section « GPU-1 (suite) », plus bas.* Ce qui a été
+fait d'abord : `start.sh` et son jumeau ont tourné **pour de vrai** sous bash (Windows),
+avec un faux `docker` qui écrit ses arguments au lieu d'agir — donc sans toucher aux
+conteneurs. Les quatre chemins ont été parcourus :
 
 | chemin | ce que le script a fait |
 |---|---|
@@ -652,3 +659,47 @@ fourchette à écrire pour quelqu'un dont on ne connaît pas la ligne.
 Les 32 Gio de ce dossier d'essai sont **gardés tels quels** en attendant que le
 propriétaire dise quoi en faire : ils ne servent à rien pour le Studio, qui lit le cache
 du profil.
+
+## GPU-1 (suite) — « tu n'as pas essayé sur le docker Linux du client ? » (20/09, ~09:00)
+
+Relevé du propriétaire, et il a raison : j'avais écrit « jamais exécuté sous Linux » en
+regardant le système de la machine, alors que **le moteur Docker de cette machine EST un
+Linux** et qu'un conteneur en est un aussi. Il ne manquait pas une machine, il manquait
+l'idée d'y entrer. Voici ce que donne l'essai, fait depuis.
+
+### Ce qui tourne maintenant sous Linux, pour de vrai
+
+`Linux 6.18.33.2-microsoft-standard-WSL2`, bash 5.2.37, le dépôt monté en lecture seule.
+
+| essai | résultat |
+|---|---|
+| `start.sh`, carte qui répond, poids absents | « Carte graphique vue : NVIDIA GeForce RTX 4090 », les trois lignes « le modèle vidéo (34 Go) n'est pas téléchargé » nommant `./scripts/telecharger-modele-video.sh`, puis `compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build` |
+| `start.sh`, carte qui répond, poids présents | « Modèles déjà téléchargés réutilisés : …/.cache/huggingface », même surcouche, pas d'avertissement |
+| `start.sh`, carte qui ne répond pas | `compose -f docker-compose.yml up -d --build` — **pas de surcouche**, le débutant sans carte ne voit rien |
+| `telecharger-modele-video.sh`, image absente | « L'image du bac à sable GPU n'existe pas encore. Lancez d'abord le Studio (`./start.sh`) », sortie 2, aucun téléchargement |
+| `telecharger-modele-video.sh`, commande assemblée | `run --rm -v /root/.cache/huggingface:/cache/huggingface -v /studio/scripts:/scripts:ro -e HF_HOME=… -e HOME=… -e HF_HUB_DISABLE_XET=1 --user 0:0 …` — chemins Linux natifs, compte de la personne |
+| le **vrai** moteur, depuis ce shell Linux | `docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --services` → `sandbox-worker`, **`sandbox-worker-gpu`**, `free-tier-manager`, `open-webui`, `sandbox-manager` |
+
+`nvidia-smi` répond dans le conteneur : `NVIDIA GeForce RTX 4090, 24138 MiB`. La détection
+de carte, la surcouche et le message ne sont donc plus des suppositions sous Linux.
+
+### Ce que l'essai a trouvé, et qui n'était pas cherché
+
+**Dans une image Alpine, `nvidia-smi` existe et ne s'exécute pas.** Le runtime NVIDIA
+injecte le binaire, mais ses bibliothèques sont celles de la glibc et Alpine tourne sur
+musl : `command -v nvidia-smi` répond oui, l'appel répond
+`cannot execute: required file not found`. **Le script conclut « pas de carte » et part
+chez le loueur** — c'est le bon repli, et il ne tient qu'à un détail : on juge le **code
+de retour** de `nvidia-smi`, pas la présence du fichier. Tester la présence aurait donné
+une machine qui croit avoir une carte et qui échoue plus tard, au moment du clip. Le même
+cas se produit en vrai sur une machine Linux dont le pilote ne correspond pas à la
+bibliothèque installée.
+
+### Ce qui reste, et qui n'est pas la même chose
+
+Ce conteneur parle au moteur Docker **de cette machine**, dont le système de fichiers
+n'est pas le sien : un `docker run -v /studio/scripts:…` lancé depuis lui demanderait au
+moteur un chemin qui n'existe pas chez lui. **Le téléchargement réel et le `compose up`
+réel n'ont donc pas été lancés depuis Linux** — ce sont les deux seules lignes du trajet
+qui attendent encore une machine dont le shell et le moteur partagent le disque. Tout ce
+qui précède, lui, est mesuré.

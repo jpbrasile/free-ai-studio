@@ -13,8 +13,14 @@
 # lance un conteneur qui a le droit d'aller sur le réseau, et qui écrit dans le
 # même dossier que le bac à sable lira ensuite.
 #
-# JAMAIS EXÉCUTÉ SOUS LINUX à ce jour (20/09/2026) : écrit d'après le `.ps1`,
-# qui lui a tourné en vrai le 19/09 (34,20 Go annoncés, 32 Go sur le disque).
+# EXÉCUTÉ SOUS LINUX le 20/09/2026, dans un conteneur de cette machine : le
+# chemin « image absente » rend son message et sort 2 sans rien télécharger, et
+# la commande assemblée porte des chemins Linux natifs et le compte de la
+# personne (`--user <uid>:<gid>`). Ce qui reste à mesurer : le `docker run` réel
+# depuis un hôte Linux -- depuis un conteneur, le moteur ne sait pas résoudre
+# les dossiers à monter, qui sont ceux du conteneur et non les siens. Le
+# téléchargement lui-même, lui, a bien eu lieu, sous Windows : 34,20 Go, 62
+# fichiers, 21 min 51 s dans un dossier vide (20/09).
 #
 # À lancer depuis le dossier du Studio :
 #   ./scripts/telecharger-modele-video.sh
