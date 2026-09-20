@@ -323,3 +323,89 @@ def test_la_cause_de_l_ecart_est_celle_qui_a_ete_mesuree(budget):
     for part in ("1,97", "1,37", "0,46"):            # la decomposition mesuree
         assert part in doc, part
     assert "1,44" in doc and "19/09" in doc          # la fenetre qui appartient a ce compteur
+
+
+# --- 7. Le releve chez Modal, pris juste avant d'ecrire -----------------------
+
+def _faux_depenses(monkeypatch, montants, disponible=True):
+    """Remplace le module `depenses` par une reponse figee.
+
+    Aucun reseau, aucun jeton : ces tests verifient le CABLAGE, pas Modal. Le
+    module est importe a l'interieur de _releve_reel(), donc il suffit de le
+    poser dans sys.modules.
+    """
+    import sys
+    import types
+    faux = types.ModuleType("depenses")
+    faux.etat = lambda cycle="this month", forcer=False: {
+        "disponible": disponible, "montants": montants,
+    }
+    monkeypatch.setitem(sys.modules, "depenses", faux)
+    return faux
+
+
+def test_le_releve_de_modal_remplace_l_estimation_quand_il_est_plus_grand(budget, monkeypatch):
+    """L'ordre du proprietaire, 20/09/2026 : << il suffit de relever le compteur
+    juste avant de l'ecrire >>.
+
+    C'est la reparation du defaut mesure le meme jour -- le compteur voyait 37 %
+    de la facture. Elle tient en un endroit, celui qui ECRIT, et non dans les 67
+    qui lisent : le contrat de lire() ne bouge pas, seul le nombre devient vrai.
+    """
+    _faux_depenses(monkeypatch, {"calcul": 3.79706491, "mesure": 4.66502664})
+    budget.consommer("video", "L4", 10.0, 16384)
+    etat = budget.lire()
+    # Le releve est ecrit, date, et c'est lui que le garde voit.
+    assert etat["usd_reel"] == pytest.approx(3.7971, abs=1e-4)
+    assert etat["usd_reel_le"]
+    assert etat["usd"] == pytest.approx(3.7971, abs=1e-4)
+    # L'estimation locale reste visible sous son nom, et elle est bien plus basse.
+    assert etat["usd_estime"] < 0.1
+    assert etat["reste_usd"] == pytest.approx(30.0 - 3.7971, abs=1e-4)
+
+
+def test_le_releve_prend_le_calcul_et_jamais_le_cout_mesure(budget, monkeypatch):
+    """`metered_cost` ajoute le stockage, que `free_storage` annule aussitot.
+
+    Mesure du 20/09/2026 : metered_cost 4,66502664 = deployed_apps 3,79706491 +
+    volumes 0,86502664, avec free_storage -0,86502664 et credits -3,80. Prendre
+    `mesure` gonflerait le compteur de 0,87 $ qui ne mangent aucun credit --
+    c'est-a-dire refuser des calculs pour une depense qui n'existe pas.
+    """
+    _faux_depenses(monkeypatch, {"calcul": 3.79706491, "mesure": 4.66502664,
+                                 "stockage": 0.86502664, "credits": -3.8})
+    budget.consommer("chanson", "L4", 10.0, 24576)
+    assert budget.lire()["usd_reel"] == pytest.approx(3.7971, abs=1e-4)
+
+
+def test_sans_reponse_de_modal_le_compteur_reste_sur_son_estimation(budget, monkeypatch):
+    """Une page ne depend jamais d'un service distant.
+
+    Sans jeton, sans reseau, ou si la commande manque : le releve rend None, et
+    tout se passe comme avant -- le garde refuse sur l'estimation locale, qui
+    est un plancher. C'est le comportement qu'avaient les 352 tests d'avant,
+    et il ne doit pas avoir change.
+    """
+    _faux_depenses(monkeypatch, {}, disponible=False)
+    budget.consommer("video", "L4", 10.0, 16384)
+    etat = budget.lire()
+    assert etat["usd_reel"] is None
+    assert etat["usd"] == pytest.approx(etat["usd_estime"])
+    assert etat["usd"] > 0
+
+
+def test_le_releve_ne_fait_jamais_baisser_le_compteur(budget, monkeypatch):
+    """Les deux nombres sont des MINORANTS, et on garde le plus grand.
+
+    Modal previent que ses donnees arrivent << within minutes >> : juste apres
+    un gros calcul, son chiffre ignore encore ce calcul-la. Si on le prenait tel
+    quel, le compteur RECULERAIT, et un client pourrait relancer en boucle un
+    travail que le garde vient d'accepter. Le maximum des deux l'interdit.
+    """
+    budget.poser("video", secondes=1000.0, usd=12.0, appels=3)
+    _faux_depenses(monkeypatch, {"calcul": 0.5})     # Modal est en retard
+    budget.consommer("video", "L4", 1.0, 16384)
+    etat = budget.lire()
+    assert etat["usd_reel"] == pytest.approx(0.5)    # le releve est garde tel quel...
+    assert etat["usd"] > 12.0                        # ...mais il ne fait pas reculer le total
+    assert etat["usd"] == pytest.approx(etat["usd_estime"])

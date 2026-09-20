@@ -83,10 +83,27 @@ CE QU'IL NE FAUT PAS EN FAIRE : multiplier l'estimation par 2,74. Ce rapport est
 UNE mesure, sur UN mois, sur UN melange de travaux ; ce n'est pas un coefficient.
 Le corriger en le multipliant serait remplacer un nombre faux par un nombre
 invente. La consequence, elle, est un fait et doit etre dite : au rythme mesure,
-le plafond de 30 $ ne se declenche qu'aux alentours de 82 $ reellement factures,
-donc APRES le credit. La reparation est de lire le vrai chiffre -- depenses.py
-le sait deja faire -- et elle est ouverte en sous-plan GPU-7 dans PLAN.md, parce
-qu'elle touche le garde appele dans 5 fichiers et 67 endroits.
+le plafond de 30 $ ne se declencherait qu'aux alentours de 82 $ reellement
+factures, donc APRES le credit.
+
+CE QUI A ETE FAIT, ET C'EST LE PROPRIETAIRE QUI L'A RACCOURCI. J'avais annonce
+un chantier -- << le garde est appele dans 5 fichiers et 67 endroits >>. Sa
+reponse : << il suffit de relever le compteur juste avant de l'ecrire >>. Elle
+est juste, et mon rayon etait le mauvais : les 67 endroits LISENT le compteur,
+ils n'en fixent pas la valeur. Un seul endroit l'ECRIT, consommer(), et c'est la
+que le releve se prend -- voir _releve_reel(). Le contrat de lire() et de
+verifier() ne change pas d'un champ ; seul le nombre devient vrai.
+
+Ce que le fichier porte desormais : `usd` (l'estimation locale, inchangee),
+`usd_reel` et `usd_reel_le` (le releve et son heure). lire() rend le PLUS GRAND
+des deux, pour la raison ecrite a cet endroit-la. Hors ligne, sans jeton ou si
+Modal ne repond pas, `usd_reel` reste None et tout se passe comme avant : le
+garde continue de refuser sur l'estimation, qui est un plancher.
+
+EFFET A ANNONCER, parce qu'il surprend : le montant affiche TRIPLE d'un coup --
+1,39 $ devient 3,80 $. Rien n'a ete depense pour autant ; c'est le meme mois,
+enfin compte. Ce qui reste ouvert en GPU-7 est plus etroit : l'estimation locale,
+elle, sous-compte toujours, et c'est elle qui sert quand Modal est injoignable.
 
 UNE PRECAUTION SUR LE 2,74 LUI-MEME. Il porte sur TOUT septembre, alors que ce
 compteur-ci n'existe que depuis le 19/09 : avant cette date, le quatrieme
@@ -225,7 +242,56 @@ def _vide() -> dict:
         "usd_par_usage": {u: 0.0 for u in USAGES},
         "appels": {u: 0 for u in USAGES},
         "repris_des_anciens": [],
+        # Le releve chez Modal. None tant qu'on n'a pas reussi a le prendre :
+        # un zero se confondrait avec << rien depense >>, qui est un autre fait.
+        "usd_reel": None,
+        "usd_reel_le": None,
     }
+
+
+def _releve_reel() -> Optional[float]:
+    """Ce que Modal dit avoir consomme du credit CE MOIS-CI, ou None.
+
+    ORDRE DU PROPRIETAIRE, 20/09/2026 : << il suffit de relever le compteur
+    juste avant de l'ecrire >>. C'est la reponse au defaut mesure le meme jour
+    (ce fichier voyait 37 % de la facture), et elle est bien plus courte que la
+    reparation que j'avais annoncee : le releve ne touche pas les 67 endroits
+    qui LISENT le compteur, seulement l'endroit unique qui l'ECRIT.
+
+    Quel nombre. `deployed_apps` -- le calcul -- et non `metered_cost`, qui
+    ajoute le stockage ; le stockage est annule par `free_storage` et ne mange
+    donc pas le credit. Mesure du 20/09/2026 : metered_cost 4,66502664 =
+    deployed_apps 3,79706491 + volumes 0,86502664, free_storage -0,86502664,
+    credits -3,80. Le champ `credits` dit la meme chose, arrondi au cent : il
+    sert de repli quand `deployed_apps` manque.
+
+    Ce que cette fonction ne fait jamais : lever, ou lire un jeton. Elle passe
+    par depenses.py, qui lance la CLI en sous-processus et herite des jetons
+    poses dans l'environnement. Sans jeton, sans reseau ou sans la commande,
+    elle rend None en quelques millisecondes et le compteur reste sur son
+    estimation locale -- une page ne doit jamais dependre d'un service distant.
+    """
+    try:
+        import depenses  # importe ici : le module doit rester utilisable seul
+    except ImportError:
+        return None
+    try:
+        etat = depenses.etat(forcer=True)
+    except Exception:          # noqa: BLE001 -- un compteur ne tombe pas avec sa source
+        return None
+    if not etat.get("disponible"):
+        return None
+    montants = etat.get("montants") or {}
+    valeur = montants.get("calcul")
+    if valeur is None:
+        credits = montants.get("credits")
+        valeur = abs(credits) if credits is not None else None
+    if valeur is None:
+        return None
+    try:
+        return max(0.0, float(valeur))
+    except (TypeError, ValueError):
+        return None
 
 
 def _reprendre_les_anciens() -> dict:
@@ -280,6 +346,16 @@ def _relire() -> dict:
         except (ValueError, TypeError):
             pass
     etat["repris_des_anciens"] = list(brut.get("repris_des_anciens") or [])
+    # Le releve est garde tel quel s'il est lisible. Il porte deja sur le bon
+    # mois : la verification du mois est faite plus haut, et le releve est ecrit
+    # en meme temps que le reste du fichier.
+    try:
+        reel = brut.get("usd_reel")
+        etat["usd_reel"] = None if reel is None else float(reel)
+    except (ValueError, TypeError):
+        etat["usd_reel"] = None
+    horodatage = brut.get("usd_reel_le")
+    etat["usd_reel_le"] = horodatage if isinstance(horodatage, str) else None
     return etat
 
 
@@ -293,15 +369,19 @@ def _ecrire(etat: dict) -> None:
         "usd_par_usage": {u: round(etat["usd_par_usage"][u], 4) for u in USAGES},
         "appels": dict(etat["appels"]),
         "repris_des_anciens": etat["repris_des_anciens"],
+        "usd_reel": (None if etat.get("usd_reel") is None
+                     else round(float(etat["usd_reel"]), 4)),
+        "usd_reel_le": etat.get("usd_reel_le"),
         "note": "Compteur UNIQUE des depenses Modal, tous usages confondus : la "
                 "video, la chanson, le dialogue et le mode autonome du bac a "
-                "sable. Estimation locale, pas une facture : le compte qui fait "
-                "foi est celui de Modal. ET IL COMPTE MOINS QUE LA VRAIE "
-                "FACTURE : mesure le 20/09/2026 sur la meme periode, ce fichier "
-                "disait 1,39 $ quand Modal en facturait 3,80 $. Le chiffre a "
-                "regarder est celui de votre tableau de bord Modal, page "
-                "<< Usage & billing >>. Supprimez ce fichier pour repartir de "
-                "zero.",
+                "sable. `usd` est l'estimation locale d'apres les prix publics ; "
+                "`usd_reel` est ce que Modal dit avoir consomme du credit, releve "
+                "au moment ou ce fichier a ete ecrit. Le garde retient le PLUS "
+                "GRAND des deux : l'estimation compte trop peu (1,39 $ contre "
+                "3,80 $ mesures le 20/09/2026), et le releve, lui, a quelques "
+                "minutes de retard sur le dernier calcul. Le compte qui fait foi "
+                "reste celui de Modal, page << Usage & billing >>. Supprimez ce "
+                "fichier pour repartir de zero.",
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(FICHIER)
 
@@ -314,6 +394,18 @@ def lire() -> dict:
             # Le report ne vaut que s'il est ecrit : sinon il se referait a
             # chaque lecture et doublerait des la premiere depense.
             _ecrire(etat)
+    # L'estimation locale reste visible sous son nom : elle seule existe hors
+    # ligne, et c'est elle qu'on compare au releve pour voir l'ecart vivre.
+    etat["usd_estime"] = etat["usd"]
+    if etat.get("usd_reel") is not None:
+        # LE PLUS GRAND DES DEUX, et ce n'est pas un arrondi de confort : les
+        # deux nombres sont des MINORANTS de la vraie depense. L'estimation
+        # compte trop peu (memoire et processeur sous-evalues) ; le releve, lui,
+        # ignore encore le calcul qui vient de finir -- Modal previent que ses
+        # donnees arrivent << within minutes >>. Le plus grand de deux minorants
+        # est le meilleur minorant connu, et se tromper vers le haut est le bon
+        # sens du refus, comme pour une carte inconnue dans prix_seconde().
+        etat["usd"] = max(float(etat["usd_reel"]), etat["usd_estime"])
     etat["plafond_usd"] = PLAFOND_USD
     etat["credit_offert_usd"] = CREDIT_OFFERT_USD
     etat["prix_releve_le"] = PRIX_RELEVE_LE
@@ -437,6 +529,13 @@ def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int) 
     if usage not in USAGES:
         raise ValueError("usage inconnu : %r" % (usage,))
     secondes = max(0.0, float(secondes))
+    # LE RELEVE SE PREND ICI, HORS DU VERROU ET JUSTE AVANT D'ECRIRE (ordre du
+    # proprietaire du 20/09/2026). Hors du verrou parce qu'il dure environ
+    # 0,85 s -- mesure trois fois de suite dans le conteneur du decideur ce
+    # jour-la -- et qu'un verrou tenu pendant un aller-retour reseau ferait
+    # attendre toutes les autres pages. Juste avant d'ecrire parce que c'est le
+    # seul instant ou le chiffre sert : celui du refus suivant.
+    reel = _releve_reel()
     with _VERROU:
         etat = _relire()
         depense = prix_seconde(gpu, memoire_mb) * secondes
@@ -444,5 +543,8 @@ def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int) 
         etat["usd"] += depense
         etat["usd_par_usage"][usage] += depense
         etat["appels"][usage] += 1
+        if reel is not None:
+            etat["usd_reel"] = reel
+            etat["usd_reel_le"] = time.strftime("%Y-%m-%d %H:%M:%S")
         _ecrire(etat)
     return vue(usage)

@@ -1127,3 +1127,59 @@ de travaux, pas un coefficient. La réparation est de lire le vrai chiffre et de
 au garde ; `depenses.py` sait déjà appeler `modal billing summary`. Rayon **mesuré** : le
 garde est appelé dans **5 fichiers et 67 endroits**. C'est un chantier, donc un
 sous-plan — **GPU-7 dans `PLAN.md`**, avec ses cinq champs.
+
+### GPU-7 réparé — et c'est le propriétaire qui a raccourci le chantier
+
+J'avais annoncé un chantier : « le garde est appelé dans **5 fichiers et 67 endroits** ».
+Sa réponse : « *il suffit de relever le compteur juste avant de l'écrire* ».
+
+**Elle est juste, et mon rayon était le mauvais.** Les 67 endroits **lisent** le
+compteur ; ils n'en fixent pas la valeur. Un seul endroit l'**écrit** — `consommer()` —
+et c'est là que le relevé se prend. Le contrat de `lire()` et de `verifier()` ne change
+pas d'un champ ; seul le nombre devient vrai. Leçon générale : un rayon se mesure sur
+les **écrivains**, pas sur les lecteurs.
+
+**Ce qui a été vérifié avant d'écrire une ligne de code**, contre le vrai service :
+
+| question | mesure du 20/09/2026, dans le conteneur du décideur |
+|---|---|
+| le chemin existe-t-il ? | oui — `depenses.py` appelle `modal billing summary`, `disponible: True` |
+| combien coûte un relevé ? | **0,85 s**, trois fois de suite (0,85 / 0,86 / 0,82) |
+| quel nombre mange le crédit ? | `deployed_apps` = **3,79706491 $** — exactement la somme du CLI |
+| et le stockage ? | `volumes 0,865` **annulé** par `free_storage −0,865` : il ne mange rien |
+
+**Ce que le compteur porte maintenant** : `usd` (l'estimation locale, inchangée),
+`usd_reel` et `usd_reel_le` (le relevé et son heure). `lire()` rend **le plus grand des
+deux**, et ce n'est pas un arrondi de confort : les deux nombres sont des **minorants**
+de la vraie dépense — le nôtre sous-évalue mémoire et processeur, celui de Modal ignore
+encore le calcul qui vient de finir (« *within minutes* »). Le plus grand de deux
+minorants est le meilleur minorant connu, et se tromper vers le haut est le bon sens du
+refus — c'est déjà ce que fait `prix_seconde()` pour une carte inconnue.
+
+**La preuve, jouée en vrai** (module neuf chargé depuis `/tmp/neuf`, service en marche
+non touché, fichier de compteur jetable) :
+
+```
+releve reel, seul    : 3.79706491
+usd_estime (nous)    : 0.0503
+usd_reel   (Modal)   : 3.7971 le 2026-09-20 09:35:10
+usd retenu (le garde): 3.7971
+reste sur 30 $       : 11.2029      (plafond humain 15 $, la moitié est réservée)
+```
+
+**Hors ligne, rien ne change** : sans jeton, sans réseau ou sans la commande, le relevé
+rend `None` en quelques millisecondes et le garde refuse sur l'estimation locale, qui
+reste un plancher. Quatre tests le gardent, dont celui qui interdit au relevé de faire
+**reculer** le compteur — cassé exprès : avec la faute 1 échoué, fichier remis 1 passé.
+
+**Effet à annoncer, parce qu'il surprend** : le montant affiché **triple d'un coup**,
+1,39 $ devient 3,80 $. Rien n'a été dépensé pour autant — c'est le même mois, enfin
+compté.
+
+**Ce qui reste ouvert dans GPU-7, et c'est plus étroit** : l'estimation locale
+sous-compte toujours (mémoire et processeur), et c'est elle qui sert quand Modal est
+injoignable. Elle ne se corrige pas en multipliant par 2,74.
+
+**Pour que ce soit actif dans la pile qui tourne**, le code étant copié dans l'image :
+`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build sandbox-manager`.
+Ce redémarrage n'a **pas** été fait — c'est un service en marche que je n'ai pas lancé.
