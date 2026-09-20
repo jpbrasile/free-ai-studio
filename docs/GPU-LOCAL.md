@@ -372,7 +372,11 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   et sa phrase ; la page a dessiné cette réponse par sa propre fonction. **Ce qui n'a donc
   pas été refait au moment du rendu** : l'occupation de la carte, car trois `julia.exe`
   étaient présents et la règle du dépôt interdit alors de lancer quoi que ce soit dessus.
-  Le trajet « carte vraiment prise → 409 → boîte » reste mesuré par bouts, pas d'un tenant.
+  ~~Le trajet « carte vraiment prise → 409 → boîte » reste mesuré par bouts, pas d'un
+  tenant.~~ **Parcouru d'un seul tenant le 20/09 vers 08:25** — section « GPU-3 (a) » en
+  bas de ce document : occupation réelle par un clip de la maison, 409 réel à 9 351 Mo
+  libres, boîte affichée par la page. Reste non obtenu : **la capture d'écran**, la
+  fenêtre Chrome de cet onglet rendant un viewport de 0 × 0.
 
 ## Le modèle de la maison ne se voyait nulle part sur la page (19/09, 21:0x)
 
@@ -564,3 +568,39 @@ lit les deux fichiers et exige les quatre mêmes gestes : la surcouche seulement
 condition, le même dossier de poids, le même modèle sondé, et le nom du script de **son**
 côté. Un lanceur réparé seul fait rougir ce test. C'est la même mécanique que le garde-fou
 du 19/09 sur le dossier des poids : le défaut qui se répète est celui que rien ne mesure.
+
+## GPU-3 (a) — « la carte est prise », vu d'un seul tenant le 20/09/2026 vers 08:25
+
+Le 19/09, cette boîte avait été obtenue en deux morceaux : un relevé réel de la carte
+occupée, **rejoué** ensuite dans le module de décision, et la page qui dessinait la
+réponse. Entre les deux, le chemin n'avait jamais été parcouru d'une traite, parce que
+trois `julia.exe` tenaient la carte et que la règle du dépôt interdit alors d'y toucher.
+
+Cette fois, d'un bout à l'autre, et **sans rien prendre à personne** : l'occupation est un
+clip de la maison, gratuit, lancé sur une carte que la sonde déclarait libre (aucun
+`julia.exe`, 24 138 Mo).
+
+| heure | ce qui est mesuré |
+|---|---|
+| 08:21:33 | clip `eb427639` envoyé à la maison — « 24138 Mo libres pour 12841 demandés (marge 1024) » |
+| 08:22:14 → 08:23:14 | la mémoire libre tombe : 21 733 → 20 233 → 18 593 → 16 933 → 15 273 → **13 653 Mo**, sous les 13 865 qu'il faut |
+| 08:24 | deuxième demande, **HTTP 409** : « La carte est prise par un autre calcul. NVIDIA GeForce RTX 4090 : **9351 Mo libres, il en faut 13865** (12841 demandés + 1024 de marge). La carte est partagée : on va chez Modal, on n'arrête personne. » — `prix_estime_usd` 0,1142, sorties `attente` / `modal` / `annuler` |
+| 08:25 | **depuis la page, dans Chrome** : la boîte s'affiche, « NVIDIA GeForce RTX 4090 : **9.1 Go libres sur 24.0, il en faut 14.6.** Attendre ne coûte rien ; louer, si. », avec les trois boutons **J'attends**, **Louer chez Modal**, **Annuler** |
+| 08:27:50 | le clip finit, la mémoire revient (21 457 Mo libres) ; `succeeded`, 430,2 s, 953 999 octets, **0 $** |
+
+**Pourquoi 12,5 Go dans le 409 et 14,6 Go dans la boîte** — et ce n'est pas une
+incohérence : la demande faite en ligne de commande portait 3 secondes (12 841 Mo
+mesurés), celle de la page était sur 5 secondes (14 902 Mo). Deux durées, deux besoins,
+les deux mesurés et écrits dans `BESOIN_MO_MESURE`.
+
+**Rien n'a été cliqué dans la boîte** : ni « Louer » — qui aurait coûté 0,114 $ — ni
+« J'attends ». Ce qui est vérifié, c'est que la question est posée avec ses chiffres,
+pas ce que fait chaque bouton.
+
+**Ce qui n'a PAS pu être fait : la capture d'écran.** La fenêtre Chrome qui porte cet
+onglet rend un viewport de **0 × 0** — toute capture échoue sur « Cannot take screenshot
+with 0 width », et restaurer les fenêtres réduites n'y change rien, l'onglet vivant dans
+une fenêtre que Windows ne liste pas. Ce qui est consigné ci-dessus est donc le **texte
+rendu de la boîte**, lu dans la page après coup, pas une image. Le contenu, lui, vient
+bien du 409 réel : la page l'a fabriqué avec sa propre fonction, à partir de la réponse
+du serveur, pendant que la carte était prise.
