@@ -242,6 +242,26 @@ def test_la_date_de_remise_a_zero_est_dite_et_franchit_l_annee(budget):
     assert budget.premier_du_mois_suivant("2026-01") == "2026-02-01"
 
     etat = budget.lire()
-    assert etat["renouvele_le"] == budget.premier_du_mois_suivant(etat["mois"])
+    assert etat["compteur_remis_a_zero_le"] == budget.premier_du_mois_suivant(etat["mois"])
     # Et c'est bien une date posterieure au mois compte.
-    assert etat["renouvele_le"] > etat["mois"]
+    assert etat["compteur_remis_a_zero_le"] > etat["mois"]
+
+
+def test_le_champ_ne_se_fait_pas_passer_pour_la_date_de_modal(budget):
+    """Le 1er du mois est a NOUS, pas a Modal -- verifie le 20/09/2026.
+
+    Leurs pages disent << $30 / month free compute >> et << All Workspaces are
+    billed monthly >> ; le JOUR de remise a zero n'est ecrit nulle part, ni
+    dans les tarifs, ni dans la facturation, ni dans les budgets. Un
+    << 1er du mois >> avait ete affiche au client : il venait d'un resume de
+    moteur de recherche, pas de Modal. Le nom du champ porte desormais ce
+    qu'il mesure, et ce test empeche de le renommer en quelque chose qui
+    promet plus qu'on ne sait.
+    """
+    etat = budget.lire()
+    assert "renouvele_le" not in etat
+    assert "compteur_remis_a_zero_le" in etat
+    # Et la raison est ecrite la ou on la cherchera : dans le module.
+    doc = budget.premier_du_mois_suivant.__doc__
+    assert "PAS LA DATE DES 30 $ DE MODAL" in doc
+    assert "tableau de bord Modal" in doc

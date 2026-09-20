@@ -1,0 +1,18 @@
+# Les fins de ligne, declarees plutot que laissees au reglage de chaque poste.
+#
+# Trouve le 20/09/2026 : ce depot n'avait pas de `.gitattributes`. Les `.sh`
+# committes jusqu'ici sont bien en LF, mais par la grace du `core.autocrlf` de
+# la machine qui les a ecrits -- pas par une regle. Chez quelqu'un dont le
+# reglage differe, un `.sh` part en CRLF, et le client Linux recoit
+# << bad interpreter: /usr/bin/env bash^M >>, un message qui ne dit pas
+# pourquoi. Ce sont precisement les scripts qu'on lui demande de lancer.
+#
+# Portee volontairement etroite : pas de `* text=auto`, qui renormaliserait
+# tout le depot d'un coup.
+
+*.sh text eol=lf
+
+# Les lanceurs Windows restent en CRLF dans l'arbre de travail.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf

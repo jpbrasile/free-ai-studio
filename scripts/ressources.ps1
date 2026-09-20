@@ -197,15 +197,35 @@ if (Test-Path -LiteralPath $fichierBudget) {
 $reste = $credit - $depense
 if ($reste -lt 0) { $reste = 0 }
 
+# CE QUI EST SOURCE ET CE QUI NE L'EST PAS. Verifie sur les pages officielles
+# le 20/09/2026, apres que le proprietaire a demande << les jours exacts >> :
+#   - Modal publie << $30 / month free compute >> (modal.com/pricing) et
+#     << All Workspaces are billed monthly >> (docs/guide/billing). Le JOUR de
+#     remise a zero n'est ecrit NULLE PART chez eux -- ni tarifs, ni
+#     facturation, ni budgets. Le << 1er du mois >> qu'on affichait venait d'un
+#     resume de moteur de recherche, pas de Modal.
+#   - Gemini : << Requests per day (RPD) quotas reset at midnight Pacific
+#     time >> (ai.google.dev/gemini-api/docs/rate-limits). Seule date ecrite
+#     par un fournisseur.
+#   - OpenRouter : la page des limites donne les comptes par jour, pas l'heure.
+#   - Groq : pas d'heure fixe publiee ; l'API rend un COMPTE A REBOURS dans
+#     l'en-tete `x-ratelimit-reset-requests`.
+# D'ou la regle de ce bloc : le 1er du mois est a NOUS, pas a Modal.
 Write-Host "  Ce qui se remet a zero tout seul" -ForegroundColor Cyan
 Write-Host ""
 Write-Host ("  Modal (machines louees)   {0:N2} `$ depenses sur {1:N0} `$ ce mois-ci, reste {2:N2} `$" -f $depense, $credit, $reste)
-Write-Host ("                            remis a zero le {0}, et tous les 1ers du mois" -f (PremierDuMoisSuivant $moisCourant))
-Write-Host "                            (estimation d'apres les prix publics, PAS votre facture :"
-Write-Host "                             le compte qui fait foi est celui de Modal)"
-Write-Host "  Routes LLM gratuites      quotas par JOUR, remis a zero chaque jour"
-Write-Host "                            (Gemini : a minuit heure du Pacifique, soit 9 h chez nous)"
-Write-Host "                            le compte du jour est sur la page Cles du Studio"
+Write-Host ("                            NOTRE compteur repart le {0}, et tous les 1ers." -f (PremierDuMoisSuivant $moisCourant))
+Write-Host "                            Modal ne publie PAS le jour de ses 30 `$ : il dit"
+Write-Host "                            << facture au mois >>, sans dire lequel. La date qui"
+Write-Host "                            fait foi est celle de VOTRE cycle, sur modal.com."
+Write-Host "                            (nos chiffres : estimation d'apres les prix publics,"
+Write-Host "                             pas votre facture)"
+Write-Host "  Gemini                    quota du JOUR, remis a zero a minuit heure du"
+Write-Host "                            Pacifique, soit 9 h chez nous -- ecrit par Google"
+Write-Host "  OpenRouter                quota du JOUR ; l'heure n'est pas publiee"
+Write-Host "  Groq                      pas d'heure fixe : l'API rend un compte a rebours"
+Write-Host "  Le compte du jour est sur la page Cles du Studio."
+Write-Host "  (verifie le 20/09/2026 sur les pages officielles)"
 Write-Host ""
 
 if (-not $Vider) {

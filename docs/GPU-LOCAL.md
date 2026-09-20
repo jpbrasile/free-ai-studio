@@ -865,13 +865,43 @@ un calcul qui sera refusé.
 
 ```
   Modal (machines louées)   1.39 $ dépensés sur 30 $ ce mois-ci, reste 28.61 $
-                            remis à zéro le 01/10/2026, et tous les 1ers du mois
-                            (estimation d'après les prix publics, PAS votre facture :
-                             le compte qui fait foi est celui de Modal)
-  Routes LLM gratuites      quotas par JOUR, remis à zéro chaque jour
-                            (Gemini : à minuit heure du Pacifique, soit 9 h chez nous)
-                            le compte du jour est sur la page Clés du Studio
+                            NOTRE compteur repart le 01/10/2026, et tous les 1ers.
+                            Modal ne publie PAS le jour de ses 30 $ : il dit
+                            « facturé au mois », sans dire lequel. La date qui
+                            fait foi est celle de VOTRE cycle, sur modal.com.
+                            (nos chiffres : estimation d'après les prix publics,
+                             pas votre facture)
+  Gemini                    quota du JOUR, remis à zéro à minuit heure du
+                            Pacifique, soit 9 h chez nous — écrit par Google
+  OpenRouter                quota du JOUR ; l'heure n'est pas publiée
+  Groq                      pas d'heure fixe : l'API rend un compte à rebours
+  Le compte du jour est sur la page Clés du Studio.
+  (vérifié le 20/09/2026 sur les pages officielles)
 ```
+
+**Cette dernière forme est une correction, et elle vaut d'être racontée.** Le bloc
+annonçait d'abord, à côté du nom de Modal : « *remis à zéro le 01/10/2026, et tous les
+1ers du mois* ». Le propriétaire a relevé la phrase — « *web search pour retrouver les
+jours exacts* ». Vérification faite, page par page :
+
+| source | ce qu'elle dit vraiment |
+|---|---|
+| `modal.com/pricing` | « $30 / month free compute » — le montant, **pas** le jour |
+| `modal.com/docs/guide/billing` | « All Workspaces are billed monthly » — **pas** le jour |
+| `modal.com/docs/guide/budgets` | rien sur une remise à zéro |
+| `ai.google.dev/.../rate-limits` | « Requests per day (RPD) quotas reset at **midnight Pacific time** » |
+| `openrouter.ai/docs/api_reference/limits` | les comptes par jour (50, ou 1 000 au-delà de 10 $ de crédits) — **pas** l'heure |
+| `console.groq.com/docs/rate-limits` | aucune heure : l'API rend un **compte à rebours**, `x-ratelimit-reset-requests` |
+
+Le « 1er du mois » venait d'un **résumé de moteur de recherche**, pas de Modal. Il est
+vrai de *notre* compteur, dont la clé est `%Y-%m` ; il ne l'est pas du crédit du client,
+dont le cycle n'est écrit nulle part publiquement. Un client qui compte sur une date
+inventée lance un calcul qui sera refusé. Le champ rendu par le service s'appelle
+maintenant `compteur_remis_a_zero_le` et non `renouvele_le` — il dit ce qu'il mesure — et
+deux tests l'empêchent de reprendre du galon : l'un exige que toute ligne parlant du
+« 1er » dise **de qui** il est, l'autre que les trois fournisseurs soient distingués au
+lieu de recevoir le même « remis à zéro chaque jour », qui donnait le même niveau de
+certitude à une mesure et à deux suppositions.
 
 Le compteur se lit dans `config/modal-budget.json`, monté depuis le dépôt : **ni clé, ni
 Docker, ni service à démarrer**. La mise en garde de `budget_modal.py` remonte jusqu'au
@@ -882,8 +912,9 @@ publics, et la seule limite qui arrête vraiment la facture est celle réglée c
 rend dans `lire()`, pour que la page et le script annoncent la **même** — deux dates
 différentes sur le même compteur seraient pires que pas de date du tout. Un test garde
 le passage de décembre à janvier, la faute que tout calcul de date oublie. Et un test
-interdit d'écrire une date en clair dans les scripts : juste une fois, fausse pour
-toujours.
+interdit d'écrire une **date de remise à zéro** en clair dans les scripts : juste une
+fois, fausse pour toujours. Une date de **relevé**, elle, s'écrit en dur et doit
+l'être — elle dit quand les pages des fournisseurs ont été lues.
 
 **Ce qui a vraiment été exécuté.** Le fichier du compteur reculé d'un mois, puis remis :
 

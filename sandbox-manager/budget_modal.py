@@ -119,7 +119,7 @@ def _mois_courant() -> str:
 
 
 def premier_du_mois_suivant(mois: str) -> str:
-    """La date ou le compteur repart de zero, en AAAA-MM-JJ.
+    """La date ou NOTRE compteur repart de zero, en AAAA-MM-JJ.
 
     Ce n'est pas une politique de Modal : c'est la consequence de la cle
     `%Y-%m`, un mois neuf ne relisant pas l'ancien. Elle est rendue ICI pour
@@ -127,6 +127,16 @@ def premier_du_mois_suivant(mois: str) -> str:
     non chacune la sienne -- deux dates differentes sur le meme compteur, c'est
     un client qui attend une remise a zero deja faite, ou qui lance un calcul
     qui sera refuse.
+
+    ET CE N'EST PAS LA DATE DES 30 $ DE MODAL. Verifie le 20/09/2026 sur leurs
+    pages : modal.com/pricing dit << $30 / month free compute >>,
+    docs/guide/billing dit << All Workspaces are billed monthly >>, et le JOUR
+    de remise a zero n'est ecrit nulle part -- ni tarifs, ni facturation, ni
+    budgets. Un << 1er du mois >> avait ete affiche ici : il venait d'un resume
+    de moteur de recherche, pas de Modal. Le champ s'appelle donc
+    `compteur_remis_a_zero_le` et non `renouvele_le` : il dit ce qu'il mesure.
+    La date qui fait foi pour le credit reste celle du cycle du client, sur son
+    tableau de bord Modal.
     """
     annee, mois_n = int(mois[:4]), int(mois[5:7])
     mois_n += 1
@@ -231,7 +241,7 @@ def lire() -> dict:
     etat["plafond_usd"] = PLAFOND_USD
     etat["credit_offert_usd"] = CREDIT_OFFERT_USD
     etat["prix_releve_le"] = PRIX_RELEVE_LE
-    etat["renouvele_le"] = premier_du_mois_suivant(etat["mois"])
+    etat["compteur_remis_a_zero_le"] = premier_du_mois_suivant(etat["mois"])
     etat["reste_usd"] = max(0.0, PLAFOND_USD - etat["usd"])
     etat["reserve_autonome_usd"] = RESERVE_AUTONOME_USD
     etat["part_reservee_autonome"] = PART_RESERVEE_AUTONOME

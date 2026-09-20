@@ -146,7 +146,49 @@ def test_le_credit_modal_est_dit_avec_sa_date_de_remise_a_zero():
         # La cadence des routes gratuites est le jour, pas le mois : les
         # confondre, c'est promettre un quota qui ne reviendra pas ce soir.
         assert "JOUR" in source
-    assert "1ers du mois" in SH and "1ers du mois" in PS1
+
+
+def test_le_premier_du_mois_est_le_notre_et_jamais_celui_de_modal():
+    """LA correction du 20/09/2026, demandee par le proprietaire : << web search
+    pour retrouver les jours exacts >>.
+
+    Le bloc annoncait << remis a zero le 01/10/2026, et tous les 1ers du mois >>
+    a cote du nom de Modal. Verification faite sur leurs pages : ils publient
+    << $30 / month free compute >> et << All Workspaces are billed monthly >>,
+    et le JOUR n'est ecrit NULLE PART -- ni tarifs, ni facturation, ni budgets.
+    Le << 1er >> venait d'un resume de moteur de recherche. Il est vrai de
+    NOTRE compteur, dont la cle est `%Y-%m` ; il ne l'est pas du credit du
+    client. Un client qui compte sur une date inventee lance un calcul qui sera
+    refuse.
+    """
+    for source in (SH, PS1):
+        # Toute ligne qui parle du 1er doit dire de QUI il est.
+        for ligne in source.splitlines():
+            if "1ers" in ligne and not ligne.strip().startswith("#"):
+                assert "NOTRE" in ligne, ligne
+        assert "ne publie PAS le jour" in source
+        # Et la date qui fait foi est nommee : celle du client, chez eux.
+        assert "VOTRE cycle" in source
+        assert "modal.com" in source
+
+
+def test_chaque_fournisseur_dit_ce_qui_est_publie_et_ce_qui_ne_l_est_pas():
+    """Trois fournisseurs, trois reponses differentes -- et aucune inventee.
+
+    Google ECRIT sa date (<< RPD quotas reset at midnight Pacific time >>).
+    OpenRouter donne les comptes par jour mais pas l'heure. Groq ne publie
+    aucune heure fixe : son API rend un compte a rebours. Ecrire << remis a
+    zero chaque jour >> pour les trois, comme on le faisait, donnait le meme
+    niveau de certitude a une mesure et a deux suppositions.
+    """
+    for source in (SH, PS1):
+        assert "Pacifique" in source
+        assert "Google" in source
+        assert "OpenRouter" in source and "Groq" in source
+        assert "n'est pas publi" in source          # publiee / publiée
+        assert "compte a rebours" in source or "compte à rebours" in source
+        # La date du releve : une limite vieille d'un an se relit autrement.
+        assert "20/09/2026" in source
 
 
 def test_la_date_de_remise_a_zero_est_calculee_et_jamais_ecrite_en_dur():
@@ -158,6 +200,11 @@ def test_la_date_de_remise_a_zero_est_calculee_et_jamais_ecrite_en_dur():
             # cela laisse passer un `#` dans une chaine, il n'y en a pas ici,
             # et le jour ou il y en aura ce test le dira.
             code = ligne.split("#")[0]
+            if not any(m in code for m in ("repart", "remis a zero", "remis à zéro")):
+                # Une date de RELEVE s'ecrit en dur, et doit l'etre : elle dit
+                # quand les pages des fournisseurs ont ete lues. Seule une date
+                # de REMISE A ZERO ne doit jamais etre figee.
+                continue
             assert "/2026" not in code, ligne
             assert "/2027" not in code, ligne
 

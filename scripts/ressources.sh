@@ -211,15 +211,35 @@ depense="$(json_nombre "$BUDGET_MODAL" usd)"
 [ "$(json_texte "$BUDGET_MODAL" mois)" = "$MOIS" ] || depense=""
 [ -n "$depense" ] || depense=0
 
+# CE QUI EST SOURCÉ ET CE QUI NE L'EST PAS. Vérifié sur les pages officielles
+# le 20/09/2026, après que le propriétaire a demandé « les jours exacts » :
+#   - Modal publie « $30 / month free compute » (modal.com/pricing) et
+#     « All Workspaces are billed monthly » (docs/guide/billing). Le JOUR de
+#     remise à zéro n'est écrit NULLE PART chez eux -- ni tarifs, ni
+#     facturation, ni budgets. Le « 1er du mois » qu'on affichait venait d'un
+#     résumé de moteur de recherche, pas de Modal.
+#   - Gemini : « Requests per day (RPD) quotas reset at midnight Pacific time »
+#     (ai.google.dev/gemini-api/docs/rate-limits). Seule date écrite par un
+#     fournisseur.
+#   - OpenRouter : la page des limites donne les comptes par jour, pas l'heure.
+#   - Groq : pas d'heure fixe publiée ; l'API rend un COMPTE À REBOURS dans
+#     l'en-tête `x-ratelimit-reset-requests`.
+# D'où la règle de ce bloc : le 1er du mois est à NOUS, pas à Modal.
 echo "  Ce qui se remet à zéro tout seul"
 echo
 printf "  %s\n" "Modal (machines louées)   $(awk -v d="$depense" -v c="$credit" 'BEGIN{printf "%.2f $ dépensés sur %.0f $ ce mois-ci, reste %.2f $", d, c, (c-d<0?0:c-d)}')"
-printf "  %s\n" "                          remis à zéro le $(premier_du_mois_suivant "$MOIS"), et tous les 1ers du mois"
-echo "                            (estimation d'après les prix publics, PAS votre facture :"
-echo "                             le compte qui fait foi est celui de Modal)"
-echo "  Routes LLM gratuites      quotas par JOUR, remis à zéro chaque jour"
-echo "                            (Gemini : à minuit heure du Pacifique, soit 9 h chez nous)"
-echo "                            le compte du jour est sur la page Clés du Studio"
+printf "  %s\n" "                          NOTRE compteur repart le $(premier_du_mois_suivant "$MOIS"), et tous les 1ers."
+echo "                            Modal ne publie PAS le jour de ses 30 \$ : il dit"
+echo "                            « facturé au mois », sans dire lequel. La date qui"
+echo "                            fait foi est celle de VOTRE cycle, sur modal.com."
+echo "                            (nos chiffres : estimation d'après les prix publics,"
+echo "                             pas votre facture)"
+echo "  Gemini                    quota du JOUR, remis à zéro à minuit heure du"
+echo "                            Pacifique, soit 9 h chez nous — écrit par Google"
+echo "  OpenRouter                quota du JOUR ; l'heure n'est pas publiée"
+echo "  Groq                      pas d'heure fixe : l'API rend un compte à rebours"
+echo "  Le compte du jour est sur la page Clés du Studio."
+echo "  (vérifié le 20/09/2026 sur les pages officielles)"
 echo
 
 if [ -z "$cle" ]; then
