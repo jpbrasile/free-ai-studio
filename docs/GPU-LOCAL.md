@@ -1250,3 +1250,52 @@ dans les journaux du serveur). Piège rencontré et écrit dans le test : `subpr
 1 passé* : l'amorce qui n'écrit pas son relevé · le démarrage qui appelle l'amorce sans
 fil · la bannière qui redit « selon le Studio » · la bannière qui ne prévient plus du
 sous-compte. Suite complète **366 passés**, ruff propre.
+
+### Validation côté client — et la page qui dépense le plus ne disait rien
+
+Ordre du propriétaire : « *pousse et reconstruit et on valide côté client* ». Poussé
+(`7596c66..ce359dc`), reconstruit, puis les pages ouvertes **dans un vrai navigateur**,
+pas lues dans le code.
+
+| page | ce que le client lit maintenant |
+|---|---|
+| `/chanson` | « Dépensé sur Modal ce mois-ci **selon Modal** … **3.80 $** sur les 15.00 $ ouverts aux demandes… Chiffre **relevé chez Modal le 2026-09-20 09:54:00** : leur compte, pas le nôtre. Notre estimation locale … dit **1.39 $** — elle sous-compte. » |
+| `/video` | même phrase, même relevé |
+| `/dialogue` | même phrase, même relevé |
+
+Sous la bannière, l'autre bloc — celui qui interroge Modal directement — dit la même
+chose par un autre chemin : « facturé 0.00 $, mesuré 4.67 $, dont **calcul 3.80 $** et
+stockage 0.87 $, déduits : crédits −3.80 $, stockage offert −0.87 $ ». Les deux nombres
+se rejoignent, et le stockage s'annule sous les yeux du client.
+
+**Ce que la validation a trouvé** : la page `/essai` — celle d'où l'on envoie du code au
+Sandbox — **n'affichait aucun montant**. Or le code parti de là s'exécute avec
+`usage="autonome"` : il dépense, et sur **la part réservée**, les 15 $ que les trois
+autres pages ne peuvent pas entamer. Les trois pages créatives montrent un montant
+depuis le 19/09 ; celle qui puise dans la réserve, non.
+
+Corrigé dans le même tour, et la page le dit maintenant en une ligne :
+
+> Depense sur Modal ce mois-ci **selon Modal**, tous usages confondus : **3.80 $ sur
+> 30.00 $**. Ce que vous lancez ici est compte sur **la part du Sandbox : 15.00 $** que
+> les pages video, chanson et dialogue ne peuvent pas entamer, mais qui se depensent
+> d'ici. Chiffre **releve chez Modal** le 2026-09-20 10:03:08 ; notre estimation locale
+> dit **1.39 $**, elle sous-compte.
+
+*(La page `/essai` est écrite sans accents, comme le reste de son HTML ; la citation les
+conserve tels quels.)*
+
+La racine `/` reste sans montant, et **c'est voulu** : elle est servie sans clé, et
+`/budget/modal` est authentifiée parce qu'« elle rend des montants, pas des booléens ».
+`/essai`, elle, porte déjà la clé — c'est ce qui rend la réparation possible sans rien
+ouvrir.
+
+Trois tests de plus, dont deux qui **exécutent la fonction dans node**, et deux gardes
+cassés exprès (*la page ne demande plus le compteur* · *la phrase ne nomme plus la part
+réservée*) : **avec la faute 1 échoué, fichier remis 1 passé**, chacun. Suite complète
+**369 passés**, ruff propre.
+
+**Non obtenu** : aucune capture d'écran. `Page.captureScreenshot` expire au bout de 30 s
+sur cette machine — le même défaut de viewport que le 20/09 au matin. La preuve ci-dessus
+est le **texte rendu** par le navigateur après exécution du JavaScript, pas le code
+source des pages.

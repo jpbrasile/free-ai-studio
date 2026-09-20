@@ -1379,6 +1379,8 @@ backend choisi, la reponse revient ici.</p>
 
 <div id="banniere" class="banniere">Verification en cours...</div>
 
+<div id="budget" class="banniere">Budget Modal : verification en cours...</div>
+
 <div class="ligne">
   <label for="backend">Ou executer :</label>
   <select id="backend">
@@ -1419,6 +1421,32 @@ fetch("/etat").then(r => r.json()).then(d => {
   if(!d.modal.configure){ b.textContent += " Modal n'est pas branche : rien ne part sur une machine distante."; }
 }).catch(() => {
   document.getElementById("banniere").textContent = "Etat non verifiable : le service Sandbox ne repond pas.";
+});
+
+// Le code envoye d'ici part sur Modal avec usage="autonome" : il DEPENSE, et
+// cette page ne montrait aucun montant, alors que les pages video, chanson et
+// dialogue en montrent un. Trouve le 20/09/2026 en validant les trois autres
+// dans un navigateur. Meme fonction nommee que sur ces pages, pour que le test
+// puisse l'executer dans node au lieu de relire le code.
+function budgetTexte(b){
+  const reel = (b.usd_reel !== null && b.usd_reel !== undefined
+                && b.usd_reel >= b.usd_estime);
+  return "Depense sur Modal ce mois-ci " + (reel ? "selon Modal" : "selon le Studio")
+    + ", tous usages confondus : " + b.usd.toFixed(2) + " $ sur "
+    + b.plafond_usd.toFixed(2) + " $. Ce que vous lancez ici est compte sur la part du "
+    + "Sandbox : " + b.reserve_autonome_usd.toFixed(2) + " $ que les pages video, chanson "
+    + "et dialogue ne peuvent pas entamer, mais qui se depensent d'ici. "
+    + (reel
+       ? "Chiffre releve chez Modal le " + b.usd_reel_le + " ; notre estimation locale dit "
+         + b.usd_estime.toFixed(2) + " $, elle sous-compte."
+       : "Modal n'a pas repondu : c'est notre estimation locale, et elle sous-compte.");
+}
+
+fetch("/budget/modal", {headers: ENTETES}).then(r => r.json()).then(d => {
+  document.getElementById("budget").textContent = budgetTexte(d);
+}).catch(() => {
+  document.getElementById("budget").textContent =
+    "Budget non verifiable : le service Sandbox ne repond pas.";
 });
 
 function afficher(d){

@@ -560,3 +560,49 @@ def test_la_banniere_avoue_sous_compter_quand_modal_se_tait(
     assert "selon le Studio" in texte
     assert "sous-compte" in texte
     assert "relevé chez Modal" not in texte
+
+
+# --- 10. La page d'essai : elle depense, elle doit le dire -------------------
+
+def test_la_page_d_essai_montre_le_budget_et_dit_d_ou_il_vient(budget, monkeypatch, tmp_path):
+    """Trouve le 20/09/2026 en validant les trois autres pages dans un navigateur.
+
+    Le code envoye depuis /essai part sur Modal avec usage=<<autonome>> : il
+    depense, et sur la part reservee, celle que personne d'autre ne peut
+    entamer. La page n'affichait aucun montant. Les trois pages creatives en
+    montrent un depuis le 19/09.
+    """
+    budget.poser("autonome", secondes=4996.2, usd=1.3878, appels=29)
+    _faux_depenses(monkeypatch, {"calcul": 3.79706491})
+    budget.amorcer()
+    texte = _rendu(tmp_path, "app", budget.lire())
+    assert "selon Modal" in texte
+    assert "releve chez Modal" in texte
+    assert "3.80" in texte and "1.39" in texte
+    assert "part du Sandbox" in texte
+    assert "15.00 $ que les pages" in texte, "la part reservee doit etre nommee, en dollars"
+
+
+def test_la_page_d_essai_previent_quand_modal_se_tait(budget, monkeypatch, tmp_path):
+    """Hors ligne, le montant affiche est un PLANCHER, et la page le dit."""
+    budget.poser("autonome", secondes=4996.2, usd=1.3878, appels=29)
+    _faux_depenses(monkeypatch, {}, disponible=False)
+    budget.amorcer()
+    texte = _rendu(tmp_path, "app", budget.lire())
+    assert "selon le Studio" in texte
+    assert "sous-compte" in texte
+    assert "releve chez Modal" not in texte
+
+
+def test_la_page_d_essai_sert_bien_ce_budget(sandbox):
+    """La fonction ne sert a rien si la page ne l'appelle pas, ni si la boite
+    ou elle ecrit n'existe pas. Les deux ont deja manque ailleurs.
+    """
+    from conftest import RACINE
+    source = (RACINE / "sandbox-manager" / "app.py").read_text(encoding="utf-8")
+    debut = source.index("ESSAI_HTML")
+    fin = source.index("@app.get(\"/essai\"")
+    page = source[debut:fin]
+    assert 'id="budget"' in page, "la boite ou ecrire le montant a disparu"
+    assert 'fetch("/budget/modal"' in page, "la page ne demande plus le compteur"
+    assert "budgetTexte(d)" in page, "le montant n'est plus mis dans la page"
