@@ -863,14 +863,22 @@ function budgetTexte(b){
     + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
     + '<span class="avert">'
     + (reel
+       // Les 8 % décrivent la MÉTHODE de comptage, pas le total affiché : ce total court
+       // sur tout le mois et peut contenir des travaux comptés AVANT la correction des
+       // tarifs du 20/09/2026, à des prix trop bas. Mesuré ce jour-là sur cette page :
+       // 1,39 $ estimé contre 3,80 $ facturés, soit 37 % — annoncer 8 % sur CE nombre
+       // serait faux de loin.
        ? 'Chiffre <b>relevé chez Modal</b> le ' + b.usd_reel_le + ' : leur compte, pas '
          + 'le nôtre. Notre estimation locale, d’après les prix relevés le '
-         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $ — elle sous-compte '
-         + 'd’environ 8 %, le temps de processeur réellement utilisé dépassant le cœur '
-         + 'réservé. '
+         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $. La méthode '
+         + 'sous-compte d’environ 8 %, le temps de processeur réellement utilisé dépassant '
+         + 'le cœur réservé — et ce total peut contenir des travaux comptés avant le '
+         + b.prix_releve_le + ', à des tarifs plus bas. '
        : 'Estimation locale d’après les prix relevés le ' + b.prix_releve_le
-         + ', pas une facture : Modal n’a pas répondu. Elle <b>sous-compte d’environ 8 %</b> '
-         + '(le processeur réellement utilisé dépasse le cœur réservé, et cela ne se sait qu’après). ')
+         + ', pas une facture : Modal n’a pas répondu. La méthode <b>sous-compte d’environ '
+         + '8 %</b> (le processeur réellement utilisé dépasse le cœur réservé, et cela ne se '
+         + 'sait qu’après), et ce total peut contenir des travaux comptés avant cette date, '
+         + 'à des tarifs plus bas. ')
     + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
     + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
     + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '

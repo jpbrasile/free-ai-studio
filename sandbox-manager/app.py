@@ -1436,12 +1436,20 @@ function budgetTexte(b){
     + b.plafond_usd.toFixed(2) + " $. Ce que vous lancez ici est compte sur la part du "
     + "Sandbox : " + b.reserve_autonome_usd.toFixed(2) + " $ que les pages video, chanson "
     + "et dialogue ne peuvent pas entamer, mais qui se depensent d'ici. "
+    // Les 8 % decrivent la METHODE de comptage, pas le total affiche : ce total
+    // court sur tout le mois et peut contenir des travaux comptes AVANT la
+    // correction des tarifs du 20/09/2026, a des prix trop bas. Mesure faite ce
+    // jour-la sur cette page : 1,39 $ estime contre 3,80 $ factures, soit 37 % --
+    // annoncer << 8 % >> sur CE nombre-la serait faux de loin.
     + (reel
        ? "Chiffre releve chez Modal le " + b.usd_reel_le + " ; notre estimation locale dit "
-         + b.usd_estime.toFixed(2) + " $, elle sous-compte d'environ 8 % (le processeur "
-         + "reellement utilise depasse le coeur reserve)."
-       : "Modal n'a pas repondu : c'est notre estimation locale. Elle sous-compte "
-         + "d'environ 8 %, le processeur reellement utilise depassant le coeur reserve.");
+         + b.usd_estime.toFixed(2) + " $. La methode sous-compte d'environ 8 % (le processeur "
+         + "reellement utilise depasse le coeur reserve), et ce total peut contenir des travaux "
+         + "comptes avant le " + b.prix_releve_le + ", a des tarifs plus bas."
+       : "Modal n'a pas repondu : c'est notre estimation locale. La methode sous-compte "
+         + "d'environ 8 %, le processeur reellement utilise depassant le coeur reserve, et ce "
+         + "total peut contenir des travaux comptes avant le " + b.prix_releve_le
+         + ", a des tarifs plus bas.");
 }
 
 fetch("/budget/modal", {headers: ENTETES}).then(r => r.json()).then(d => {

@@ -15,8 +15,10 @@ Aucun appel reseau : Modal n'est jamais touche.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
+import unicodedata
 
 import pytest
 from fastapi.testclient import TestClient
@@ -701,3 +703,84 @@ def test_l_estimation_corrigee_retombe_sur_la_facture_du_20_09(budget):
     facture = 0.1579
     assert estime / facture > 0.90, "l'estimation retombe a moins de 90 % de la facture"
     assert estime <= facture, "une estimation au-dessus de la facture refuserait trop tot"
+
+
+# --- 12. Les 8 % qualifient la METHODE, jamais le total affiche --------------
+#
+# Defaut trouve le 20/09/2026 en relisant les quatre bannieres validees la
+# veille. La phrase disait : le total est de 3,80 $, et << elle sous-compte
+# d'environ 8 % >>. Le lecteur comprend << le vrai chiffre est 3,80 x 1,08 >>.
+# C'est faux. Les 8 % mesurent l'ecart entre le coeur RESERVE et le processeur
+# reellement utilise, sur un travail donne. Le total, lui, court sur tout le
+# mois et contient des travaux comptes AVANT la correction des tarifs du
+# 20/09/2026. Mesure du jour meme, sur ce meme compteur : 1,39 $ estime contre
+# 3,80 $ factures, soit 37 % d'ecart -- annoncer 8 % sur CE nombre-la est faux
+# de loin, et faux dans le sens qui rassure.
+
+
+def _texte_nu(texte: str) -> str:
+    """Le mot tel qu'on le compare : sans balises, sans accents, sans typographie.
+
+    Les trois pages creatives ecrivent en francais accentue et coupent parfois
+    le mot par un <b> ; app.py ecrit en ASCII. Une regle ecrite quatre fois
+    n'est gardee qu'une fois sur quatre le jour ou quelqu'un en oublie une.
+    """
+    sans_balises = re.sub(r"</?[a-zA-Z][^>]*>", "", texte)
+    decompose = unicodedata.normalize("NFKD", sans_balises)
+    return "".join(c for c in decompose if not unicodedata.combining(c))
+
+
+TOUTES_LES_BANNIERES = PAGES + [("app", None)]
+
+
+def _etat_de_banniere(budget, monkeypatch, nom_module, champ, modal_repond):
+    """L'etat que le serveur enverrait a CETTE page, Modal repondant ou non."""
+    budget.poser("autonome" if nom_module == "app" else nom_module,
+                 secondes=4996.2, usd=1.3878, appels=29)
+    if modal_repond:
+        _faux_depenses(monkeypatch, {"calcul": 3.79706491})
+    else:
+        _faux_depenses(monkeypatch, {}, disponible=False)
+    budget.amorcer()
+    if nom_module == "app":
+        return budget.lire()
+    etat = budget.vue(nom_module)
+    etat[champ] = 2
+    return etat
+
+
+@pytest.mark.parametrize("modal_repond", [True, False], ids=["modal_repond", "modal_muet"])
+@pytest.mark.parametrize("nom_module,champ", TOUTES_LES_BANNIERES)
+def test_les_8_pourcent_ne_qualifient_jamais_le_total_affiche(
+        budget, monkeypatch, tmp_path, nom_module, champ, modal_repond):
+    """CHAQUE mention de << sous-compte >> est precedee de << la methode >>.
+
+    La regle porte sur les occurrences et non sur une phrase entiere : c'est la
+    seule forme qui tombe encore si quelqu'un ajoute demain une cinquieme
+    banniere, ou une seconde mention dans une banniere existante.
+    """
+    etat = _etat_de_banniere(budget, monkeypatch, nom_module, champ, modal_repond)
+    texte = _texte_nu(_rendu(tmp_path, nom_module, etat))
+    mentions = [trouve.start() for trouve in re.finditer("sous-compte", texte)]
+    assert mentions, "la banniere n'avoue plus sous-compter"
+    for debut in mentions:
+        avant = texte[max(0, debut - 12):debut]
+        assert avant.endswith("methode "), (
+            "les 8 % sont accroches a << " + avant.strip() + " >> et non a la methode")
+
+
+@pytest.mark.parametrize("modal_repond", [True, False], ids=["modal_repond", "modal_muet"])
+@pytest.mark.parametrize("nom_module,champ", TOUTES_LES_BANNIERES)
+def test_le_total_affiche_dit_qu_il_contient_des_travaux_aux_anciens_tarifs(
+        budget, monkeypatch, tmp_path, nom_module, champ, modal_repond):
+    """Sans cette reserve, le total passe pour homogene alors qu'il ne l'est pas.
+
+    La date n'est pas ecrite en dur ici : elle vient de PRIX_RELEVE_LE, de sorte
+    qu'un releve de prix refait demain deplace la phrase et le test ensemble.
+    """
+    etat = _etat_de_banniere(budget, monkeypatch, nom_module, champ, modal_repond)
+    texte = _texte_nu(_rendu(tmp_path, nom_module, etat))
+    date = budget.PRIX_RELEVE_LE
+    assert "tarifs plus bas" in texte, "le total passe pour homogene"
+    assert ("avant le " + date) in texte or ("avant cette date" in texte and date in texte), (
+        "la reserve ne nomme pas la date du releve de prix")
