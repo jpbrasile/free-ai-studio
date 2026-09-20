@@ -23,6 +23,22 @@ services:
     environment:
       GPU_LOCAL_ACTIF: "${GPU_LOCAL_ACTIF:-true}"
       SANDBOX_WORKER_GPU_URL: http://sandbox-worker-gpu:8000
+      # Le decideur telecharge lui-meme les 34 Go quand un clip les demande
+      # (regle du 20/09 : vider une ressource ne doit pas fermer une porte,
+      # l'usage suivant la redescend). C'est LUI et pas le bac a sable parce
+      # qu'il est sur le reseau normal et n'execute jamais de code du client.
+      POIDS_VIDEO_DIR: /cache/huggingface
+      # Le meme dossier dit a Hugging Face lui-meme : le module passe deja
+      # `cache_dir`, ceci couvre tout autre appel de la bibliotheque, qui
+      # sinon ecrirait dans `/root/.cache/huggingface`, efface au redemarrage.
+      HF_HOME: /cache/huggingface
+      HF_HUB_DISABLE_XET: "1"
+    volumes:
+      # EXACTEMENT le meme dossier que le bac a sable monte ci-dessous : ce que
+      # le decideur descend, le bac a sable doit le lire. Deux chemins
+      # differents ici, c'est une heure de ligne pour rien et un Studio qui
+      # continue de dire que les poids manquent.
+      - ${GPU_MODELES_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/huggingface}:/cache/huggingface
     deploy:
       resources:
         reservations:

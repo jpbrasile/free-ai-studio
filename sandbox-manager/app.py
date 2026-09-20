@@ -31,6 +31,7 @@ import garde_exposition
 # annonce comme systematique. Bibliotheque standard seulement, rien a installer.
 import nettoyage_dialogue
 import ou_calculer
+import poids_video
 import video
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -1911,25 +1912,39 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
             write_job(jid, job)
 
 
-def maison_prete() -> tuple[bool, str]:
+def maison_prete() -> tuple[bool, str, bool]:
     """Le bac a sable de la carte a-t-il de quoi travailler, a cette seconde ?
 
     Il repond sur /health, qui dit aussi si les 34 Go de poids sont la. Ce
     detour vaut son appel : sans les poids, un clip routé << maison >>
     s'arrêterait au bout de dix minutes au lieu de partir tout de suite chez le
-    loueur. Une demi-seconde d'attente contre dix minutes perdues."""
+    loueur. Une demi-seconde d'attente contre dix minutes perdues.
+
+    Rend trois choses, et la troisieme est nouvelle (20/09) : *est-ce que ca
+    s'arrange tout seul ?* Une carte absente ne s'arrange pas -- le clip part
+    chez le loueur, point. Des poids manquants, si : on LANCE le telechargement
+    ici meme, et le client choisit d'attendre ou de payer. C'est la regle posee
+    par le proprietaire -- << si on supprime, l'usage de la ressource demandee
+    demarre par son telechargement >> -- et c'est ce qui rend le vidage de
+    `scripts/ressources.*` sans danger."""
     if not WORKER_GPU_URL:
-        return False, "Cet ordinateur n'a pas de carte branchee au Studio"
+        return False, "Cet ordinateur n'a pas de carte branchee au Studio", False
     try:
         with httpx.Client(timeout=2.0) as c:
             etat = c.get(WORKER_GPU_URL + "/health").json()
     except Exception as exc:
-        return False, "Le bac a sable de la carte ne repond pas (%s)" % type(exc).__name__
+        return False, "Le bac a sable de la carte ne repond pas (%s)" % type(exc).__name__, False
     if etat.get("poids_presents") is False:
+        # Demarre, ou continue : `demarrer()` ne relance rien s'il tourne deja.
+        e = poids_video.demarrer()
+        if e["possible"]:
+            return False, poids_video.phrase(e), True
+        # Le decideur ne voit pas le cache (surcouche GPU incomplete) : on ne
+        # peut pas telecharger a la place du client, on lui rend la commande.
         return False, ("Les 34 Go du modele video ne sont pas encore telecharges sur cet "
                        "ordinateur. Une seule fois, dans le dossier du Studio : "
-                       + video.commande_telechargement())
-    return True, ""
+                       + video.commande_telechargement()), False
+    return True, "", False
 
 
 def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
@@ -1945,7 +1960,28 @@ def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
       - l'absence de bac a sable GPU : sans la surcouche compose, il n'y a rien
         a router, et la question ne se pose meme pas.
     """
-    prete, motif = maison_prete()
+    prete, motif, ca_s_arrange = maison_prete()
+    if not prete and ca_s_arrange:
+        # Les poids se telechargent MAINTENANT, parce que ce clip les demande.
+        # Meme boite que pour une carte prise, et pour la meme raison : ce n'est
+        # pas une panne, c'est une attente dont le client connait le prix. La
+        # page relance toute seule toutes les 30 s ; quand les 34 Go sont la,
+        # le clip part ici et ne coute rien.
+        prix = video.prix_estime(plan["qualite"], plan["duree"])
+        attendre = bool(payload.get("attendre"))
+        return {
+            "ou": ou_calculer.ATTENTE if attendre else ou_calculer.ON_DEMANDE,
+            "reglage": ou_calculer.TOUJOURS_MAISON if attendre else ou_calculer.reglage_lu(),
+            "titre": "Le modèle vidéo se télécharge",
+            "pourquoi": motif + (
+                " Attendre ne coûte rien ; louer chez %s coûte %s."
+                % (loueur.capitalize(),
+                   ("environ %.3f $" % prix) if prix is not None else "ce que la page affiche")),
+            "besoin_mo": None,
+            "carte": {"vue": False, "motif": motif},
+            "prix_estime_usd": prix,
+            "sorties": [ou_calculer.ATTENTE, ou_calculer.MODAL, "annuler"],
+        }
     if not prete:
         return {
             "ou": ou_calculer.MODAL,
@@ -1983,6 +2019,19 @@ def video_budget(request: Request, authorization: Optional[str] = Header(default
         "kaggle_permis": raison is None,
         "kaggle_raison": raison,
     }
+
+
+@app.get("/video/poids/etat")
+def video_poids_etat(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Ou en sont les 34 Go du modele video, en chiffres.
+
+    Sert a deux choses : la page, qui montre l'avancement pendant l'attente, et
+    `scripts/ressources.*`, qui dit au client ce qu'il occupe et ce qu'il rend.
+    Ne DEMARRE rien : consulter n'est pas demander."""
+    auth(authorization)
+    e = poids_video.etat()
+    e["phrase"] = poids_video.phrase(e)
+    return e
 
 
 @app.get("/video/ou-calculer")

@@ -765,3 +765,143 @@ fait. Il affiche maintenant les Mo en dessous du Go (« 1,9 Mo rendus »).
 La copie d'essai de GPU-3(b), elle, a été **effacée le 20/09 sur ordre du propriétaire** :
 31,9 Go rendus, disque de 346,9 à **378,7 Go libres**, la copie lue par le Studio vérifiée
 intacte avant et après (32 fichiers, 31,85 Go).
+
+## GPU-5 — « nb Go par applis » : le client voit la place, et il la reprend
+
+Demande du propriétaire, 20/09 : « *mettre chez le client une fonction de vidage des
+ressources téléchargées via le studio, nb Go par applis* ».
+
+Jusqu'ici le Studio se comportait comme un invité qui pose ses valises dans le couloir :
+personne ne sait ce qu'elles pèsent, et personne ne sait lesquelles on peut sortir. Les
+34 Go du modèle vidéo étaient la seule pièce nommée quelque part, et seulement dans ce
+document-ci — que le client ne lit pas.
+
+`scripts/ressources.{sh,ps1}` — jumeaux, comme les trois autres paires. **Sans argument,
+ils ne suppriment rien : ils mesurent et ils affichent.** Mesure réelle sur cette
+machine, 20/09 :
+
+| application | ce qui est sur le disque | taille | clé |
+|---|---|---|---|
+| Vidéo à la maison | les 34 Go du modèle vidéo | 31,85 Go | `video-poids` |
+| Vidéo à la maison | le bac à sable qui sait parler à la carte | 5,95 Go | `video-image` |
+| Chat (Open WebUI) | l'application de conversation | 8,93 Go | `chat` |
+| Écoute des voix | les modèles qui transcrivent | 2,00 Go | `whisper` |
+| Le Studio lui-même | ses trois services | 1 002,0 Mo | `studio` |
+| **VOTRE TRAVAIL** | vos fichiers · vos conversations | 781,2 Mo · 1,05 Go | *aucune* |
+
+**Téléchargé : 49,70 Go. Votre travail : 1,81 Go.** Le total téléchargé est annoncé
+comme une **borne haute**, et le script le dit sur la ligne d'après : les images Docker
+partagent des morceaux, les additionner majore. Un total présenté comme exact serait
+faux de quelques Go sans que personne puisse le voir.
+
+**Ce qui ne s'efface pas d'ici.** Les deux volumes du travail — `sandbox-data`,
+`open-webui-data` — sont affichés, parce que le client a le droit de savoir ce qu'ils
+pèsent, et **refusés au vidage** : le script répond « c'est VOTRE travail » et imprime
+la commande manuelle, pour que la personne puisse le faire elle-même en connaissance de
+cause. Un `docker volume rm` de trop, et six mois de travail partent sans confirmation
+possible.
+
+**Pourquoi un script et pas un bouton dans la page.** Vider une image ou un volume Docker
+demande la prise `/var/run/docker.sock`. La monter dans le service web reviendrait à
+donner à n'importe quelle page — et au code quelconque qui tourne dans le bac à sable —
+les pleins pouvoirs sur la machine hôte. Aucune prise de ce genre n'est montée nulle part
+dans ce dépôt, et ce n'est pas pour une commodité de ménage qu'on ouvrirait la première.
+La raison est écrite en tête des deux scripts, à l'endroit où quelqu'un aura un jour
+l'idée de « simplifier ».
+
+### Le test qui gardait cette page était creux, et c'est la mutation qui l'a dit
+
+`test_le_travail_du_client_est_montre_mais_jamais_supprime` cherchait `docker volume rm`
+et `rm -rf` sur les lignes qui nomment le travail du client. Or les deux scripts passent
+par des fonctions — `vider_volume`, `ViderImage`. **Épreuve : j'ai ajouté à la main dans
+`ressources.sh` la faute exacte que le test doit attraper** (`menage) vider_volume
+"${PROJET}_sandbox-data"`), et le test **est passé** : « avec la faute -> code 0 :
+1 passed ». Il ne gardait rien.
+
+Corrigé — la garde regarde maintenant les appels **et** les commandes brutes, et saute
+les définitions de fonctions. Rejoué des deux côtés :
+
+| | avec la faute | fichier remis |
+|---|---|---|
+| `ressources.sh` | **code 1**, 1 failed | code 0, 6 passed |
+| `ressources.ps1` | **code 1**, 1 failed | code 0, 6 passed |
+
+Un test qui n'a jamais échoué n'est pas une garde, c'est une décoration. Celui-ci
+protégeait la seule chose irremplaçable de la machine.
+
+## GPU-6 — vider ne doit pas fermer une porte
+
+Ordre du propriétaire, dans le même tour : « *si on supprime, l'usage de la ressource
+demandée démarre par son téléchargement* ».
+
+Sans cette règle, la fonction de vidage ci-dessus était un piège. Le client rendait
+32 Go, redemandait un clip « à la maison », et le Studio le faisait **payer chez le
+loueur** en lui disant d'ouvrir un terminal et de lancer un script. Un débutant paie sans
+comprendre pourquoi, alors que le produit lui promet l'inverse.
+
+**Qui télécharge, et pourquoi ce n'est pas le bac à sable.** Le bac à sable qui fabrique
+les clips est sur un réseau **sans internet** (`internal: true`) : c'est ce qui rend sûr
+d'y exécuter du code quelconque, et on n'y touche pas. Le décideur, lui, est sur le
+réseau normal **et** sur le réseau interne, et n'exécute jamais de code du client. C'est
+donc lui qui va chercher les poids — dans le **même** dossier que le bac à sable lira
+ensuite, monté des deux côtés par `docker-compose.gpu.yml`.
+
+Ce que voit le client : la **même** boîte que pour une carte occupée, avec ses trois
+sorties — j'attends (la page redemande toutes les 30 s), je loue tout de suite, j'annule
+— et le compte qui avance : « *Le modèle vidéo (34 Go) se télécharge maintenant : 2 %
+faits. Encore environ 22 minutes. Une seule fois — les clips suivants repartent du
+disque.* »
+
+### Deux défauts, trouvés en jouant le chemin et non en le relisant
+
+**(a) « Le dossier existe » comptait pour « les poids sont là ».** Le bac à sable
+répondait `poids_presents: true` dès que le dossier existait. Tant que personne ne
+téléchargeait en arrière-plan, le cas ne se produisait guère ; à partir du moment où le
+Studio télécharge lui-même, **le dossier existe pendant les vingt-deux minutes où il se
+remplit**. Un clip routé « maison » à la troisième minute était perdu. Le défaut était
+**déjà livré** avant ce chantier — un téléchargement interrompu à la main produisait le
+même mensonge. Corrigé des deux côtés : aucun fichier `.incomplete`, **et** au moins 98 %
+des 34 203 034 754 octets mesurés.
+
+**(b) Le téléchargement écrivait à côté de l'endroit surveillé.** `snapshot_download`
+sans `cache_dir` écrit dans le dossier par défaut de Hugging Face — dans le conteneur,
+`/root/.cache/huggingface`, qui n'est pas monté et disparaît au redémarrage. **Mesuré, et
+c'est ce qui l'a révélé** : sonde lancée sur un dossier vide, **0 octet après 30 s** là où
+le Studio regarde, pendant que la page annonçait tranquillement « se télécharge : 0 %
+faits ». Une phrase rassurante posée sur rien, et 34 Go perdus au premier
+`docker compose up`. Aucun test ne pouvait le voir : les tests remplacent Hugging Face.
+
+Corrigé par une fonction unique, `cache_hub()`, qui sert **aux deux** usages — dire où
+écrire, et mesurer ce qui est arrivé — pour qu'ils ne *puissent* pas diverger ; plus
+`HF_HOME` dans le compose pour tout autre appel de la bibliothèque.
+
+### Ce qui a vraiment été exécuté
+
+Sonde relancée sur l'image corrigée, dossier vide, réseau réel :
+
+| | avant le correctif | après |
+|---|---|---|
+| t+6 s | 0 octet | 87 104 018 octets |
+| t+30 s | **0 octet** | **758 192 658 octets — 2,2 %** |
+| reste annoncé | *(aucun : 0 %, indéfiniment)* | **≈ 22 minutes** |
+| `present` | False | False — *le partiel ne compte pas pour « prêt »* |
+
+Le débit tombe sur la mesure de GPU-3(b) faite la veille (24,9 Mio/s, 21 min 51 s) : les
+deux chiffres viennent de deux chemins indépendants et se rejoignent.
+
+Et sur la pile qui tourne, poids présents, `GET /video/poids/etat` (qui **ne démarre
+jamais** rien) : `34 203 028 556 / 34 203 034 754 octets`, **100,0 %**, « Le modèle vidéo
+est sur cet ordinateur. » Appeler deux fois `demarrer()` ne lance qu'un téléchargement.
+
+Suite complète **340 passés**, ruff propre, `bash -n` sur les deux `.sh`, analyse
+syntaxique des deux `.ps1`, `verifier-imports` (3 services, 79 routes) et `verifier-js`
+(14 scripts) verts.
+
+### Non vérifié, dit tel quel
+
+Le **bout en bout** n'a pas été joué : effacer pour de vrai les 34 Go de cette machine,
+demander un clip depuis la page, et le voir sortir après le téléchargement. Il coûte
+22 minutes de ligne et la suppression du cache réel, qui est une décision du propriétaire
+de la machine — c'est précisément ce que GPU-4 a tranché. Ce qui est mesuré, c'est chaque
+morceau du chemin, dont le seul qui n'était pas testable autrement : les octets qui
+arrivent au bon endroit.

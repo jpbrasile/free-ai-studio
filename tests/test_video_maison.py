@@ -56,7 +56,7 @@ def studio(sandbox, monkeypatch):
     monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
     # Le bac a sable de la carte repond et porte ses 34 Go. Son absence et ses
     # poids manquants ont leurs propres tests, plus bas.
-    monkeypatch.setattr(sandbox, "maison_prete", lambda: (True, ""))
+    monkeypatch.setattr(sandbox, "maison_prete", lambda: (True, "", False))
     partis = []
     monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: partis.append(a))
     sandbox.partis = partis
@@ -204,8 +204,11 @@ def test_sans_poids_le_clip_part_chez_le_loueur_au_lieu_d_echouer_dix_minutes_pl
     monkeypatch.setattr(sandbox, "WORKER_GPU_URL", GPU_URL)
     monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
     monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: None)
+    # Troisieme valeur False : ce Studio-la ne peut PAS telecharger lui-meme
+    # (pas de cache monte dans le decideur), donc le clip part chez le loueur.
+    # Le cas ou il peut a son propre test, juste en dessous.
     monkeypatch.setattr(sandbox, "maison_prete",
-                        lambda: (False, "Les 34 Go du modele video ne sont pas encore telecharges"))
+                        lambda: (False, "Les 34 Go du modele video ne sont pas encore telecharges", False))
     monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "utilisable",
                         lambda *a, **k: pytest.fail("la carte ne doit pas etre sondee"))
     fiche = creer(sandbox).json()
@@ -231,12 +234,15 @@ def test_maison_prete_lit_ce_que_le_bac_a_sable_repond(sandbox, monkeypatch):
     monkeypatch.setattr(sandbox, "WORKER_GPU_URL", GPU_URL)
     monkeypatch.setattr(sandbox.httpx, "Client",
                         lambda **k: FauxClient({"ok": True, "poids_presents": True}))
-    assert sandbox.maison_prete() == (True, "")
+    assert sandbox.maison_prete() == (True, "", False)
 
     monkeypatch.setattr(sandbox.httpx, "Client",
                         lambda **k: FauxClient({"ok": True, "poids_presents": False}))
-    prete, motif = sandbox.maison_prete()
+    prete, motif, ca_s_arrange = sandbox.maison_prete()
     assert prete is False and "telecharger-modele-video" in motif
+    # Sans cache monte dans le decideur, il ne peut pas telecharger a la place
+    # du client : il lui rend la commande, et ca ne s'arrange pas tout seul.
+    assert ca_s_arrange is False
 
 
 def test_sans_bac_a_sable_gpu_l_execution_maison_refuse_clairement(sandbox):

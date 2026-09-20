@@ -1059,11 +1059,15 @@ function demanderAuClient(d){
     : (d.pourquoi || "");
   boite.hidden = false;
 
+  // `titre` n'arrive que quand ce n'est PAS la carte qui bloque -- aujourd'hui
+  // le modèle qui se télécharge. Sans lui, la boîte dirait « la carte est
+  // prise » pendant que le Studio descend 34 Go, ce qui est faux et inquiète.
   if(d.ou === "attente"){
     const depuis = ATTENTE_DEPUIS ? Math.round((Date.now() - ATTENTE_DEPUIS)/1000) : 0;
-    boite.innerHTML = "<h3>⏸ J’attends la carte</h3>"
+    boite.innerHTML = "<h3>⏸ " + (d.titre ? d.titre : "J’attends la carte") + "</h3>"
       + '<div class="chiffres">' + chiffres + " Nouvel essai toutes les 30 secondes ; "
-      + "j’attends depuis " + depuis + " s. On n’arrête jamais le calcul qui tient la carte.</div>"
+      + "j’attends depuis " + depuis + " s."
+      + (d.titre ? "" : " On n’arrête jamais le calcul qui tient la carte.") + "</div>"
       + '<div class="ligne">'
       + '<button class="primaire" id="btLouer">Louer chez ' + (document.getElementById("ou").value === "kaggle" ? "Kaggle" : "Modal") + prix(d) + '</button>'
       + '<button id="btAnnuler">Annuler</button></div>';
@@ -1079,7 +1083,7 @@ function demanderAuClient(d){
   }
 
   // « on-demande » : trois sorties, et le prix AVANT, pas après.
-  boite.innerHTML = "<h3>La carte de cet ordinateur est prise</h3>"
+  boite.innerHTML = "<h3>" + (d.titre ? d.titre : "La carte de cet ordinateur est prise") + "</h3>"
     + '<div class="chiffres">' + chiffres + " Attendre ne coûte rien ; louer, si.</div>"
     + '<div class="ligne">'
     + '<button class="primaire" id="btAttendre">J’attends</button>'

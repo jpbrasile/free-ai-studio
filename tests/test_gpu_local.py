@@ -154,10 +154,25 @@ def test_le_compose_et_le_script_visent_le_meme_dossier_de_poids():
     compose = (RACINE / "docker-compose.gpu.yml").read_text(encoding="utf-8")
     script = (RACINE / "scripts" / "telecharger-modele-video.ps1").read_text(encoding="utf-8")
 
-    montage = [l for l in compose.splitlines() if "/cache/huggingface" in l and "- $" in l]
-    assert len(montage) == 1, montage
+    montage = [l.strip() for l in compose.splitlines()
+               if "/cache/huggingface" in l and "- $" in l]
+    # Deux depuis le 20/09 : le bac a sable LIT les poids, le decideur les
+    # TELECHARGE (regle du proprietaire : vider une ressource ne doit pas fermer
+    # une porte). Le nombre importe peu ; ce qui doit etre vrai, c'est qu'ils
+    # visent TOUS le meme dossier. Deux chemins differents ici, c'est 34 Go
+    # descendus la ou personne ne les lit, et un Studio qui continue de dire
+    # qu'ils manquent.
+    assert len(montage) >= 1, montage
+    assert len(set(montage)) == 1, montage
     assert "GPU_MODELES_DIR" in montage[0]
     assert ".cache/huggingface" in montage[0]
+    # Et le decideur doit savoir ou il ecrit, sinon il ne telecharge rien.
+    assert "POIDS_VIDEO_DIR: /cache/huggingface" in compose
+    # `HF_HOME` couvre tout appel de la bibliotheque qui ne passerait pas par
+    # notre module : sans lui, il ecrit dans `/root/.cache/huggingface`, qui
+    # n'est pas monte et disparait au redemarrage (mesure du 20/09 : 0 octet
+    # arrive la ou le Studio regarde).
+    assert compose.count("HF_HOME: /cache/huggingface") == 2
 
     assert "$env:GPU_MODELES_DIR" in script
     assert r'".cache\huggingface"' in script

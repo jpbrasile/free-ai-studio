@@ -44,8 +44,35 @@ def health():
     # ailleurs AVANT de lancer un clip qui echouerait dix minutes plus tard.
     if POIDS:
         etat["poids_chemin"] = POIDS
-        etat["poids_presents"] = Path(POIDS).is_dir()
+        etat["poids_presents"] = poids_complets()
     return etat
+
+
+# Depuis le 20/09, le Studio telecharge ces poids LUI-MEME des qu'un clip les
+# demande : le dossier existe donc pendant les vingt-deux minutes ou il se
+# remplit. << Le dossier existe >> ne peut plus vouloir dire << pret >>, sans
+# quoi le gestionnaire routerait un clip ici au bout de trois minutes et le
+# perdrait -- et c'etait deja vrai d'un telechargement interrompu a la main.
+# Deux marques, les memes que cote gestionnaire : aucun fichier `.incomplete`
+# (huggingface_hub les nomme ainsi pendant qu'il ecrit) et au moins 98 % des
+# 34 203 034 754 octets mesures le 20/09.
+POIDS_OCTETS = int(os.getenv("SANDBOX_POIDS_OCTETS", "34203034754"))
+
+
+def poids_complets() -> bool:
+    dossier = Path(POIDS)
+    if not dossier.is_dir():
+        return False
+    total = 0
+    try:
+        for f in dossier.rglob("*"):
+            if f.name.endswith(".incomplete"):
+                return False
+            if f.is_file():
+                total += f.stat().st_size
+    except OSError:
+        return False
+    return total >= 0.98 * POIDS_OCTETS
 
 @app.post("/run")
 def run(req: RunRequest, authorization: Optional[str] = Header(default=None)):
