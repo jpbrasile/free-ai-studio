@@ -396,22 +396,38 @@ Free AI Studio **assemble des paliers gratuits** ; il n’est pas un studio open
 chaque fonction, qui fait le travail, et pourriez-vous le faire tourner vous-même ?
 Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 
-| Fonction | Fournisseur, modèle | Nature | Licence |
-|---|---|---|---|
-| Chat, Free AI Auto | Google, `gemini-3.5-flash-lite` | API propriétaire, palier gratuit | poids non publiés ; conditions de l’API Gemini |
-| Chat, Free AI Max | Google, `gemini-3.8-flash`, puis la chaîne d’Auto | API propriétaire, palier gratuit, quota à part | poids non publiés ; conditions de l’API Gemini |
-| Chat (1er secours) | OpenRouter, `openrouter/free` | API tierce, palier gratuit ; le modèle servi change d’une requête à l’autre, ouvert ou non | celle du modèle routé, variable |
-| Chat (2e secours, si activé) | Groq, `openai/gpt-oss-20b` | modèle ouvert exécuté à distance, par un service propriétaire | Apache 2.0 ([fiche](https://huggingface.co/openai/gpt-oss-20b)) |
-| Lecture d’image | Google, modèle du chat | API propriétaire, palier gratuit | poids non publiés |
-| Fabrication d’image | Google, `gemini-3.1-flash-lite-image` | API propriétaire, palier gratuit | poids non publiés |
-| Recherche Web | DuckDuckGo | service tiers, sans compte | conditions de DuckDuckGo |
-| Lire à haute voix (16/09/2026) | Piper 1.8.0 et deux voix, `fr_FR-siwis-medium` et `en_US-norman-medium`, dans le routeur du Studio, sur le processeur | modèles ouverts exécutés localement | Piper : GPL-3.0-or-later ([code](https://github.com/OHF-Voice/piper1-gpl)). Voix française : entraînée sur « The SIWIS French Speech Synthesis Database » (J. Yamagishi, P.-E. Honnet, P. Garner, A. Lazaridis, université d’Édimbourg, 2017, [doi:10.7488/ds/1705](https://doi.org/10.7488/ds/1705)), **CC BY 4.0** : usage commercial permis, en citant la source ([fiche de la voix](https://huggingface.co/rhasspy/piper-voices/blob/main/fr/fr_FR/siwis/medium/MODEL_CARD)). Voix anglaise : entraînée de zéro sur environ 15,5 h d’enregistrements [LibriVox](https://librivox.org), **domaine public** ([fiche de la voix](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/norman/medium/MODEL_CARD)) |
-| Dictée « sur cet ordinateur », et repli quand Groq refuse | Whisper `small`, dans le routeur du Studio, sur le processeur | modèle ouvert exécuté localement | MIT ([fiche](https://huggingface.co/Systran/faster-whisper-small), [licence](https://github.com/openai/whisper/blob/main/LICENSE)) |
-| Dictée « Groq si possible », avec une clé Groq | Groq, `whisper-large-v3` | modèle ouvert exécuté à distance, par un service propriétaire ; votre voix part chez Groq | Apache 2.0 ([fiche](https://huggingface.co/openai/whisper-large-v3)) |
-| Vidéo | Wan 2.1 VACE 1,3 B ou 14 B, sur Modal (ou Kaggle) | modèle ouvert exécuté à distance, sur une machine louée | Apache 2.0, aucune restriction de territoire ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B)) |
-| Chanson (15/09/2026) | m-a-p, YuE2-3B et son décodeur YuE2-Vae, sur Modal, Kaggle ou Colab | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | poids : **CC BY-NC 4.0, usage non commercial**, aucune restriction de territoire ; code `yue2_infer` : Apache 2.0 ([fiche](https://huggingface.co/m-a-p/YuE2-3B)). Correctifs T4 repris du carnet Kaggle d’AIQUEST Academy, Apache 2.0 |
+<!-- TABLEAU-LICENCES: engendre par scripts/generer-tableau-readme.py -->
 
-Seules la voix, et la dictée « sur cet ordinateur », ne dépendent d’aucun tiers. La vidéo, la chanson et le 2e secours du chat
+| Fonction | Fournisseur, modèle | Nature | Licence, territoire |
+|---|---|---|---|
+| Chat, Free AI Auto | Google, `gemini-3.5-flash-lite` | API propriétaire, palier gratuit | poids non publiés ; conditions de l'API Gemini ([fiche](https://ai.google.dev/gemini-api/terms)) ; territoire : celui des conditions Gemini |
+| Chat, Free AI Max | Google, `gemini-3.8-flash` | API propriétaire, palier gratuit, quota compté à part | poids non publiés ; conditions de l'API Gemini ([fiche](https://ai.google.dev/gemini-api/terms)) ; territoire : celui des conditions Gemini |
+| Chat, premier secours | OpenRouter, `openrouter/free` | API tierce, palier gratuit ; le modèle servi change d'une requête à l'autre, ouvert ou non | celle du modèle routé, variable ([fiche](https://openrouter.ai/models)) ; territoire : variable |
+| Chat, second secours (si activé) | Groq, `openai/gpt-oss-20b` | modèle ouvert exécuté à distance, par un service propriétaire | Apache 2.0 ([fiche](https://huggingface.co/openai/gpt-oss-20b)) ; territoire : aucune restriction de pays |
+| Lecture d'image | Google, `gemini-3.5-flash-lite` | API propriétaire, palier gratuit ; le modèle du chat | poids non publiés ; conditions de l'API Gemini ([fiche](https://ai.google.dev/gemini-api/terms)) ; territoire : celui des conditions Gemini |
+| Fabrication d'image | Google, `gemini-3.1-flash-lite-image` | API propriétaire, palier gratuit | poids non publiés ; conditions de l'API Gemini ([fiche](https://ai.google.dev/gemini-api/terms)) ; territoire : celui des conditions Gemini |
+| Recherche Web | DuckDuckGo | service tiers, sans compte | conditions de DuckDuckGo ([fiche](https://duckduckgo.com/terms)) ; territoire : aucune restriction connue |
+| Lire à haute voix, français | Piper, dans le routeur du Studio, `fr_FR-siwis-medium` | modèle ouvert exécuté sur le processeur de ce PC ; le texte ne quitte pas la machine | Piper : GPL-3.0-or-later. Voix : CC BY 4.0 (base SIWIS, université d'Édimbourg, doi:10.7488/ds/1705) — usage commercial permis en citant la source ([fiche](https://huggingface.co/rhasspy/piper-voices/blob/main/fr/fr_FR/siwis/medium/MODEL_CARD)) ; territoire : aucune restriction de pays |
+| Lire à haute voix, anglais | Piper, dans le routeur du Studio, `en_US-norman-medium` | modèle ouvert exécuté sur le processeur de ce PC ; le texte ne quitte pas la machine | Piper : GPL-3.0-or-later. Voix : domaine public (environ 15,5 h d'enregistrements LibriVox, entraînée de zéro) ([fiche](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/norman/medium/MODEL_CARD)) ; territoire : aucune restriction de pays |
+| Dictée « sur cet ordinateur », et repli quand Groq refuse | Whisper, dans le routeur du Studio, `small` | modèle ouvert exécuté sur le processeur de ce PC ; la voix ne quitte pas la machine | MIT ([fiche](https://huggingface.co/Systran/faster-whisper-small)) ; territoire : aucune restriction de pays |
+| Dictée « Groq si possible » | Groq, `whisper-large-v3` | modèle ouvert exécuté à distance, par un service propriétaire ; votre voix part chez Groq | Apache 2.0 ([fiche](https://huggingface.co/openai/whisper-large-v3)) ; territoire : aucune restriction de pays |
+| Vidéo, qualité « Rapide » (si on loue) | Wan-AI, `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | Apache 2.0 ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B)) ; territoire : aucune restriction de pays |
+| Vidéo, qualité « Soignée » (si on loue) | Wan-AI, `Wan-AI/Wan2.1-VACE-14B-diffusers` | modèle ouvert exécuté à distance, sur une machine louée | Apache 2.0 ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B)) ; territoire : aucune restriction de pays |
+| Vidéo fabriquée À LA MAISON, sur la carte de ce PC <sup>1</sup> | Wan-AI, `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | modèle ouvert exécuté sur la carte graphique de ce PC ; rien ne part chez personne | Apache 2.0 ([fiche](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers)) ; territoire : aucune restriction de pays |
+| Chanson <sup>2</sup> | m-a-p, `m-a-p/YuE2-3B` | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | poids : CC BY-NC 4.0, USAGE NON COMMERCIAL ; code `yue2_infer` : Apache 2.0 ([fiche](https://huggingface.co/m-a-p/YuE2-3B)) ; territoire : aucune restriction de pays |
+| Dialogue à plusieurs voix <sup>3</sup> | FireRedTeam, `FireRedTeam/FireRedTTS2` | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | Apache 2.0 — la licence elle-même n'interdit rien, usage commercial compris ([fiche](https://huggingface.co/FireRedTeam/FireRedTTS2)) ; territoire : aucune restriction de pays trouvée |
+
+**Ce que la seule licence ne dit pas :**
+
+1. **Vidéo fabriquée À LA MAISON, sur la carte de ce PC** — Place sur la carte MESURÉE, pas estimée : 12 841 Mo pour un clip de 3 s, 14 902 Mo pour 5 s (`ou_calculer.BESOIN_MO_MESURE`). Une durée absente de cette table part chez le loueur, avec son motif : on ne lance pas un travail sur un chiffre supposé. Ce modèle n'a pas de VACE — l'image de fin et l'image de référence ne peuvent pas être fabriquées ici, elles partent chez le loueur et la page le dit.
+2. **Chanson** — Anglais et chinois. Version instrumentale : la LoRA `Mothersuperior/YuE2-instrumental-cot-full-loras`, CC BY-NC 4.0 elle aussi. Correctifs T4 repris du carnet Kaggle d'AIQUEST Academy, Apache 2.0, et attribués.
+3. **Dialogue à plusieurs voix** — RÉSERVE DES AUTEURS, qui n'est pas dans la licence : leur README écrit que cette capacité est « intended solely for academic research purposes ». Une licence Apache 2.0 et cette phrase ne disent pas la même chose ; le Studio affiche LES DEUX, là où le modèle se choisit. « Territoire : aucune restriction TROUVÉE » n'est pas « aucune restriction » : deux vérifications indépendantes n'ont rien montré, le fichier de licence brut n'a pas été lu ligne à ligne. Anglais, chinois, japonais, coréen, français, allemand et russe ; 4 locuteurs, 3 minutes au plus.
+
+*Tableau engendré depuis `registry/apps.json` ; la date de la dernière lecture de chaque licence y est écrite, champ `verifie_le`. Ne pas le modifier à la main : `python scripts/generer-tableau-readme.py`.*
+
+<!-- FIN-TABLEAU-LICENCES -->
+
+Trois choses ne dépendent d’aucun tiers : la voix, la dictée « sur cet ordinateur », et **la vidéo fabriquée à la maison** — celle-là tourne sur la carte graphique de votre PC, gratuitement, depuis le 19/09/2026. La vidéo louée, la chanson, le dialogue et le 2e secours du chat
 reposent sur des modèles ouverts que vous pourriez faire tourner vous-même, avec la carte
 graphique qu’il faut. Tout le reste dépend d’un fournisseur qui peut changer son offre.
 
