@@ -71,6 +71,12 @@ services:
       # sa machine. Ces deux reglages le coupent quand le Studio sert d'autres
       # personnes (voir docs/GPU_CLOUD.md).
       STUDIO_HEBERGE: ${STUDIO_HEBERGE:-false}
+      # Sous quel systeme le Studio a ete lance : ce conteneur est Linux quelle
+      # que soit la machine, il ne peut pas le deviner. Pose par le lanceur
+      # (`scripts/demarrer.ps1` -> windows, `start.sh` -> linux). Vide, les
+      # messages nomment les deux scripts de telechargement au lieu d'en
+      # inventer un. Rien d'autre n'en depend.
+      STUDIO_LANCEUR: ${STUDIO_LANCEUR:-}
       # La MEME chaine que celle des ports ci-dessous. Une variable qui ouvre
       # le port et que le service relit : on ne peut pas publier sur le reseau
       # sans que garde_exposition.py le voie. Une declaration se trompe, ceci

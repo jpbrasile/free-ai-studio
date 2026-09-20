@@ -353,13 +353,16 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
   (tenu par un test, jamais vu en vrai), le script de téléchargement `telecharger-modele-
   video.ps1` ~~**jamais exécuté**~~ (exécuté le 19/09 à 21:5x, voir plus bas), et ~~la boîte
   « la carte est prise » **vue dans un navigateur**~~ (ligne suivante).
-- **Le chantier ne marche que sous Windows aujourd'hui, et ce n'est écrit nulle part
-  ailleurs.** Seul `scripts/demarrer.ps1` ajoute `-f docker-compose.gpu.yml` ; `start.sh` ne
-  le fait pas, et il n'existe pas de jumeau `.sh` du script de téléchargement. Un débutant
-  sous Linux avec une carte obtient donc le comportement d'avant le chantier — tout est
-  loué — **sans un mot**. Mesuré par `grep -rn docker-compose.gpu.yml` : sept fichiers le
-  nomment, aucun n'est un `.sh`. Ce n'est pas réparé ici : c'est un chantier (lanceur,
-  script de téléchargement, message qui nomme le bon script), pas une demi-ligne.
+- ~~**Le chantier ne marche que sous Windows aujourd'hui, et ce n'est écrit nulle part
+  ailleurs.**~~ **Les trois pièces sont écrites le 20/09** (`start.sh`,
+  `scripts/telecharger-modele-video.sh`, le message qui nomme le bon script) — section
+  « GPU-1 » en bas de ce document. *Énoncé d'origine, gardé :* seul `scripts/demarrer.ps1`
+  ajoutait `-f docker-compose.gpu.yml` ; `start.sh` ne le faisait pas, et il n'existait pas
+  de jumeau `.sh` du script de téléchargement. Un débutant sous Linux avec une carte
+  obtenait donc le comportement d'avant le chantier — tout est loué — **sans un mot**.
+  Mesuré par `grep -rn docker-compose.gpu.yml` : sept fichiers le nommaient, aucun n'était
+  un `.sh`. **Ce qui reste non vérifié, et qui n'est pas la même chose** : rien de tout
+  cela n'a jamais tourné SOUS Linux — cette machine est sous Windows.
 - ~~La boîte « la carte est prise » vue à l'écran.~~ **Vue le 19/09 vers 21:10.** Elle
   affiche « NVIDIA GeForce RTX 4090 : 3.2 Go libres sur 24.0, il en faut 12.5 », puis les
   trois sorties « J'attends », « Louer chez Modal — environ 0,114 $ » et « Annuler ».
@@ -498,3 +501,66 @@ regarder, pas seulement compter les octets. Ce qui est établi, en revanche : **
 chantier.
 
 Les deux fichiers et les deux images sont dans `C:\Users\test\Documents\clips-4090\`.
+
+## GPU-1 — les deux lanceurs font enfin la même chose (20/09/2026)
+
+Jusqu'ici, la carte de la maison ne servait qu'aux gens sous Windows. Sous Linux, le
+Studio démarrait sans regarder s'il y avait une carte : tous les clips partaient chez le
+loueur, **sans un mot**, exactement comme avant le chantier. Le plus désagréable n'est pas
+la dépense, c'est le silence — rien à l'écran ne disait qu'une carte était là et ignorée.
+
+### Les trois pièces écrites
+
+| | avant | maintenant |
+|---|---|---|
+| `start.sh` | `docker compose up -d`, jamais la surcouche | regarde `nvidia-smi`, ajoute `-f docker-compose.gpu.yml` **si une carte répond**, réutilise le cache Hugging Face déjà rempli, et dit quoi faire si les 34 Go manquent |
+| téléchargement des 34 Go | `telecharger-modele-video.ps1` seulement | + `scripts/telecharger-modele-video.sh`, même dossier de destination, même image |
+| le message « il manque les 34 Go » | nommait toujours le script PowerShell | nomme celui de **cette** machine (`STUDIO_LANCEUR`), et les deux si le lanceur est inconnu |
+
+Deux différences assumées entre les jumeaux, toutes deux écrites dans les fichiers :
+
+- le `.ps1` lance le conteneur **en root** (le cache appartient à l'utilisateur Windows) ;
+  le `.sh` le lance **sous le compte de la personne** (`--user "$(id -u):$(id -g)"`), sinon
+  root déposerait des fichiers root dans son dossier personnel, qu'elle ne pourrait plus
+  effacer sans `sudo` ;
+- `start.sh` gagne `--build`, que `demarrer.ps1` avait déjà : le code des services est
+  **copié** dans les images, il n'est pas monté. Sans cette option, un dépôt mis à jour
+  continue de tourner sur l'image d'avant — y compris sur la détection de carte qu'on vient
+  d'ajouter.
+
+### Ce qui a vraiment été exécuté, et ce qui ne l'a pas été
+
+**Jamais exécuté sous Linux. Cette machine est sous Windows.** Ce qui a été fait à la
+place : `start.sh` et son jumeau ont tourné **pour de vrai** sous bash, avec un faux
+`docker` qui écrit ses arguments au lieu d'agir — donc sans toucher aux conteneurs. Les
+quatre chemins ont été parcourus :
+
+| chemin | ce que le script a fait |
+|---|---|
+| carte présente, poids présents | `Carte graphique vue : NVIDIA GeForce RTX 4090`, puis `compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build` |
+| `nvidia-smi` présent mais en échec | `compose -f docker-compose.yml up -d --build` — **pas de surcouche**, c'est le cas du débutant sans carte |
+| carte présente, poids absents | les trois lignes « le modèle vidéo (34 Go) n'est pas téléchargé », avec `./scripts/telecharger-modele-video.sh` |
+| téléchargement qui rate | « Le téléchargement a échoué (code 1). Relancez : il reprend où il s'est arrêté », et le script rend bien 1 |
+
+Ce dernier chemin a servi à attraper un défaut du premier jet : avec `set -e`, un
+téléchargement raté aurait arrêté le script **avant** son message, et la personne n'aurait
+rien vu. Corrigé (`|| code=$?`), puis vérifié comme ci-dessus.
+
+La troisième pièce a été vérifiée **dans la pile réelle**, elle : `sandbox-manager`
+reconstruit avec `STUDIO_LANCEUR=windows`, `printenv` dans le conteneur rend `windows`, et
+le service nomme `powershell -ExecutionPolicy Bypass -File scripts\telecharger-modele-video.ps1`.
+Posée à `linux`, la même fonction rend `./scripts/telecharger-modele-video.sh` ; vide, elle
+nomme les deux.
+
+**Reste ouvert** : une machine Linux avec une carte, où `start.sh` applique la surcouche et
+un clip sort à la maison. Tant que personne n'a fait tourner cela, GPU-1 est fermé sur son
+critère de repli — les trois pièces écrites et tenues par des tests — pas sur le trajet
+complet.
+
+### Ce qui empêche les deux lanceurs de diverger à nouveau
+
+`tests/test_gpu_local.py::test_le_lanceur_linux_applique_la_surcouche_comme_celui_de_windows`
+lit les deux fichiers et exige les quatre mêmes gestes : la surcouche seulement sous
+condition, le même dossier de poids, le même modèle sondé, et le nom du script de **son**
+côté. Un lanceur réparé seul fait rougir ce test. C'est la même mécanique que le garde-fou
+du 19/09 sur le dossier des poids : le défaut qui se répète est celui que rien ne mesure.

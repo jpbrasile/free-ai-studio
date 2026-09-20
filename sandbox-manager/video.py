@@ -64,6 +64,31 @@ CACHE_MODAL = "/modeles/hf"
 # ensuite. Le meme chemin est monte cote compose (docker-compose.gpu.yml).
 CACHE_MAISON = os.getenv("VIDEO_CACHE_MAISON", "/cache/huggingface")
 
+# Sous quel systeme le Studio a ete lance. Ce service tourne dans un conteneur
+# Linux quelle que soit la machine : il ne PEUT pas le deviner. C'est le
+# lanceur qui le dit -- `scripts/demarrer.ps1` pose "windows", `start.sh` pose
+# "linux" -- et la seule chose qui en depend est le nom du script a taper pour
+# descendre les 34 Go. Nommer un script PowerShell a quelqu'un sous Linux, ou
+# l'inverse, transforme un message utile en cul-de-sac.
+STUDIO_LANCEUR = (os.getenv("STUDIO_LANCEUR") or "").strip().lower()
+_TELECHARGEMENT_PS1 = "powershell -ExecutionPolicy Bypass -File scripts\\telecharger-modele-video.ps1"
+_TELECHARGEMENT_SH = "./scripts/telecharger-modele-video.sh"
+
+
+def commande_telechargement() -> str:
+    """La commande qui descend les 34 Go, ecrite pour CETTE machine.
+
+    Lanceur inconnu -- un `docker compose up` tape a la main, par exemple : on
+    nomme les deux plutot que d'en inventer un. Se tromper coute a la personne
+    le temps de comprendre pourquoi la commande n'existe pas ; donner les deux
+    ne coute qu'une ligne."""
+    if STUDIO_LANCEUR == "windows":
+        return _TELECHARGEMENT_PS1
+    if STUDIO_LANCEUR == "linux":
+        return _TELECHARGEMENT_SH
+    return "%s   (Linux, macOS)\n    %s   (Windows)" % (_TELECHARGEMENT_SH, _TELECHARGEMENT_PS1)
+
+
 MODELES = {
     "rapide": {
         "titre": "Rapide (defaut)",
@@ -256,9 +281,10 @@ if D.get("cache"):
             print("ECHEC : les poids du modele %s ne sont pas sur cet ordinateur.\n"
                   "Ce bac a sable n'a pas internet, par construction : il ne peut pas les\n"
                   "telecharger lui-meme. Lancez UNE FOIS, dans le dossier du Studio :\n"
-                  "    powershell -ExecutionPolicy Bypass -File scripts\\telecharger-modele-video.ps1\n"
+                  "    %s\n"
                   "C'est environ 34 Go, une seule fois, et le clip repartira ensuite tout seul."
-                  % D["modele"], file=sys.stderr)
+                  % (D["modele"], D.get("aide_poids", "scripts/telecharger-modele-video")),
+                  file=sys.stderr)
             sys.exit(5)
 os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "0")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -546,6 +572,9 @@ def preparer(payload: dict, pour_modal: bool = True, maison: bool = False) -> di
         "images": table_durees[duree]["images"],
         "images_par_seconde": modele.get("images_par_seconde", 16),
         "cache": CACHE_MAISON if maison else (CACHE_MODAL if pour_modal else ""),
+        # Le script part sur une machine qui ne sait rien du systeme d'ou vient
+        # la demande : la commande a taper voyage donc AVEC lui.
+        "aide_poids": commande_telechargement(),
     }
     for cle_page, cle_demande in (
         ("image_depart", "image_depart"),

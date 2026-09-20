@@ -286,3 +286,32 @@ def test_la_fiche_du_travail_garde_le_texte_du_clip(studio, monkeypatch):
     r = creer(studio, description=phrase)
     assert r.status_code == 200
     assert r.json()["video"]["description"] == phrase
+
+
+# --- 7. Le message nomme un script qui existe sur CETTE machine ---------------
+
+def test_le_message_des_34_go_nomme_le_script_de_la_machine(studio, monkeypatch):
+    """Dire << lancez ce script >> en nommant celui de l'autre systeme est un
+    cul-de-sac : la personne tape une commande qui n'existe pas chez elle.
+
+    Le service tourne dans un conteneur Linux quelle que soit la machine : il
+    ne peut pas le deviner, c'est le lanceur qui le lui dit. Lanceur inconnu --
+    un `docker compose up` tape a la main -- on nomme les DEUX plutot que d'en
+    inventer un."""
+    video = studio.video
+
+    monkeypatch.setattr(video, "STUDIO_LANCEUR", "windows")
+    assert video.commande_telechargement().endswith("telecharger-modele-video.ps1")
+
+    monkeypatch.setattr(video, "STUDIO_LANCEUR", "linux")
+    assert video.commande_telechargement() == "./scripts/telecharger-modele-video.sh"
+
+    monkeypatch.setattr(video, "STUDIO_LANCEUR", "")
+    deux = video.commande_telechargement()
+    assert "telecharger-modele-video.sh" in deux and "telecharger-modele-video.ps1" in deux
+
+    # Et la commande voyage AVEC le script envoye au bac a sable, qui ne sait
+    # rien du systeme d'ou vient la demande.
+    monkeypatch.setattr(video, "STUDIO_LANCEUR", "linux")
+    prepare = video.preparer({"description": "un phare", "duree": "3"}, maison=True)
+    assert prepare["demande"]["aide_poids"] == "./scripts/telecharger-modele-video.sh"

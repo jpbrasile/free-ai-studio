@@ -164,3 +164,53 @@ def test_le_compose_et_le_script_visent_le_meme_dossier_de_poids():
     # Le volume Docker n'est plus un dernier recours du script : il ne serait
     # lu par personne.
     assert '$cible = "modeles-gpu"' not in script
+
+    # Le jumeau Linux vise le meme dossier, par les memes deux regles.
+    jumeau = (RACINE / "scripts" / "telecharger-modele-video.sh").read_text(encoding="utf-8")
+    assert "GPU_MODELES_DIR" in jumeau
+    assert '"$HOME/.cache/huggingface"' in jumeau
+    # Le volume Docker n'est pas un dernier recours ici non plus. On juge les
+    # lignes de code, pas les commentaires : le commentaire, lui, EXPLIQUE
+    # pourquoi ce volume n'est plus vise, et doit pouvoir le nommer.
+    code = [l for l in jumeau.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    assert not [l for l in code if "modeles-gpu" in l], code
+
+
+def test_le_lanceur_linux_applique_la_surcouche_comme_celui_de_windows():
+    """Un debutant sous Linux avec une carte doit obtenir le meme Studio.
+
+    Defaut releve le 19/09 : `start.sh` n'ajoutait JAMAIS
+    docker-compose.gpu.yml -- la carte etait la, et tous les clips partaient
+    chez le loueur sans un mot. Les deux lanceurs doivent maintenant faire les
+    memes quatre choses, et ce test est ce qui les empeche de diverger
+    pendant qu'on ne regarde que celui de Windows.
+
+    JAMAIS EXECUTE SOUS LINUX : ce test lit les fichiers, il ne lance rien.
+    Le trajet reel -- carte Linux, clip fabrique a la maison -- reste ouvert
+    dans PLAN.md, etape 9, GPU-1."""
+    sh = (RACINE / "start.sh").read_text(encoding="utf-8")
+    ps1 = (RACINE / "scripts" / "demarrer.ps1").read_text(encoding="utf-8")
+
+    # 1. la surcouche, et seulement si une carte repond
+    assert "nvidia-smi" in sh
+    assert "-f docker-compose.gpu.yml" in sh or "docker-compose.gpu.yml" in sh
+    ligne_surcouche = [l for l in sh.splitlines() if "docker-compose.gpu.yml" in l and "#" not in l]
+    assert len(ligne_surcouche) == 1, ligne_surcouche
+    # elle est DANS le bloc conditionnel, pas dans la commande de base
+    avant = sh.split(ligne_surcouche[0])[0]
+    assert avant.rstrip().endswith("then") or 'if [ -n "$carte" ]' in avant
+
+    # 2. le meme dossier de poids que partout ailleurs
+    assert '"$HOME/.cache/huggingface"' in sh
+    assert "GPU_MODELES_DIR" in sh
+    # 3. le meme modele sonde pour dire << les 34 Go manquent >>
+    assert "models--Wan-AI--Wan2.2-TI2V-5B-Diffusers" in sh
+    assert "models--Wan-AI--Wan2.2-TI2V-5B-Diffusers" in ps1
+    # 4. il nomme le script qui existe de SON cote
+    assert "./scripts/telecharger-modele-video.sh" in sh
+    assert "telecharger-modele-video.ps1" not in sh
+
+    # Et les deux disent au service quelle machine c'est.
+    assert "STUDIO_LANCEUR=linux" in sh
+    assert '$env:STUDIO_LANCEUR = "windows"' in ps1
+    assert "STUDIO_LANCEUR" in (RACINE / "docker-compose.yml").read_text(encoding="utf-8")

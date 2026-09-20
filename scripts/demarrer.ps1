@@ -354,6 +354,14 @@ if ($creees -gt 0) {
 # --- 7. Construction et demarrage ----------------------------------------------
 Titre "Demarrage des services"
 Note "Premiere fois : plusieurs minutes de telechargement. C'est normal."
+
+# Sous quel systeme le Studio est lance. Le service qui decide tourne dans un
+# conteneur Linux quelle que soit la machine : il ne PEUT pas le deviner. La
+# seule chose qui en depend est le nom du script a taper pour descendre les
+# 34 Go -- nommer un script PowerShell a quelqu'un sous Linux, ou l'inverse,
+# transforme un message utile en cul-de-sac. `start.sh` pose "linux".
+$env:STUDIO_LANCEUR = "windows"
+
 # La carte de la maison, si elle existe. La surcouche docker-compose.gpu.yml
 # n'est ajoutee QUE si une carte repond : une reservation `driver: nvidia` sur
 # une machine sans carte fait ECHOUER `docker compose up`, et le debutant sans

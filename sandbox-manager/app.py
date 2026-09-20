@@ -1928,7 +1928,7 @@ def maison_prete() -> tuple[bool, str]:
     if etat.get("poids_presents") is False:
         return False, ("Les 34 Go du modele video ne sont pas encore telecharges sur cet "
                        "ordinateur. Une seule fois, dans le dossier du Studio : "
-                       "scripts\\telecharger-modele-video.ps1")
+                       + video.commande_telechargement())
     return True, ""
 
 
