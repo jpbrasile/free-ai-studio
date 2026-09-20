@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+from pathlib import Path
 
 import httpx
+from fastapi.testclient import TestClient
+
+RACINE = Path(__file__).resolve().parents[1]
 
 EVALUATIONS = "/api/v1/evaluations/config"
 CODE = "/api/v1/configs/code_execution"
@@ -272,3 +277,59 @@ def test_pas_de_temoin_si_un_reglage_echoue(routeur, monkeypatch):
     # ne fait rien. Pas de temoin : le reglage sera retente au prochain demarrage.
     poser(routeur, monkeypatch, OpenWebUIComplet(en_panne="/api/v1/configs/models"))
     assert not routeur.REGLAGES_FAITS.exists()
+
+
+# --- Le demarrage, apres le passage a `lifespan` (20/09/2026) ----------------
+#
+# `@app.on_event("startup")` est deprecie par FastAPI. Le plan (etape 7) disait
+# << passer a `lifespan` au prochain changement du demarrage >> ; ce changement
+# a eu lieu le 20/09 dans l'autre service, la dette se paie ici le meme jour.
+#
+# Une migration de demarrage se rate en silence : le service monte, il repond a
+# /health, et rien de ce qui devait partir n'est parti. Les reglages d'Open WebUI
+# ne sont pas poses, la dictee n'est pas prechauffee, et cela ne se voit qu'au
+# premier usage. Ce test regarde donc ce qui PART, pas ce qui est ecrit.
+
+
+def test_le_demarrage_lance_bien_ses_trois_taches(routeur, monkeypatch):
+    """Les trois taches du demarrage partent, et le service n'attend aucune.
+
+    Elles sont detachees expres : le prechauffage de la dictee peut telecharger
+    464 Mo, et un routeur qui attendrait cela ne repondrait pas avant plusieurs
+    minutes. Le test remplace les trois par des temoins, ouvre le service comme
+    un vrai serveur le fait (le `with` declenche le cycle de vie), et verifie
+    que les trois ont ete appelees.
+    """
+    partis = []
+
+    async def faux_reglages():
+        partis.append("reglages")
+
+    monkeypatch.setattr(routeur, "poser_reglages_webui", faux_reglages)
+    monkeypatch.setattr(routeur, "prechauffer_whisper", lambda: partis.append("whisper"))
+    monkeypatch.setattr(routeur, "prechauffer_voix", lambda: partis.append("voix"))
+
+    with TestClient(routeur.app) as client:
+        assert client.get("/health").json()["ok"] is True
+        # Les taches sont detachees : on laisse la boucle leur donner un tour.
+        for _ in range(50):
+            if len(partis) == 3:
+                break
+            time.sleep(0.02)
+
+    assert sorted(partis) == ["reglages", "voix", "whisper"], partis
+
+
+def test_le_demarrage_ne_passe_plus_par_on_event(routeur):
+    """La dette est payee, pas contournee.
+
+    Un `on_event` qui reviendrait ne casserait rien tout de suite : il
+    marcherait, en ajoutant un avertissement par test -- il y en avait 210.
+    C'est exactement le genre de dette qui reste dix mois.
+    """
+    source = (RACINE / "free-tier-manager" / "app.py").read_text(encoding="utf-8")
+    # Un decorateur commence la ligne. Le module cite `@app.on_event` dans une
+    # phrase pour dire ce qu'il remplace, et cette phrase doit pouvoir rester.
+    decorateurs = [l for l in source.splitlines() if l.startswith("@app.on_event")]
+    assert decorateurs == [], decorateurs
+    assert "lifespan=demarrage_et_arret" in source

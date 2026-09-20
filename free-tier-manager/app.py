@@ -8,6 +8,7 @@ import time
 import json
 import logging
 import wave
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,10 +22,38 @@ from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Res
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("free-tier-manager")
 
+@asynccontextmanager
+async def demarrage_et_arret(_app: FastAPI):
+    """Ce que le routeur lance au demarrage, et rien a l'arret.
+
+    ANCIENNEMENT `@app.on_event("startup")`, deprecie par FastAPI : la suite de
+    tests le repetait a chaque montee du service. Le plan (etape 7) disait
+    << passer a `lifespan` au prochain changement du demarrage >> ; ce
+    changement a eu lieu le 20/09/2026 dans l'autre service, et la dette se
+    paie ici le meme jour plutot que de rester un avertissement de plus.
+
+    Les trois taches partent DETACHEES, comme avant : le routeur doit repondre
+    tout de suite, et le prechauffage de la dictee peut telecharger 464 Mo. Ce
+    qui est apres le `yield` s'executerait a l'arret -- rien pour l'instant, et
+    c'est voulu : ces taches meurent avec la boucle.
+
+    Les trois fonctions appelees sont definies PLUS BAS dans ce fichier. C'est
+    licite et ce n'est pas un hasard : le corps ne s'execute qu'au demarrage du
+    service, alors que `lifespan=` doit etre passe a la construction de `app`,
+    donc avant tout le reste.
+    """
+    asyncio.create_task(poser_reglages_webui())
+    # Dans un fil a part : le telechargement ne bloque pas le routeur.
+    asyncio.create_task(asyncio.to_thread(prechauffer_whisper))
+    asyncio.create_task(asyncio.to_thread(prechauffer_voix))
+    yield
+
+
 app = FastAPI(
     title="Free AI Studio - Free Tier Manager",
     version="1.1.0",
     docs_url="/docs",
+    lifespan=demarrage_et_arret,
 )
 
 INTERNAL_KEY = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
@@ -1699,14 +1728,6 @@ async def poser_reglages_webui() -> None:
     except OSError as exc:
         log.warning("Temoin de reglages non ecrit (%s) : %s", REGLAGES_FAITS, exc)
     log.info("Reglages Open WebUI poses : %s", ", ".join(faits) or "rien a changer")
-
-
-@app.on_event("startup")
-async def demarrage() -> None:
-    asyncio.create_task(poser_reglages_webui())
-    # Dans un fil a part : le telechargement ne bloque pas le routeur.
-    asyncio.create_task(asyncio.to_thread(prechauffer_whisper))
-    asyncio.create_task(asyncio.to_thread(prechauffer_voix))
 
 
 @app.get("/health")
