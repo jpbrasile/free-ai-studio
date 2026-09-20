@@ -457,3 +457,44 @@ rendra.
 texte que la page propose elle-même. Le local est gratuit ; le loué coûte **environ
 0,114 $** et attend l'accord du propriétaire — une dépense ne se décide pas toute seule,
 c'est la règle du chantier.
+
+## GPU-2 — la comparaison de qualité, faite le 20/09/2026 vers 06:15
+
+Autorisée par le propriétaire (« oui pour les 0,114 $ »). **Même texte des deux côtés**, celui
+que la page propose elle-même : *« Un phare breton sous la pluie, la mer se soulève, la lumière
+tourne. »* — vérifié **octet par octet** dans les deux fiches (`c3a8` = è ; l'affichage de
+PowerShell 5.1 le montre en mojibake, c'est son décodage latin-1, pas la donnée).
+
+| | loué (`52a7cf3e`) | à la maison (`27e68191`) |
+|---|---|---|
+| modèle | Wan 2.1 VACE 1.3B | Wan 2.2 TI2V-5B |
+| carte | NVIDIA L4 (louée) | RTX 4090 (ici) |
+| définition | 832 × 480 | **1280 × 704** |
+| images | 49 à 16 im/s = 3,1 s | **73 à 24 im/s** = 3,0 s |
+| passes | 30 | 50 |
+| temps de calcul | 393,9 s | **391,0 s** |
+| fichier | 131 468 octets | 367 447 octets |
+| coût | **0,1097 $** (budget Modal 1,2781 → 1,3878) | **0 $** |
+
+**Le chiffre qui compte n'est pas le temps, c'est ce qu'il achète.** Les deux calculs durent la
+même chose à trois secondes près, mais la maison fabrique **5,6 fois plus** de
+pixel × image × passe (3 289 088 000 contre 587 059 200). C'est une mesure grossière — elle
+suppose que toutes les passes se valent, ce qui est faux entre deux architectures — et elle ne
+remplace pas un banc. Elle dit seulement l'ordre de grandeur.
+
+**Et à l'œil, une surprise qui va dans l'autre sens.** Une image prise au milieu de chaque clip
+(`clips-4090/image_LOUE.png`, `image_MAISON.png`) :
+
+- **le loué 480p obéit mieux au texte** : il fait la pluie, le crépuscule bas, **et la lanterne
+  est allumée**. L'image est molle, la mer peu détaillée, la plage dynamique étroite.
+- **la maison 720p est nettement plus belle** — herbe, rochers, écume, nuages, un horizon avec
+  une île — **et elle ignore deux mots sur trois** : pas de pluie, coucher de soleil dégagé,
+  lanterne éteinte.
+
+**n = 1, un seul texte, une seule graine.** Cela ne dit pas qu'un modèle suit mieux les consignes
+que l'autre ; cela dit que sur ce clip-là, le gain de définition n'est pas gratuit et qu'il faut
+regarder, pas seulement compter les octets. Ce qui est établi, en revanche : **le même clip coûte
+0,11 $ dehors et 0 $ ici, pour le même temps d'attente**, et c'est la raison d'être de ce
+chantier.
+
+Les deux fichiers et les deux images sont dans `C:\Users\test\Documents\clips-4090\`.
