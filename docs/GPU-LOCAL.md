@@ -331,6 +331,12 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
 > mesuré, qui décide, et la preuve qui le ferme. Une ligne « non vérifié » qui reste ici
 > sans entrée là-bas est un manque nommé mais jamais ouvert : c'est exactement le défaut
 > relevé par le propriétaire le 19/09 au soir.
+>
+> **Les trois sont fermés le 20/09/2026.** Ce qui reste non mesuré, et qui est écrit tel
+> quel partout où il apparaît : **rien n'a jamais tourné sous Linux** (cette machine est
+> sous Windows), et la boîte « carte prise » n'a **pas de capture d'écran** — la fenêtre
+> Chrome qui porte l'onglet rend un viewport de 0 × 0. Le reste des lignes ci-dessous
+> tient toujours.
 
 - ~~De combien la 4090 bat la L4 louée.~~ **Mesuré le 19/09** : 412 s contre 422 s pour un
   clip de 3 s, mais en 720p au lieu de 480p et 50 passes au lieu de 30 — voir le tableau.
@@ -604,3 +610,45 @@ une fenêtre que Windows ne liste pas. Ce qui est consigné ci-dessus est donc l
 rendu de la boîte**, lu dans la page après coup, pas une image. Le contenu, lui, vient
 bien du 409 réel : la page l'a fabriqué avec sa propre fonction, à partir de la réponse
 du serveur, pendant que la carte était prise.
+
+## GPU-3 (b) — les 34 Go descendus depuis un dossier vide, jusqu'au bout (20/09/2026)
+
+Le 19/09, ce téléchargement avait été mesuré sur 75 secondes (1 901,5 Mo) et jamais
+jusqu'à la fin ; la seule autre exécution, celle qui a rempli le cache du profil, avait
+duré « presque une heure » avec une reprise après blocage. Un chiffre tiré d'une course
+interrompue et d'un souvenir n'est pas une mesure.
+
+Dossier **neuf et vide** (`C:\Users\test\gpu3-poids-depuis-zero`, 0 entrée au départ),
+hors du cache du profil pour ne pas toucher aux 34 Go qui font tourner le Studio.
+
+| | mesuré |
+|---|---|
+| début → fin | 08:20:14 → 08:42:04 |
+| durée | **1 310,9 s**, soit 21 min 51 s |
+| écrit | **34 203 034 754 octets** = 34,20 Go (31,85 Gio), 62 fichiers |
+| débit moyen | **24,9 Mio/s** |
+| code de sortie | 0 |
+| place sur `C:` | 380,1 Go libres avant, 348 Go après |
+
+**Vingt-deux minutes, pas une heure.** La différence avec le 19/09 tient à une seule
+chose, déjà écrite dans `docker-compose.gpu.yml` et dans le script : la couche de
+transfert « Xet » de `huggingface_hub`, coupée par `HF_HUB_DISABLE_XET=1`. Le 19/09 elle
+s'était bloquée treize minutes sans écrire un octet, à 14 067 Mo sur 34 200. C'est la
+mesure qui justifie ce réglage, et la voici de bout en bout.
+
+**Et le dossier est utilisable, pas seulement rempli** : l'arbre obtenu est
+`hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers/snapshots/b8fff731…/` avec `transformer/`,
+`text_encoder/`, `vae/`, `scheduler/`, `tokenizer/` et `model_index.json` — exactement le
+chemin que le bac à sable de la carte exige (`SANDBOX_POIDS_REQUIS`
+= `/cache/huggingface/hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers`). Un téléchargement
+qui finit dans le mauvais dossier était le défaut réparé le 19/09 ; ici les deux chemins
+coïncident.
+
+**Ce qui reste hors mesure** : ces 24,9 Mio/s sont ceux de cette ligne, ce matin-là. Sur
+une ligne trois fois plus lente, la même opération demande une heure et demie — le
+message du Studio annonce toujours « une demi-heure à une heure », ce qui reste la bonne
+fourchette à écrire pour quelqu'un dont on ne connaît pas la ligne.
+
+Les 32 Gio de ce dossier d'essai sont **gardés tels quels** en attendant que le
+propriétaire dise quoi en faire : ils ne servent à rien pour le Studio, qui lit le cache
+du profil.
