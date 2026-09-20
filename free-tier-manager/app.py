@@ -2355,6 +2355,31 @@ VEILLEUSE_FRAICHE_S = 30
 VEILLEUSE_AVANCE_S = 120
 
 
+def branche_locale() -> Optional[str]:
+    """La branche sur laquelle ce dossier est pose, ou None s'il n'y en a pas.
+
+    POURQUOI ELLE EXISTE, mesure le 20/09/2026 en ouvrant la page. Le Studio
+    comparait sa version aux dix derniers commits de `main`, en dur. Sur la
+    branche `audit-20260911`, qui est EN AVANCE sur `main`, le commit installe
+    n'est evidemment pas dans cette liste, et la page annoncait << Une version
+    plus recente existe >> a un debutant dont le dossier etait le plus a jour
+    des deux. Le bouton l'aurait ramene en arriere.
+
+    Lue dans `.git/HEAD` comme le reste : aucun binaire git n'est requis. Un
+    dossier en tete detachee n'a pas de branche et rend None -- c'est un etat,
+    pas une panne.
+    """
+    try:
+        tete = (DEPOT_GIT / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not tete.startswith("ref:"):
+        return None
+    ref = tete.split(":", 1)[1].strip()
+    prefixe = "refs/heads/"
+    return ref[len(prefixe):] or None if ref.startswith(prefixe) else None
+
+
 def version_locale() -> Optional[str]:
     """Le commit installe, lu directement dans .git : aucun binaire git requis."""
     try:
@@ -2441,7 +2466,12 @@ def veilleuse_vivante() -> bool:
 # relu a chaque fois, parce que c'est ce qui bouge pendant une mise a jour.
 _GITHUB_CACHE: Dict[str, Any] = {"cle": None, "quand": 0.0, "valeur": None}
 GITHUB_CACHE_S = max(60, int(os.getenv("MAJ_CACHE_SECONDS", "600")))
-_CHAMPS_CACHES = ("comparaison", "a_jour", "retard", "version_distante", "quota_repris_a")
+_CHAMPS_CACHES = ("comparaison", "a_jour", "retard", "version_distante", "quota_repris_a",
+                  # Ajoutes le 20/09/2026 avec la comparaison par branche. Un
+                  # champ absent d'ici revient VIDE au coup suivant, servi par
+                  # le cache : la page dirait alors << a jour >> sans branche ni
+                  # avance, dix minutes durant.
+                  "branche", "avance_de", "retard_de")
 
 
 def _cle_cache(slug: str, locale: str) -> str:
@@ -2458,6 +2488,72 @@ def _github_en_cache(slug: str, locale: str) -> Optional[Dict[str, Any]]:
     valeur = dict(_GITHUB_CACHE["valeur"])
     valeur["age_secondes"] = round(time.time() - _GITHUB_CACHE["quand"])
     return valeur
+
+
+def _dans_les_commits(sha: str, commits: Any) -> bool:
+    try:
+        return sha in [c.get("sha", "") for c in commits]
+    except (AttributeError, TypeError):
+        return False
+
+
+async def _situer_par_comparaison(client, slug: str, locale: str,
+                                  branche: str) -> Dict[str, Any]:
+    """Ou est le dossier par rapport a sa branche, quand la liste ne suffit pas.
+
+    GitHub repond a exactement cette question : `compare/base...head` rend un
+    `status` qui decrit HEAD PAR RAPPORT A BASE. Avec base = le commit installe
+    et head = la branche :
+
+      ahead      la branche a des commits de plus  -> ce dossier est EN RETARD
+      behind     la branche est derriere           -> ce dossier est EN AVANCE
+      identical  meme commit                       -> a jour
+      diverged   les deux ont avance chacun de leur cote
+
+    Et 404 quand le commit installe n'existe pas chez GitHub : c'est le cas
+    normal d'un commit local pas encore pousse. Ce n'est pas une panne, et ce
+    n'est surtout pas << vous etes en retard >>.
+    """
+    sortie: Dict[str, Any] = {"comparaison": "inconnue", "a_jour": None, "retard": []}
+    try:
+        r = await client.get(
+            f"https://api.github.com/repos/{slug}/compare/{locale}...{branche}",
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "Free-AI-Studio/1.0"},
+        )
+    except httpx.HTTPError as exc:
+        log.warning("comparaison de version impossible : %s", exc)
+        sortie["comparaison"] = "reseau"
+        return sortie
+    if r.status_code == 404:
+        sortie["comparaison"] = "commit_local_inconnu"
+        return sortie
+    if r.status_code != 200:
+        sortie["comparaison"] = f"http_{r.status_code}"
+        return sortie
+    corps = r.json()
+    etat = corps.get("status")
+    sortie["comparaison"] = "faite"
+    sortie["version_distante"] = (corps.get("commits") or [{}])[-1].get("sha")
+    if etat == "identical":
+        sortie["a_jour"] = True
+    elif etat == "ahead":
+        sortie["a_jour"] = False
+        sortie["retard"] = [
+            {"sha": c.get("sha", "")[:7],
+             "titre": (c.get("commit", {}).get("message") or "").splitlines()[0][:120]}
+            for c in reversed(corps.get("commits") or [])
+        ][:10]
+    elif etat == "behind":
+        # Ce dossier porte des commits que la branche n'a pas : il est DEVANT.
+        # Lui proposer une mise a jour, c'est lui proposer de les perdre.
+        sortie["comparaison"] = "en_avance"
+        sortie["avance_de"] = corps.get("behind_by")
+    elif etat == "diverged":
+        sortie["comparaison"] = "divergee"
+        sortie["avance_de"] = corps.get("behind_by")
+        sortie["retard_de"] = corps.get("ahead_by")
+    return sortie
 
 
 def _github_mettre_en_cache(slug: str, locale: str, sortie: Dict[str, Any]) -> None:
@@ -2491,14 +2587,31 @@ async def maj_etat():
         # Sans jeton, l'API GitHub ne repond que pour un depot public. Un depot
         # prive rend 404 : ce n'est pas une panne, et le dire evite de faire
         # croire a une erreur.
+        # LA BRANCHE DE CE DOSSIER, pas `main` en dur. Defaut mesure le
+        # 20/09/2026 en ouvrant la page : sur `audit-20260911`, en AVANCE sur
+        # `main`, le Studio annoncait << une version plus recente existe >> et
+        # le bouton aurait ramene l'utilisateur en arriere. `DEPOT_BRANCHE`
+        # garde la main pour qui veut suivre une autre branche que la sienne.
+        branche = os.getenv("DEPOT_BRANCHE", "").strip() or branche_locale() or "main"
+        sortie["branche"] = branche
         try:
             async with httpx.AsyncClient(timeout=8) as client:
                 r = await client.get(
                     f"https://api.github.com/repos/{slug}/commits",
-                    params={"sha": os.getenv("DEPOT_BRANCHE", "main"), "per_page": "10"},
+                    params={"sha": branche, "per_page": "10"},
                     headers={"Accept": "application/vnd.github+json",
                              "User-Agent": "Free-AI-Studio/1.0"},
                 )
+                if r.status_code == 200 and not _dans_les_commits(locale, r.json()):
+                    # Le commit installe n'est pas dans les dix derniers de la
+                    # branche. Il y a DEUX raisons possibles, et elles appellent
+                    # des gestes opposes : tres en retard (mettre a jour) ou en
+                    # avance / modifie localement (surtout pas). L'ancien code
+                    # disait << en retard >> dans les deux cas. GitHub sait
+                    # trancher, et c'est un seul appel de plus, seulement ici.
+                    sortie.update(await _situer_par_comparaison(client, slug, locale, branche))
+                    _github_mettre_en_cache(slug, locale, sortie)
+                    return sortie
             if r.status_code == 200:
                 commits = r.json()
                 distants = [c.get("sha", "") for c in commits]
@@ -2513,9 +2626,11 @@ async def maj_etat():
                         for c in commits[: len(retard)]
                     ]
                 else:
-                    # Le commit installe n'est pas dans les dix derniers : soit tres
-                    # en retard, soit une version locale modifiee.
-                    sortie["a_jour"] = False
+                    # Inatteignable en pratique : ce cas est traite plus haut,
+                    # par comparaison. Garde en filet, et sans mentir : on ne
+                    # sait pas, on le dit.
+                    sortie["comparaison"] = "inconnue"
+                    sortie["a_jour"] = None
             elif r.status_code in (403, 429) and r.headers.get("x-ratelimit-remaining") == "0":
                 # Quota epuise n'est PAS « depot prive » : confondre les deux
                 # ferait dire a la page que le depot est ferme alors qu'il est
@@ -2817,6 +2932,24 @@ function majAfficher(d){
     majCase.className = "etat";
     majCase.textContent = "Dépôt privé : je ne peux pas comparer avec GitHub sans identifiants ("
       + version + "). Le bouton met quand même à jour.";
+  } else if(d.comparaison === "en_avance"){
+    // Ce dossier est DEVANT sa branche. Lui proposer une mise à jour, c'est lui
+    // proposer de perdre ce qu'il a en plus : la page le dit au lieu de le taire.
+    majCase.className = "etat pret";
+    majCase.textContent = "À jour, et même en avance : ce dossier porte "
+      + (d.avance_de ? d.avance_de + " commit(s)" : "des commits")
+      + " que « " + (d.branche || "?") + " » n’a pas encore (" + version + "). "
+      + "Mettre à jour vous les ferait perdre.";
+  } else if(d.comparaison === "divergee"){
+    majCase.className = "etat";
+    majCase.textContent = "Ce dossier et « " + (d.branche || "?") + " » ont avancé chacun de "
+      + "leur côté (" + version + ") : " + (d.avance_de || 0) + " commit(s) ici que la branche "
+      + "n’a pas, " + (d.retard_de || 0) + " là-bas que vous n’avez pas. À trancher à la main.";
+  } else if(d.comparaison === "commit_local_inconnu"){
+    majCase.className = "etat";
+    majCase.textContent = "Votre version (" + version + ") n’existe pas sur GitHub : "
+      + "elle n’a pas encore été poussée, ou elle est modifiée sur place. Rien à comparer, "
+      + "et le bouton mettrait votre travail de côté.";
   } else {
     majCase.className = "etat";
     majCase.textContent = "Comparaison impossible pour l’instant (" + version + "). Le bouton met quand même à jour.";
