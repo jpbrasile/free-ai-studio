@@ -184,6 +184,9 @@ $moisCourant = Get-Date -Format "yyyy-MM"
 $credit = 30.0
 if ($env:MODAL_CREDIT_MENSUEL_USD) { $credit = [double]$env:MODAL_CREDIT_MENSUEL_USD }
 $depense = 0.0
+$estime = 0.0
+$vientDeModal = $false
+$releveLe = ""
 $fichierBudget = Join-Path $Racine "config\modal-budget.json"
 if (Test-Path -LiteralPath $fichierBudget) {
     try {
@@ -191,7 +194,22 @@ if (Test-Path -LiteralPath $fichierBudget) {
         # Un compteur d'un mois clos ne dit rien du mois en cours : il est deja
         # reparti de zero, et l'afficher serait un chiffre faux presente comme
         # a jour.
-        if ($b.mois -eq $moisCourant) { $depense = [double]$b.usd }
+        if ($b.mois -eq $moisCourant) {
+            $estime = [double]$b.usd
+            $depense = $estime
+            # Depuis le 20/09/2026 le compteur range aussi le chiffre RELEVE
+            # chez Modal. Cette page lisait `usd` seul, donc elle affichait
+            # encore l'estimation quand les pages du Studio, elles, montraient
+            # la vraie facture : 1,39 $ ici contre 3,80 $ la, le meme jour.
+            # Le plus grand des deux, comme le garde lui-meme : ce sont deux
+            # MINORANTS. Le notre sous-evalue memoire et processeur ; celui de
+            # Modal ignore le calcul qui vient de finir (<< within minutes >>).
+            if ($null -ne $b.usd_reel -and [double]$b.usd_reel -ge $estime) {
+                $depense = [double]$b.usd_reel
+                $vientDeModal = $true
+                $releveLe = [string]$b.usd_reel_le
+            }
+        }
     } catch { }
 }
 $reste = $credit - $depense
@@ -216,12 +234,19 @@ if ($reste -lt 0) { $reste = 0 }
 #   - Groq : pas d'heure fixe publiee ; l'API rend un COMPTE A REBOURS dans
 #     l'en-tete `x-ratelimit-reset-requests`.
 #
-# ET L'ECART, MESURE LE MEME JOUR. Notre chiffre n'est pas seulement << une
-# estimation >> : il compte MOINS que la facture. Sur la meme periode (premier
-# usage le 09/09/2026, rien d'autre n'avait tourne depuis le 1er), ce compteur
-# disait 1,39 $ quand Modal en facturait 3,80 $. Le credit restant annonce par
-# Modal est 26,20 $, pas 28,61 $. Un plafond qui se trompe vers le bas se
-# declenche trop tard : c'est pourquoi la ligne le dit au lieu de le taire.
+# L'ECART MESURE LE 20/09/2026, ET CE QUI EN RESTE. Ce compteur disait 1,39 $
+# quand Modal en facturait 3,80 $ sur la meme periode. La cause a ete trouvee le
+# meme jour, et ce n'etait pas un << ordre de grandeur >> : Modal publie DEUX
+# grilles de prix (`modal billing rates`), et les bacs a sable -- tout ce que le
+# Studio lance -- paient le processeur et la memoire TROIS FOIS le tarif normal.
+# Nous comptions avec l'autre grille. Les prix sont corriges depuis.
+#
+# Ce qui reste, et qui est ecrit tel quel : Modal facture le plus grand de ce
+# qu'on RESERVE et de ce qu'on UTILISE. Le Studio reserve 1 coeur ; les six jours
+# factures de septembre en montrent de 1,0 a 3,2. L'estimation peut donc encore
+# etre un peu basse, de l'ordre de 8 % sur ce melange de travaux -- plus jamais
+# du triple. Sur la seule journee entierement couverte, le 20/09, elle retombe a
+# 0,145 $ contre 0,158 $ factures.
 Write-Host "  Ce qui se remet a zero tout seul" -ForegroundColor Cyan
 Write-Host ""
 Write-Host ("  Modal (machines louees)   {0:N2} `$ depenses sur {1:N0} `$ ce mois-ci, reste {2:N2} `$" -f $depense, $credit, $reste)
@@ -230,10 +255,21 @@ Write-Host "                            Le credit Modal aussi : << Billing Cycle
 Write-Host "                            lu le 20/09/2026 sur VOTRE tableau de bord. Leur page"
 Write-Host "                            publique, elle, ne publie PAS le jour ; le tableau de"
 Write-Host "                            bord si, et c'est VOTRE cycle qui fait foi (modal.com)."
-Write-Host "                            ATTENTION, notre chiffre compte MOINS que la vraie"
-Write-Host "                            facture : mesure le 20/09/2026 sur la meme periode,"
-Write-Host "                            1,39 `$ ici contre 3,80 `$ chez Modal. Le reste exact"
-Write-Host "                            est sur leur page << Usage & billing >>, pas ici."
+if ($vientDeModal) {
+    Write-Host ("                            Ce montant est RELEVE CHEZ MODAL (le {0}) :" -f $releveLe)
+    Write-Host "                            c'est leur compte, pas le notre. Notre estimation"
+    Write-Host ("                            locale, elle, dit {0:N2} `$ -- elle sous-compte" -f $estime)
+    Write-Host "                            un peu (le processeur reellement utilise au-dela du"
+    Write-Host "                            coeur reserve). Le detail est sur leur page"
+    Write-Host "                            << Usage & billing >>."
+} else {
+    Write-Host "                            ATTENTION, Modal n'a pas repondu : ce chiffre est"
+    Write-Host "                            NOTRE estimation. Elle compte MOINS que la vraie"
+    Write-Host "                            facture, d'environ 8 % sur les travaux mesures en"
+    Write-Host "                            septembre 2026 -- le processeur reellement utilise"
+    Write-Host "                            depasse le coeur reserve, et cela ne se sait qu'apres."
+    Write-Host "                            Le reste exact est sur leur page << Usage & billing >>."
+}
 Write-Host "  Gemini                    quota du JOUR, remis a zero a minuit heure du"
 Write-Host "                            Pacifique, soit 9 h chez nous -- ecrit par Google"
 Write-Host "  OpenRouter                quota du JOUR ; l'heure n'est pas publiee"

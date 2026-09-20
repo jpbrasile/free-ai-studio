@@ -79,7 +79,12 @@ def test_script_et_carnet_sont_du_python_valide(ch):
 
 def test_prix_compte_la_memoire(ch, monkeypatch):
     monkeypatch.setenv("MODAL_CPU", "1.0")
-    attendu = 0.000222 + 0.0000131 + 0.00000222 * ch.MEMOIRE_MB / 1024
+    # Les prix se lisent dans la table, ils ne se recopient pas ici : ce test
+    # garde la FORMULE. Les montants sont gardes contre la grille publiee par
+    # Modal dans tests/test_budget_modal.py (section 11).
+    p = ch.budget_modal
+    attendu = (p.PRIX_GPU_USD_S['L4'] + p.PRIX_CPU_USD_S
+               + p.PRIX_MEMOIRE_USD_S * ch.MEMOIRE_MB / 1024)
     assert ch.prix_seconde("L4") == pytest.approx(attendu)
     # Carte inconnue : comptee au prix de la plus chere, jamais moins.
     assert ch.prix_seconde("X9") > ch.prix_seconde("L40S") - 1e-12
@@ -89,7 +94,12 @@ def test_compteur_video_compte_aussi_cpu_memoire(sandbox, monkeypatch):
     """Jusqu'au 15/09, la video ne comptait que la carte : 18 % de moins en L4."""
     monkeypatch.setenv("MODAL_CPU", "1.0")
     monkeypatch.setenv("VIDEO_MEMORY_MB", "16384")
-    assert sandbox.video.prix_seconde("L4") == pytest.approx(0.000222 + 0.0000131 + 0.00000222 * 16)
+    # Les prix se lisent dans la table, ils ne se recopient pas ici : ce test
+    # garde la FORMULE. Les montants sont gardes contre la grille publiee par
+    # Modal dans tests/test_budget_modal.py (section 11).
+    p = sandbox.budget_modal
+    assert sandbox.video.prix_seconde("L4") == pytest.approx(
+        p.PRIX_GPU_USD_S['L4'] + p.PRIX_CPU_USD_S + p.PRIX_MEMOIRE_USD_S * 16)
 
 
 def test_il_n_y_a_plus_qu_une_table_de_prix(sandbox, ch):

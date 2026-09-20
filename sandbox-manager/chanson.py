@@ -936,9 +936,12 @@ function budgetTexte(b){
     + (reel
        ? 'Chiffre <b>relevé chez Modal</b> le ' + b.usd_reel_le + ' : leur compte, pas '
          + 'le nôtre. Notre estimation locale, d’après les prix relevés le '
-         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $ — elle sous-compte. '
+         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $ — elle sous-compte '
+         + 'd’environ 8 %, le temps de processeur réellement utilisé dépassant le cœur '
+         + 'réservé. '
        : 'Estimation locale d’après les prix relevés le ' + b.prix_releve_le
-         + ', pas une facture : Modal n’a pas répondu, et notre estimation <b>sous-compte</b>. ')
+         + ', pas une facture : Modal n’a pas répondu. Elle <b>sous-compte d’environ 8 %</b> '
+         + '(le processeur réellement utilisé dépasse le cœur réservé, et cela ne se sait qu’après). ')
     + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
     + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
     + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '

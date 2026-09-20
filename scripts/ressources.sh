@@ -205,11 +205,26 @@ premier_du_mois_suivant() {   # 2026-09 -> 01/10/2026
 MOIS="$(date +%Y-%m)"
 BUDGET_MODAL="config/modal-budget.json"
 credit="${MODAL_CREDIT_MENSUEL_USD:-30}"
-depense="$(json_nombre "$BUDGET_MODAL" usd)"
+estime="$(json_nombre "$BUDGET_MODAL" usd)"
+# Depuis le 20/09/2026 le compteur range aussi le chiffre RELEVÉ chez Modal.
+# Cette page lisait `usd` seul, donc elle affichait encore l'estimation quand
+# les pages du Studio, elles, montraient la vraie facture : 1,39 $ ici contre
+# 3,80 $ là, le même jour, pour le même mois.
+reel="$(json_nombre "$BUDGET_MODAL" usd_reel)"
+reel_le="$(json_texte "$BUDGET_MODAL" usd_reel_le)"
 # Un compteur d'un mois clos ne dit rien du mois en cours : il est déjà reparti
 # de zéro, et l'afficher serait un chiffre faux présenté comme à jour.
-[ "$(json_texte "$BUDGET_MODAL" mois)" = "$MOIS" ] || depense=""
-[ -n "$depense" ] || depense=0
+[ "$(json_texte "$BUDGET_MODAL" mois)" = "$MOIS" ] || { estime=""; reel=""; }
+[ -n "$estime" ] || estime=0
+# Le plus grand des deux, comme le garde lui-même : les deux nombres sont des
+# MINORANTS. Le nôtre sous-évalue mémoire et processeur ; celui de Modal ignore
+# encore le calcul qui vient de finir (« within minutes »).
+depense="$estime"
+vient_de_modal=0
+if [ -n "$reel" ] && awk -v r="$reel" -v e="$estime" 'BEGIN{exit !(r >= e)}'; then
+  depense="$reel"
+  vient_de_modal=1
+fi
 
 # CE QUI EST SOURCÉ ET CE QUI NE L'EST PAS. Vérifié le 20/09/2026, après que le
 # propriétaire a demandé « les jours exacts », puis « mesure Modal pour moi » :
@@ -230,12 +245,19 @@ depense="$(json_nombre "$BUDGET_MODAL" usd)"
 #   - Groq : pas d'heure fixe publiée ; l'API rend un COMPTE À REBOURS dans
 #     l'en-tête `x-ratelimit-reset-requests`.
 #
-# ET L'ÉCART, MESURÉ LE MÊME JOUR. Notre chiffre n'est pas seulement « une
-# estimation » : il compte MOINS que la facture. Sur la même période (premier
-# usage le 09/09/2026, rien d'autre n'avait tourné depuis le 1er), ce compteur
-# disait 1,39 $ quand Modal en facturait 3,80 $. Le crédit restant annoncé par
-# Modal est 26,20 $, pas 28,61 $. Un plafond qui se trompe vers le bas se
-# déclenche trop tard : c'est pourquoi la ligne le dit au lieu de le taire.
+# L'ÉCART MESURÉ LE 20/09/2026, ET CE QUI EN RESTE. Ce compteur disait 1,39 $
+# quand Modal en facturait 3,80 $ sur la même période. La cause a été trouvée le
+# même jour, et ce n'était pas un « ordre de grandeur » : Modal publie DEUX
+# grilles de prix (`modal billing rates`), et les bacs à sable — tout ce que le
+# Studio lance — paient le processeur et la mémoire TROIS FOIS le tarif normal.
+# Nous comptions avec l'autre grille. Les prix sont corrigés depuis.
+#
+# Ce qui reste, et qui est écrit tel quel : Modal facture le plus grand de ce
+# qu'on RÉSERVE et de ce qu'on UTILISE. Le Studio réserve 1 cœur ; les six jours
+# facturés de septembre en montrent de 1,0 à 3,2. L'estimation peut donc encore
+# être un peu basse, de l'ordre de 8 % sur ce mélange de travaux — plus jamais
+# du triple. Sur la seule journée entièrement couverte, le 20/09, elle retombe à
+# 0,145 $ contre 0,158 $ facturés.
 echo "  Ce qui se remet à zéro tout seul"
 echo
 printf "  %s\n" "Modal (machines louées)   $(awk -v d="$depense" -v c="$credit" 'BEGIN{printf "%.2f $ dépensés sur %.0f $ ce mois-ci, reste %.2f $", d, c, (c-d<0?0:c-d)}')"
@@ -244,10 +266,21 @@ echo "                            Le crédit Modal aussi : « Billing Cycle: Sep
 echo "                            lu le 20/09/2026 sur VOTRE tableau de bord. Leur page"
 echo "                            publique, elle, ne publie PAS le jour ; le tableau de"
 echo "                            bord si, et c'est VOTRE cycle qui fait foi (modal.com)."
-echo "                            ATTENTION, notre chiffre compte MOINS que la vraie"
-echo "                            facture : mesuré le 20/09/2026 sur la même période,"
-echo "                            1,39 \$ ici contre 3,80 \$ chez Modal. Le reste exact"
-echo "                            est sur leur page « Usage & billing », pas ici."
+if [ "$vient_de_modal" -eq 1 ]; then
+  echo "                            Ce montant est RELEVÉ CHEZ MODAL (le $reel_le) :"
+  echo "                            c'est leur compte, pas le nôtre. Notre estimation"
+  printf "  %s\n" "                          locale, elle, dit $(awk -v e="$estime" 'BEGIN{printf "%.2f", e}') \$ — elle sous-compte"
+  echo "                            un peu (le processeur réellement utilisé au-delà du"
+  echo "                            cœur réservé). Le détail est sur leur page"
+  echo "                            « Usage & billing »."
+else
+  echo "                            ATTENTION, Modal n'a pas répondu : ce chiffre est"
+  echo "                            NOTRE estimation. Elle compte MOINS que la vraie"
+  echo "                            facture, d'environ 8 % sur les travaux mesurés en"
+  echo "                            septembre 2026 — le processeur réellement utilisé"
+  echo "                            dépasse le cœur réservé, et cela ne se sait qu'après."
+  echo "                            Le reste exact est sur leur page « Usage & billing »."
+fi
 echo "  Gemini                    quota du JOUR, remis à zéro à minuit heure du"
 echo "                            Pacifique, soit 9 h chez nous — écrit par Google"
 echo "  OpenRouter                quota du JOUR ; l'heure n'est pas publiée"

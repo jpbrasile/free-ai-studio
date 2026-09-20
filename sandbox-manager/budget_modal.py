@@ -73,18 +73,55 @@ ont ete verifiees, et c'est la premiere.
     processeur  0,46 $   12 %
 
   Notre modele, pour un clip video sur L4 : 82 % de carte, 13 % de memoire,
-  5 % de processeur. Nous traitons comme marginal ce que Modal facture presque
-  a moitie. Deux causes nommees : `coeurs` vaut 1,0 par defaut (`MODAL_CPU`)
-  alors que la facture correspond a plusieurs coeurs, et la memoire est comptee
-  sur ce que le code DEMANDE (`VIDEO_MEMORY_MB`, `CHANSON_MEMORY_MB`) et non
-  sur ce que Modal reserve.
+  5 % de processeur. Nous traitions comme marginal ce que Modal facture presque
+  a moitie.
 
-CE QU'IL NE FAUT PAS EN FAIRE : multiplier l'estimation par 2,74. Ce rapport est
-UNE mesure, sur UN mois, sur UN melange de travaux ; ce n'est pas un coefficient.
-Le corriger en le multipliant serait remplacer un nombre faux par un nombre
-invente. La consequence, elle, est un fait et doit etre dite : au rythme mesure,
-le plafond de 30 $ ne se declencherait qu'aux alentours de 82 $ reellement
-factures, donc APRES le credit.
+CE QU'IL NE FALLAIT PAS EN FAIRE : multiplier l'estimation par 2,74. Ce rapport
+est UNE mesure, sur UN mois, sur UN melange de travaux -- c'est un constat et
+pas un coefficient. Le corriger en le multipliant, c'aurait ete remplacer un
+nombre faux par un nombre invente.
+
+CE QUI A ETE FAIT A LA PLACE, LE 20/09/2026, SUR DEMANDE DU PROPRIETAIRE
+(<< plutot que citer les donnees erronnees du passe, faire une meilleure
+evaluation du cout >>). La CLI de Modal a une commande que nous n'avions jamais
+lancee, `modal billing rates --json` : elle rend LEUR grille. Elle dit que Modal
+publie DEUX grilles, et que les bacs a sable -- tout ce que le Studio lance --
+paient le processeur et la memoire TROIS FOIS le tarif normal.
+
+    par coeur-heure ... 0,04730 $ normal,  0,14190 $ en bac a sable
+    par Gio-heure ..... 0,00800 $ normal,  0,02400 $ en bac a sable
+    par carte ......... le meme prix des deux cotes
+
+  Et la meme commande donne le decompte par ressource
+  (`billing report --show-resources`), d'ou l'on remonte aux QUANTITES
+  facturees en divisant par le tarif. Verification des deux causes que ce
+  fichier accusait jusqu'ici -- les deux sont FAUSSES :
+
+    jour     carte L4    memoire facturee    coeurs factures
+    09/09      546 s       16,1 Gio             2,7
+    15/09      138 s       24,1 Gio             3,2
+    16/09    3 692 s       24,0 Gio             1,1
+    17/09    3 836 s       24,0 Gio             1,2
+    18/09      254 s       24,0 Gio             1,0
+    20/09      394 s       16,1 Gio             1,8
+
+  La memoire facturee vaut EXACTEMENT ce que le code demande : 16 Gio pour la
+  video (`VIDEO_MEMORY_MB` = 16384), 24 Gio pour la chanson et le dialogue. La
+  quantite etait juste depuis le debut, c'est le prix qui etait faux.
+
+CE QUE LA CORRECTION DONNE, SUR LA SEULE FENETRE PROPRE. Le 20/09 est le seul
+jour ou ce compteur-ci couvrait les quatre depensiers. Modal y facture
+0,157 9 $. Avec les tarifs corriges, pour les 394 s de L4 mesurees, 16 Gio et
+1 coeur demande : 0,145 1 $ -- contre 0,109 7 $ avant. Le reste tient en un
+point, et il est nomme plus bas.
+
+CE QUI RESTE, ECRIT COMME TEL : LES COEURS. Modal facture le plus grand de ce
+qu'on RESERVE et de ce qu'on UTILISE. Nous reservons 1 coeur (`MODAL_CPU`) ; les
+six jours factures montrent entre 1,0 et 3,2 coeurs reellement comptes. C'est le
+seul terme qui ne se deduit pas avant de lancer, et il vaut au plus 8 % du total
+(le processeur pese 12 % de la facture). On ne le corrige donc PAS par une
+moyenne : ce serait remettre un coefficient invente la ou on vient d'en enlever
+un. Le releve chez Modal, lui, le couvre des que la depense est finie.
 
 CE QUI A ETE FAIT, ET C'EST LE PROPRIETAIRE QUI L'A RACCOURCI. J'avais annonce
 un chantier -- << le garde est appele dans 5 fichiers et 67 endroits >>. Sa
@@ -145,7 +182,23 @@ USAGES_HUMAINS = ("video", "chanson", "dialogue")
 # estimee au tarif L40S (0,000542 contre 0,000583), et sur H100 a la moitie du
 # vrai prix (0,000542 contre 0,001097). Se tromper vers le bas est exactement ce
 # qu'un compteur de refus ne doit jamais faire.
-PRIX_RELEVE_LE = "2026-09-17"
+#
+# DEPUIS LE 20/09/2026 ILS NE SONT PLUS SEULEMENT RECOPIES A LA MAIN. La CLI de
+# Modal a une commande, `modal billing rates --json`, qui rend SA grille. Elle a
+# ete relevee ce jour-la, et elle a livre le motif de l'ecart 1,39 / 3,80 :
+# Modal publie DEUX grilles, et nous appliquions la mauvaise sur deux lignes.
+#
+#                         normale        bac a sable      rapport
+#   processeur / coeur-h  0,04730 $      0,14190 $         x 3,00
+#   memoire / Gio-h       0,00800 $      0,02400 $         x 3,00
+#   cartes                le meme prix dans les deux grilles
+#
+# Le Studio ne lance QUE des bacs a sable (`modal.Sandbox.create`, application
+# `free-ai-studio-sandbox`). Le tarif qui s'applique a lui est donc la seconde
+# colonne, et nous comptions avec la premiere. Ce n'est pas un coefficient
+# d'ajustement trouve pour coller a la facture : c'est le prix affiche par le
+# fournisseur pour le service que l'on utilise.
+PRIX_RELEVE_LE = "2026-09-20"
 PRIX_GPU_USD_S: Dict[str, float] = {
     "T4": 0.000164,
     "L4": 0.000222,
@@ -157,9 +210,19 @@ PRIX_GPU_USD_S: Dict[str, float] = {
     "A100": 0.000583,
     "A100-80GB": 0.000694,
     "H100": 0.001097,
+    # Quatre cartes ajoutees le 20/09/2026, vues dans `modal billing rates` et
+    # absentes d'ici. Ce n'est pas un oubli anodin : prix_seconde() facture une
+    # carte INCONNUE au prix de la plus chere CONNUE, donc une B300 etait
+    # comptee au tarif H100 -- 0,001097 au lieu de 0,001972, soit 44 % de moins.
+    # La garde contre l'inconnu ne protege que si la liste est a jour.
+    "RTX6000": 0.000842,
+    "H200": 0.001261,
+    "B200": 0.001736,
+    "B300": 0.001972,
 }
-PRIX_CPU_USD_S = 0.0000131       # par coeur physique et par seconde
-PRIX_MEMOIRE_USD_S = 0.00000222  # par Gio et par seconde
+# LA GRILLE DU BAC A SABLE, pas la normale : voir le tableau ci-dessus.
+PRIX_CPU_USD_S = 0.0000394       # par coeur et par seconde (0,14190 $/coeur-h)
+PRIX_MEMOIRE_USD_S = 0.00000667  # par Gio et par seconde   (0,02400 $/Gio-h)
 
 # Le plafond unique. Par defaut : le credit declare lui-meme. Ce n'est pas une
 # generosite, c'est la seule valeur qui ne soit pas inventee -- l'ancien 5+20+5

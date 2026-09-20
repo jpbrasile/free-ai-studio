@@ -606,3 +606,98 @@ def test_la_page_d_essai_sert_bien_ce_budget(sandbox):
     assert 'id="budget"' in page, "la boite ou ecrire le montant a disparu"
     assert 'fetch("/budget/modal"' in page, "la page ne demande plus le compteur"
     assert "budgetTexte(d)" in page, "le montant n'est plus mis dans la page"
+
+
+# --- 11. Les prix : ceux de Modal, et la bonne des deux grilles ---------------
+#
+# Le defaut du 20/09/2026. Notre estimation disait 1,39 $ la ou Modal facturait
+# 3,80 $, et l'explication ecrite dans le module accusait les QUANTITES : trop
+# peu de coeurs, memoire mal comptee. Les deux etaient fausses. La cause est que
+# Modal publie deux grilles de prix -- la normale et celle des bacs a sable --
+# et que le Studio, qui ne lance que des bacs a sable, comptait avec la normale.
+# Le processeur et la memoire y valent exactement trois fois plus.
+#
+# Personne ne l'avait vu parce que personne n'avait jamais lance
+# `modal billing rates`. Ces trois tests-la sont la pour que la prochaine
+# difference de grille se voie sans facture.
+
+TARIFS_HORAIRES_RELEVES = {
+    # Releves le 20/09/2026 par `modal billing rates --json`, tels quels.
+    "cpu_hour_cost": 0.04730,
+    "cpu_hour_cost_sandbox": 0.141900,
+    "mem_gib_hour_cost": 0.00800,
+    "mem_gib_hour_cost_sandbox": 0.024000,
+    "gpu_hour_cost_t4": 0.59,
+    "gpu_hour_cost_l4": 0.80,
+    "gpu_hour_cost_a10g": 1.10,
+    "gpu_hour_cost_l40s": 1.95,
+    "gpu_hour_cost_a100_40gb": 2.10,
+    "gpu_hour_cost_a100_80gb": 2.50,
+    "gpu_hour_cost_rtx6000": 3.03,
+    "gpu_hour_cost_h100": 3.95,
+    "gpu_hour_cost_h200": 4.54,
+    "gpu_hour_cost_b200": 6.25,
+    "gpu_hour_cost_b300": 7.10,
+}
+
+CARTES = {
+    "T4": "gpu_hour_cost_t4", "L4": "gpu_hour_cost_l4",
+    "A10": "gpu_hour_cost_a10g", "A10G": "gpu_hour_cost_a10g",
+    "L40S": "gpu_hour_cost_l40s", "A100": "gpu_hour_cost_a100_40gb",
+    "A100-80GB": "gpu_hour_cost_a100_80gb", "RTX6000": "gpu_hour_cost_rtx6000",
+    "H100": "gpu_hour_cost_h100", "H200": "gpu_hour_cost_h200",
+    "B200": "gpu_hour_cost_b200", "B300": "gpu_hour_cost_b300",
+}
+
+
+def test_le_processeur_et_la_memoire_sont_au_tarif_du_bac_a_sable(budget):
+    """LE defaut du 20/09/2026, en un test.
+
+    Le Studio ne cree que des bacs a sable (`modal.Sandbox.create`). Modal
+    facture leur processeur et leur memoire trois fois le tarif d'un conteneur
+    ordinaire. Compter avec la grille normale, c'est sous-compter de deux tiers
+    sur 48 % de la facture -- la part memoire + processeur mesuree en
+    septembre 2026.
+    """
+    attendu_cpu = TARIFS_HORAIRES_RELEVES["cpu_hour_cost_sandbox"] / 3600
+    attendu_mem = TARIFS_HORAIRES_RELEVES["mem_gib_hour_cost_sandbox"] / 3600
+    assert budget.PRIX_CPU_USD_S == pytest.approx(attendu_cpu, rel=0.01)
+    assert budget.PRIX_MEMOIRE_USD_S == pytest.approx(attendu_mem, rel=0.01)
+    # Et surtout : PAS la grille normale, celle qui etait utilisee avant.
+    assert budget.PRIX_CPU_USD_S > TARIFS_HORAIRES_RELEVES["cpu_hour_cost"] / 3600 * 2
+    assert budget.PRIX_MEMOIRE_USD_S > TARIFS_HORAIRES_RELEVES["mem_gib_hour_cost"] / 3600 * 2
+
+
+def test_aucune_carte_publiee_par_modal_ne_manque_a_la_table(budget):
+    """Une carte absente est comptee au prix de la plus chere CONNUE.
+
+    Cette garde ne protege que si la table suit le catalogue : le 20/09/2026 il
+    manquait RTX6000, H200, B200 et B300, et une B300 etait donc estimee au
+    tarif H100 -- 0,001097 au lieu de 0,001972, 44 % de moins. Le refus serait
+    arrive bien trop tard.
+    """
+    for carte, cle in CARTES.items():
+        assert carte in budget.PRIX_GPU_USD_S, carte
+        assert budget.PRIX_GPU_USD_S[carte] == pytest.approx(
+            TARIFS_HORAIRES_RELEVES[cle] / 3600, rel=0.01), carte
+
+
+def test_l_estimation_corrigee_retombe_sur_la_facture_du_20_09(budget):
+    """La preuve chiffree, sur la seule journee ou ce compteur couvrait tout.
+
+    Modal a facture 0,157 9 $ le 20/09/2026, decompose par sa propre CLI :
+    0,087 6 $ de carte L4, 0,042 3 $ de memoire, 0,028 0 $ de processeur. En
+    divisant par les tarifs de Modal, cela fait 394 s de L4, 16,1 Gio de
+    memoire -- exactement `VIDEO_MEMORY_MB` -- et 1,8 coeur.
+
+    Avec les prix corriges, les memes 394 s et le coeur que l'on RESERVE,
+    l'estimation vaut 0,145 $. Avant, 0,110 $. Le reste (les coeurs reellement
+    utilises au-dela du coeur reserve) ne se sait pas avant de lancer, et c'est
+    ecrit tel quel dans le module.
+    """
+    secondes, memoire_mb = 394, 16384
+    estime = budget.prix_seconde("L4", memoire_mb) * secondes
+    assert 0.14 < estime < 0.15, estime
+    facture = 0.1579
+    assert estime / facture > 0.90, "l'estimation retombe a moins de 90 % de la facture"
+    assert estime <= facture, "une estimation au-dessus de la facture refuserait trop tot"

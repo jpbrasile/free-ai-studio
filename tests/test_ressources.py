@@ -15,10 +15,22 @@ Trois choses se gardent ici, dans cet ordre de degat.
 Ces tests lisent les fichiers ; ils ne lancent pas docker. Ce que lire ne peut
 pas dire a ete joue en vrai le 20/09 (les six chemins, et la mesure sur cette
 machine : 49,70 Go telecharges contre 1,81 Go de travail).
+
+UNE EXCEPTION, ajoutee le 20/09/2026 : la ligne du budget Modal choisit entre
+deux nombres, et lire le texte du script ne prouve pas qu'elle choisit bien. Ce
+test-la LANCE le script, sur une copie et avec un compteur fabrique, pour ne
+jamais toucher le vrai. Il a besoin de docker (le script s'arrete sans lui) et
+se saute proprement quand il n'y en a pas.
 """
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
+import time
 from pathlib import Path
+
+import pytest
 
 RACINE = Path(__file__).resolve().parents[1]
 
@@ -250,8 +262,117 @@ def test_le_compteur_d_un_mois_clos_n_est_jamais_affiche_comme_a_jour():
 
 
 def test_l_estimation_ne_se_fait_jamais_passer_pour_une_facture():
-    """Le module le dit depuis le debut, la page du client doit le dire aussi :
-    personne ici ne lit le compte Modal."""
+    """Le chiffre affiche dit toujours D'OU il vient.
+
+    Depuis le 20/09/2026 il y a deux provenances possibles : le releve pris
+    chez Modal, ou notre estimation locale quand Modal n'a pas repondu. Les
+    deux s'affichent avec leur nom ; ce qui reste interdit, c'est de montrer la
+    seconde en laissant croire que c'est la premiere.
+    """
     for source in (SH, PS1):
         assert "facture" in source
         assert "fait foi" in source
+
+
+def test_la_ligne_modal_montre_le_releve_de_modal_quand_il_existe():
+    """Le defaut trouve le 20/09/2026 en lancant le script, le jour meme ou le
+    compteur avait appris a relever le vrai chiffre.
+
+    Les pages du Studio disaient 3,80 $ et 26,20 $ de reste ; ce script, lui,
+    disait encore 1,39 $ et 28,61 $, parce qu'il ne lisait que `usd`. Deux
+    tableaux de bord de la meme maison qui donnent deux budgets differents, et
+    celui qu'on lit dans un terminal est le plus rassurant des deux : c'est
+    exactement l'ordre dans lequel il ne faut pas se tromper.
+
+    Il lit donc `usd_reel`, et quand ce chiffre existe il le montre AVEC son
+    jour de releve -- une valeur sans sa date ne se compare a rien.
+    """
+    assert "usd_reel" in SH and "usd_reel_le" in SH
+    assert "usd_reel" in PS1 and "usd_reel_le" in PS1
+    for source in (SH, PS1):
+        haut = source.upper()
+        assert "RELEV" in haut and "CHEZ MODAL" in haut
+    # Et le jour vient de la variable, jamais d'une date ecrite en clair.
+    assert "$reel_le" in SH
+    assert "$releveLe" in PS1
+
+
+def test_des_deux_minorants_c_est_le_plus_grand_qui_s_affiche():
+    """Les deux nombres comptent MOINS que la verite, chacun a sa facon.
+
+    Le notre ignore la memoire et le processeur. Celui de Modal ignore le
+    calcul qui vient de finir -- leur page previent que le total arrive
+    << within minutes >>. Prendre le plus grand des deux est la seule regle qui
+    ne fasse jamais afficher un budget plus confortable que la realite ; le
+    garde `budget_modal.lire()` applique deja la meme, et ce script doit dire
+    la meme chose que lui.
+
+    Et l'autre nombre ne disparait pas : le releve s'affiche avec l'estimation
+    a cote, sinon on ne verrait plus de combien elle sous-compte.
+    """
+    # SH : la comparaison passe par awk, faute de flottants en shell.
+    assert "r >= e" in SH
+    assert "$estime" in SH
+    # PS1 : comparaison native, meme sens.
+    assert "-ge $estime" in PS1
+    for source in (SH, PS1):
+        assert "sous-compte" in source
+
+
+def _ligne_modal(tmp_path: Path, budget: dict) -> str:
+    """Lance le script sur une COPIE, avec le compteur qu'on lui donne.
+
+    Le script fait `cd "$(dirname "$0")/.."` : depose dans `<tmp>/scripts/`, il
+    lit donc `<tmp>/config/modal-budget.json` et jamais celui du depot, qui est
+    le vrai compteur et qu'un conteneur en marche reecrit a chaque depense.
+    """
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "config").mkdir()
+    shutil.copy2(RACINE / "scripts" / "ressources.sh", tmp_path / "scripts")
+    (tmp_path / "config" / "modal-budget.json").write_text(
+        json.dumps(budget), encoding="utf-8")
+    fait = subprocess.run(["bash", "scripts/ressources.sh"], cwd=tmp_path,
+                          capture_output=True, text=True, encoding="utf-8",
+                          timeout=120)
+    if fait.returncode == 2 and "Docker" in (fait.stdout or ""):
+        pytest.skip("pas de docker sur cette machine")
+    debut = fait.stdout.index("Modal (machines")
+    return fait.stdout[debut:fait.stdout.index("Gemini", debut)]
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker absent")
+def test_en_vrai_le_releve_de_modal_l_emporte_sur_notre_estimation(tmp_path):
+    """Le seul test qui aurait attrape le defaut du 20/09/2026.
+
+    Ce jour-la le script affichait 1,39 $ quand Modal facturait 3,80 $. Lire le
+    fichier ne le dit pas : il faut deux nombres differents dans le compteur et
+    regarder lequel sort. Ici le releve est le plus grand, c'est donc lui qui
+    doit s'afficher, avec son jour.
+    """
+    mois = time.strftime("%Y-%m")
+    texte = _ligne_modal(tmp_path, {"mois": mois, "usd": 1.3878, "usd_reel": 3.797,
+                                    "usd_reel_le": "2026-09-20 10:03:08"})
+    assert "3.80 $ dépensés" in texte
+    assert "reste 26.20 $" in texte
+    assert "RELEVÉ CHEZ MODAL (le 2026-09-20 10:03:08)" in texte
+    # L'estimation reste visible a cote : c'est elle qui dit de combien on
+    # sous-compte quand Modal ne repond pas.
+    assert "1.39 $" in texte
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="docker absent")
+def test_en_vrai_un_releve_en_retard_ne_fait_pas_baisser_le_budget(tmp_path):
+    """L'autre sens, celui qu'on oublie : le releve de Modal est en retard.
+
+    Leur total arrive << within minutes >> ; entre-temps notre estimation est
+    le plus grand des deux, et c'est elle qui protege. Un script qui ferait
+    confiance au releve en toutes circonstances afficherait ici 3,00 $ au lieu
+    de 7,00 $ -- un budget plus confortable que la realite, exactement ce que
+    la regle du plus grand interdit.
+    """
+    mois = time.strftime("%Y-%m")
+    texte = _ligne_modal(tmp_path, {"mois": mois, "usd": 7.0, "usd_reel": 3.0,
+                                    "usd_reel_le": "2026-09-20 10:03:08"})
+    assert "7.00 $ dépensés" in texte
+    assert "reste 23.00 $" in texte
+    assert "Modal n'a pas répondu" in texte

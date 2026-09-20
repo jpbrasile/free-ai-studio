@@ -1438,8 +1438,10 @@ function budgetTexte(b){
     + "et dialogue ne peuvent pas entamer, mais qui se depensent d'ici. "
     + (reel
        ? "Chiffre releve chez Modal le " + b.usd_reel_le + " ; notre estimation locale dit "
-         + b.usd_estime.toFixed(2) + " $, elle sous-compte."
-       : "Modal n'a pas repondu : c'est notre estimation locale, et elle sous-compte.");
+         + b.usd_estime.toFixed(2) + " $, elle sous-compte d'environ 8 % (le processeur "
+         + "reellement utilise depasse le coeur reserve)."
+       : "Modal n'a pas repondu : c'est notre estimation locale. Elle sous-compte "
+         + "d'environ 8 %, le processeur reellement utilise depassant le coeur reserve.");
 }
 
 fetch("/budget/modal", {headers: ENTETES}).then(r => r.json()).then(d => {

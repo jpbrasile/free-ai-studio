@@ -1299,3 +1299,152 @@ réservée*) : **avec la faute 1 échoué, fichier remis 1 passé**, chacun. Sui
 sur cette machine — le même défaut de viewport que le 20/09 au matin. La preuve ci-dessus
 est le **texte rendu** par le navigateur après exécution du JavaScript, pas le code
 source des pages.
+
+---
+
+## Le bout en bout, fait sur une application de 464 Mo et non sur celle de 34 Go
+
+**Demande du propriétaire, 20/09/2026** : « *le bout en bout GPU (effacer les 34 Go,
+demander un clip) est le seul point encore non vérifié* » → « *fais-le sur une appli
+impliquant un petit nb de Go* ».
+
+Le principe à vérifier est le même pour 464 Mo et pour 34 Go : **on efface ce qui a été
+téléchargé, on redemande le service, et le Studio doit le remettre tout seul.** Le choix
+de la petite application n'est pas un contournement, c'est ce qui rend la vérification
+répétable : 464 Mo se retéléchargent en une minute, 34 Go occupent la ligne une heure.
+
+L'application choisie est la **dictée** : `models--Systran--faster-whisper-small`,
+**464 Mo**, dans le volume que tient `free-tier-manager`.
+
+| étape | ce qui a été fait | mesure |
+|---|---|---|
+| 1 | le modèle mis de côté **dans** le conteneur (pas de `docker volume rm`) | 464 Mo déplacés |
+| 2 | service redémarré, dictée redemandée | — |
+| 3 | le modèle **revient tout seul** depuis huggingface.co | arrivé à 10:17 |
+| 4 | transcription locale d'une phrase fabriquée par la voix de Windows | « Bonjour, ceci est un essai de transcription. », langue fr p = 0,99, **1,9 s** |
+| 5 | copie mise de côté supprimée, `/modeles` remis à son état | 2,0 Go, comme avant |
+
+**Pourquoi le modèle n'a pas été supprimé mais déplacé** : `docker volume rm` exige que
+le conteneur soit *retiré*, pas seulement arrêté, et le classificateur a refusé
+`docker compose rm -sf free-tier-manager` — à raison : c'est un conteneur que je n'ai pas
+créé. Déplacer le dossier à l'intérieur du conteneur teste exactement la même chose
+(le modèle n'est plus là où le code le cherche) sans toucher à rien de partagé.
+
+**La carte, elle, a été vue par le tuyau interne** : torch 2.6.0+cu124, **RTX 4090**,
+22 988 Mio libres, un produit 4000 × 4000 en **0,062 s**, code de sortie 0, 2,0 s en tout.
+Carte sondée avant chaque lancement (aucun `julia`, 24 138 Mio libres).
+
+**Ce qui n'est PAS prouvé par là, et il faut le dire** : ce n'est pas le chemin du client.
+Sur `/essai`, « carte graphique » vaut pour Modal et Kaggle, et la page l'écrit
+(« La carte graphique n'existe pas sur le backend local »). `POST /jobs` avec
+`provider=local, gpu=true` échoue sur `FileNotFoundError: nvidia-smi`, et **ce n'est pas
+un défaut** : `local_execute` vise le bac à sable processeur. Le seul chemin client vers
+la carte de la maison reste la vidéo, donc les 34 Go. **Le bout en bout à 34 Go reste non
+fait.**
+
+---
+
+## L'estimation du coût refaite, parce que citer un vieil écart n'est pas une réparation
+
+**Ordre du propriétaire, 20/09/2026** : « *si on a besoin d'estimer la dépense à venir
+plutôt que citer les données erronnées du passé, faire une meilleure évaluation du coût* ».
+
+Il a raison sur le fond : depuis le matin, le Studio affichait partout « notre estimation
+sous-compte, 1,39 $ ici contre 3,80 $ chez Modal ». C'est un aveu honnête et c'est une
+mauvaise réponse — le compteur ne sert pas à raconter le passé, il sert à **refuser avant
+de dépenser**, et pour cela il lui faut un prix juste.
+
+### La cause n'était aucune de celles que j'avais écrites
+
+Ce document accusait les **quantités** : trop peu de cœurs comptés, mémoire comptée sur ce
+que le code demande plutôt que sur ce que Modal réserve. **Les deux sont fausses.** La CLI
+de Modal a une commande que nous n'avions jamais lancée :
+
+```
+modal billing rates --json
+```
+
+Elle rend leur grille. Et elle en contient **deux** :
+
+| | conteneur ordinaire | **bac à sable** | rapport |
+|---|---|---|---|
+| processeur, le cœur-heure | 0,047 30 $ | **0,141 90 $** | **× 3,00** |
+| mémoire, le Gio-heure | 0,008 00 $ | **0,024 00 $** | **× 3,00** |
+| cartes | identiques des deux côtés | | × 1 |
+
+Le Studio ne lance **que** des bacs à sable (`modal.Sandbox.create`, application
+`free-ai-studio-sandbox`). Nous comptions avec l'autre colonne. Ce n'est pas un
+coefficient trouvé pour coller à la facture : c'est le prix affiché par le fournisseur
+pour le service qu'on utilise.
+
+### Les quantités, elles, étaient justes — et c'est mesuré
+
+La même CLI décompose la facture par ressource (`billing report --show-resources`). En
+divisant chaque montant par le tarif, on remonte aux quantités que Modal a réellement
+comptées :
+
+| jour | carte L4 | mémoire facturée | cœurs facturés |
+|---|---|---|---|
+| 09/09 | 546 s | 16,1 Gio | 2,7 |
+| 15/09 | 138 s | 24,1 Gio | 3,2 |
+| 16/09 | 3 692 s | 24,0 Gio | 1,1 |
+| 17/09 | 3 836 s | 24,0 Gio | 1,2 |
+| 18/09 | 254 s | 24,0 Gio | 1,0 |
+| 20/09 | 394 s | 16,1 Gio | 1,8 |
+
+**La mémoire facturée vaut exactement ce que le code demande** — 16 Gio pour la vidéo
+(`VIDEO_MEMORY_MB` = 16384), 24 Gio pour la chanson et le dialogue. L'accusation portée
+contre nos quantités était donc une supposition, et une supposition fausse.
+
+### Ce que la correction donne
+
+Sur le 20/09, seule journée où ce compteur couvrait les quatre dépensiers :
+
+| | montant |
+|---|---|
+| facturé par Modal | **0,157 9 $** |
+| estimé avant correction | 0,109 7 $ (69 %) |
+| **estimé après correction** | **0,145 0 $ (92 %)** |
+
+Vérifié **dans l'image reconstruite**, pas dans le dépôt : `PRIX_RELEVE_LE 2026-09-20`,
+processeur 0,141 84 $/h, mémoire 0,024 01 $/h, et `prix_seconde("L4", 16384) × 394 s`
+= 0,145 0 $.
+
+### Ce qui reste, et pourquoi on ne le « corrige » pas
+
+**Les cœurs.** Modal facture le plus grand de ce qu'on **réserve** et de ce qu'on
+**utilise**. Le Studio réserve 1 cœur (`MODAL_CPU`) ; les six jours facturés montrent de
+1,0 à 3,2 cœurs réellement comptés. C'est le seul terme qui ne se connaît pas avant de
+lancer. Il vaut **au plus 8 %** du total — le processeur pèse 12 % de la facture. On ne le
+remplace donc pas par une moyenne : ce serait remettre un coefficient inventé là où l'on
+vient d'en retirer un. Le relevé pris chez Modal le couvre dès que la dépense est finie.
+
+**Le mois déjà écoulé ne se recalcule pas** : `usd_estime` vaut toujours 1,3878 $ pour
+septembre, parce qu'il a été accumulé aux anciens prix. La correction porte sur ce qui
+vient, ce qui est exactement ce qui a été demandé.
+
+### Un second défaut trouvé par la même commande
+
+`prix_seconde()` facture une carte **inconnue** au prix de la plus chère **connue** — une
+garde qui ne protège que si la table suit le catalogue. Il manquait **RTX6000, H200, B200
+et B300**. Une B300 était donc estimée au tarif H100 : **0,001097 au lieu de 0,001972, soit
+44 % de moins**. Les quatre sont ajoutées.
+
+### Ce qui garde la correction
+
+Trois tests neufs comparent nos prix à la grille relevée chez Modal, ligne par ligne, et
+rejouent la journée du 20/09. Cassés exprès, les trois tombent :
+
+```
+le processeur revient au tarif normal      TOMBE (bien)
+la memoire revient au tarif normal         TOMBE (bien)
+la B300 disparait de la table              TOMBE (bien)
+fichier remis en place                     vert
+```
+
+Et **quatre tests recopiaient les prix à la main** dans `test_chanson.py` et
+`test_dialogue.py` : ils sont tombés à la correction alors que rien de ce qu'ils gardent
+n'avait bougé. Ils lisent désormais la table ; ils gardent la formule, pas les montants.
+
+**Suite complète : 376 passés, ruff propre.** Image `sandbox-manager` reconstruite et
+service sain.
