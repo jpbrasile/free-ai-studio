@@ -1,7 +1,11 @@
 fastapi==0.116.1
 uvicorn[standard]==0.35.0
 httpx==0.28.1
-python-multipart==0.0.20
+# Meme version que free-tier-manager : la CI installe les trois fichiers dans
+# UN SEUL environnement, et deux epingles differentes du meme paquet y rendent
+# l'installation impossible. Les images, elles, installent chacune la sienne et
+# ne voyaient donc rien -- 36 passages rouges d'affilee, du 15/09 au 20/09/2026.
+python-multipart==0.0.32
 kaggle==2.2.4
 modal==1.5.5
 huggingface_hub==1.32.0
