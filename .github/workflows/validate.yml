@@ -53,8 +53,13 @@ jobs:
       - name: JavaScript syntax of the service pages
         run: python scripts/verifier-js.py
 
+      # -rs : un test saute est NOMME dans le journal, avec sa raison. Sans lui,
+      # le run du 20/09/2026 disait << 440 passed, 1 skipped >> et personne ne
+      # pouvait savoir lequel : il a fallu rejouer la suite sur une machine de
+      # developpement en cachant torch pour retrouver le nom. Un resultat qu'on
+      # ne peut pas lire ne protege personne.
       - name: Tests
-        run: python -m pytest -q tests
+        run: python -m pytest -q -rs tests
 
       - name: Bash syntax
         run: |
