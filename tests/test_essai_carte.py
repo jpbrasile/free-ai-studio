@@ -340,3 +340,58 @@ def test_une_duree_demandee_ne_peut_que_RACCOURCIR_l_attente(sandbox):
     gestionnaire = (RACINE / "sandbox-manager" / "app.py").read_text(encoding="utf-8")
     assert "min(plafond, int(secondes))" in gestionnaire
     assert "ESSAI_MAISON_S = int(os.getenv(" in gestionnaire
+
+
+# --- 9. le repli dit ce qui manque sur le processeur -------------------------
+# Trouve le 21/09 en PROUVANT le repli sur la vraie carte : le routage etait
+# juste, le voisin intact, et le travail mourait sur
+# `ModuleNotFoundError: No module named 'torch'`. Le client lisait << le code
+# tourne sur le processeur >> et une trace qui ne s'y rapporte pas.
+
+def test_le_repli_carte_prise_previent_que_torch_n_y_est_pas(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://bac-gpu:8000")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda: (False, "La carte est prise.", {}))
+    ou, phrase = sandbox.ou_lancer_essai()
+    assert ou == "local"
+    assert "torch" in phrase and "CUDA" in phrase, phrase
+    assert "s'arretera" in phrase, phrase
+
+
+def test_le_repli_sans_bac_a_sable_gpu_previent_aussi(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "")
+    ou, phrase = sandbox.ou_lancer_essai()
+    assert ou == "local"
+    assert "torch" in phrase, phrase
+
+
+def test_partir_SUR_LA_CARTE_ne_previent_de_rien(sandbox, monkeypatch):
+    """La mise en garde ne vaut que pour le processeur -- sur la carte, torch est la."""
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://bac-gpu:8000")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda: (True, "Personne ne la tient.", {}))
+    ou, phrase = sandbox.ou_lancer_essai()
+    assert ou == "maison"
+    assert "torch" not in phrase, phrase
+
+
+def test_la_phrase_et_les_DEUX_IMAGES_sont_tenues_ensemble(sandbox):
+    """Le jour ou torch arrive sur le bac a sable du processeur, ce test tombe.
+
+    Une phrase sur l'etat d'une image se perime en silence. Celle-ci est donc
+    verifiee contre les deux fichiers qui construisent les images, et non
+    recopiee depuis une mesure d'un jour.
+    """
+    cpu = (RACINE / "sandbox-worker" / "requirements.txt").read_text(
+        encoding="utf-8")
+    assert "torch" not in cpu.lower(), (
+        "torch est arrive sur le bac a sable du processeur : la mise en garde "
+        "de ou_lancer_essai() est devenue fausse, il faut la retirer")
+
+    gpu = (RACINE / "sandbox-worker-gpu" / "Dockerfile").read_text(
+        encoding="utf-8")
+    assert "FROM pytorch/pytorch:" in gpu, (
+        "le bac a sable de la carte ne part plus d'une image pytorch : verifier "
+        "que torch y est toujours avant de promettre le contraire du processeur")
+
+    assert "torch" in sandbox.SANS_TORCH

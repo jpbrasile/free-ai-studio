@@ -723,6 +723,19 @@ def terminer_en_echec(jid: str, message: str) -> None:
 ESSAI_MAISON_S = int(os.getenv("ESSAI_MAISON_TIMEOUT_SECONDS", "600"))
 
 
+# Les deux bacs a sable n'ont PAS les memes bibliotheques, et c'est voulu : celui
+# du processeur est un `python:3.12-slim` (fastapi, uvicorn, pydantic), celui de
+# la carte part d'une image `pytorch/pytorch:2.6.0-cuda12.4` de plusieurs Go.
+# Sans cette phrase, un repli correct -- carte prise, voisin jamais interrompu --
+# rendait `ModuleNotFoundError: No module named 'torch'`, une trace que personne
+# ne relie au repli. Mesure du 21/09 sur les conteneurs en marche.
+# Un test tient les DEUX bouts : cette phrase et les deux images. Le jour ou
+# quelqu'un ajoute torch au bac a sable du processeur, il tombe, au lieu de
+# laisser la page mentir.
+SANS_TORCH = (" Attention : torch et CUDA n'y sont pas installes, "
+              "un code qui les importe s'arretera la.")
+
+
 def ou_lancer_essai() -> tuple[str, str]:
     """Carte ou processeur, decide a la seconde. Rend (ou, phrase a montrer).
 
@@ -737,11 +750,11 @@ def ou_lancer_essai() -> tuple[str, str]:
     if not WORKER_GPU_URL:
         return "local", ("Aucun bac a sable GPU sur cette machine : la surcouche "
                          "docker-compose.gpu.yml n'est pas appliquee. Le code "
-                         "tourne sur le processeur.")
+                         "tourne sur le processeur." + SANS_TORCH)
     libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
     if libre:
         return "maison", phrase + " Le code tourne sur la carte."
-    return "local", phrase + " Le code tourne sur le processeur."
+    return "local", phrase + " Le code tourne sur le processeur." + SANS_TORCH
 
 
 def run_local(jid: str, code: str, gpu: bool = False):
