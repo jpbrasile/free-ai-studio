@@ -218,7 +218,7 @@
       "territoire": "aucune restriction de pays",
       "vram_min_go": null,
       "modes": ["modal", "kaggle", "colab"],
-      "cout": "Modal : environ 0,117 $ le clip de 3 s ; Kaggle et Colab : gratuit",
+      "cout": "Modal : environ 0,155 $ le clip de 3 s (422 s de L4 mesurées le 09/09/2026, au tarif relevé chez Modal le 20/09/2026 ; le clip du 20/09 a pris 394 s, soit 0,145 $) ; Kaggle et Colab : gratuit",
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B",
       "verifie_le": "2026-09-11",
       "code": "sandbox-manager/video.py MODELES['rapide']"
@@ -233,7 +233,7 @@
       "territoire": "aucune restriction de pays",
       "vram_min_go": null,
       "modes": ["modal"],
-      "cout": "environ six fois le prix de « Rapide »",
+      "cout": "INCONNU : ce modèle n'a jamais été lancé. Ce qui est mesuré, c'est le tarif des cartes : l'A100 coûte 1,98 fois la L4 par seconde (2,62 $/h contre 1,33 $/h, mémoire et processeur compris). Son temps de calcul n'a jamais été relevé, donc le prix d'un clip non plus",
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-14B",
       "verifie_le": "2026-09-11",
       "code": "sandbox-manager/video.py MODELES['soigne']"

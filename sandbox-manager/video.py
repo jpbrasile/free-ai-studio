@@ -135,7 +135,11 @@ MODELES = {
         "etapes": 30,
         # Meme provenance que ci-dessus : declaree, non mesuree.
         "secondes_max": int(os.getenv("VIDEO_SECONDES_MAX_SOIGNE", "5")),
-        "note": "Meilleure image, environ six fois le prix. Reserve aux plans qui comptent.",
+        # << environ six fois le prix >> a ete retire le 21/09/2026 : ce
+        # nombre n'avait de source nulle part dans le depot, et ce modele
+        # n'a jamais ete lance une seule fois. `prix_estime("soigne", ...)`
+        # rend None, ce qui est la bonne reponse ; la note ne dit pas plus.
+        "note": "Meilleure image. Ce modele n'a jamais ete lance : sa carte coute 1,98 fois celle de Rapide a la seconde, mais son temps de calcul n'a jamais ete mesure, donc le prix d'un clip est inconnu.",
     },
     # Le modele de la MAISON. Il ne se choisit pas dans la liste des qualites :
     # il est choisi par `ou_calculer.decider()` quand le clip peut etre fabrique
@@ -459,7 +463,14 @@ def prix_seconde(gpu: str) -> float:
 # None, et la page affiche alors le plafond du pire cas, qui est honnete mais
 # large.
 SECONDES_MESUREES = {
-    ("rapide", "3"): 422,   # 09/09/2026, L4, 49 images en 832x480, 0,117 $
+    # 09/09/2026, L4, 49 images en 832x480. Le prix n'est PAS ecrit ici :
+    # `prix_estime()` le calcule au tarif du jour, et c'est ce qui a evite
+    # que la correction des tarifs du 20/09 le laisse en arriere -- le
+    # registre, lui, avait recopie 0,117 $ et y est reste. Deux autres
+    # relevés du meme clip existent, 422,4 s le 09/09 et 393,9 s le 20/09
+    # (`52a7cf3e`) : 7 % d'ecart, et c'est la plus grande qui est gardee --
+    # un prix montre avant de depenser se majore.
+    ("rapide", "3"): 422,
 }
 
 

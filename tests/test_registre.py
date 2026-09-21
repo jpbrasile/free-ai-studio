@@ -190,6 +190,52 @@ def test_la_place_sur_la_carte_est_celle_qui_a_ete_MESUREE(sandbox, par_id):
     assert par_id["video_maison"]["vram_min_go"] == round(mesure_mo / 1024, 1)
 
 
+def test_le_prix_du_clip_loue_suit_le_TARIF_et_non_un_souvenir(sandbox, par_id):
+    """Le registre annoncait 0,117 $, le code en calcule 0,155.
+
+    Meme famille que le 12,5 Go, et trouvee le meme jour. Le 20/09,
+    `modal billing rates` a revele que les bacs a sable paient le processeur et
+    la memoire TROIS FOIS le tarif ordinaire ; `budget_modal` a ete corrige, et
+    `prix_estime()` a suivi puisqu'il multiplie le temps mesure par le tarif du
+    jour. Le registre, lui, portait un nombre recopie : il est reste sur
+    l'ancien, 25 % sous la realite, et c'est un client qui l'aurait paye.
+
+    Ce test DEDUIT le prix attendu du code. Un test qui l'aurait recopie serait
+    reste d'accord avec le registre le jour ou les deux avaient tort.
+    """
+    attendu = sandbox.video.prix_estime("rapide", "3")
+    assert attendu is not None, "la mesure du clip de 3 s a disparu de SECONDES_MESUREES"
+    ecrit = "%.3f" % attendu
+    ecrit = ecrit.replace(".", ",")
+    assert ecrit in par_id["video_rapide"]["cout"], (
+        "le registre annonce %r, le code calcule %s $"
+        % (par_id["video_rapide"]["cout"], ecrit))
+
+
+def test_un_modele_JAMAIS_lance_n_annonce_pas_un_prix(sandbox, par_id):
+    """Le registre disait << environ six fois le prix de Rapide >>.
+
+    Ce nombre n'avait de source nulle part dans le depot, et le modele soigne
+    n'a jamais ete lance une seule fois : `prix_estime("soigne", ...)` rend
+    None pour toutes les durees. Un multiple annonce au client est alors un
+    nombre fabrique, quelle que soit sa vraisemblance.
+
+    Le controle est ecrit dans ce sens-la, et non sur le texte : tant que le
+    code ne sait pas chiffrer ce clip, le registre ne doit pas le chiffrer non
+    plus. Le jour ou une mesure entre dans `SECONDES_MESUREES`, ce test demande
+    de lui-meme que le registre porte enfin un prix.
+    """
+    sait_chiffrer = any(sandbox.video.prix_estime("soigne", str(d)) is not None
+                        for d in range(1, 13))
+    cout = par_id["video_soignee"]["cout"]
+    if sait_chiffrer:
+        assert "INCONNU" not in cout, (
+            "une mesure existe desormais : le registre doit donner le prix")
+    else:
+        assert "INCONNU" in cout and "jamais" in cout, (
+            "aucune mesure n'existe pour ce modele, et le registre annonce %r" % cout)
+
+
 # --- 3. Rien ne se sert sans ligne au registre -------------------------------
 
 def test_aucune_application_du_code_n_est_absente_du_registre(routeur, sandbox, registre):
