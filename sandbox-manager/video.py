@@ -263,7 +263,16 @@ def table_maison() -> dict:
             for s in range(1, secondes_max_maison() + 1)}
 
 
-def durees_offertes(totale_mo: int | None = None) -> list[dict]:
+# `None` veut dire << aucune carte >>, et il faut donc un autre mot pour dire
+# << je n'ai pas regarde, sonde toi-meme >>. Les deux tenaient dans `None`
+# jusqu'au 21/09/2026, et cela coutait deux choses : la page annoncait
+# << trop long pour votre carte >> a qui n'a pas de carte, et elle sondait
+# DEUX fois par ouverture -- `options_duree_html()` d'abord, puis cette
+# fonction quand la premiere sonde n'avait rien vu.
+SONDE_MOI_MEME = object()
+
+
+def durees_offertes(totale_mo: int | None = SONDE_MOI_MEME) -> list[dict]:
     """Ce que la page met dans son menu, avec le temps attendu pour chacune.
 
     Le temps est montre AVANT que le client valide (ordre du 21/09) : entre la
@@ -276,7 +285,7 @@ def durees_offertes(totale_mo: int | None = None) -> list[dict]:
     la liste entiere est rendue -- c'est le loueur qui fabriquera, et sa memoire
     n'est pas celle d'ici.
     """
-    if totale_mo is None:
+    if totale_mo is SONDE_MOI_MEME:
         etat = ou_calculer.gpu_local.releve()
         totale_mo = etat["totale_mo"] if etat.get("vue") else None
 
@@ -308,6 +317,13 @@ def durees_offertes(totale_mo: int | None = None) -> list[dict]:
                                   if tient_ici else None),
             "besoin_mo": besoin,
             "tient_ici": tient_ici,
+            # Le temps et le prix CHEZ LE LOUEUR, pour le modele qu'il
+            # rencontrerait. `None` tant que moins de deux durees de ce modele
+            # ont ete chronometrees -- on ne trace pas une droite sur un point.
+            "secondes_loueur": secondes_loueur(QUALITE_LOUEE_PAR_DEFAUT, cle),
+            "temps_loueur_mesure": temps_loueur_est_mesure(
+                QUALITE_LOUEE_PAR_DEFAUT, cle),
+            "prix_loueur_usd": prix_estime(QUALITE_LOUEE_PAR_DEFAUT, cle),
         })
     return offres
 
@@ -360,13 +376,51 @@ def _en_minutes(secondes: int) -> str:
     return "environ %d min" % minutes
 
 
+def _en_dollars(usd: float) -> str:
+    """<< 0,06 $ >>. La virgule est le separateur decimal en francais.
+
+    Ecrit le 21/09/2026 apres avoir imprime le menu d'une machine sans carte :
+    ma propre ligne annoncait << environ 0.06 $ >>.
+    """
+    return ("%.2f $" % usd).replace(".", ",")
+
+
+def _pourquoi_pas_ici(totale_mo: int | None, aucune_ne_tient: bool) -> str:
+    """Pourquoi ce clip ne se fabrique pas sur la carte du client.
+
+    TROIS RAISONS, ET CE NE SONT PAS LES MEMES MOTS. Une seule phrase servait
+    pour les trois jusqu'au 21/09/2026, et elle disait faux dans deux cas sur
+    trois.
+
+    - Pas de carte : rien n'est << trop long >>, il n'y a pas de carte. Tout
+      part chez le loueur, quelle que soit la duree.
+    - Carte vue, mais aucune duree n'y tient : c'est le MODELE qui ne rentre
+      pas, pas la duree. Une seconde de video fait dix-sept images ; si
+      dix-sept images debordent, treize n'y changeraient rien. La phrase
+      << trop long >> envoie le debutant essayer plus court en boucle.
+    - Carte vue, les durees courtes tiennent : la duree EST en cause, et le
+      menu montre justement lesquelles passent.
+    """
+    if totale_mo is None:
+        return "vous n'avez pas de carte ici"
+    if aucune_ne_tient:
+        return "votre carte est trop petite pour ce mod\u00e8le"
+    return "trop long pour votre carte"
+
+
 def options_duree_html() -> str:
     """Le menu de la page, avec le temps attendu DANS chaque option.
 
     Le client lit ce que son choix coutera en minutes au moment ou il choisit,
     et non apres avoir appuye sur le bouton (ordre du 21/09/2026).
     """
-    offres = durees_offertes()
+    # Une seule sonde, et son verdict sert DEUX fois : pour savoir ce qui tient
+    # ici, et pour choisir entre << vous n'avez pas de carte >> et << votre
+    # carte est trop petite pour ce clip-la >>. Ce ne sont pas la meme phrase
+    # et ce n'est pas le meme probleme.
+    etat = ou_calculer.gpu_local.releve()
+    totale_mo = etat["totale_mo"] if etat.get("vue") else None
+    offres = durees_offertes(totale_mo)
     ici = [o for o in offres if o["tient_ici"]]
     defaut = DUREE_PAR_DEFAUT
     if ici and not any(o["duree"] == defaut for o in ici):
@@ -378,8 +432,18 @@ def options_duree_html() -> str:
     for offre in offres:
         if offre["tient_ici"]:
             dit = "%s sur votre carte" % _en_minutes(offre["secondes_estimees"])
+        elif offre["secondes_loueur"] is not None:
+            # Le clip ne tient pas ici : il sera loue, et le client lit ce que
+            # cela lui prendra ET ce que cela lui coutera avant de choisir.
+            # Jusqu'au 21/09 cette branche ne disait ni l'un ni l'autre.
+            dit = "%s \u2014 %s chez le loueur" % (
+                _pourquoi_pas_ici(totale_mo, not ici),
+                _en_minutes(offre["secondes_loueur"]))
+            if offre["prix_loueur_usd"] is not None:
+                dit += ", environ %s" % _en_dollars(offre["prix_loueur_usd"])
         else:
-            dit = "trop long pour votre carte, fabriqu\u00e9 chez le loueur"
+            dit = ("%s, fabriqu\u00e9 chez le loueur"
+                   % _pourquoi_pas_ici(totale_mo, not ici))
         morceaux.append(
             '<option value="%s"%s>%d %s \u2014 %s</option>'
             % (offre["duree"],
@@ -459,25 +523,142 @@ def prix_seconde(gpu: str) -> float:
 # Temps de calcul MESURE sur une machine louee, par qualite et par duree. Sert
 # a chiffrer ce qu'une location couterait AVANT de la lancer : quand la carte
 # d'ici est prise, le client choisit entre attendre et payer, et il ne peut pas
-# choisir sans le prix. Rien n'est extrapole -- une combinaison absente rend
-# None, et la page affiche alors le plafond du pire cas, qui est honnete mais
-# large.
+# choisir sans le prix.
+#
+# ENGENDRE DEPUIS LES FICHES DE TRAVAIL -- jamais retape. Chaque ligne porte
+# l'identifiant du travail qui l'a produite, avec sa date, sa carte, sa
+# definition et ses trois temps. Une mesure recopiee a la main est une mesure
+# qui derive : le 21/09/2026 trois tests recopiaient 12,5 Go et defendaient
+# l'erreur qu'ils devaient attraper.
+#
+# CE QUI EST ECRIT : `resume.secondes_calcul`, le script entier dans le bac a
+# sable. Le mur vu du gestionnaire, 2 a 3 % plus grand parce qu'il comprend
+# l'allumage de la machine louee, est en commentaire : c'est lui que le
+# compteur de depense encaisse, et le confondre avec l'autre compterait deux
+# fois. Deux releves sur la meme duree : on garde LE PLUS GRAND -- un temps
+# montre avant de depenser se majore.
+#
+# LE PRIX N'EST PAS ECRIT ICI. `prix_estime()` le calcule au tarif du jour, et
+# c'est ce qui a evite que la correction des tarifs du 20/09 le laisse en
+# arriere -- le registre, lui, en avait recopie un, 25 % trop bas.
+#
+# CE QUE LA TABLE NE DIT PAS ENCORE : le modele soigne n'a qu'UNE duree, donc
+# aucune pente -- `secondes_loueur` rend None pour toutes les autres. Et sa
+# seule mesure comprend le PREMIER telechargement de ses 75 Go, qui ne se
+# reproduira pas : elle majore donc largement un clip suivant. Les deux
+# manques sont chiffres dans SP-VIDEO-TEMPS-LOUEUR.
 SECONDES_MESUREES = {
-    # 09/09/2026, L4, 49 images en 832x480. Le prix n'est PAS ecrit ici :
-    # `prix_estime()` le calcule au tarif du jour, et c'est ce qui a evite
-    # que la correction des tarifs du 20/09 le laisse en arriere -- le
-    # registre, lui, avait recopie 0,117 $ et y est reste. Deux autres
-    # relevés du meme clip existent, 422,4 s le 09/09 et 393,9 s le 20/09
-    # (`52a7cf3e`) : 7 % d'ecart, et c'est la plus grande qui est gardee --
-    # un prix montre avant de depenser se majore.
+    # 21/09/2026 `0d1afe0e` NVIDIA L4 832x480 bfloat16 17 images
+    #   modele 17 s + calcul 117 s = 150.8 s dans le bac ; 162.8 s vus du gestionnaire.
+    ("rapide", "1"): 151,
+    # 20/09/2026 `52a7cf3e` NVIDIA L4 832x480 bfloat16 49 images
+    #   modele 16 s + calcul 361 s = 393.9 s dans le bac ; 405.5 s vus du gestionnaire.
+    # 09/09/2026 `b16ee2c1` NVIDIA L4 832x480 bfloat16 49 images   <-- gardee
+    #   modele 24 s + calcul 380 s = 422.4 s dans le bac ; 433.1 s vus du gestionnaire.
     ("rapide", "3"): 422,
+    # 21/09/2026 `54182907` NVIDIA L4 832x480 bfloat16 81 images
+    #   modele 18 s + calcul 712 s = 750.7 s dans le bac ; 761.8 s vus du gestionnaire.
+    ("rapide", "5"): 751,
+    # 21/09/2026 `dce69faa` NVIDIA A100-SXM4-40GB 1280x720 bfloat16 17 images
+    #   modele 382 s + calcul 353 s = 765.4 s dans le bac ; 785.1 s vus du gestionnaire.
+    #   dont le PREMIER telechargement des poids (382 s) : il ne se
+    #   reproduira pas, le disque du loueur les garde. Un clip suivant
+    #   prendra donc entre 383 s (calcul + bac seuls) et ce total.
+    ("soigne", "1"): 765,
 }
 
 
+# Quel modele le clip rencontrerait s'il partait chez le loueur. C'est le defaut
+# de `preparer()`, et il est nomme ici plutot que recopie : le menu des durees
+# montre le temps de CE modele-la.
+QUALITE_LOUEE_PAR_DEFAUT = "rapide"
+
+
+def _points_loueur(qualite: str) -> list[tuple[int, float]]:
+    """Les clips de CE modele chronometres chez le loueur, en (images, secondes).
+
+    Le nombre d'images est recalcule depuis la duree et la cadence du modele :
+    c'est lui qui gouverne le temps, pas la duree affichee. Deux modeles de
+    cadences differentes ne seraient pas sur la meme droite.
+    """
+    fps = fps_de(qualite)
+    return sorted((images_pour(int(duree), fps), float(secondes))
+                  for (q, duree), secondes in SECONDES_MESUREES.items()
+                  if q == str(qualite))
+
+
+def secondes_loueur(qualite: str, duree: str):
+    """Le temps de calcul attendu chez le loueur, ou None si on n'en sait rien.
+
+    Trois reponses, et la page doit pouvoir les distinguer :
+      - cette duree a ete chronometree : la mesure, telle quelle ;
+      - au moins deux durees l'ont ete : la droite de ces mesures, relevee pour
+        ne jamais promettre moins qu'un clip deja paye ;
+      - moins de deux : None, et la page s'en tient au plafond du pire cas.
+
+    CE QUE CETTE FONCTION REPARE. Jusqu'au 21/09/2026 la table etait lue comme
+    un simple dictionnaire : une seule duree y figurait, donc le client qui
+    demandait 1 s ou 5 s ne voyait ni temps ni prix avant de payer. La cause
+    n'etait pas le code mais la mesure -- trois clips avaient ete fabriques chez
+    le loueur et LES TROIS faisaient 49 images. Une droite a deux inconnues ;
+    trois mesures au meme point n'en determinent qu'une.
+
+    Une duree que le modele loue ne declare pas savoir faire rend None, et non
+    une extrapolation : `DUREES` s'arrete a ce que sa fiche annonce.
+    """
+    if qualite not in MODELES or str(duree) not in DUREES:
+        return None
+    cle = (str(qualite), str(duree))
+    if cle in SECONDES_MESUREES:
+        return float(SECONDES_MESUREES[cle])
+    points = _points_loueur(qualite)
+    if len(points) < 2:
+        return None
+    images = images_pour(int(duree), fps_de(qualite))
+    if images > points[-1][0]:
+        # AU-DELA DE LA PLUS LONGUE MESURE, LA DROITE MENT DU MAUVAIS COTE.
+        # Trois clips loues le 21/09 ont montre que le prix d'une image MONTE
+        # avec la longueur du clip : 8,22 s par image de 17 a 49 images, puis
+        # 10,97 s de 49 a 81. La courbe est convexe -- forme attendue d'une
+        # attention qui compare chaque image a toutes les autres.
+        #
+        # ENTRE deux mesures, la droite relevee majore encore : une courbe
+        # convexe passe SOUS la corde qui joint deux de ses points, et la
+        # droite passe au-dessus de cette corde (300,8 s contre 286,6 a
+        # 33 images ; 600,7 contre 586,5 a 65). AU-DELA, la courbe monte plus
+        # vite qu'elle : la droite promettrait moins cher que la realite.
+        #
+        # C'est l'erreur commise a la main le jour meme : une fourchette posee
+        # avant la mesure plafonnait a 698 s pour le clip de 5 s, qui en a pris
+        # 750,7. Le garde est ecrit avant d'en avoir besoin -- aucune duree
+        # offerte ne depasse la derniere mesure aujourd'hui -- parce que le jour
+        # ou `secondes_max` bougera d'une seconde, rien ne sonnerait.
+        return None
+    origine, pente = ou_calculer.droite_relevee(points)
+    return round(origine + pente * images, 1)
+
+
+def temps_loueur_est_mesure(qualite: str, duree: str) -> bool:
+    """Vrai si ce temps-la a ete chronometre sur un vrai clip loue.
+
+    Meme separation que `ou_calculer.temps_est_mesure()` pour la carte d'ici :
+    la page n'a pas le droit de presenter une droite comme un releve.
+    """
+    return (str(qualite), str(duree)) in SECONDES_MESUREES
+
+
 def prix_estime(qualite: str, duree: str):
-    """Ce que cette location couterait, en dollars, ou None si non mesure."""
-    secondes = SECONDES_MESUREES.get((str(qualite), str(duree)))
-    if secondes is None or qualite not in MODELES:
+    """Ce que cette location couterait, en dollars, ou None si on n'en sait rien.
+
+    Le temps vient de `secondes_loueur()` -- mesure ou droite des mesures --, le
+    tarif du jour de `prix_seconde()`. C'est cette seconde moitie qui a evite
+    que la correction des tarifs du 20/09 laisse ce prix en arriere, quand le
+    registre, lui, en gardait une copie de 25 % trop basse.
+    """
+    if qualite not in MODELES:
+        return None
+    secondes = secondes_loueur(qualite, duree)
+    if secondes is None:
         return None
     return round(prix_seconde(MODELES[qualite]["gpu"]) * secondes, 4)
 
@@ -1308,8 +1489,15 @@ function chargerReglage(){
       // chronometre aux vraies passes que pour deux d'entre elles, et il
       // depend des passes la ou la place n'en depend pas. Une seule liste
       // ferait dire << chronometree >> d'un temps extrapole.
-      const place = (d.durees_mesurees || []).join(" et ");
-      const chrono = (d.durees_chronometrees || []).join(" et ");
+      // Une enumeration francaise prend des virgules et un seul << et >>.
+      // `join(" et ")` disait vrai tant que la liste tenait deux elements ; la
+      // campagne du 21/09 l'a portee a sept, et la page affichait
+      // << 1 et 2 et 3 et 4 et 6 et 7 et 8 secondes >> -- vu en ouvrant la page,
+      // invisible aux tests, qui ne lisent pas une phrase.
+      const enumere = (l) => l.length < 2 ? (l[0] || "")
+        : l.slice(0, -1).join(", ") + " et " + l[l.length - 1];
+      const place = enumere(d.durees_mesurees || []);
+      const chrono = enumere(d.durees_chronometrees || []);
       document.getElementById("reglageNote").textContent =
         "Fabriquer ici ne coûte rien. La carte est partagée : le Studio ne prend "
         + "jamais la place d'un calcul en cours."

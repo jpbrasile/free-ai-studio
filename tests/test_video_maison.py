@@ -616,3 +616,263 @@ def test_par_lAPI_une_duree_hors_du_loueur_ne_propose_PAS_de_louer(studio, monke
     assert decision["besoin_mo"] == studio.ou_calculer.besoin_mo(
         studio.video.DUREES_MAISON[duree]["images"])
     assert studio.partis == []
+
+
+# --- La loi du temps CHEZ LE LOUEUR ------------------------------------------
+#
+# Jusqu'au 21/09/2026 il n'y avait pas de loi : une table a une entree, lue
+# comme un dictionnaire. Un client qui demandait 1 s ou 5 s ne voyait ni temps
+# ni prix avant de payer. La cause n'etait pas le code -- trois clips avaient
+# ete fabriques chez Modal et LES TROIS faisaient 49 images. Une droite a deux
+# inconnues ; trois mesures au meme point n'en determinent qu'une.
+
+
+def _mesures_de(video, qualite):
+    """Les durees de ce modele reellement chronometrees, triees."""
+    return sorted((d for (q, d) in video.SECONDES_MESUREES if q == qualite),
+                  key=int)
+
+
+def test_la_droite_du_loueur_ne_promet_JAMAIS_moins_qu_un_clip_deja_paye(sandbox):
+    """Un temps montre avant de depenser se majore ; il ne se minore pas.
+
+    Meme regle que pour la place sur la carte d'ici, et pour la meme raison :
+    ces deux chiffres sont lus par quelqu'un qui n'a pas encore paye. Une droite
+    qui passerait SOUS une mesure promettrait moins que ce qui a deja ete
+    constate, et la promesse serait dementie par un clip deja fabrique.
+    """
+    video = sandbox.video
+    for qualite in ("rapide", "soigne"):
+        points = video._points_loueur(qualite)
+        if len(points) < 2:
+            continue
+        origine, pente = sandbox.ou_calculer.droite_relevee(points)
+        for images, mesure in points:
+            assert origine + pente * images >= mesure - 1e-6, (
+                "la droite de %s passe sous la mesure de %d images (%.1f s)"
+                % (qualite, images, mesure))
+
+
+def test_un_temps_chronometre_est_rendu_TEL_QUEL(sandbox):
+    """Sur une duree mesuree, la fonction rend la mesure, pas la droite.
+
+    Majorer une mesure n'est pas prudent : c'est jeter la mesure. Meme
+    raisonnement que `besoin_mo()` sur un point mesure.
+    """
+    video = sandbox.video
+    for (qualite, duree), secondes in video.SECONDES_MESUREES.items():
+        assert video.secondes_loueur(qualite, duree) == float(secondes)
+        assert video.temps_loueur_est_mesure(qualite, duree)
+
+
+def test_le_temps_du_loueur_monte_avec_la_duree(sandbox):
+    """Un clip plus long ne peut pas etre annonce plus court."""
+    video = sandbox.video
+    for qualite in ("rapide", "soigne"):
+        temps = [(d, video.secondes_loueur(qualite, d)) for d in video.DUREES]
+        connus = [(int(d), s) for d, s in temps if s is not None]
+        connus.sort()
+        for (d1, s1), (d2, s2) in zip(connus, connus[1:]):
+            assert s2 >= s1, ("%s : %d s annonce %.1f s, %d s annonce %.1f s"
+                              % (qualite, d1, s1, d2, s2))
+
+
+def test_UN_SEUL_clip_chronometre_ne_trace_pas_de_droite(sandbox, monkeypatch):
+    """Une pente ne se devine pas sur un point, et c'etait tout le probleme.
+
+    Ce test tient l'etat d'AVANT le 21/09 : une seule duree mesuree. La reponse
+    juste est alors None -- la page montre le plafond du pire cas, qui est large
+    mais honnete -- et surement pas une droite passant par l'origine.
+    """
+    video = sandbox.video
+    monkeypatch.setattr(video, "SECONDES_MESUREES", {("rapide", "3"): 422})
+    assert video.secondes_loueur("rapide", "3") == 422.0
+    assert video.secondes_loueur("rapide", "1") is None
+    assert video.prix_estime("rapide", "1") is None
+    assert not video.temps_loueur_est_mesure("rapide", "1")
+
+
+def test_le_prix_du_loueur_est_le_TEMPS_fois_le_TARIF(sandbox):
+    """Le prix ne vit nulle part : il se recalcule a chaque lecture.
+
+    C'est ce qui a sauve `prix_estime()` le 20/09, quand les tarifs des bacs a
+    sable se sont reveles triples : la fonction a suivi toute seule, pendant que
+    le registre gardait une copie 25 % trop basse.
+    """
+    video = sandbox.video
+    for qualite in ("rapide", "soigne"):
+        carte = video.MODELES[qualite]["gpu"]
+        for duree in video.DUREES:
+            secondes = video.secondes_loueur(qualite, duree)
+            attendu = (None if secondes is None
+                       else round(video.prix_seconde(carte) * secondes, 4))
+            assert video.prix_estime(qualite, duree) == attendu
+
+
+def test_une_duree_que_le_modele_loue_ne_DECLARE_PAS_n_a_ni_temps_ni_prix(sandbox,
+                                                                           monkeypatch):
+    """Au-dela de ce que sa fiche annonce, on ne chiffre pas -- meme si on sait.
+
+    DEUX GARDES SE RESSEMBLENT ET N'ONT PAS LE MEME ROLE. L'une refuse de
+    chiffrer au-dela de la plus longue MESURE (la droite y mentirait, la courbe
+    montant plus vite qu'elle) ; l'autre refuse de chiffrer une duree que le
+    modele loue ne DECLARE pas savoir faire. Aujourd'hui les deux limites
+    coincident -- le menu s'arrete a la plus longue duree mesuree -- et la
+    premiere ecriture de ce test prenait donc une duree que les DEUX gardes
+    rejettent : retirer la seconde du code ne le faisait pas echouer. Mesure du
+    21/09 : cinq mutations attrapees sur six, celle-la muette.
+
+    On met donc en place le seul cas qui les separe : un menu RACCOURCI sous ce
+    qui a ete mesure. La loi saurait chiffrer cette duree ; elle doit se taire
+    parce qu'elle n'est pas offerte.
+    """
+    video = sandbox.video
+    mesurees = sorted((d for (q, d) in video.SECONDES_MESUREES if q == "rapide"), key=int)
+    assert len(mesurees) >= 2, "il faut deux mesures pour que la loi sache chiffrer"
+    hors_menu = mesurees[-1]
+    # Le menu s'arrete AVANT cette duree, alors qu'elle est mesuree.
+    monkeypatch.setattr(video, "DUREES",
+                        {d: v for d, v in video.DUREES.items() if int(d) < int(hors_menu)})
+    assert hors_menu not in video.DUREES
+    assert video.secondes_loueur("rapide", hors_menu) is None, (
+        "%s s n'est pas au menu du modele loue : rien ne doit etre chiffre"
+        % hors_menu)
+    assert video.prix_estime("rapide", hors_menu) is None
+    # ... et ce qui reste au menu est toujours chiffre.
+    assert video.secondes_loueur("rapide", mesurees[0]) is not None
+
+
+def test_le_menu_DIT_le_temps_du_loueur_des_qu_il_sait_le_calculer(sandbox, monkeypatch):
+    """Ecrit dans le sens reversible, comme la garde du modele jamais lance.
+
+    Tant que la loi rend None, le menu n'a rien a dire et ne dit rien. Le jour
+    ou deux durees sont chronometrees, la droite existe -- et le menu DOIT
+    montrer les minutes au lieu de la phrase muette d'avant.
+    """
+    video = sandbox.video
+    # Une carte trop petite pour tout : chaque duree part donc chez le loueur.
+    # La sonde est POSEE, sans quoi `options_duree_html()` refait la sienne et
+    # voit la carte de la machine qui fait tourner les tests -- ce qui a fait
+    # echouer ce test a sa premiere ecriture, pour une raison etrangere a ce
+    # qu'il juge.
+    petite = {"vue": True, "nom": "carte minuscule", "totale_mo": 4096,
+              "libre_mo": 4096, "marge_mo": 1024, "motif": ""}
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "releve", lambda: petite)
+    offres = video.durees_offertes()
+    assert offres and not any(o["tient_ici"] for o in offres)
+    menu = video.options_duree_html()
+    for offre in offres:
+        if offre["secondes_loueur"] is None:
+            continue
+        attendu = video._en_minutes(offre["secondes_loueur"])
+        assert attendu in menu, (
+            "le menu ne dit pas %r pour la duree %s alors que la loi la chiffre"
+            % (attendu, offre["duree"]))
+
+
+def test_au_DELA_de_la_plus_longue_mesure_la_droite_se_tait(sandbox, monkeypatch):
+    """Une courbe convexe extrapolee par une droite promet moins cher que vrai.
+
+    Trois clips loues le 21/09 : 17, 49 et 81 images. Le prix d'une image monte
+    -- 8,22 s puis 10,97 s. Entre deux mesures la droite relevee majore encore,
+    parce qu'une courbe convexe passe sous la corde ; au-dela, elle passe
+    dessous, et un prix montre avant de depenser serait trop bas.
+
+    Le cas ne se produit pas aujourd'hui (la plus longue duree offerte est aussi
+    la plus longue mesuree). On le fabrique donc : une table amputee de son
+    dernier point doit faire taire la loi sur ce point-la.
+    """
+    video = sandbox.video
+    mesurees = sorted((d for (q, d) in video.SECONDES_MESUREES if q == "rapide"), key=int)
+    if len(mesurees) < 3:
+        pytest.skip("il faut au moins trois durees mesurees pour amputer la derniere")
+    la_plus_longue = mesurees[-1]
+    ampute = {c: v for c, v in video.SECONDES_MESUREES.items()
+              if c != ("rapide", la_plus_longue)}
+    monkeypatch.setattr(video, "SECONDES_MESUREES", ampute)
+    assert video.secondes_loueur("rapide", la_plus_longue) is None, (
+        "la loi chiffre %s s alors qu'aucune mesure ne va jusque-la"
+        % la_plus_longue)
+    assert video.prix_estime("rapide", la_plus_longue) is None
+    # ... et elle parle toujours entre les mesures qui restent.
+    assert video.secondes_loueur("rapide", mesurees[0]) is not None
+
+
+def test_SANS_carte_le_menu_ne_dit_pas_que_le_clip_est_TROP_LONG(sandbox, monkeypatch):
+    """Une machine sans carte n'a pas une carte trop petite.
+
+    Vu le 21/09/2026 en imprimant le menu d'une machine sans carte : la page
+    annoncait << 1 seconde -- trop long pour votre carte >>. Un clip d'une
+    seconde n'est trop long pour rien ; la phrase disait au debutant que sa
+    machine etait juste un peu faible, quand elle n'a pas de carte du tout.
+
+    Les deux etats tenaient dans un seul `None`, d'ou la confusion. Ce test
+    juge les DEUX cas, sans quoi il laisserait remettre la meme phrase partout.
+    """
+    video = sandbox.video
+    sans = {"vue": False, "motif": "pas de carte", "totale_mo": 0, "libre_mo": 0,
+            "marge_mo": 1024, "nom": ""}
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "releve", lambda: sans)
+    menu = video.options_duree_html()
+    assert "trop long pour votre carte" not in menu, (
+        "sans carte, aucune duree n'est << trop longue >> : %s" % menu[:200])
+    assert "pas de carte" in menu
+
+    petite = {"vue": True, "nom": "carte de portable", "totale_mo": 8192,
+              "libre_mo": 8192, "marge_mo": 1024, "motif": ""}
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "releve", lambda: petite)
+    menu = video.options_duree_html()
+    tient_ici = [o for o in video.durees_offertes(8192) if o["tient_ici"]]
+    assert not tient_ici, (
+        "ce cas a ete choisi parce qu'AUCUNE duree n'y tient ; si le modele a "
+        "maigri, prendre une carte plus petite plutot que d'affaiblir le test")
+    assert "trop petite pour ce mod\u00e8le" in menu, (
+        "si meme 17 images debordent, c'est le MODELE qui ne rentre pas : dire "
+        "<< trop long >> envoie le debutant essayer plus court en boucle")
+    assert "trop long pour votre carte" not in menu
+
+    moyenne = {"vue": True, "nom": "carte de 16 Go", "totale_mo": 16384,
+               "libre_mo": 16384, "marge_mo": 1024, "motif": ""}
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "releve", lambda: moyenne)
+    menu = video.options_duree_html()
+    assert "sur votre carte" in menu, "16 Go porte les clips courts"
+    assert "trop long pour votre carte" in menu, (
+        "quand le court tient et le long deborde, la DUREE est bien en cause")
+
+
+def test_un_prix_montre_en_francais_prend_une_VIRGULE(sandbox, monkeypatch):
+    """<< environ 0.06 $ >> etait ecrit avec un point. Page francaise."""
+    video = sandbox.video
+    sans = {"vue": False, "motif": "pas de carte", "totale_mo": 0, "libre_mo": 0,
+            "marge_mo": 1024, "nom": ""}
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "releve", lambda: sans)
+    menu = video.options_duree_html()
+    assert " $" in menu, "le menu doit chiffrer la location"
+    import re
+    assert not re.search(r"\d\.\d+ \$", menu), (
+        "un prix a point decimal dans une page francaise : %s" % menu[:300])
+
+
+def test_ouvrir_le_menu_ne_sonde_la_carte_QU_UNE_fois(sandbox, monkeypatch):
+    """Une ouverture de page = une sonde, pas deux.
+
+    Ce test compte des APPELS et non des phrases, parce que la deuxieme sonde
+    rendait la meme reponse que la premiere : la page affichait exactement la
+    meme chose avec une sonde ou avec deux, et rien d'autre n'aurait vu le
+    doublon revenir. Sans carte est le cas qui doublait -- c'est aussi le cas
+    le plus courant du produit.
+    """
+    video = sandbox.video
+    sans = {"vue": False, "motif": "pas de carte", "totale_mo": 0, "libre_mo": 0,
+            "marge_mo": 1024, "nom": ""}
+    appels = []
+
+    def compter():
+        appels.append(1)
+        return sans
+
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "releve", compter)
+    video.options_duree_html()
+    assert len(appels) == 1, (
+        "%d sondes pour une ouverture de page ; `durees_offertes` doit "
+        "recevoir le verdict au lieu de resonder" % len(appels))

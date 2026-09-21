@@ -478,7 +478,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
         - **`video_soignee` annonçait « environ six fois le prix de Rapide »** — ce nombre n'a **de source nulle part** dans le dépôt, et ce modèle **n'a jamais été lancé une seule fois**. `prix_estime("soigne", …)` rend `None` pour toutes les durées, ce qui est la bonne réponse ; le registre, lui, chiffrait. Remplacé par ce qui est mesuré : la carte A100 coûte **1,98 fois** la L4 à la seconde (2,62 $/h contre 1,33 $/h, mémoire et processeur compris), et le temps de calcul est inconnu, donc le prix d'un clip aussi.
         - **Les deux gardes qui manquaient**, écrites comme celle qui a attrapé le 12,5 Go — elles **déduisent** du code au lieu de recopier. La seconde est écrite dans le bon sens : tant que `SECONDES_MESUREES` ne sait pas chiffrer ce modèle, le registre ne doit pas le chiffrer ; **le jour où une mesure y entre, le test réclame de lui-même que le registre porte enfin un prix**. Deux mutations, deux attrapées (0,117 $ remis, « six fois » remis). **528 tests**, `ruff` propre, `verifier-js` 14 sans échec.
 
-    - **SP-VIDEO-TEMPS-LOUEUR — le temps chez le loueur n'a qu'UN point, et le modèle soigné n'a jamais tourné.** OUVERT le 21/09/2026.
+    - **SP-VIDEO-TEMPS-LOUEUR — le temps chez le loueur n'a qu'UN point, et le modèle soigné n'a jamais tourné.** OUVERT le 21/09/2026. **CLOS le 21/09/2026 au soir : trois clips loués, 1,08 $ dépensés, et ma propre prédiction démentie — le détail est au point 13 ci-dessous.**
         - *Ce qui manque* : trois clips ont été fabriqués chez Modal, et **les trois font 49 images** (422,4 s le 09/09, 422 s le 19/09, 393,9 s le 20/09 — 7 % d'écart entre eux). Une droite a deux inconnues ; trois mesures au même point n'en déterminent qu'une. **La pente du loueur n'existe pas**, donc le temps d'un clip de 1 s ou de 5 s ne se calcule pas — c'est pourquoi la page affiche `None` plutôt qu'une estimation, et c'est la bonne décision tant que rien n'est mesuré. *Ce qui, lui, est mesuré* : sur le modèle de la maison, sept clips de la campagne du 21/09 tiennent sur une **droite à 2,7 % près** (`temps = 118,5 s + 0,642 s par image`, à 2 passes ; le huitième point, 49 images, est écarté parce que sa première passe a pris 30,2 s contre 12 à 16 s partout ailleurs). **La forme est donc connue, c'est la pente du loueur qui ne l'est pas.** Et le modèle **soigné** (Wan 2.1 VACE 14B sur A100) n'a **jamais** été lancé : ni temps, ni prix, ni preuve qu'il tourne.
         - *Où* : `sandbox-manager/video.py`, `SECONDES_MESUREES` — une seule entrée, `("rapide", "3")` ; `prix_estime()` qui la lit ; `durees_offertes()`, qui met `None` dans le temps quand le clip ne tient pas ici.
         - *Rayon mesuré* : **une table à deux entrées.** `SECONDES_MESUREES` est écrite à un seul endroit et lue par `prix_estime()` seul. Le travail n'est pas dans le code : il est dans **trois clips loués**.
@@ -501,6 +501,38 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
         - *GPU* : **oui** — quelques clips pour mesurer l'écart demande/carte, et au moins une reprise après changement de version.
         - *Qui décide* : **moi** pour la forme de la règle, le **propriétaire** pour le temps de carte que coûte la reprise. Sous-réserver fait planter un client en fin de calcul ; c'est le dégât à ne pas prendre à la légère.
         - *Preuve de clôture* : la suite des places réservées redevient croissante **sans maximum courant** ; le test qui exige aujourd'hui que les relevés bruts restent non monotones rougit, et c'est le signal que le pansement peut être retiré.
+
+
+13. **SP-VIDEO-TEMPS-LOUEUR — CLOS le 21/09/2026 au soir. Trois clips loués, et ma prédiction démentie par le deuxième.** Le matin, la page ne savait chiffrer qu'une seule durée chez le loueur : trois clips avaient été fabriqués là-bas et **les trois faisaient 49 images**. Trois mesures au même endroit ne donnent pas une pente. Les trois clips manquants ont été lancés par le chemin de production (`POST /video/creer`, `ou_calculer: "toujours-modal"`), avec la phrase du clip du 20/09 pour que les points se comparent entre eux.
+
+    | clip | carte | images | dans le bac | vu du gestionnaire | travail |
+    |---|---|---|---|---|---|
+    | rapide, 1 s | L4 | 17 | 150,8 s | 162,8 s | `0d1afe0e` |
+    | rapide, 5 s | L4 | 81 | 750,7 s | 761,8 s | `54182907` |
+    | soigné, 1 s | A100 | 17 | 765,4 s | 785,1 s | `dce69faa` |
+
+    **Ce que la campagne a coûté** : le compteur de Modal est passé de 3,7971 $ à 4,88 $, soit **1,08 $** — dans la fourchette de 0,6 à 1,2 $ annoncée au propriétaire avant de lancer, et qui avait servi à obtenir son accord.
+
+    **J'avais publié une prédiction avant le premier résultat, et elle était fausse.** Écrite à 12:30:17, avant qu'aucun clip ne rentre : au plus **698 s** pour le clip de 5 s. Le loueur a mis **750,7 s**, soit **7,6 % de plus**, et du côté qui coûte de l'argent. La cause vaut plus cher que le clip : **le temps du loueur n'est pas une droite.** De 17 à 49 images il monte de **8,47 s par image** ; de 49 à 81, de **10,28**. Prolonger la première pente jusqu'à 81 images donne 693 s — à cinq secondes près, exactement ce que j'avais annoncé, et exactement l'erreur.
+
+    **Ce que cette courbure impose au code, écrit avant d'en avoir besoin.** Une droite remontée au-dessus de tous ses points majore honnêtement **entre** les mesures : une courbe qui se creuse vers le haut passe sous sa corde. Mais **au-delà de la dernière mesure, elle promet trop court**. `secondes_loueur()` se tait donc passé la plus longue durée chronométrée, au lieu d'annoncer un temps que le loueur ne tiendra pas. Aujourd'hui le menu s'arrête pile sur 5 s et la garde ne change rien à ce qui s'affiche ; elle est là pour le jour où quelqu'un ajoutera une durée au menu sans payer le clip qui la mesure.
+
+    **Le premier clip d'un modèle n'est pas les suivants.** Les 765 s du 14B contiennent **382 s de téléchargement** des 75 Go de poids, pour 353 s de calcul : plus de la moitié de la facture de ce clip-là. Un second clip prendrait entre 383 s et 765 s. Ce n'est **pas mesuré**, et ni le registre ni le README ne font semblant : les deux disent « PREMIER lancement » et donnent les deux nombres. Un second clip soigné (≈ 0,29 $) trancherait ; il n'a pas été lancé, faute d'autorisation pour cette dépense-là.
+
+    **Trois défauts vus en ouvrant la page, réparés dans le même tour.** Aucun n'était visible aux tests, qui ne lisent pas une phrase :
+    - « 1 et 2 et 3 et 4 et 6 et 7 et 8 secondes ». `join(" et ")` faisait une phrase française tant que la liste tenait deux éléments ; la campagne l'a portée à sept.
+    - « 1 seconde — trop long pour votre carte » sur une machine qui **n'a pas de carte**. Rien n'est trop long quand il n'y a pas de carte, et c'est le cas le plus courant du produit.
+    - « trop long pour votre carte » sur une carte de 8 Go où **aucune** durée ne tient. Une seconde de vidéo fait dix-sept images ; si dix-sept débordent, treize n'y changeraient rien : c'est le modèle qui ne rentre pas. La phrase envoyait le débutant essayer plus court, en boucle. Trois situations, trois phrases, et le test juge les trois.
+
+    **Vérifié** : **539 tests**, `ruff` propre, `verifier-js` 14 scripts sans échec, et **14 mutations remises une à une dans le code, 14 attrapées, 0 muette**. Le menu a été imprimé sous trois sondes posées (aucune carte / 8 Go / 16 Go) parce que la branche « chez le loueur » **n'est pas atteignable dans un navigateur sur cette machine** : sa 4090 prend toutes les durées offertes. Une quinzième garde compte les sondes de carte par ouverture de page, parce que la seconde sonde supprimée ce matin rendait la même réponse que la première et serait revenue sans que rien ne rougisse.
+
+    - **SP-PRIX-ET-DATES-EN-FRANÇAIS — les pages écrivent l'argent et les dates à l'anglaise.** OUVERT le 21/09/2026.
+        - *Ce qui manque* : la page de vidéo, ouverte ce soir, annonce « 4.88 $ sur les 15.00 $ » et « relevé chez Modal le 2026-09-21 10:58:42 ». Point décimal et date ISO, dans un produit entièrement en français qui s'adresse à un débutant. Le dégât est petit et permanent : c'est la première ligne que le client lit, elle parle de **son** argent, et elle est écrite comme un journal de machine.
+        - *Où* : `sandbox-manager/` — `budget_modal.py`, `app.py`, `ou_calculer.py`, `depenses.py`, et le JavaScript embarqué de `video.py`, `chanson.py` et `dialogue.py`.
+        - *Rayon mesuré* : **39 endroits écrivent un montant** — 7 en Python (`%.2f $`, `{…:.2f} $`) et **32 en JavaScript** (`toFixed`) — et **17 écrivent une date**. Six modules, quatre pages. Il faut deux formateurs, un par langage, et chacun sa garde : sans garde, le point revient au premier remaniement sans que rien ne rougisse. `video.py` en a un depuis ce matin (`_en_dollars`) et il couvre **1 des 39**.
+        - *GPU* : **non**.
+        - *Qui décide* : **moi** pour la virgule et la date — c'est de la présentation, aucun nombre ne bouge. Le **propriétaire** seulement s'il veut aussi l'espace insécable avant l'unité, qui touche l'apparence de toutes les pages.
+        - *Preuve de clôture* : une garde qui balaie le HTML **rendu** des quatre pages et refuse tout `\d\.\d+ \$` et toute date `\d{4}-\d{2}-\d{2}` visible. Elle doit **rougir aujourd'hui** avant d'être réparée : c'est la seule façon de savoir qu'elle regarde au bon endroit.
 
 
 ## Détail par tâche

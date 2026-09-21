@@ -231,6 +231,15 @@ def test_un_modele_JAMAIS_lance_n_annonce_pas_un_prix(sandbox, par_id):
     if sait_chiffrer:
         assert "INCONNU" not in cout, (
             "une mesure existe desormais : le registre doit donner le prix")
+        # Et ce doit etre LE prix, pas un prix. Tant que rien n'etait mesure,
+        # ce test ne pouvait demander que la disparition d'un mot ; la mesure
+        # entree le 21/09, il deduit le nombre comme celui du modele rapide.
+        duree = next(d for d in map(str, range(1, 13))
+                     if sandbox.video.prix_estime("soigne", d) is not None)
+        ecrit = ("%.3f" % sandbox.video.prix_estime("soigne", duree)).replace(".", ",")
+        assert ecrit in cout, (
+            "le registre annonce %r, le code calcule %s $ pour %s s"
+            % (cout, ecrit, duree))
     else:
         assert "INCONNU" in cout and "jamais" in cout, (
             "aucune mesure n'existe pour ce modele, et le registre annonce %r" % cout)

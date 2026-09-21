@@ -218,7 +218,7 @@
       "territoire": "aucune restriction de pays",
       "vram_min_go": null,
       "modes": ["modal", "kaggle", "colab"],
-      "cout": "Modal : environ 0,155 $ le clip de 3 s (422 s de L4 mesurées le 09/09/2026, au tarif relevé chez Modal le 20/09/2026 ; le clip du 20/09 a pris 394 s, soit 0,145 $) ; Kaggle et Colab : gratuit",
+      "cout": "Modal : de 0,056 $ le clip de 1 s à 0,277 $ le clip de 5 s (0,155 $ pour 3 s). Les durées de 1 et 3 et 5 s ont été chronométrées sur un vrai clip loué ; les autres sont la droite de ces mesures, relevée pour ne jamais promettre moins cher. Tarif relevé chez Modal le 20/09/2026 ; Kaggle et Colab : gratuit",
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B",
       "verifie_le": "2026-09-11",
       "code": "sandbox-manager/video.py MODELES['rapide']"
@@ -233,7 +233,7 @@
       "territoire": "aucune restriction de pays",
       "vram_min_go": null,
       "modes": ["modal"],
-      "cout": "INCONNU : ce modèle n'a jamais été lancé. Ce qui est mesuré, c'est le tarif des cartes : l'A100 coûte 1,98 fois la L4 par seconde (2,62 $/h contre 1,33 $/h, mémoire et processeur compris). Son temps de calcul n'a jamais été relevé, donc le prix d'un clip non plus",
+      "cout": "Modal : environ 0,558 $ le clip de 1 s — PREMIER lancement, mesuré le 21/09/2026 (765 s d'A100, dont 382 s de téléchargement des 75 Go de poids, qui ne se reproduira pas : un clip suivant prendra entre 383 s et ce total). Aucune autre durée n'a été chronométrée sur ce modèle, donc aucune autre n'est chiffrée. L'A100 coûte 1,98 fois la L4 à la seconde (2,62 $/h contre 1,33 $/h, mémoire et processeur compris)",
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-14B",
       "verifie_le": "2026-09-11",
       "code": "sandbox-manager/video.py MODELES['soigne']"

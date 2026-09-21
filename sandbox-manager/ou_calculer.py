@@ -125,13 +125,36 @@ def _loi(champ: str) -> tuple[float, float]:
     tirer la droite du temps vers le bas. Sans ce filtre, la page promettrait
     trois minutes pour un clip qui en prend sept.
     """
-    points = sorted((n, float(v[champ])) for n, v in ANCRES.items() if champ in v)
+    points = [(n, float(v[champ])) for n, v in ANCRES.items() if champ in v]
     if not points:
         raise KeyError(
             "aucune ancre ne porte le champ %r : la loi n'a rien a ajuster" % champ)
+    return droite_relevee(points)
+
+
+def droite_relevee(points) -> tuple[float, float]:
+    """La droite des moindres carres, remontee pour passer au-dessus de chacun.
+
+    Rend (origine, pente). Un seul point : une horizontale a sa hauteur -- on ne
+    devine pas une pente sur une mesure isolee.
+
+    POURQUOI ELLE EST RELEVEE. Les deux grandeurs qui l'empruntent sont montrees
+    AVANT de depenser : la place a reserver, et le temps que le clip prendra.
+    Une droite qui passerait sous une mesure promettrait moins que ce qui a ete
+    constate, et la promesse serait dementie par un clip deja fabrique.
+
+    POURQUOI ELLE EST SORTIE DE `_loi` le 21/09/2026. Le temps chez le LOUEUR
+    s'ajuste maintenant de la meme facon (`video.secondes_loueur`), sur une
+    AUTRE table -- autre machine, autre modele, autre provenance. Deux tables,
+    un seul ajustement : recopier douze lignes de moindres carres, c'est
+    s'exposer a les corriger d'un seul cote. C'est le defaut repare le matin
+    meme sur le 12,5 Go, puis a midi sur deux prix du registre.
+    """
+    points = sorted(points)
+    if not points:
+        raise KeyError("aucun point a ajuster")
     if len(points) == 1:
-        (n0, v0), = points
-        return v0, 0.0
+        return float(points[0][1]), 0.0
     moy_n = sum(n for n, _ in points) / len(points)
     moy_v = sum(v for _, v in points) / len(points)
     haut = sum((n - moy_n) * (v - moy_v) for n, v in points)

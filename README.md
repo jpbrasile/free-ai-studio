@@ -349,15 +349,33 @@ Studio envoie chez Modal** — clips, chansons, dialogues et code envoyé au San
 vos autres usages de Modal ; et le crédit de 30 $ que la page affiche est celui que vous
 déclarez (`MODAL_CREDIT_MENSUEL_USD`) : la page le dit.
 
-**Ce que coûte un clip, mesuré le 09/09/2026.** Réglage le moins cher (3 s, « Rapide »,
-carte L4) : 832×480, 49 images, **7 minutes d’attente**. Le premier chiffre publié,
-0,096 $, est le prix de la carte seule pendant 432 s. Modal facture aussi le processeur et la
-mémoire ; le compteur les ajoute depuis le 15/09/2026, et la même durée compte alors
-**0,117 $**. À ce prix, les 30 $ de crédit paieraient 256 clips. Le plafond du Studio en
-laisse passer **166** : un clip n’est lancé que si son pire cas (40 minutes de L4 sans
-résultat, 0,65 $) tient encore sous le plafond. Calcul refait le 15/09/2026 avec la
-règle du code (`budget_verifier` dans `sandbox-manager/video.py`). Le premier lancement d’un modèle prend 1 à
-2 minutes de plus, le temps de le télécharger ; ensuite il reste sur un disque persistant.
+**Ce que coûte un clip, et d'où le prix vient.** Le Studio ne lit pas votre facture :
+il multiplie un temps **mesuré sur un vrai clip** par le tarif **relevé chez Modal**
+(le 20/09/2026). Sur la carte L4, la seconde de location — carte, mémoire et processeur
+compris — coûte 0,000368 $, soit **1,33 $ de l'heure**. Un bac à sable paie le processeur et la
+mémoire **trois fois** le tarif ordinaire, ce qui a été découvert le 20/09/2026 : les
+versions précédentes de cette page annonçaient 0,117 $ le clip de 3 s, soit un quart de
+moins que la réalité.
+
+| durée | images | calcul | prix | d'où vient le temps |
+|---|---|---|---|---|
+| 1 s | 17 | 151 s | 0,056 $ | **mesuré** |
+| 2 s | 33 | 301 s | 0,111 $ | droite des mesures |
+| 3 s | 49 | 422 s | 0,155 $ | **mesuré** |
+| 4 s | 65 | 601 s | 0,221 $ | droite des mesures |
+| 5 s | 81 | 751 s | 0,277 $ | **mesuré** |
+
+À 0,155 $ le clip de 3 s, les 30 $ de crédit que vous déclarez en paieraient **193**. Le
+Studio en laisse passer **90** avant de s'arrêter : un clip n'est lancé que si son
+**pire cas** — 40 minutes de L4 sans résultat, 0,883 $ — tient encore sous le plafond des
+demandes humaines (15 $, soit la moitié du plafond total ; l'autre moitié est réservée au
+mode autonome, qui sinon serait le seul à jeûner). C'est la règle de `budget_verifier`
+dans `sandbox-manager/video.py`, et les nombres de ce paragraphe en sortent.
+
+**Le tout premier clip d'un modèle coûte plus cher que les suivants**, le temps de
+descendre ses poids sur le disque du loueur. Mesuré le 21/09/2026 sur le modèle
+« Soigné » et ses 75 Go : **382 s de téléchargement** pour 353 s de calcul, soit plus de
+la moitié de la facture de ce clip-là. Le disque les garde ensuite.
 Le petit modèle fait des plans presque fixes : la scène est juste, le mouvement est discret.
 
 Attention si vous cherchez « mieux » : les licences de **MiniMax H3** et de **HunyuanVideo**

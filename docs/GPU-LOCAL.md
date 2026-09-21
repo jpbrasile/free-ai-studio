@@ -160,7 +160,13 @@ sera refait pour le modèle retenu :
 | chargement du modèle | 23,7 s | — |
 | **calcul** | **411,8 s** | **422 s** |
 | ~~pic mémoire carte~~ **pic du compteur torch** | **12 841 Mo** | — |
-| **coût** | **0 $** | 0,117 $ |
+| **coût** | **0 $** | 0,155 $ <sup>†</sup> |
+
+> <sup>†</sup> **Corrigé le 21/09/2026.** Cette case disait 0,117 $, le prix
+> d'avant la découverte du 20/09 : un bac à sable Modal paie le processeur et la
+> mémoire **trois fois** le tarif ordinaire. Le temps n'a pas bougé (422 s) ; le
+> tarif, si. Le chiffre ci-dessus est `video.prix_estime("rapide", "3")` au tarif
+> relevé le 20/09/2026, et il se recalcule à chaque lecture au lieu d'être recopié.
 
 > **Correction du 21/09/2026, et l'étiquette n'était pas un détail.** Cette ligne disait
 > « pic mémoire **carte** ». Le nombre vient de `torch.cuda.max_memory_allocated()` — le
