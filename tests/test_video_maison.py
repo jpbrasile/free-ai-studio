@@ -876,3 +876,50 @@ def test_ouvrir_le_menu_ne_sonde_la_carte_QU_UNE_fois(sandbox, monkeypatch):
     assert len(appels) == 1, (
         "%d sondes pour une ouverture de page ; `durees_offertes` doit "
         "recevoir le verdict au lieu de resonder" % len(appels))
+
+
+def test_une_REPRISE_est_toujours_plus_rapide_que_le_PREMIER_lancement(sandbox):
+    """Un modele relance ne redescend pas ses poids ; il ne peut pas etre plus lent.
+
+    Mesure du 21/09/2026 sur le 14B : 765,4 s au premier lancement, 479,4 s au
+    second, meme carte et meme phrase. Ce test tient les deux tables l'une
+    contre l'autre -- c'est la seule facon de voir qu'on a interverti les deux
+    nombres, ce qui ferait annoncer un clip ordinaire plus cher qu'une
+    decouverte et n'aurait l'air faux nulle part ailleurs.
+    """
+    video = sandbox.video
+    assert video.SECONDES_MESUREES_REPRISE, (
+        "table vide : la supprimer plutot que de garder un test qui ne peut "
+        "plus rien attraper")
+    for cle, reprise in video.SECONDES_MESUREES_REPRISE.items():
+        premier = video.SECONDES_MESUREES.get(cle)
+        assert premier is not None, (
+            "%s a une reprise mais pas de premier lancement : la reprise ne "
+            "veut rien dire seule" % (cle,))
+        assert reprise < premier, (
+            "%s : reprise %s s contre premier lancement %s s -- une reprise "
+            "ne redescend pas les poids" % (cle, reprise, premier))
+
+
+def test_le_PRIX_d_une_reprise_sort_du_temps_et_du_TARIF(sandbox):
+    """Le prix d'une reprise se calcule, il ne se recopie pas."""
+    video = sandbox.video
+    for (qualite, duree), secondes in video.SECONDES_MESUREES_REPRISE.items():
+        attendu = round(
+            video.prix_seconde(video.MODELES[qualite]["gpu"]) * secondes, 4)
+        assert video.prix_reprise(qualite, duree) == attendu
+        assert video.prix_reprise(qualite, duree) < video.prix_estime(qualite, duree)
+
+
+def test_une_duree_JAMAIS_relancee_n_annonce_pas_de_prix_de_reprise(sandbox):
+    """Sans seconde mesure, la part qui disparait est inconnue -- donc rien.
+
+    Ecrit dans le bon sens : le jour ou une reprise de << rapide >> sera
+    chronometree, ce test reclamera de lui-meme qu'elle soit declaree, au lieu
+    de laisser le code rendre `None` pour toujours.
+    """
+    video = sandbox.video
+    for cle in video.SECONDES_MESUREES:
+        if cle not in video.SECONDES_MESUREES_REPRISE:
+            assert video.secondes_reprise(*cle) is None
+            assert video.prix_reprise(*cle) is None

@@ -373,9 +373,14 @@ mode autonome, qui sinon serait le seul à jeûner). C'est la règle de `budget_
 dans `sandbox-manager/video.py`, et les nombres de ce paragraphe en sortent.
 
 **Le tout premier clip d'un modèle coûte plus cher que les suivants**, le temps de
-descendre ses poids sur le disque du loueur. Mesuré le 21/09/2026 sur le modèle
-« Soigné » et ses 75 Go : **382 s de téléchargement** pour 353 s de calcul, soit plus de
-la moitié de la facture de ce clip-là. Le disque les garde ensuite.
+descendre ses poids sur le disque du loueur. Les deux ont été mesurés le 21/09/2026 sur
+le modèle « Soigné » et ses 75 Go, même carte et même phrase : **765 s** la première fois,
+**479 s** la seconde, soit **0,558 $** puis **0,349 $**. Ce qui disparaît est la descente des
+poids — la charge du modèle tombe de 382 s à 120 s — tandis que le calcul ne bouge pas
+(353 s puis 345 s). Ce qui ne se reproduit **pas** vaut donc **262 s**, et non les 382 s de la
+première charge : remonter 75 Go du disque dans la carte coûte 120 s à chaque clip. Le
+Studio retient la première valeur pour surveiller votre budget, parce que c'est celle que
+vous paierez en découvrant le modèle.
 Le petit modèle fait des plans presque fixes : la scène est juste, le mouvement est discret.
 
 Attention si vous cherchez « mieux » : les licences de **MiniMax H3** et de **HunyuanVideo**

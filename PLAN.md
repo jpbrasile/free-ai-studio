@@ -526,6 +526,19 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
 
     **Vérifié** : **539 tests**, `ruff` propre, `verifier-js` 14 scripts sans échec, et **14 mutations remises une à une dans le code, 14 attrapées, 0 muette**. Le menu a été imprimé sous trois sondes posées (aucune carte / 8 Go / 16 Go) parce que la branche « chez le loueur » **n'est pas atteignable dans un navigateur sur cette machine** : sa 4090 prend toutes les durées offertes. Une quinzième garde compte les sondes de carte par ouverture de page, parce que la seconde sonde supprimée ce matin rendait la même réponse que la première et serait revenue sans que rien ne rougisse.
 
+    **Le second clip soigné a tranché — lancé sur autorisation, et il dément la lecture facile.** Le même clip, même carte et même phrase, relancé quelques heures plus tard (`9517593d`) : **479,4 s** contre 765,4 s. Le détail est ce qui compte :
+
+    | | charge du modèle | calcul | total dans le bac |
+    |---|---|---|---|
+    | premier lancement `dce69faa` | 382 s | 353 s | 765,4 s |
+    | reprise `9517593d` | **120 s** | 345 s | **479,4 s** |
+
+    Le calcul ne bouge pas (2,3 % d'écart) : c'est bien la descente des poids qui disparaît, donc le disque du loueur les garde. Mais **la part non renouvelable vaut 262 s, pas 382** — remonter 75 Go du disque dans la carte coûte encore 120 s à chaque clip. Le dépôt écrivait ce matin « un clip suivant prendra entre 383 s et 765 s » : la fourchette était honnête et contenait la mesure, elle est remplacée par elle. **0,558 $ la découverte, 0,349 $ chacun ensuite**, les deux mesurés.
+
+    `SECONDES_MESUREES` garde **765 s** : c'est elle qui borne le budget, et un client qui découvre ce modèle paiera bien ce prix-là. La reprise vit dans sa propre table, qui ne sert qu'à **dire** ce que coûte un clip ordinaire. Quatre gardes la tiennent, dont une trouvée muette à la première passe : le registre pouvait reperdre le prix mesuré sans que rien ne rougisse. **542 tests, 5 mutations sur 5 attrapées** après réparation.
+
+    *Ce qui n'a pas été mesuré, et pourquoi* : le temps **vu du gestionnaire** manque pour ce clip. Le suiveur de campagne recevait l'identifiant **abrégé** que le lanceur imprimait, donc une adresse inconnue du gestionnaire — et il traduisait tout code non-200 en « pas encore prêt ». Il a sondé une adresse morte pendant **50 minutes** pendant que le clip finissait en 479 s. Les deux fautes sont réparées dans l'outil, et la seconde est la vraie : **un sondeur doit séparer ce qui n'est pas ENCORE arrivé de ce qui n'arrivera JAMAIS.** La mesure qui compte, celle du bac, est intacte : c'est celle que la table porte pour tous les autres clips.
+
     - **SP-PRIX-ET-DATES-EN-FRANÇAIS — les pages écrivent l'argent et les dates à l'anglaise.** OUVERT le 21/09/2026.
         - *Ce qui manque* : la page de vidéo, ouverte ce soir, annonce « 4.88 $ sur les 15.00 $ » et « relevé chez Modal le 2026-09-21 10:58:42 ». Point décimal et date ISO, dans un produit entièrement en français qui s'adresse à un débutant. Le dégât est petit et permanent : c'est la première ligne que le client lit, elle parle de **son** argent, et elle est écrite comme un journal de machine.
         - *Où* : `sandbox-manager/` — `budget_modal.py`, `app.py`, `ou_calculer.py`, `depenses.py`, et le JavaScript embarqué de `video.py`, `chanson.py` et `dialogue.py`.

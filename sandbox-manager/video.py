@@ -561,11 +561,55 @@ SECONDES_MESUREES = {
     ("rapide", "5"): 751,
     # 21/09/2026 `dce69faa` NVIDIA A100-SXM4-40GB 1280x720 bfloat16 17 images
     #   modele 382 s + calcul 353 s = 765.4 s dans le bac ; 785.1 s vus du gestionnaire.
-    #   dont le PREMIER telechargement des poids (382 s) : il ne se
-    #   reproduira pas, le disque du loueur les garde. Un clip suivant
-    #   prendra donc entre 383 s (calcul + bac seuls) et ce total.
+    #   PREMIER lancement de ce modele : les 75 Go de poids sont descendus ici.
+    #   Ce que cela coute vraiment est desormais mesure, voir la table suivante.
     ("soigne", "1"): 765,
 }
+
+# LE MEME CLIP, RELANCE. Un modele qui tourne pour la premiere fois descend ses
+# poids chez le loueur ; les fois suivantes, il les retrouve sur le disque. Les
+# deux temps n'ont rien a voir, et le client merite les deux plutot qu'une
+# moyenne qui ne decrit aucun de ses clips.
+#
+# Cette table ne sert PAS a chiffrer un budget : c'est `SECONDES_MESUREES` qui
+# le fait, et elle garde le premier lancement, parce qu'un client qui decouvre
+# ce modele le paiera. Celle-ci sert a DIRE, dans le registre et le README, ce
+# que coute un clip ordinaire une fois la decouverte passee.
+SECONDES_MESUREES_REPRISE = {
+    # 21/09/2026 `9517593d` NVIDIA A100-SXM4-40GB 17 images, meme phrase que
+    # `dce69faa`, meme carte, quelques heures plus tard.
+    #   modele 120 s + calcul 345 s = 479.4 s dans le bac.
+    #   Le temps vu du gestionnaire n'a PAS ete releve pour ce clip : le
+    #   suiveur sondait une adresse abregee, donc inexistante, pendant que le
+    #   clip finissait. La mesure qui compte ici est celle du bac, qui est
+    #   aussi ce que `SECONDES_MESUREES` porte pour tous les autres.
+    #
+    # CE QUE LA PAIRE ETABLIT : 382 s de charge deviennent 120 s, donc
+    # 262 s ne se reproduisent pas -- et non 382, qui etait la lecture facile.
+    # Le calcul seul, lui, ne bouge pas : 353 s puis 345 s, 2,3 % d'ecart.
+    ("soigne", "1"): 479,
+}
+
+
+def secondes_reprise(qualite: str, duree: str):
+    """Le temps du MEME clip relance, poids deja sur le disque du loueur.
+
+    `None` tant qu'aucune relance n'a ete chronometree : on ne devine pas une
+    reprise a partir d'un premier lancement, la part qui disparait n'etant
+    connue que si on l'a mesuree deux fois.
+    """
+    valeur = SECONDES_MESUREES_REPRISE.get((str(qualite), str(duree)))
+    return None if valeur is None else float(valeur)
+
+
+def prix_reprise(qualite: str, duree: str):
+    """Ce que coute le meme clip relance, ou None si ce n'est pas mesure."""
+    if qualite not in MODELES:
+        return None
+    secondes = secondes_reprise(qualite, duree)
+    if secondes is None:
+        return None
+    return round(prix_seconde(MODELES[qualite]["gpu"]) * secondes, 4)
 
 
 # Quel modele le clip rencontrerait s'il partait chez le loueur. C'est le defaut

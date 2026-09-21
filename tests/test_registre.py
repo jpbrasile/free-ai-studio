@@ -240,6 +240,19 @@ def test_un_modele_JAMAIS_lance_n_annonce_pas_un_prix(sandbox, par_id):
         assert ecrit in cout, (
             "le registre annonce %r, le code calcule %s $ pour %s s"
             % (cout, ecrit, duree))
+        # ET LE PRIX D'UNE REPRISE, des qu'il est mesure. Un premier lancement
+        # descend les poids du modele chez le loueur ; les fois suivantes non,
+        # et l'ecart est du simple au double sur ce modele-la. Annoncer le seul
+        # premier lancement fait croire au client que chacun de ses clips
+        # coutera ce prix. Sans cette ligne, remettre la fourchette d'avant
+        # laissait la suite verte -- mesure par mutation le 21/09/2026.
+        reprise = sandbox.video.prix_reprise("soigne", duree)
+        if reprise is not None:
+            ecrit_reprise = ("%.3f" % reprise).replace(".", ",")
+            assert ecrit_reprise in cout, (
+                "le registre ne dit pas ce que coute un clip ORDINAIRE : "
+                "il annonce %r, le code calcule %s $ pour une reprise de %s s"
+                % (cout, ecrit_reprise, duree))
     else:
         assert "INCONNU" in cout and "jamais" in cout, (
             "aucune mesure n'existe pour ce modele, et le registre annonce %r" % cout)
