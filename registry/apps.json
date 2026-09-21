@@ -24,11 +24,23 @@
     "Le texte de ce fichier part tel quel dans le README : il s'écrit en français",
     "accentué, pas en ASCII comme les commentaires du code.",
     "",
-    "Refaire le tableau du README après un changement :",
-    "    python scripts/generer-tableau-readme.py",
+    "Refaire les blocs engendrés — le tableau du README et « Ce que le Studio",
+    "sert aujourd'hui » de notebooks/SOTA_LINKS.md — après un changement :",
+    "    python scripts/engendrer-depuis-registre.py",
+    "    python scripts/engendrer-depuis-registre.py --verifier",
+    "Le second sort en code 1 si un bloc a vieilli ; la CI le lance.",
     "",
     "`verifie_le` = le jour où la licence a été lue sur la fiche officielle, et",
-    "non le jour où la ligne a été écrite. Une licence peut changer."
+    "non le jour où la ligne a été écrite. Une licence peut changer.",
+    "",
+    "`relu_le` = le jour où une MACHINE a relu la licence chez l'éditeur et l'a",
+    "trouvée identique à celle écrite ici. Ce n'est pas la même chose que",
+    "`verifie_le`, qui dit qu'un HUMAIN a ouvert la page et lu les conditions :",
+    "une machine ne fait que comparer deux étiquettes. Avancer `verifie_le` à sa",
+    "place changerait son sens en silence, et le travail programmé du lundi",
+    "(scripts/inscrire-la-relecture.py, .github/workflows/licences.yml) n'y",
+    "touche jamais. Les entrées hors Hugging Face, et celles qu'aucune machine",
+    "ne peut comparer, n'ont PAS de `relu_le` : elles se relisent à la main."
   ],
   "applications": [
     {

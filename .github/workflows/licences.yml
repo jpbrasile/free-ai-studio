@@ -1,0 +1,151 @@
+# Relit chaque semaine, chez leur éditeur, les licences des modèles que le
+# Studio fait tourner — et ne décide jamais à la place d'un humain.
+#
+# POURQUOI. `registry/apps.json` porte un champ `verifie_le`, défini dans son
+# propre en-tête comme « le jour où la licence a été lue sur la fiche
+# officielle », suivi de « une licence peut changer ». Rien ne la relisait : la
+# date vieillissait toute seule et se lisait quand même comme une vérification.
+#
+# CE QUE CE TRAVAIL NE FAIT PAS. Il ne change aucune licence. Une licence
+# passée en non commercial est une décision humaine : elle peut interdire du
+# jour au lendemain un usage que le Studio annonce permis. Le robot ouvre un
+# ticket ou une demande de fusion, et quelqu'un tranche.
+#
+# LES TROIS CODES DE SORTIE NE SONT JAMAIS CONFONDUS, et c'est tout l'intérêt :
+#   0  tout concorde            -> demande de fusion qui inscrit la date de relecture
+#   1  un humain doit trancher  -> ticket, avec le rapport
+#   2  la lecture a échoué      -> le travail ÉCHOUE, sans ticket et sans fusion.
+#      Un réseau en panne n'est pas un accord, et un ticket « désaccord » ouvert
+#      sur une panne apprend à ne plus lire les tickets.
+#
+# Ce fichier ne s'exécutera pas tant qu'il n'est pas sur la branche par défaut :
+# `schedule` ne part que de là. Rien ne se déclenche en le posant ici.
+
+name: Licences — relecture hebdomadaire
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # lundi, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: licences
+  cancel-in-progress: false
+
+jobs:
+  relire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Aucune installation : le script n'utilise que la bibliothèque standard.
+      # Ajouter une dépendance ici, c'est ajouter une panne possible à un
+      # travail dont le seul rôle est de dire la vérité une fois par semaine.
+      - name: Relire les licences chez leur éditeur
+        id: relire
+        run: |
+          set +e
+          python scripts/proposer-les-mises-a-jour.py \
+            --rapport rapport.md --verdict verdict.json --releve releve.json
+          code=$?
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Relecture des licences"
+            echo
+            echo "Code de sortie : \`$code\`"
+            echo
+            cat rapport.md 2>/dev/null || echo "_Aucun rapport : la lecture a échoué._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Garder le relevé et le rapport
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relecture-des-licences
+          path: |
+            rapport.md
+            releve.json
+            verdict.json
+          if-no-files-found: ignore
+
+      # --- Code 2 : rien n'a pu être lu ------------------------------------
+      # On échoue, bruyamment, et on n'écrit nulle part. Le silence serait un
+      # faux vert ; un ticket serait un faux désaccord.
+      - name: La lecture a échoué — ni ticket, ni fusion
+        if: steps.relire.outputs.code == '2'
+        run: |
+          echo "::error::Lecture impossible chez l'éditeur. Rien n'a été vérifié :"
+          echo "::error::ce n'est NI une concordance NI un désaccord."
+          exit 1
+
+      # --- Code 1 : un humain doit trancher --------------------------------
+      # Un seul ticket ouvert à la fois : le rouvrir chaque lundi ferait une
+      # pile que plus personne ne lit.
+      - name: Ouvrir ou mettre à jour le ticket
+        if: steps.relire.outputs.code == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          titre="Licences : une lecture chez l'éditeur ne concorde plus"
+          numero=$(gh issue list --state open --label licences \
+                     --search "$titre" --json number --jq '.[0].number // empty')
+          corps=$(mktemp)
+          {
+            echo "Relevé automatique du $(date -u +%Y-%m-%d) — **rien n'a été modifié**."
+            echo
+            echo "Une licence qui change est une décision humaine : le Studio annonce"
+            echo "peut-être encore comme libre un modèle qui ne l'est plus."
+            echo
+            cat rapport.md
+          } > "$corps"
+          if [ -n "$numero" ]; then
+            gh issue comment "$numero" --body-file "$corps"
+          else
+            gh label create licences --color FBCA04 \
+              --description "Relecture des licences chez leur éditeur" 2>/dev/null || true
+            gh issue create --title "$titre" --label licences --body-file "$corps"
+          fi
+
+      # --- Code 0 : tout concorde ------------------------------------------
+      # La date de relecture s'inscrit dans une branche à part, jamais sur la
+      # branche par défaut : la fusion reste le geste d'un humain.
+      - name: Proposer la date de relecture
+        if: steps.relire.outputs.code == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/inscrire-la-relecture.py --verdict verdict.json
+          if git diff --quiet; then
+            echo "Les dates sont déjà à jour : rien à proposer."
+            exit 0
+          fi
+          branche="licences/relecture-$(date -u +%Y-%m-%d)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branche"
+          git commit -o registry/apps.json \
+            -m "chore(licences): relecture du $(date -u +%Y-%m-%d) chez les éditeurs"
+          git push origin "$branche"
+          gh pr create --head "$branche" \
+            --title "Licences : relecture du $(date -u +%Y-%m-%d)" \
+            --body "$(printf '%s\n' \
+              "Les licences lisibles chez leur éditeur concordent avec le registre." \
+              "" \
+              "Cette demande n'inscrit qu'un champ : \`relu_le\`, une ligne par entrée." \
+              "**\`verifie_le\` n'est pas touché** — il dit qu'un *humain* a ouvert la" \
+              "page officielle, et une machine qui avancerait cette date lui ferait" \
+              "dire autre chose que ce qu'elle sait." \
+              "" \
+              "Les entrées hors Hugging Face et celles qui ne sont pas comparables" \
+              "n'ont **pas** de date : elles se relisent à la main. Le rapport complet" \
+              "est joint au travail qui a produit cette demande.")"

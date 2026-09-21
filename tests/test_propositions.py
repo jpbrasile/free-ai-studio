@@ -415,3 +415,69 @@ def test_une_date_illisible_est_refusee_sans_rien_ecrire(tmp_path):
         cwd=RACINE, capture_output=True, text=True, encoding="utf-8")
     assert fait.returncode == 2
     assert (RACINE / "registry" / "apps.json").read_bytes() == avant
+
+
+# --- 8. Le travail programme : les trois codes y restent distincts ----------
+
+HEBDO = RACINE / ".github" / "workflows" / "licences.yml"
+
+
+def _etapes() -> list[str]:
+    """Le workflow decoupe en etapes, sans pyyaml -- la CI ne l'installe pas."""
+    texte = HEBDO.read_text(encoding="utf-8")
+    debut = texte.index("    steps:")
+    return re.split(r"\n      - (?=uses:|name:)", texte[debut:])[1:]
+
+
+def _etape(bout: str) -> str:
+    for morceau in _etapes():
+        if bout in morceau:
+            return morceau
+    raise AssertionError("aucune etape ne contient %r" % bout)
+
+
+def test_une_panne_de_lecture_n_ouvre_NI_ticket_NI_fusion():
+    """Le seul endroit ou ce travail peut mentir.
+
+    Un reseau en panne rend 2. S'il ouvrait un ticket << desaccord >>, on
+    apprendrait a ne plus lire les tickets ; s'il se taisait, la semaine
+    passerait pour verifiee.
+    """
+    for bout, code in (("gh issue create", "'1'"), ("inscrire-la-relecture", "'0'")):
+        etape = _etape(bout)
+        assert "steps.relire.outputs.code == %s" % code in etape, (
+            "l'etape qui contient %r doit etre conditionnee au code %s" % (bout, code))
+
+    panne = _etape("::error::")
+    assert "steps.relire.outputs.code == '2'" in panne
+    assert "exit 1" in panne, "une lecture impossible doit faire ECHOUER le travail"
+
+
+def test_le_juge_n_est_jamais_blanchi():
+    """`|| true` et `continue-on-error` transforment un rouge en vert.
+
+    C'est la facon la plus courante de fabriquer une CI verte, et elle avait
+    deja coute cinq jours de rouge invisible sur `validate.yml`.
+    """
+    etape = _etape("proposer-les-mises-a-jour.py")
+    assert "continue-on-error" not in etape
+    assert "|| true" not in etape
+    assert "$GITHUB_OUTPUT" in etape, "le code de sortie doit etre transmis tel quel"
+
+
+def test_la_machine_ne_pousse_que_sur_une_branche_a_elle():
+    """Une fusion reste le geste d'un humain : le robot propose, il ne fusionne pas."""
+    etape = _etape("git push")
+    assert 'git push origin "$branche"' in etape
+    assert "--head" in etape and "gh pr create" in etape
+    texte = HEBDO.read_text(encoding="utf-8")
+    assert "gh pr merge" not in texte, "le robot fusionnerait tout seul"
+    for interdit in ("git push origin main", "git push origin HEAD:main", "--admin"):
+        assert interdit not in texte, "le robot ecrit sur la branche par defaut : %s" % interdit
+
+
+def test_les_deux_scripts_appeles_existent():
+    texte = HEBDO.read_text(encoding="utf-8")
+    for appele in ("scripts/proposer-les-mises-a-jour.py", "scripts/inscrire-la-relecture.py"):
+        assert appele in texte
+        assert (RACINE / appele).exists(), "le workflow appelle un script absent : %s" % appele
