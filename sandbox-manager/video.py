@@ -110,6 +110,12 @@ MODELES = {
         "hauteur": 480,
         "flow_shift": 3.0,
         "etapes": 30,
+        # DECLAREE, NON MESUREE. C'est ce que le depot servait avant le 21/09,
+        # ou la table du loueur s'arretait a 5 s (81 images a 16 img/s). Le
+        # 21/09 au matin je l'ai etendue a 9 s en la faisant deriver des ancres
+        # de la carte D'ICI -- autre modele, autre machine, aucun rapport. Elle
+        # revient a ce qui est sourceable, et sa vraie valeur est un chantier.
+        "secondes_max": int(os.getenv("VIDEO_SECONDES_MAX_RAPIDE", "5")),
         "note": "Tient sur une petite carte : marche aussi sur Kaggle et Colab gratuits.",
     },
     "soigne": {
@@ -127,6 +133,8 @@ MODELES = {
         "hauteur": 720,
         "flow_shift": 5.0,
         "etapes": 30,
+        # Meme provenance que ci-dessus : declaree, non mesuree.
+        "secondes_max": int(os.getenv("VIDEO_SECONDES_MAX_SOIGNE", "5")),
         "note": "Meilleure image, environ six fois le prix. Reserve aux plans qui comptent.",
     },
     # Le modele de la MAISON. Il ne se choisit pas dans la liste des qualites :
@@ -220,9 +228,28 @@ def images_pour(secondes: int, fps: int) -> int:
 
 
 def secondes_max_maison() -> int:
-    """La plus longue duree que la loi memoire accepte encore de majorer."""
+    """La plus longue duree que la loi memoire accepte encore de majorer.
+
+    C'est un plafond de CONNAISSANCE, pas de capacite : au-dela, on ne sait plus
+    majorer la place memoire a partir des ancres. Il ne dit rien de la carte du
+    client -- c'est `durees_offertes()` qui confronte chaque duree a SA carte.
+    """
     plafond = max(ou_calculer.ANCRES) + 24 * ou_calculer.IMAGES_MAX_EXTRAPOLATION
     return max(1, (plafond - 1) // fps_de("maison"))
+
+
+def secondes_max_loueur() -> int:
+    """La plus longue duree que les modeles LOUES declarent savoir faire.
+
+    Elle n'a rien a voir avec la carte d'ici, et le 21/09 au matin elle en
+    dependait : j'avais construit la table du loueur sur `secondes_max_maison()`,
+    donc sur mes deux ancres. Un portable sans carte se voyait alors offrir neuf
+    durees << fabriquees chez le loueur >> sans que rien n'etablisse que le
+    modele loue sache faire 9 s -- et un depassement memoire chez le loueur se
+    paie.
+    """
+    return max(int(MODELES[q].get("secondes_max", 0))
+               for q in MODELES if q != "maison")
 
 
 def table_maison() -> dict:
@@ -249,14 +276,23 @@ def durees_offertes(totale_mo: int | None = None) -> list[dict]:
         etat = ou_calculer.gpu_local.releve()
         totale_mo = etat["totale_mo"] if etat.get("vue") else None
 
+    fps = fps_de("maison")
+    plafond_loueur = secondes_max_loueur()
     offres = []
-    for cle, entree in table_maison().items():
+    for secondes in range(1, max(secondes_max_maison(), plafond_loueur) + 1):
+        cle = str(secondes)
+        entree = {"images": images_pour(secondes, fps), "secondes": secondes}
         besoin = ou_calculer.besoin_mo(entree["images"])
-        # `tient_ici` ne retire rien du menu : le loueur sait fabriquer ces
-        # clips, et un menu vide serait un cul-de-sac. Il dit seulement, duree
-        # par duree, si cette carte-ci peut la porter, carte vide.
+        # `tient_ici` ne retire rien tout seul : le loueur sait fabriquer la
+        # plupart de ces clips, et un menu vide serait un cul-de-sac. Il dit
+        # seulement, duree par duree, si CETTE carte-ci peut la porter.
         tient_ici = (totale_mo is not None
                      and besoin + ou_calculer.gpu_local.MARGE_MO <= totale_mo)
+        # Mais une duree que PERSONNE ne sait faire n'a rien a faire dans le
+        # menu. Avant cette ligne, un portable sans carte se voyait offrir 9 s
+        # << chez le loueur >> alors que le plafond declare du loueur est 5.
+        if not tient_ici and secondes > plafond_loueur:
+            continue
         offres.append({
             "duree": cle,
             "secondes": entree["secondes"],
@@ -331,6 +367,17 @@ def options_duree_html() -> str:
     return "".join(morceaux)
 
 
+def loueur_sait_faire(duree: str) -> bool:
+    """Le modele LOUE sait-il fabriquer un clip de cette duree ?
+
+    Separe de la maison depuis le 21/09 : le plafond du loueur derivait des
+    ancres de la carte d'ici, ce qui n'avait aucun sens -- autre modele, autre
+    machine. Quand la reponse est non, un clip de cette duree ne doit jamais
+    etre propose a la location : il y serait rabattu sur une duree plus courte.
+    """
+    return str(duree) in DUREES
+
+
 def images_maison(duree: str):
     """Combien d'images pour cette duree sur le modele de la maison, ou None.
 
@@ -339,14 +386,17 @@ def images_maison(duree: str):
     entree = DUREES_MAISON.get(str(duree))
     return entree["images"] if entree else None
 
-# 16 images par seconde, meme contrainte 4k+1, meme formule -- et les MEMES
-# durees offertes que pour la carte d'ici. C'est une necessite, pas une
-# symetrie de confort : quand le verdict envoie chez le loueur un clip demande
-# pour la maison, la duree doit exister des deux cotes. Sans cela le code
-# remplacait en SILENCE la duree demandee par 5 s, et le client recevait un
-# clip qu'il n'avait pas commande.
+# 16 images par seconde, meme contrainte 4k+1, meme formule -- mais PAS les
+# memes durees, et c'est le correctif du 21/09 apres-midi. Ce commentaire disait
+# que l'egalite des deux tables etait << une necessite, pas une symetrie de
+# confort >>, parce que `preparer()` rabattait sinon la duree sur 5 s en silence.
+# La necessite venait de la substitution : on a retire la substitution. Le
+# plafond du loueur est desormais celui du loueur, declare dans sa fiche.
+#
+# Le plafond du loueur est CELUI DU LOUEUR. Il derivait de `secondes_max_maison()`
+# -- donc des ancres de la carte d'ici -- le 21/09 au matin ; corrige le meme jour.
 DUREES = {str(s): {"images": images_pour(s, fps_de("rapide")), "secondes": s}
-          for s in range(1, secondes_max_maison() + 1)}
+          for s in range(1, secondes_max_loueur() + 1)}
 
 NEGATIF = (
     "couleurs criardes, surexpose, statique, details flous, sous-titres, style, "
@@ -716,14 +766,26 @@ def preparer(payload: dict, pour_modal: bool = True, maison: bool = False) -> di
     modele = MODELES[qualite]
     table_durees = DUREES_MAISON if maison else DUREES
 
-    duree = str(payload.get("duree") or "5")
+    duree = str(payload.get("duree") or DUREE_PAR_DEFAUT)
     if duree not in table_durees:
         if maison:
             raise ValueError(
-                "La duree de %s s n'a pas encore ete mesuree sur la carte d'ici. "
-                "Ce clip ne peut pas etre fabrique a la maison." % duree
+                "Un clip de %s s est trop long pour ce que l'on sait majorer sur la "
+                "carte d'ici. Il ne peut pas y etre fabrique." % duree
             )
-        duree = "5"
+        if duree not in DUREES_MAISON:
+            raise ValueError(
+                "Aucun des deux modeles ne sait faire un clip de %s s : le modele "
+                "loue s'arrete a %d s, et la carte d'ici a %d s."
+                % (duree, secondes_max_loueur(), secondes_max_maison())
+            )
+        # ICI VIVAIT `duree = "5"`. Le client demandait 7 s, recevait 5 s, et
+        # aucune ligne ne le disait -- la substitution corrompait meme le
+        # routage, qui decidait sur la memoire d'un clip de 5 s. Cette duree
+        # n'est connue que de la maison : on prepare donc le plan de la maison,
+        # pour que le routage tranche sur la VRAIE duree. `decider()` sait
+        # qu'elle ne peut pas partir chez le loueur (`loueur_peut`).
+        return preparer(payload, pour_modal=False, maison=True)
 
     description = str(payload.get("description") or "").strip()
     if not description:

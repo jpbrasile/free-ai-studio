@@ -377,18 +377,80 @@ def test_le_menu_ne_se_vide_JAMAIS_meme_sur_une_petite_carte(studio):
     assert petite, "un menu vide est un cul-de-sac"
     assert not any(o["tient_ici"] for o in petite)
     assert all(o["secondes_estimees"] is None for o in petite)
+
+    # Sur une petite carte, TOUT passe par le loueur : aucune duree offerte ne
+    # doit donc depasser ce que le loueur sait faire. Avant le 21/09 apres-midi,
+    # ce menu proposait 9 s << chez le loueur >> alors que le plafond declare du
+    # loueur est 5 s -- le clip y aurait ete rabattu a 5 s, en silence.
+    plafond = studio.video.secondes_max_loueur()
+    assert all(o["secondes"] <= plafond for o in petite), (
+        "on offre une duree que personne ne sait faire")
+
+    # Une grande carte en offre DAVANTAGE, et c'est le but : les durees en plus
+    # sont celles qu'elle seule sait faire.
     grande = studio.video.durees_offertes(totale_mo=24564)
-    assert [o["duree"] for o in petite] == [o["duree"] for o in grande]
+    assert len(grande) > len(petite)
     assert any(o["tient_ici"] for o in grande)
+    for o in grande:
+        if o["secondes"] > plafond:
+            assert o["tient_ici"], (
+                "%s s n'est ni faisable ici ni chez le loueur" % o["duree"])
 
 
-def test_les_deux_tables_offrent_les_MEMES_durees(studio):
-    """Sinon le code remplacait en silence la duree demandee par 5 secondes.
+def test_une_duree_connue_de_la_MAISON_SEULE_nest_jamais_rabattue(studio):
+    """Le danger que nommait l'ancien test, garde ; son moyen, jete.
 
-    Ce remplacement etait invisible : le client demandait 7 s et recevait 5 s
-    sans qu'aucune ligne ne le dise.
+    L'ancien exigeait que les deux tables offrent les MEMES durees, pour que
+    `preparer()` ne tombe jamais sur son `duree = "5"`. Le moyen etait faux : il
+    faisait deriver le plafond du LOUEUR des ancres de la carte d'ici -- autre
+    modele, autre machine. On a retire la substitution a la place, et les deux
+    tables peuvent enfin differer sans mentir.
+
+    Ce que la substitution cassait, et qu'on verifie ici : le client demandait
+    7 s, recevait 5 s, et le ROUTAGE lui-meme decidait sur la memoire d'un clip
+    de 5 s -- 14 902 Mo au lieu de 19 677.
     """
-    assert set(studio.video.DUREES) == set(studio.video.DUREES_MAISON)
+    assert set(studio.video.DUREES) != set(studio.video.DUREES_MAISON), (
+        "les deux plafonds sont a nouveau couples : celui du loueur n'est pas "
+        "celui de la maison")
+    seule_maison = set(studio.video.DUREES_MAISON) - set(studio.video.DUREES)
+    assert seule_maison, "aucune duree propre a la maison : le test ne teste rien"
+
+    duree = sorted(seule_maison, key=int)[0]
+    plan = studio.video.preparer({"description": "un chat", "duree": duree})
+    attendu = studio.video.DUREES_MAISON[duree]["images"]
+    assert plan["duree"] == duree, "la duree a ete rabattue sur %s" % plan["duree"]
+    assert plan["demande"]["images"] == attendu, (
+        "la duree a ete rabattue : %d images au lieu de %d"
+        % (plan["demande"]["images"], attendu))
+    assert plan["demande"]["modele"] == studio.video.MODELES["maison"]["hf"]
+    assert plan["resume_public"]["secondes_video"] == int(duree)
+
+
+def test_une_duree_que_PERSONNE_ne_sait_faire_est_refusee(studio):
+    """Ni la maison ni le loueur : on le dit, on ne bricole pas."""
+    trop = str(max(studio.video.secondes_max_maison(),
+                   studio.video.secondes_max_loueur()) + 1)
+    with pytest.raises(ValueError) as erreur:
+        studio.video.preparer({"description": "un chat", "duree": trop})
+    assert trop in str(erreur.value)
+
+
+def test_carte_prise_et_loueur_incapable_on_ATTEND_sans_proposer_de_louer(studio):
+    """Proposer une porte qui n'existe pas, c'est la substitution avec un bouton.
+
+    Carte prise, duree que le loueur ne sait pas faire : le client ne doit pas
+    se voir offrir << attendre ou louer >>, parce que louer lui rendrait un clip
+    plus court sans le dire.
+    """
+    decision = studio.ou_calculer.decider(
+        {}, studio.video.DUREES_MAISON[
+            sorted(set(studio.video.DUREES_MAISON) - set(studio.video.DUREES),
+                   key=int)[0]]["images"],
+        prix_estime_usd=0.12, sonde=sonde_prise, loueur_peut=False)
+    assert decision["ou"] == studio.ou_calculer.ATTENTE
+    assert studio.ou_calculer.MODAL not in decision["sorties"]
+    assert "QUE sur elle" in decision["pourquoi"]
 
 
 def test_la_page_dit_AU_PLUS_quand_le_chiffre_est_majore(studio):
@@ -467,3 +529,28 @@ def test_le_nombre_d_images_SUIT_la_granularite_DU_MODELE(studio, monkeypatch):
     assert a_quatre % 4 == 1 and a_cinq % 5 == 1
     assert a_quatre != a_cinq, (
         "le compte ne suit pas le modele : la granularite est recopiee")
+
+
+def test_par_lAPI_une_duree_hors_du_loueur_ne_propose_PAS_de_louer(studio, monkeypatch):
+    """Le meme refus, mais par le vrai chemin -- page, routage, decision.
+
+    Trois mutations muettes le 21/09 : `loueur_sait_faire()` pouvait mentir et
+    dire toujours oui, `app.py` pouvait cesser de le demander, et rien ne
+    rougissait -- le test precedent appelait `decider()` a la main avec
+    `loueur_peut=False`, donc il ne verifiait pas le cablage. Celui-ci passe par
+    l'API : carte prise, duree que seule la maison sait faire.
+    """
+    monkeypatch.setattr(studio.ou_calculer.gpu_local, "utilisable", sonde_prise)
+    duree = sorted(set(studio.video.DUREES_MAISON) - set(studio.video.DUREES),
+                   key=int)[0]
+    r = creer(studio, duree=duree)
+    assert r.status_code == 409
+    decision = r.json()["detail"]
+    assert decision["ou"] == "attente", (
+        "on propose de louer une duree que le loueur ne sait pas faire")
+    assert "modal" not in decision["sorties"]
+    assert decision["sorties"] == ["attente", "annuler"]
+    # Et le chiffre est bien celui de la duree DEMANDEE, pas d'un clip rabattu.
+    assert decision["besoin_mo"] == studio.ou_calculer.besoin_mo(
+        studio.video.DUREES_MAISON[duree]["images"])
+    assert studio.partis == []

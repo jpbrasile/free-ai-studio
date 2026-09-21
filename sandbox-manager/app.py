@@ -2213,6 +2213,9 @@ def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
         prix_estime_usd=video.prix_estime(plan["qualite"], plan["duree"]),
         reglage=reglage,
         loueur=loueur.capitalize(),
+        # Une duree que le loueur ne sait pas faire ne doit jamais lui etre
+        # proposee : elle y serait rabattue sur une plus courte, en silence.
+        loueur_peut=video.loueur_sait_faire(plan["duree"]),
     )
 
 

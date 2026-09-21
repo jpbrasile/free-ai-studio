@@ -260,7 +260,8 @@ def commandes_que_la_maison_ignore(resume: dict) -> list[str]:
 
 
 def decider(resume: dict, images: int | None, prix_estime_usd: float | None = None,
-            reglage: str | None = None, sonde=None, loueur: str = "Modal") -> dict:
+            reglage: str | None = None, sonde=None, loueur: str = "Modal",
+            loueur_peut: bool = True) -> dict:
     """Ou fabriquer ce clip, et pourquoi -- en une reponse montrable telle quelle.
 
     `resume` est le `resume_public` de `video.preparer()`. `images` est le
@@ -268,6 +269,9 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
     la maison. `sonde` sert aux tests : par defaut la vraie carte. `loueur` est
     le nom de la machine louee, tel que le client l'a choisi sur la page --
     Modal ou Kaggle -- pour que la phrase rendue dise ou le clip part vraiment.
+    `loueur_peut` dit si le modele loue sait faire CETTE duree : quand il ne
+    sait pas, louer n'est pas une porte, et la proposer reviendrait a rabattre
+    le clip sur une duree plus courte sans le dire.
 
     Rend toujours les memes cles, pour que la page n'ait jamais a deviner :
     `ou`, `pourquoi`, `besoin_mo`, `carte`, `prix_estime_usd`, `sorties`,
@@ -348,7 +352,19 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
         return reponse(MODAL, "Aucune carte utilisable ici : " + phrase,
                        carte=carte, besoin=besoin)
 
-    # La carte existe et elle est prise. C'est ICI que le client decide.
+    # La carte existe et elle est prise.
+    if not loueur_peut:
+        # Louer n'est pas une porte pour cette duree : le modele loue ne va pas
+        # jusque-la. Offrir le choix rabattrait le clip sur une duree plus
+        # courte sans le dire -- c'est la substitution muette, avec un bouton.
+        return reponse(ATTENTE, (
+            "La carte est prise, et ce clip ne peut etre fabrique QUE sur elle : "
+            "le modele loue chez %s ne va pas jusqu'a cette duree. On attend "
+            "qu'elle se libere, on n'arrete jamais le travail qui la tient. "
+            % loueur) + phrase, carte=carte, besoin=besoin,
+            sorties=(ATTENTE, "annuler"))
+
+    # C'est ICI que le client decide.
     if reglage == TOUJOURS_MAISON:
         return reponse(ATTENTE, (
             "La carte est prise et vous avez regle << toujours a la maison >> : "
