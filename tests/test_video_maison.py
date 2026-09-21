@@ -923,3 +923,22 @@ def test_une_duree_JAMAIS_relancee_n_annonce_pas_de_prix_de_reprise(sandbox):
         if cle not in video.SECONDES_MESUREES_REPRISE:
             assert video.secondes_reprise(*cle) is None
             assert video.prix_reprise(*cle) is None
+
+
+def test_la_page_ne_dit_pas_que_le_modele_est_CHARGE_une_seule_fois(sandbox):
+    """<< Telecharge une fois puis garde en cache >> etait vrai et trompeur.
+
+    Le client comprenait que le premier clip paie le modele et que les suivants
+    n'y pensent plus. Mesure du 21/09/2026, meme clip relance sur la meme
+    carte : la charge tombe de 382 s a 120 s -- les 75 Go ne redescendent donc
+    pas, mais les remonter dans la carte coute 120 s A CHAQUE CLIP, un quart de
+    la facture d'un clip d'une seconde.
+
+    Ce test juge la page rendue, pas une constante : c'est la phrase que le
+    client lit qui doit rester juste.
+    """
+    page = sandbox.video.PAGE_HTML
+    assert "gard\u00e9 en cache" not in page, (
+        "la page redit que le modele est mis en cache une fois pour toutes")
+    assert "recharg\u00e9 \u00e0 chaque clip" in page, (
+        "la page doit dire que le modele est recharge a chaque clip")

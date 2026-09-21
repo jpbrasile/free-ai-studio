@@ -1401,8 +1401,12 @@ function rafraichirBudget(){
                + d.modeles.maison.poids_go + " Go) sur la carte de cet ordinateur")
             : "")
         + ". Rien ne part chez un fournisseur d’IA : "
-        + "le calcul tourne sur une machine que vous louez à la minute, et le modèle est "
-        + "téléchargé une fois puis gardé en cache."
+        + "le calcul tourne sur une machine que vous louez à la minute. "
+        // Une phrase se coupe sur un point, jamais au milieu : coupee en
+        // deux morceaux, elle s’affiche bien mais ne se cherche plus,
+        // ni par un test ni par qui relit. Vu le 21/09/2026.
+        + "Le modèle n’est téléchargé qu’une fois, mais il est rechargé à chaque clip, "
+        + "ce qui prend une ou deux minutes avant que le calcul commence."
         + '<br><a href="/">Retour au Sandbox</a> &nbsp; <a href="/cles">Brancher Modal ou Kaggle</a>';
       return d;
     })
