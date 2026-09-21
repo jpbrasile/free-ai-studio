@@ -246,13 +246,13 @@
       "nature": "modèle ouvert exécuté sur la carte graphique de ce PC ; rien ne part chez personne",
       "licence": "Apache 2.0",
       "territoire": "aucune restriction de pays",
-      "vram_min_go": 12.5,
+      "vram_min_go": 14.4,
       "modes": ["local"],
       "cout": "gratuit, sans carte bancaire",
       "source": "https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers",
-      "verifie_le": "2026-09-19",
+      "verifie_le": "2026-09-21",
       "code": "sandbox-manager/video.py MODELES['maison']",
-      "note": "Place sur la carte MESURÉE, pas estimée : 12 841 Mo pour un clip de 3 s, 14 902 Mo pour 5 s (`ou_calculer.BESOIN_MO_MESURE`). Une durée absente de cette table part chez le loueur, avec son motif : on ne lance pas un travail sur un chiffre supposé. Ce modèle n'a pas de VACE — l'image de fin et l'image de référence ne peuvent pas être fabriquées ici, elles partent chez le loueur et la page le dit."
+      "note": "Place sur la carte MESURÉE, pas estimée : la mémoire libre qu'un vrai clip consomme, relevée durée par durée le 21/09/2026 et publiée avec sa provenance dans `sandbox-manager/ancres_video.py` (`ou_calculer.BESOIN_MO_MESURE`). Le chiffre ci-dessus est celui d'un clip de 3 s, et la place dépend de la longueur du clip : 11 771 Mo à 1 s, 14 751 à 3 s, 16 711 à 4 s, 20 451 à 8 s. Avec les 1 024 Mo de marge de la sonde, et la carte supposée entièrement libre : une carte de 12 Go ne peut fabriquer AUCUNE durée (même 1 s demande 12 795 Mo), une carte de 16 Go s'arrête à 3 s, et il faut 24 Go pour tout le menu. Détail et provenance : `docs/GPU-LOCAL.md`, section << Ce que la carte du client peut vraiment faire >>. Jusqu'au 21/09 ce champ annonçait 12,5 Go, qui était le compteur interne de torch et non la place prise sur la carte : 1,9 Go de moins que la réalité. Ce modèle n'a pas de VACE — l'image de fin et l'image de référence ne peuvent pas être fabriquées ici, elles partent chez le loueur et la page le dit."
     },
     {
       "id": "chanson",

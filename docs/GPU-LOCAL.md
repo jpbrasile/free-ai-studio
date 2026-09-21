@@ -159,8 +159,19 @@ sera refait pour le modèle retenu :
 | passes de débruitage | **50** | 30 |
 | chargement du modèle | 23,7 s | — |
 | **calcul** | **411,8 s** | **422 s** |
-| pic mémoire carte | **12 841 Mo** | — |
+| ~~pic mémoire carte~~ **pic du compteur torch** | **12 841 Mo** | — |
 | **coût** | **0 $** | 0,117 $ |
+
+> **Correction du 21/09/2026, et l'étiquette n'était pas un détail.** Cette ligne disait
+> « pic mémoire **carte** ». Le nombre vient de `torch.cuda.max_memory_allocated()` — le
+> compteur interne de l'allocateur torch, qui ne compte ni le contexte CUDA ni les blocs que
+> l'allocateur garde en réserve sans les rendre au pilote. Or c'est à la mémoire **libre de
+> la carte**, rendue par `nvidia-smi`, que la décision le compare. Le même clip de 3 s refait
+> le 21/09 : **12 828 Mo** au compteur torch — donc la mesure est reproductible à 0,1 % — mais
+> **14 751 Mo de mémoire libre réellement consommée**, soit **1 910 Mo de plus**. Le Studio
+> réservait moins que le clip ne prend, et les 1 024 Mo de marge de la sonde ne couvraient pas
+> l'écart. Les chiffres qui décident vivent désormais dans `sandbox-manager/ancres_video.py`,
+> engendré depuis le journal de mesure avec sa provenance.
 
 **Ce que ces nombres disent, et rien de plus.** Le même clip de 3 secondes sort en
 **pratiquement le même temps** — 412 s contre 422 s — mais à la maison il est en **720p au
@@ -169,9 +180,61 @@ carte de la maison a produit **3,4 fois plus de pixels**. **Ce n'est pas une mes
 matériel** : les deux modèles sont différents, le 5B est presque quatre fois le 1,3B. Le
 chiffre honnête est celui du produit, pas celui d'un banc d'essai.
 
-**Et le nombre le plus utile pour la suite est le pic mémoire : 12 841 Mo.** C'est ce que la
+~~**Et le nombre le plus utile pour la suite est le pic mémoire : 12 841 Mo.** C'est ce que la
 phase 3 passera à `gpu_local.utilisable(besoin)` — mesuré, pas estimé. Il tient largement
-dans les 24 564 Mo de la carte, et il tiendrait encore si un tiers en occupait 10 Go.
+dans les 24 564 Mo de la carte, et il tiendrait encore si un tiers en occupait 10 Go.~~
+**Le nombre était le bon endroit, pas la bonne grandeur** (voir la correction ci-dessus) :
+c'est **14 751 Mo** de mémoire libre qu'il faut, mesuré le 21/09.
+
+### Ce que la carte du client peut vraiment faire (campagne du 21/09/2026)
+
+La question posée par le propriétaire le 21/09 : *il s'agit de la VRAM potentielle chez le
+client ; les conclusions dépendent de son existence et de sa capacité.* Un seul chiffre ne
+peut pas y répondre — la place que prend un clip dépend de sa longueur. Les neuf clips de la
+campagne (2 passes, 1280 × 704, RTX 4090, sonde `nvidia-smi` à 1 Hz) donnent la table
+entière. **Place consommée** = pic sur la carte moins ce qui y résidait déjà ; **carte
+minimale** = cette place plus les 1 024 Mo de marge que `gpu_local.utilisable()` exige.
+
+| durée | images | place consommée | réservée par `besoin_mo()` | carte minimale |
+|---|---|---|---|---|
+| 1 s | 25 | 11 771 Mo | 11 771 | 12 795 Mo |
+| 2 s | 49 | 13 413 Mo | 13 413 | 14 437 Mo |
+| 3 s | 73 | 14 751 Mo | 14 751 | 15 775 Mo |
+| 4 s | 97 | 16 711 Mo | 16 711 | 17 735 Mo |
+| 5 s | 121 | *16 351 Mo* | **16 711** | 17 735 Mo |
+| 6 s | 145 | 17 411 Mo | 17 411 | 18 435 Mo |
+| 7 s | 169 | 18 991 Mo | 18 991 | 20 015 Mo |
+| 8 s | 193 | 20 451 Mo | 20 451 | 21 475 Mo |
+
+**La ligne de 5 s est en italique parce qu'elle descend**, et c'est la seule chose de cette
+campagne qu'on n'aurait pas devinée : 121 images consomment moins que 97. Ce que le clip
+**demande** monte pourtant sans exception — le compteur d'allocation de torch fait 11 111,
+11 802, 12 828, 13 855, 14 882, 15 909, 16 935, 17 962, soit **+1 027 Mo toutes les 24
+images**, à un mégaoctet près à chaque pas. Ce qui décroche est ce que l'allocateur garde
+**en réserve**, qui dépend de l'état de son cache et non du travail demandé. La table telle
+quelle ferait donc réserver moins pour un clip de 5 s que pour un de 4 s. `besoin_mo()` prend
+le **maximum courant** : la place réservée pour *n* images est la plus grande jamais relevée
+à *n* images ou moins. Ce n'est pas une mesure retouchée — les relevés bruts restent dans
+`ancres_video.py` — c'est une affirmation plus faible et vraie : *on n'a jamais vu un clip de
+cette longueur ou plus court prendre davantage.*
+
+**Carte par carte, la carte supposée entièrement libre** — c'est le cas le plus favorable,
+et le pilote, le bureau Windows et un navigateur ouvert en prennent déjà quelques centaines
+de mégaoctets :
+
+| carte du client | ce qui part à la maison |
+|---|---|
+| aucune carte, ou 4 / 6 / 8 Go | **aucune durée** — tout passe chez le loueur |
+| 12 Go (RTX 3060, 4070) | **aucune durée** : même 1 s demande 12 795 Mo |
+| 16 Go (RTX 4060 Ti 16 Go, 4080) | **1, 2 et 3 s** ; le clip de 4 s demande 17 735 Mo |
+| 24 Go (RTX 4090) | **1 à 8 s**, tout le menu |
+
+**Deux promesses du dépôt tombent avec cette table.** Le registre annonçait 12,5 Go pour
+« vidéo maison » : une carte de 12 Go passait le contrôle et **ne peut en fait rien faire**.
+Et le test qui aurait dû attraper la seconde exigeait que toute durée mesurée tienne dans
+16 Go, marge comprise — vrai du compteur torch, faux de la carte : **une carte de 16 Go ne
+peut pas fabriquer le clip de 5 s** que la page lui proposait par défaut.
+
 
 **Deux défauts trouvés en route, tous deux écrits parce qu'ils se répéteront :**
 

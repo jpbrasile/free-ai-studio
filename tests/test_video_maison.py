@@ -467,32 +467,82 @@ def test_la_page_dit_AU_PLUS_quand_le_chiffre_est_majore(studio):
 
 
 def test_la_reponse_dit_si_le_chiffre_est_mesure_ou_majore(studio, monkeypatch):
-    monkeypatch.setattr(studio.ou_calculer.gpu_local, "utilisable", sonde_libre)
-    mesuree = creer(studio, duree="5").json()["ou_calculer"]
-    assert mesuree["besoin_est_mesure"] is True
+    """Les deux durees d'essai se DEDUISENT, elles ne s'ecrivent plus.
 
-    majoree = creer(studio, duree="7").json()["ou_calculer"]
-    assert majoree["besoin_est_mesure"] is False
+    Ce test nommait 5 s comme la duree mesuree. Le 21/09 il a rougi : 121
+    images ont bien ete mesurees, a 16 351 Mo, mais 97 images en avaient pris
+    16 711 -- la suite des relevés n'est pas croissante, parce que la reserve
+    de l'allocateur torch depend de l'etat de son cache. La place reservee pour
+    5 s est donc le maximum courant, 16 711, qui n'est la mesure de personne a
+    cette duree : la reponse dit << au plus >>, et elle a raison.
+    """
+    monkeypatch.setattr(studio.ou_calculer.gpu_local, "utilisable", sonde_libre)
+    table = studio.video.table_maison()
+    mesurees = studio.video.durees_mesurees()
+    majorees = [c for c in table if c not in mesurees]
+    assert mesurees and majorees, (
+        "il faut une duree de chaque sorte pour que ce test dise quelque chose")
+
+    vu = creer(studio, duree=mesurees[0]).json()["ou_calculer"]
+    assert vu["besoin_est_mesure"] is True
+
+    vu = creer(studio, duree=majorees[0]).json()["ou_calculer"]
+    assert vu["besoin_est_mesure"] is False
+
+
 # --- 10. La phrase sous le menu ----------------------------------------------
 
-def test_la_phrase_ne_dit_MESUREES_que_des_durees_chronometrees(studio):
+def test_la_phrase_ne_dit_MESUREE_que_la_place_vraiment_relevee(studio):
     """Le defaut du 21/09, trouve en OUVRANT la page apres l'avoir deployee.
 
     La phrase listait les cles du menu. Tant que le menu tenait exactement les
-    deux durees chronometrees, elle disait vrai par coincidence ; le menu s'est
+    deux durees mesurees, elle disait vrai par coincidence ; le menu s'est
     ouvert a neuf durees et elle a annonce << Durees mesurees ici : 1 et 2 et
-    ... et 9 secondes >>. Sept de ces neuf sont majorees. Un nombre fabrique,
-    et tous les tests passaient : aucun ne lisait la page.
+    ... et 9 secondes >>. Sept de ces neuf etaient majorees. Un nombre
+    fabrique, et tous les tests passaient : aucun ne lisait la page.
     """
     mesurees = studio.video.durees_mesurees()
     offertes = [o["duree"] for o in studio.video.durees_offertes()]
     table = studio.video.table_maison()
-    assert mesurees, "aucune duree chronometree : la phrase n'aurait rien a dire"
+    assert mesurees, "aucune place relevee : la phrase n'aurait rien a dire"
     assert len(mesurees) < len(offertes), (
         "la phrase redirait le menu entier -- c'est le defaut qu'on repare")
     for cle in offertes:
         attendu = studio.ou_calculer.besoin_est_mesure(table[cle]["images"])
         assert (cle in mesurees) is attendu, cle
+
+
+def test_la_PLACE_et_le_TEMPS_ne_sont_pas_la_meme_liste(studio):
+    """Le meme defaut un cran plus loin, et la campagne du 21/09 l'ouvrait.
+
+    Une seule liste servait aux deux phrases. Elle disait vrai tant que les
+    memes clips avaient donne la place ET le temps. La campagne a releve la
+    place de toutes les durees du menu a 2 passes -- le temoin dit que la place
+    n'en depend pas, 12 841 Mo a 50 passes contre 12 828 a 2 -- mais le temps,
+    lui, en depend du simple au double : 412 s contre 170 s pour le meme clip
+    de 3 s. Nommer << chronometree >> une duree dont le temps est extrapole
+    serait exactement le defaut repare le matin meme.
+
+    ET LES DEUX LISTES NE S'EMBOITENT PAS, contrairement a ce que j'avais
+    ecrit d'abord. 5 s a bien ete chronometree le 19/09, et pourtant sa place
+    est annoncee << au plus >> : 121 images ont pris 16 351 Mo, mais 97 en
+    avaient pris 16 711, et la place reservee est le maximum courant. Un temps
+    mesure n'entraine donc pas une place mesuree. Ce qu'il entraine, c'est
+    qu'un clip a tourne -- donc une ancre.
+    """
+    place = studio.video.durees_mesurees()
+    chrono = studio.video.durees_chronometrees()
+    table = studio.video.table_maison()
+    assert chrono, "aucun temps chronometre : la phrase n'aurait rien a dire"
+    for cle in chrono:
+        assert table[cle]["images"] in studio.ou_calculer.ANCRES, (
+            "%s s est dite chronometree sans qu'aucun clip n'ait tourne" % cle)
+    assert set(chrono) ^ set(place), (
+        "les deux listes sont identiques : ce test ne distingue plus rien, et "
+        "la page pourrait de nouveau n'en lire qu'une")
+    for cle in table:
+        attendu = studio.ou_calculer.temps_est_mesure(table[cle]["images"])
+        assert (cle in chrono) is attendu, cle
 
 
 def test_la_page_tire_la_phrase_des_MESURES_et_non_du_MENU(studio):
@@ -503,16 +553,28 @@ def test_la_page_tire_la_phrase_des_MESURES_et_non_du_MENU(studio):
     assert "Object.keys(d.durees_maison" not in page, (
         "la phrase se rebranche sur le menu : elle redira neuf durees mesurees")
     assert "d.durees_mesurees" in page
+    assert "d.durees_chronometrees" in page, (
+        "la page ne lit qu'une liste : elle dira << chronometree >> d'un temps "
+        "extrapole des que les deux listes cesseront de coincider")
     assert "chronom" in page, "la phrase ne dit plus ce qu'elle nomme"
 
 
-def test_la_reponse_du_serveur_porte_les_DEUX_listes(studio, monkeypatch, tmp_path):
+def test_la_reponse_du_serveur_porte_les_TROIS_listes(studio, monkeypatch, tmp_path):
     """La page ne peut pas distinguer ce que le serveur ne lui dit pas."""
     monkeypatch.setattr(studio.ou_calculer, "FICHIER", tmp_path / "ou-calculer.json")
     client = TestClient(studio.app, base_url=LOCAL)
     vu = client.get("/video/ou-calculer", headers=CLE).json()
     assert set(vu["durees_mesurees"]) < set(vu["durees_maison"]), (
-        "le menu et les mesures doivent rester deux listes differentes")
+        "le menu et les places relevees doivent rester deux listes differentes")
+    # Pas d'emboitement entre les deux : une duree peut avoir son temps
+    # chronometre et sa place annoncee << au plus >>, parce que la place
+    # reservee est le maximum courant des relevés (voir
+    # `test_la_PLACE_et_le_TEMPS_ne_sont_pas_la_meme_liste`).
+    assert set(vu["durees_chronometrees"]) <= set(vu["durees_maison"])
+    assert set(vu["durees_chronometrees"]) ^ set(vu["durees_mesurees"]), (
+        "les deux listes sont identiques : la page pourrait n'en lire qu'une")
+
+
 def test_le_nombre_d_images_SUIT_la_granularite_DU_MODELE(studio, monkeypatch):
     """Le test precedent ne pouvait pas voir d'ou venait le pas.
 

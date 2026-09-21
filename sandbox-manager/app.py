@@ -2257,9 +2257,13 @@ def video_ou_calculer_lire(request: Request, authorization: Optional[str] = Head
         "defaut": ou_calculer.REGLAGE_DEFAUT,
         "carte_possible": bool(WORKER_GPU_URL),
         "durees_maison": video.DUREES_MAISON,
-        # Deux listes differentes, et la page ne doit pas les confondre : le
-        # menu offre neuf durees, deux seulement ont ete chronometrees ici.
+        # TROIS listes differentes, et la page ne doit en confondre aucune :
+        # ce que le menu OFFRE, les durees dont la PLACE a ete relevee sur un
+        # vrai clip, et celles dont le TEMPS a ete chronometre aux 50 passes de
+        # la production. La place a ete mesuree a 2 passes et n'en depend pas
+        # (temoin du 21/09 a 0,1 %) ; le temps en depend du simple au double.
         "durees_mesurees": video.durees_mesurees(),
+        "durees_chronometrees": video.durees_chronometrees(),
     }
 
 

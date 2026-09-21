@@ -179,12 +179,103 @@ def test_entre_deux_mesures_c_est_LA_MESURE_DU_DESSUS_qui_majore():
     images (4 s) reservaient 14 981 Mo quand 121 images (5 s) n'en avaient
     mesure que 14 902. La duree la plus courte demandait plus que la plus
     longue, et pouvait se voir refuser a la maison quand l'autre passait.
+
+    Les points d'essai se DEDUISENT de la table au lieu d'etre ecrits a la
+    main : le 21/09, la campagne a fait de 25 et 49 images des ancres, et ce
+    test a rougi en exigeant que 49 reserve le palier de 73. Il avait raison de
+    rougir -- mais pour la mauvaise raison, puisque 49 etait devenu une mesure.
+    Un test qui nomme des nombres que la table peut s'approprier est un test
+    qui rougira encore a la prochaine campagne, sans rien avoir garde.
     """
-    assert ou_calculer.besoin_mo(97) == ou_calculer.ANCRES[121]["memoire_mo"]
-    assert ou_calculer.besoin_mo(49) == ou_calculer.ANCRES[73]["memoire_mo"]
-    assert ou_calculer.besoin_mo(25) == ou_calculer.ANCRES[73]["memoire_mo"]
+    paliers = sorted(ou_calculer.ANCRES)
+    entre_deux = [(bas + haut) // 2 for bas, haut in zip(paliers, paliers[1:])
+                  if haut - bas > 1]
+    assert entre_deux, "la table n'a plus deux paliers voisins : rien a majorer"
+    for images in entre_deux:
+        assert images not in ou_calculer.ANCRES, images
+        au_dessus = min(n for n in paliers if n > images)
+        attendu = max(ou_calculer.ANCRES[n]["memoire_mo"]
+                      for n in paliers if n <= au_dessus)
+        assert ou_calculer.besoin_mo(images) == attendu, (
+            "%d images ne prend pas le palier de %d" % (images, au_dessus))
+    # Sous la plus petite mesure aussi : ce palier-la majore tout ce qui passe.
+    if paliers[0] > 1:
+        assert ou_calculer.besoin_mo(1) == ou_calculer.ANCRES[paliers[0]]["memoire_mo"]
     # Et au-dessus de tout ce qui est mesure, la droite reprend la main.
-    assert ou_calculer.besoin_mo(145) > ou_calculer.ANCRES[121]["memoire_mo"]
+    assert ou_calculer.besoin_mo(max(paliers) + 24) > ou_calculer.ANCRES[max(paliers)]["memoire_mo"]
+
+
+def test_la_place_reservee_ne_DESCEND_jamais_quand_le_clip_s_allonge():
+    """La mesure brute descend, et c'est ce qui a impose le maximum courant.
+
+    Campagne du 21/09, memoire libre consommee : 97 images en prennent 16 711
+    et 121 seulement 16 351. Ce que le clip DEMANDE monte pourtant sans
+    exception -- compteur d'allocation de torch : 11 111, 11 802, 12 828,
+    13 855, 14 882, 15 909, 16 935, 17 962, soit +1 027 Mo toutes les 24
+    images a un megaoctet pres -- et ce qui decroche est la RESERVE de
+    l'allocateur, qui depend de l'etat de son cache, pas du travail.
+
+    Laisser la table telle quelle ferait reserver a un clip de 5 s moins qu'a
+    un clip de 4 s : le plus long des deux partirait a la maison sur une place
+    trop petite, et mourrait apres plusieurs minutes de calcul.
+    """
+    paliers = sorted(ou_calculer.ANCRES)
+    brut = [ou_calculer.ANCRES[n]["memoire_mo"] for n in paliers]
+    assert brut != sorted(brut), (
+        "les relevés bruts sont croissants : ce test n'a plus de danger a "
+        "garder, et le maximum courant peut etre retire")
+    reserve = [ou_calculer.besoin_mo(n) for n in paliers]
+    assert reserve == sorted(reserve), reserve
+    for n, valeur in zip(paliers, reserve):
+        assert valeur >= ou_calculer.ANCRES[n]["memoire_mo"], (
+            "%d images : la place reservee est sous sa propre mesure" % n)
+
+
+def test_la_loi_du_TEMPS_ignore_les_ancres_qui_n_ont_pas_ete_chronometrees(monkeypatch):
+    """Les deux champs de la table n'ont PAS ete pris dans les memes conditions.
+
+    La memoire vient de la campagne du 21/09 a 2 passes, et le temoin a montre
+    qu'elle n'en depend pas : 12 841 Mo a 50 passes, 12 828 a 2, soit 0,1 %. Le
+    TEMPS, lui, en depend de plein fouet -- 412 s a 50 passes contre 170 s a 2
+    pour le meme clip de 3 s. Une duree mesuree en memoire mais jamais
+    chronometree a 50 passes ne porte donc pas de `secondes`, et elle ne doit
+    pas tirer la droite du temps vers le bas.
+
+    Sans ce filtre, une ancre sans `secondes` fait tomber `_loi` sur un
+    KeyError -- ou, pire si un jour on y mettait le temps de la campagne, fait
+    promettre a la page trois minutes pour un clip qui en prend sept.
+    """
+    monkeypatch.setattr(ou_calculer, "ANCRES", {
+        73: {"memoire_mo": 14751, "secondes": 412.0},
+        121: {"memoire_mo": 16351, "secondes": 598.0},
+        193: {"memoire_mo": 19000},          # mesuree en memoire, jamais chronometree
+    })
+    avant = ou_calculer._loi("secondes")
+    monkeypatch.setattr(ou_calculer, "ANCRES", {
+        73: {"memoire_mo": 14751, "secondes": 412.0},
+        121: {"memoire_mo": 16351, "secondes": 598.0},
+    })
+    assert ou_calculer._loi("secondes") == avant, (
+        "une ancre sans `secondes` a deplace la loi du temps")
+    # Et la memoire, elle, prend bien le troisieme point.
+    monkeypatch.setattr(ou_calculer, "ANCRES", {
+        73: {"memoire_mo": 14751, "secondes": 412.0},
+        121: {"memoire_mo": 16351, "secondes": 598.0},
+        193: {"memoire_mo": 19000},
+    })
+    assert ou_calculer.besoin_mo(193) == 19000
+
+
+def test_un_champ_que_PERSONNE_ne_porte_se_plaint_au_lieu_de_rendre_zero(monkeypatch):
+    """Une loi ajustee sur zero point rendrait (0, 0) : un besoin de 0 Mo.
+
+    C'est le seul endroit ou le filtre ci-dessus pouvait devenir dangereux --
+    il rend silencieusement vide ce qui etait plein. Un besoin nul enverrait
+    tous les clips a la maison, quelle que soit la carte.
+    """
+    monkeypatch.setattr(ou_calculer, "ANCRES", {73: {"memoire_mo": 14751}})
+    with pytest.raises(KeyError):
+        ou_calculer._loi("secondes")
 
 
 def test_la_marge_GRANDIT_avec_la_distance_aux_mesures():
@@ -210,15 +301,50 @@ def test_la_marge_ne_s_empile_JAMAIS_sur_une_mesure():
     """Grief principal de la relecture, verifie par le calcul.
 
     `gpu_local.utilisable()` ajoute deja 1 024 Mo. En majorant par-dessus un
-    point mesure, on refusait a la maison, sur une carte de 16 Go, le clip de
-    5 s dont la mesure dit qu'il y tient : 14 902 + 1 024 = 15 926 tient dans
-    16 384, mais 16 094 + 1 024 = 17 118 non. Majorer une mesure, ce n'est pas
-    etre prudent, c'est jeter la mesure.
+    point mesure, on empilait deux prudences et on refusait a la maison un clip
+    dont la mesure dit qu'il y tient. Majorer une mesure, ce n'est pas etre
+    prudent, c'est jeter la mesure.
+
+    Ce qui est verifie ici est donc l'ABSENCE de marge multiplicative sur un
+    point mesure, et non l'egalite exacte : depuis le 21/09, `besoin_mo()`
+    prend le maximum courant des relevés, parce que la suite des mesures n'est
+    pas croissante. La place d'un clip de 5 s est donc celle relevee a 4 s.
+    C'est un autre releve, pas une marge -- aucune des deux valeurs n'a ete
+    multipliee par quoi que ce soit.
     """
     for images, ancre in ou_calculer.ANCRES.items():
-        assert ou_calculer.besoin_mo(images) == ancre["memoire_mo"]
-        assert ou_calculer.besoin_mo(images) + 1024 <= 16384, (
-            "une carte de 16 Go doit garder les durees mesurees")
+        assert ou_calculer.besoin_mo(images) in {
+            a["memoire_mo"] for a in ou_calculer.ANCRES.values()}, (
+            "%d images : la place reservee n'est le releve d'aucun clip" % images)
+
+
+def test_ce_qu_une_carte_de_16_Go_peut_VRAIMENT_faire():
+    """Ce test portait une promesse fausse, et il la defendait.
+
+    Il exigeait que TOUTE duree mesuree tienne dans 16 Go, marge comprise. Il
+    passait parce que les deux ancres du 19/09 etaient prises au compteur
+    interne de torch : le clip de 5 s y valait 14 902 Mo, et 14 902 + 1 024
+    tient dans 16 384. La campagne du 21/09 a mesure la memoire LIBRE que ce
+    meme clip consomme -- 16 351 Mo -- et il en faut donc 17 375. Une carte de
+    16 Go ne peut PAS le faire, et le Studio le lui promettait : le client
+    aurait attendu plusieurs minutes de calcul pour un depassement memoire.
+
+    On ne garde donc plus une promesse, on ecrit ou passe la frontiere. Elle
+    peut echouer : si quelqu'un remet des chiffres du mauvais instrument, ou
+    deplace la marge, la liste change et ce test le dit.
+    """
+    carte_16_go = 16384
+    tiennent = sorted(n for n, a in ou_calculer.ANCRES.items()
+                      if a["memoire_mo"] + gpu_local.MARGE_MO <= carte_16_go)
+    debordent = sorted(set(ou_calculer.ANCRES) - set(tiennent))
+    assert tiennent, "aucune duree mesuree ne tiendrait dans 16 Go"
+    assert debordent, (
+        "toutes les durees mesurees tiennent dans 16 Go : c'est exactement ce "
+        "que la table disait quand elle portait le compteur torch")
+    # La frontiere est entre la plus grande qui tient et la plus petite qui deborde.
+    assert max(tiennent) < min(debordent)
+    assert (ou_calculer.ANCRES[min(debordent)]["memoire_mo"]
+            + gpu_local.MARGE_MO) > carte_16_go
 
 
 def test_trop_loin_des_ancres_le_clip_part_chez_le_loueur():
@@ -246,18 +372,53 @@ def test_une_duree_jamais_mesuree_mais_PROCHE_est_acceptee():
 def test_les_ancres_restent_ce_qui_a_ete_MESURE():
     """`BESOIN_MO_MESURE` publie les mesures, jamais la loi.
 
-    Les deux pics du 19/09. Le nom est reste parce que README.md le cite ; ce
-    qu'il rend doit donc rester une mesure, sans quoi une page annoncerait un
-    chiffre calcule en le presentant comme releve.
+    Le nom est reste parce que README.md le cite ; ce qu'il rend doit donc
+    rester une mesure, sans quoi une page annoncerait un chiffre calcule en le
+    presentant comme releve.
+
+    Les valeurs ne sont plus ecrites ici. Elles l'etaient -- 12 841 et 14 902 --
+    et c'etait une troisieme copie de la verite : le 21/09, quand la campagne a
+    remplace ces deux nombres pris au compteur interne de torch par la memoire
+    libre reellement consommee, ce test a defendu les anciens. Un test qui
+    recopie la table ne garde pas la table, il la fige.
     """
-    assert ou_calculer.BESOIN_MO_MESURE[73] == 12841
-    assert ou_calculer.BESOIN_MO_MESURE[121] == 14902
-    assert set(ou_calculer.BESOIN_MO_MESURE) == {73, 121}
-    # Sur un point mesure, on rend la mesure -- et `besoin_est_mesure()` permet
-    # a la page de ne pas annoncer un majorant comme un releve.
-    assert ou_calculer.besoin_mo(73) == 12841
-    assert ou_calculer.besoin_est_mesure(73)
-    assert not ou_calculer.besoin_est_mesure(97)
+    assert ou_calculer.BESOIN_MO_MESURE == {
+        n: a["memoire_mo"] for n, a in ou_calculer.ANCRES.items()}
+    # `besoin_est_mesure()` dit si le chiffre RENDU est la mesure de ce clip-la,
+    # et non si la duree figure dans la table. Depuis le maximum courant les
+    # deux different : 121 images sont mesurees, mais la place rendue est celle
+    # relevee a 97. La page doit alors dire << au plus >>.
+    for images in ou_calculer.ANCRES:
+        rendu = ou_calculer.besoin_mo(images)
+        propre = ou_calculer.ANCRES[images]["memoire_mo"]
+        assert ou_calculer.besoin_est_mesure(images) is (rendu == propre), images
+        assert rendu >= propre
+    assert any(ou_calculer.besoin_est_mesure(n) for n in ou_calculer.ANCRES), (
+        "aucune duree n'est annoncee comme mesuree : la page ne dirait plus rien")
+    hors_table = max(ou_calculer.ANCRES) + 1
+    assert not ou_calculer.besoin_est_mesure(hors_table)
+
+
+def test_les_ancres_viennent_du_fichier_ENGENDRE_et_portent_leur_provenance():
+    """La condition posee par la relecture en retirant `enregistrer_ancre()`.
+
+    Une table reecrite sans sa provenance derive de ce qui l'a produite : on ne
+    sait plus sur quelle carte, a quelle definition, avec combien de passes ni
+    avec quel instrument un chiffre a ete pris. C'est precisement ce qui est
+    arrive aux deux ancres du 19/09, appelees << pic memoire carte >> dans la
+    documentation alors qu'elles portaient le compteur interne de torch.
+
+    Ce test ne juge pas les nombres : il exige que le fichier dise d'ou ils
+    viennent.
+    """
+    import ancres_video
+    assert ou_calculer.ANCRES is ancres_video.ANCRES, (
+        "la table a ete recopiee dans ou_calculer : elle va deriver")
+    doc = ancres_video.__doc__ or ""
+    for mot in ("Date de la campagne", "Carte et versions", "Definition",
+                "Passes", "Machine hote", "TEMOINS"):
+        assert mot in doc, "la provenance ne dit pas : %s" % mot
+    assert ancres_video.ANCRES, "table vide"
 
 
 def test_le_MAJORANT_est_passe_a_la_sonde_et_il_couvre_la_mesure():

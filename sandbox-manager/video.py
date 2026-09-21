@@ -309,7 +309,7 @@ def durees_offertes(totale_mo: int | None = None) -> list[dict]:
 
 
 def durees_mesurees() -> list[str]:
-    """Les durees dont la place memoire a ete RELEVEE sur une vraie carte.
+    """Les durees dont la PLACE sur la carte a ete relevee sur un vrai clip.
 
     La page nommait ici toutes les durees de son menu. Tant que le menu tenait
     exactement les deux durees chronometrees, la phrase disait vrai par
@@ -319,6 +319,25 @@ def durees_mesurees() -> list[str]:
     """
     return [cle for cle, entree in table_maison().items()
             if ou_calculer.besoin_est_mesure(entree["images"])]
+
+
+def durees_chronometrees() -> list[str]:
+    """Les durees dont le TEMPS a ete mesure, aux vraies passes de production.
+
+    Pourquoi ce n'est PAS la meme liste que `durees_mesurees()` depuis la
+    campagne du 21/09 : la place et le temps n'ont pas ete pris dans les memes
+    conditions. La place a ete relevee a 2 passes, et le temoin a montre
+    qu'elle n'en depend pas (12 841 Mo a 50 passes, 12 828 a 2). Le temps, lui,
+    en depend de plein fouet -- 412 s contre 170 s pour le meme clip de 3 s --
+    et il n'a ete chronometre a 50 passes que pour deux durees.
+
+    Confondre les deux ferait dire a la page << chronometree >> d'une duree
+    dont le temps affiche est extrapole. C'est le defaut repare le matin meme,
+    un cran plus loin : une phrase vraie tant que les deux listes coincidaient,
+    et fausse le jour ou l'une des deux s'allonge.
+    """
+    return [cle for cle, entree in table_maison().items()
+            if ou_calculer.temps_est_mesure(entree["images"])]
 
 
 DUREES_MAISON = table_maison()
@@ -1271,17 +1290,24 @@ function chargerReglage(){
       document.getElementById("ouCalculer").hidden = false;
       document.getElementById("reglage").value = d.reglage;
       majLicence();   // la ligne de licence doit nommer le modèle de la maison
-      // Ce qui est CHRONOMETRE, jamais ce qui est offert : le menu compte neuf
-      // durees, deux ont ete relevees sur une vraie carte. Les nommer toutes
+      // Ce qui est MESURE, jamais ce qui est offert : les nommer toutes
       // << mesurees >> etait un nombre fabrique, vu en ouvrant la page.
-      const mesurees = (d.durees_mesurees || []).join(" et ");
+      // Et DEUX listes, pas une : la place a ete relevee sur un vrai clip pour
+      // toutes les durees de la campagne du 21/09 ; le TEMPS n'a ete
+      // chronometre aux vraies passes que pour deux d'entre elles, et il
+      // depend des passes la ou la place n'en depend pas. Une seule liste
+      // ferait dire << chronometree >> d'un temps extrapole.
+      const place = (d.durees_mesurees || []).join(" et ");
+      const chrono = (d.durees_chronometrees || []).join(" et ");
       document.getElementById("reglageNote").textContent =
         "Fabriquer ici ne coûte rien. La carte est partagée : le Studio ne prend "
         + "jamais la place d'un calcul en cours."
-        + (mesurees
-           ? (" Durées chronométrées sur cette carte : " + mesurees
-              + " secondes. Pour les autres, le temps est estimé et la place "
-              + "réservée est majorée.")
+        + (place
+           ? (" Place relevée sur cette carte pour : " + place + " secondes.")
+           : "")
+        + (chrono
+           ? (" Le temps affiché est une estimation, sauf pour " + chrono
+              + " secondes, qui ont été chronométrées.")
            : "");
       return d;
     })

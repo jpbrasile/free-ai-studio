@@ -60,23 +60,29 @@ ATTENTE = "attente"        # le client a dit << j'attends >>, ou l'a regle une f
 # ---------------------------------------------------------------------------
 # LES ANCRES : les seuls clips REELLEMENT mesures sur cette carte.
 # ---------------------------------------------------------------------------
-# RTX 4090, Wan 2.2 TI2V-5B, 1280 x 704, 50 passes, 19/09/2026. On n'y touche
-# pas a la main : `enregistrer_ancre()` y ajoute ce qu'un vrai clip a coute,
-# et les lois ci-dessous se reajustent dessus.
+# La table ne vit plus ici : elle est ENGENDREE dans `ancres_video.py` a partir
+# du journal de la campagne, avec sa provenance -- date, carte, definition,
+# passes, versions de torch, instrument, nombre de releves. C'est la condition
+# que la relecture adverse avait posee en retirant `enregistrer_ancre()` : une
+# table reecrite sans sa provenance derive de ce qui l'a produite.
 #
-# Jusqu'au 21/09 ces deux lignes etaient la SEULE reponse possible : une duree
-# absente partait chez le loueur, motif << on ne lance pas sur un chiffre
-# suppose >>. Deux consequences, relevees par le proprietaire :
+# Jusqu'au 21/09 deux lignes ecrites a la main etaient la SEULE reponse
+# possible : une duree absente partait chez le loueur, motif << on ne lance pas
+# sur un chiffre suppose >>. Deux consequences, relevees par le proprietaire :
 #   - la page ne pouvait offrir que 3 s et 5 s, pour toujours ;
 #   - et ces deux branches n'etaient atteignables par AUCUN chemin de
 #     production, la page n'offrant que ces deux durees-la.
 # Le chiffre ne sert qu'a une chose -- ai-je assez de memoire a cette seconde --
 # et a cette question un majorant repond aussi bien qu'une mesure, et mieux
 # qu'un refus.
-ANCRES: dict[int, dict[str, float]] = {
-    73: {"memoire_mo": 12841, "secondes": 412},    # clip_4090.mp4
-    121: {"memoire_mo": 14902, "secondes": 598},   # clip_4090_5s.mp4
-}
+#
+# ET LES DEUX ANCRES DU 19/09 NE MESURAIENT PAS CE QU'ON CROYAIT. Elles
+# portaient `torch.cuda.max_memory_allocated()`, le compteur interne de
+# l'allocateur, quand la decision les compare a la memoire LIBRE de la carte.
+# Mesure du 21/09 sur le meme clip de 3 s : 12 841 Mo au compteur torch, mais
+# 14 751 Mo de memoire libre reellement consommee, +14,9 %. On reservait moins
+# que le clip ne prend, et la marge de 1 024 Mo ne couvrait pas l'ecart.
+from ancres_video import ANCRES  # noqa: E402  (apres le docstring, avant l'usage)
 
 # Ce que ces deux lignes apprennent : 66 % d'images en plus coutent 45 % de
 # temps en plus mais seulement 16 % de memoire en plus. Les deux croissent, et
@@ -108,8 +114,21 @@ def _loi(champ: str) -> tuple[float, float]:
     Rend (origine, pente). Avec deux ancres c'est la droite qui les joint ;
     avec trois ou plus, la droite des moindres carres puis remontee du plus
     grand ecart, pour qu'aucune mesure ne se retrouve au-dessus de la loi.
+
+    ON N'AJUSTE QUE SUR LES ANCRES QUI PORTENT LE CHAMP, et c'est le coeur de
+    l'affaire depuis le 21/09 : les deux grandeurs de cette table n'ont pas ete
+    prises dans les memes conditions. La memoire vient de la campagne a 2
+    passes -- le temoin a montre qu'elle n'en depend pas (12 841 Mo a 50 passes,
+    12 828 a 2). Le TEMPS, lui, en depend de plein fouet : 412 s a 50 passes
+    contre 181 s a 2 pour le meme clip de 3 s. Il n'existe donc que pour les
+    durees chronometrees a 50 passes, et une duree sans `secondes` ne doit pas
+    tirer la droite du temps vers le bas. Sans ce filtre, la page promettrait
+    trois minutes pour un clip qui en prend sept.
     """
-    points = sorted((n, float(v[champ])) for n, v in ANCRES.items())
+    points = sorted((n, float(v[champ])) for n, v in ANCRES.items() if champ in v)
+    if not points:
+        raise KeyError(
+            "aucune ancre ne porte le champ %r : la loi n'a rien a ajuster" % champ)
     if len(points) == 1:
         (n0, v0), = points
         return v0, 0.0
@@ -139,24 +158,35 @@ def besoin_mo(images: int) -> int:
 
     Pourquoi la mesure n'est pas majoree (relecture adverse du 21/09, verifiee
     par le calcul) : `gpu_local.utilisable()` ajoute DEJA 1 024 Mo de marge. En
-    empilant la mienne par-dessus un point mesure, je refusais a la maison, sur
-    une carte de 16 Go, le clip de 5 s dont la mesure dit qu'il y tient --
-    14 902 + 1 024 = 15 926, contre 16 094 + 1 024 = 17 118 avec la loi. Majorer
-    une mesure n'est pas prudent : c'est jeter la mesure.
+    empilant la mienne par-dessus un point mesure, on empile deux prudences et
+    on refuse a la maison un clip dont la mesure dit qu'il y tient. Majorer une
+    mesure n'est pas prudent : c'est jeter la mesure.
+
+    MAIS LA SUITE DES MESURES N'EST PAS CROISSANTE, et il a fallu mesurer pour
+    le voir. Campagne du 21/09, memoire libre consommee : 97 images en prennent
+    16 711 et 121 seulement 16 351. Un clip plus long qui coute moins. Ce que le
+    clip DEMANDE, lui, monte sans exception -- le compteur d'allocation de torch
+    fait 11 111, 11 802, 12 828, 13 855, 14 882 -- et ce qui decroche est ce que
+    l'allocateur garde EN RESERVE, qui depend de l'etat du cache et non du
+    travail. La memoire prise sur la carte suit cette reserve a 461 Mo pres, le
+    contexte CUDA.
+
+    Telle quelle, la table ferait donc reserver a un clip de 5 s moins qu'a un
+    clip de 4 s -- exactement le defaut que la regle du palier avait ete ecrite
+    pour empecher. On prend donc le MAXIMUM COURANT : la place reservee pour n
+    images est la plus grande jamais relevee a n images ou moins. Ce n'est pas
+    une mesure retouchee -- les relevés bruts restent dans `ancres_video.py`
+    avec leur provenance -- c'est une phrase differente et plus faible : << on
+    n'a jamais vu un clip de cette longueur ou plus court prendre davantage >>.
     """
     images = int(images)
-    if images in ANCRES:
-        return int(ANCRES[images]["memoire_mo"])
 
-    # ENTRE DEUX MESURES : celle du palier au-dessus majore, exactement.
-    # Ajouter des images ne peut pas faire BAISSER la memoire ; tout ce qui est
-    # sous un palier mesure tient donc dans ce palier. Pas de droite a ajuster,
-    # pas de marge a choisir, et aucune hypothese sur la forme de la courbe --
-    # seulement qu'elle monte. C'est aussi ce qui rend cette fonction
-    # croissante, sans quoi 4 secondes auraient reserve plus que 5.
-    au_dessus = [n for n in ANCRES if n > images]
-    if au_dessus:
-        return int(ANCRES[min(au_dessus)]["memoire_mo"])
+    # Le palier qui porte cette duree : la plus petite mesure au-dessus, ou la
+    # mesure exacte si elle existe.
+    paliers = [n for n in ANCRES if n >= images]
+    if paliers:
+        jusqu_a = min(paliers)
+        return max(int(ANCRES[n]["memoire_mo"]) for n in ANCRES if n <= jusqu_a)
 
     # AU-DESSUS DE TOUT CE QUI A ETE MESURE : plus de palier, donc la droite
     # ajustee sur les mesures, relevee d'une marge qui grandit avec la
@@ -169,13 +199,33 @@ def besoin_mo(images: int) -> int:
 
 
 def besoin_est_mesure(images: int) -> bool:
-    """Vrai si ce nombre d'images a ete releve sur une vraie carte.
+    """Vrai si le chiffre rendu EST la mesure de ce clip-la.
 
     La page n'a pas le droit de dire << il en faut X >> d'un majorant : ce
     serait annoncer un chiffre calcule comme un chiffre releve. Elle dit
     << il en faut au plus X >> quand c'est faux.
+
+    << Present dans la table >> ne suffit plus depuis que `besoin_mo()` prend
+    le maximum courant : 121 images ONT ete mesurees a 16 351 Mo, et pourtant
+    la place reservee est 16 711, celle relevee a 97 images. Ce chiffre-la
+    n'est la mesure de personne a cette duree, et la page doit dire << au
+    plus >>. Une duree dont la mesure est le maximum de son propre prefixe,
+    elle, reste une mesure.
     """
-    return int(images) in ANCRES
+    images = int(images)
+    return images in ANCRES and besoin_mo(images) == int(ANCRES[images]["memoire_mo"])
+
+
+def temps_est_mesure(images: int) -> bool:
+    """Vrai si ce clip a ete CHRONOMETRE, aux 50 passes de la production.
+
+    Distinct de `besoin_est_mesure()` depuis la campagne du 21/09, et il faut
+    que les deux le restent : la place a ete relevee a 2 passes et n'en depend
+    pas (temoin a 0,1 %), le temps en depend de plein fouet -- 412 s a 50
+    passes contre 170 s a 2 pour le meme clip de 3 s. Une ancre sans champ
+    `secondes` a donc une place mesuree et un temps extrapole.
+    """
+    return "secondes" in ANCRES.get(int(images), {})
 
 
 def secondes_estimees(images: int) -> int:

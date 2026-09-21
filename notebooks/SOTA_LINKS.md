@@ -73,7 +73,7 @@ Les sections ci-dessus listent des **candidats** pour les carnets Colab/Kaggle. 
 | Dictée « sur cet ordinateur », et repli quand Groq refuse | `small` | local | **non mesurée** |
 | Vidéo, qualité « Rapide » (si on loue) | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | modal, kaggle, colab | **non mesurée** |
 | Vidéo, qualité « Soignée » (si on loue) | `Wan-AI/Wan2.1-VACE-14B-diffusers` | modal | **non mesurée** |
-| Vidéo fabriquée À LA MAISON, sur la carte de ce PC | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | local | 12,5 Go mesurés |
+| Vidéo fabriquée À LA MAISON, sur la carte de ce PC | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | local | 14,4 Go mesurés |
 | Chanson | `m-a-p/YuE2-3B` | modal, kaggle, colab | **non mesurée** |
 | Dialogue à plusieurs voix | `FireRedTeam/FireRedTTS2` | modal, kaggle | **non mesurée** |
 

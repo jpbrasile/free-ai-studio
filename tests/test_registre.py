@@ -174,10 +174,17 @@ def test_le_dialogue_garde_la_reserve_de_ses_auteurs(sandbox, par_id):
 
 
 def test_la_place_sur_la_carte_est_celle_qui_a_ete_MESUREE(sandbox, par_id):
-    """12,5 Go n'est pas une estimation : c'est le pic releve sur la carte.
+    """Ce nombre n'est pas une estimation : c'est ce qu'un vrai clip a pris.
 
     Si quelqu'un arrondissait ce nombre vers le bas, le Studio lancerait un clip
     sur une carte qui ne peut pas le tenir.
+
+    C'est arrive, et ce test l'a attrape le 21/09 : le registre annoncait
+    12,5 Go, qui etait le compteur interne de torch. La campagne a mesure la
+    memoire LIBRE que le meme clip consomme -- 14 751 Mo, soit 14,4 Go. Le
+    registre promettait 1,9 Go de moins que la realite. Il a rougi parce qu'il
+    DEDUIT la valeur attendue de la table du code au lieu de la recopier ; les
+    trois tests qui recopiaient les nombres, eux, ont defendu les anciens.
     """
     mesure_mo = sandbox.ou_calculer.BESOIN_MO_MESURE[73]
     assert par_id["video_maison"]["vram_min_go"] == round(mesure_mo / 1024, 1)
