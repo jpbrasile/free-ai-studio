@@ -414,7 +414,7 @@ def local_execute(jid: str, code: str) -> dict:
     return data
 
 
-def maison_execute(jid: str, code: str) -> dict:
+def maison_execute(jid: str, code: str, secondes: int | None = None) -> dict:
     """Le meme appel que local_execute, vers le bac a sable qui a la carte.
 
     Deux differences, toutes les deux mesurees le 19/09/2026 :
@@ -427,13 +427,17 @@ def maison_execute(jid: str, code: str) -> dict:
     """
     if not WORKER_GPU_URL:
         raise BackendUnavailable("Aucun bac a sable GPU : la surcouche docker-compose.gpu.yml n'est pas appliquee.")
-    attente = int(os.getenv("VIDEO_TIMEOUT_SECONDS", "2400")) + 60
+    # `secondes` RACCOURCIT, jamais ne rallonge : le bac a sable plafonne de
+    # son cote, et la video garde ses 2 400 s en ne demandant rien.
+    plafond = int(os.getenv("VIDEO_TIMEOUT_SECONDS", "2400"))
+    demande = plafond if secondes is None else max(1, min(plafond, int(secondes)))
+    attente = demande + 60
     try:
         with httpx.Client(timeout=attente) as c:
             r = c.post(
                 WORKER_GPU_URL + "/run",
                 headers={"Authorization": f"Bearer {WORKER_KEY}"},
-                json={"job_id": jid, "code": code},
+                json={"job_id": jid, "code": code, "secondes": demande},
             )
             r.raise_for_status()
             data = r.json()
@@ -710,12 +714,55 @@ def terminer_en_echec(jid: str, message: str) -> None:
     write_job(jid, job)
 
 
-def run_local(jid: str, code: str):
+# Ce que /essai s'autorise a attendre quand le code part sur la carte. Le bac
+# a sable GPU est regle a 2 400 s pour la video -- un clip de 3 s a demande
+# 412 s de calcul le 19/09 -- mais ici c'est quelqu'un devant une page, et un
+# code qui ne s'arrete pas tiendrait la carte quarante minutes. 600 s : de quoi
+# charger un modele (25 s mesurees pour celui de la video) et calculer, pas de
+# quoi immobiliser la carte de quelqu'un d'autre.
+ESSAI_MAISON_S = int(os.getenv("ESSAI_MAISON_TIMEOUT_SECONDS", "600"))
+
+
+def ou_lancer_essai() -> tuple[str, str]:
+    """Carte ou processeur, decide a la seconde. Rend (ou, phrase a montrer).
+
+    REG-1, tranche par le proprietaire le 21/09/2026 : on lance sur la carte si
+    elle est LIBRE. La place qu'un code jamais vu prendra n'est pas connue et ne
+    peut pas l'etre ; on ne la devine donc pas, on mesure l'occupation a
+    l'instant. S'il deborde quand meme, CUDA l'arrete en quelques secondes dans
+    un bac a sable -- l'echec est immediat et lisible, il ne contamine aucun
+    resultat. C'est ce qui distingue ce cas de tous les autres chiffres du
+    Studio, ou une valeur supposee se glisserait dans une mesure.
+    """
+    if not WORKER_GPU_URL:
+        return "local", ("Aucun bac a sable GPU sur cette machine : la surcouche "
+                         "docker-compose.gpu.yml n'est pas appliquee. Le code "
+                         "tourne sur le processeur.")
+    libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
+    if libre:
+        return "maison", phrase + " Le code tourne sur la carte."
+    return "local", phrase + " Le code tourne sur le processeur."
+
+
+def run_local(jid: str, code: str, gpu: bool = False):
+    """Le code du client sur SA machine : processeur, ou carte s'il l'a demandee."""
     job = read_job(jid)
-    job.update({"status": "running", "started_at": time.time(), "provider_effective": "local"})
+    ou, phrase = ("local", "")
+    if gpu:
+        ou, phrase = ou_lancer_essai()
+    job.update({"status": "running", "started_at": time.time(),
+                "provider_effective": ou})
+    if phrase:
+        # La fiche PORTE la raison. Un repli silencieux sur le processeur
+        # serait la meme faute que la case grisee sans explication : le client
+        # croirait avoir utilise sa carte.
+        job["placement"] = phrase
     write_job(jid, job)
     try:
-        finish_execution(jid, "local", local_execute(jid, code))
+        if ou == "maison":
+            finish_execution(jid, "maison", maison_execute(jid, code, ESSAI_MAISON_S))
+        else:
+            finish_execution(jid, "local", local_execute(jid, code))
     except BackendUnavailable as exc:
         terminer_en_echec(jid, str(exc)[:1000])
 
@@ -1421,6 +1468,7 @@ const CLE = "__CLE__";
 const DEMO = "__DEMO__";
 const ENTETES = {"Authorization": "Bearer " + CLE, "Content-Type": "application/json"};
 const OU = {modal:"Modal (machine distante)", local:"votre ordinateur, isole dans Docker",
+            maison:"la carte de votre ordinateur, isolee dans Docker",
             kaggle:"Kaggle", colab:"Colab"};
 
 document.getElementById("code").value = DEMO;
@@ -1487,24 +1535,25 @@ function carteTexte(d){
     + (c.libre_mo !== null && c.libre_mo !== undefined
        ? " (" + c.libre_mo + " Mo libres sur " + c.totale_mo + ")" : "")
     + ". La page Video s'en sert pour fabriquer des clips gratuitement. "
-    // Le point honnete : la carte existe, et cette page ne s'en sert pas.
-    // Le dire est la seule facon de ne pas remplacer une phrase fausse par
-    // une autre.
-    + "Ici, le code tourne quand meme sur le processeur : la place qu'un code "
-    + "quelconque prendrait sur la carte n'est pas connue d'avance, et la carte "
-    + "est partagee. Le Studio ne lance pas un travail sur un chiffre suppose. "
+    // Depuis le 21/09/2026 cette page s'en sert aussi. La phrase dit la regle
+    // exacte, parce qu'une case qui marche << parfois >> sans dire quand est
+    // aussi trompeuse qu'une case grisee sans raison.
+    + "Cochez << carte graphique >> et le code partira dessus, a une condition "
+    + "verifiee au moment du lancement : que personne d'autre ne la tienne. "
+    + "Sinon il tourne sur le processeur, et la reponse vous dit laquelle des "
+    + "deux a servi. Un calcul deja en cours n'est jamais arrete. "
     + MODAL_PLUS_VITE;
 }
 
-// La case etait IGNOREE en silence pour << Votre ordinateur >> : run_local ne
-// recoit meme pas `gpu`. Une case qui ne fait rien doit se voir, pas se taire.
+// La case a ete grisee du 20 au 21/09/2026 parce qu'elle ne faisait rien.
+// Elle fait maintenant quelque chose : le code part sur la carte SI elle est
+// libre a cet instant, et la fiche du travail dit ou il a tourne et pourquoi.
 function accorderLaCase(){
-  const local = document.getElementById("backend").value === "local";
   const case_ = document.getElementById("gpu");
-  case_.disabled = local;
-  if(local){ case_.checked = false; }
-  case_.parentElement.title = local
-    ? "Sans effet sur votre ordinateur : le code y tourne sur le processeur."
+  case_.disabled = false;
+  case_.parentElement.title = document.getElementById("backend").value === "local"
+    ? "Sur votre carte si elle est libre au moment du lancement ; sinon sur le "
+      + "processeur, et la reponse vous dira laquelle."
     : "";
 }
 
@@ -1530,6 +1579,9 @@ function afficher(d){
   if(d.exit_code !== undefined && d.exit_code !== null){ texte += " - code de sortie " + d.exit_code; }
   if(d.status === "needs_configuration"){ texte += ". Ce backend n'est pas branche : voir la page des cles."; }
   if(d.status === "handoff_ready"){ texte += ". Aucun backend automatique disponible : un notebook Colab a ete prepare."; }
+  // La raison du placement, quand il y en a une. Sans elle, un repli sur le
+  // processeur se lirait comme un lancement sur la carte.
+  if(d.placement){ texte += ". " + d.placement; }
   etat.textContent = texte;
 
   let brut = d.stdout || "";
@@ -1618,17 +1670,22 @@ def essai_carte(authorization: Optional[str] = Header(default=None)):
       - `carte` : le releve REEL de `nvidia-smi` a cette seconde (`vue` faux et
         `motif` rempli sur une machine sans carte -- jamais d'exception) ;
       - `bac_a_sable_gpu` : le deuxieme bac a sable est-il monte ;
-      - `utilisee_par_cette_page` : faux, et c'est le point honnete. Cette page
-        envoie du code QUELCONQUE ; la place qu'il prendrait sur la carte n'est
-        pas connue d'avance, et la carte est partagee. Le Studio ne lance pas un
-        travail sur un chiffre suppose -- c'est la meme regle qui fait partir
-        chez le loueur un clip dont la duree n'a pas ete mesuree.
+      - `utilisee_par_cette_page` : vrai depuis le 21/09/2026 des qu'un bac a
+        sable GPU est monte. Ce champ a ete faux du 20 au 21/09, et l'etait
+        honnetement : la place qu'un code QUELCONQUE prendrait sur la carte
+        n'est pas connue d'avance. Le proprietaire a tranche (REG-1) : on ne
+        devine pas ce besoin -- il ne peut pas se mesurer -- on mesure
+        l'OCCUPATION a l'instant du lancement. Un code qui deborde quand meme
+        est arrete par CUDA en quelques secondes, dans un bac a sable, avec un
+        message lisible ; il ne contamine aucun resultat. C'est ce qui separe
+        ce cas d'un clip dont la duree n'a pas ete mesuree, ou un chiffre
+        suppose se glisserait dans une mesure publiee.
     """
     auth(authorization)
     return {
         "carte": gpu_local.releve(),
         "bac_a_sable_gpu": bool(WORKER_GPU_URL),
-        "utilisee_par_cette_page": False,
+        "utilisee_par_cette_page": bool(WORKER_GPU_URL),
     }
 
 
@@ -1775,7 +1832,7 @@ def create_job(req: JobRequest, request: Request, authorization: Optional[str] =
     elif req.provider == "modal":
         threading.Thread(target=run_modal, args=(jid, req.code, req.gpu, req.internet), daemon=True).start()
     elif req.provider == "local":
-        threading.Thread(target=run_local, args=(jid, req.code), daemon=True).start()
+        threading.Thread(target=run_local, args=(jid, req.code, req.gpu), daemon=True).start()
     elif req.provider == "kaggle":
         threading.Thread(target=run_kaggle, args=(jid, req.code, req.gpu, req.internet), daemon=True).start()
     else:

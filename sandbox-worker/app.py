@@ -28,6 +28,12 @@ TIMEOUT = int(os.getenv("SANDBOX_TIMEOUT_SECONDS", "120"))
 class RunRequest(BaseModel):
     job_id: Optional[str] = None
     code: str = Field(min_length=1)
+    # Combien de secondes ce travail-ci s'autorise. Le bac a sable GPU est
+    # regle a 2 400 s pour la video ; le code tape dans /essai n'a pas a
+    # pouvoir tenir la carte quarante minutes. La valeur est PLAFONNEE par
+    # SANDBOX_TIMEOUT_SECONDS ci-dessus : une demande ne peut que RACCOURCIR
+    # l'attente, jamais l'allonger, sinon ce champ serait une porte.
+    secondes: Optional[int] = None
 
 
 def auth(value: Optional[str]):
@@ -99,10 +105,12 @@ def run(req: RunRequest, authorization: Optional[str] = Header(default=None)):
         valeur = os.environ.get(nom)
         if valeur is not None:
             env[nom] = valeur
+    # Plafonnee par le reglage : une demande ne peut que raccourcir.
+    attente = TIMEOUT if req.secondes is None else max(1, min(TIMEOUT, int(req.secondes)))
     try:
         proc = subprocess.run(
             ["python", "-I", str(script)], cwd=job_dir, env=env,
-            text=True, capture_output=True, timeout=TIMEOUT
+            text=True, capture_output=True, timeout=attente
         )
         stdout = proc.stdout[-MAX_OUTPUT:]
         stderr = proc.stderr[-MAX_OUTPUT:]

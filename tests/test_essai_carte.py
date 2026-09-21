@@ -24,15 +24,19 @@ Ce que ces tests gardent :
    absente -- et n'affirme JAMAIS qu'il n'y a pas de carte quand il y en a une ;
 3. quand la carte existe, la page dit aussi que cette page-ci ne s'en sert pas.
    Remplacer une phrase fausse par une autre serait le meme defaut a l'envers ;
-4. la case << carte graphique >> ne reste plus cochable pour << Votre
-   ordinateur >>, ou elle etait IGNOREE en silence : `run_local` ne recoit meme
-   pas le drapeau.
+4. la case << carte graphique >> fait ce qu'elle dit. Elle a ete grisee du 20
+   au 21/09/2026 parce qu'elle etait IGNOREE en silence -- `run_local` ne
+   recevait meme pas le drapeau. Depuis REG-1, tranche par le proprietaire le
+   21/09, le code part sur la carte SI elle est libre a cet instant, sinon sur
+   le processeur, et la fiche du travail dit LAQUELLE a servi. Un repli
+   silencieux serait la meme faute que la case grisee sans raison.
 
 Aucun appel reseau, aucun nvidia-smi : la sonde est remplacee par un faux.
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 
 import pytest
@@ -134,12 +138,25 @@ def test_avec_une_carte_la_page_la_nomme_et_ne_la_nie_pas(tmp_path):
     assert "n'existe pas" not in texte
 
 
-def test_avec_une_carte_la_page_dit_que_cette_page_ne_s_en_sert_pas(tmp_path):
+def test_avec_une_carte_la_page_dit_LA_CONDITION_et_pas_seulement_oui(tmp_path):
+    """Une case qui marche << parfois >> sans dire quand trompe autant qu'une
+    case grisee sans raison.
+
+    La phrase disait, du 20 au 21/09 : << Ici, le code tourne quand meme sur le
+    processeur [...] le Studio ne lance pas un travail sur un chiffre suppose >>.
+    Elle est devenue fausse a la minute ou la carte a ete branchee. Ce test
+    garde la meme exigence qu'avant -- la page dit la REGLE, pas seulement le
+    resultat -- de l'autre cote.
+    """
     texte = _rendu(tmp_path, {"carte": VUE, "bac_a_sable_gpu": True,
-                              "utilisee_par_cette_page": False})
-    assert "processeur" in texte
-    assert "chiffre suppose" in texte, \
-        "la raison du refus doit etre dite, sinon elle passe pour un oubli"
+                              "utilisee_par_cette_page": True})
+    assert "chiffre suppose" not in texte, \
+        "la vieille raison est devenue fausse : la page s'en sert desormais"
+    assert "que personne d'autre ne la tienne" in texte, \
+        "la condition doit etre ecrite, sinon la case marche << parfois >>"
+    assert "processeur" in texte, "le repli doit etre annonce avant, pas subi"
+    assert "jamais arrete" in texte, \
+        "un client doit savoir qu'on n'interrompt pas le calcul d'un autre"
 
 
 def test_sans_carte_la_page_le_dit_avec_son_motif(tmp_path):
@@ -173,25 +190,153 @@ def test_la_page_interroge_vraiment_la_route(sandbox):
     assert "carteTexte(d)" in page, "la reponse n'est plus mise dans la page"
 
 
-def test_la_case_carte_ne_reste_pas_cochable_pour_votre_ordinateur(sandbox):
-    """Elle etait IGNOREE en silence : `run_local` ne recoit meme pas `gpu`.
+def test_la_case_carte_est_redevenue_cochable_et_la_page_le_justifie(sandbox):
+    """Elle a ete grisee un jour, le temps qu'elle serve a quelque chose.
 
-    Une case sans effet qui se laisse cocher est un mensonge de plus, et celui-la
-    fait croire a un calcul sur la carte qui n'a jamais eu lieu.
+    Une case sans effet qui se laisse cocher fait croire a un calcul sur la
+    carte qui n'a jamais eu lieu ; une case grisee alors que le Studio SAIT
+    utiliser la carte est la meme faute a l'envers.
     """
     page = _client(sandbox).get("/essai").text
     assert "function accorderLaCase()" in page
-    assert 'case_.disabled = local' in page
+    assert "case_.disabled = false" in page, "la case doit etre rendue au client"
+    assert "case_.disabled = local" not in page, "le grisage du 20/09 doit avoir disparu"
     assert 'addEventListener("change", accorderLaCase)' in page
+    assert "si elle est libre au moment du lancement" in page, \
+        "l'infobulle doit dire la condition"
 
 
-def test_le_lancement_local_ignore_toujours_le_drapeau_gpu(sandbox):
-    """Ce test ECHOUERA le jour ou /essai saura utiliser la carte -- et c'est voulu.
-
-    Il fige ce qui est VRAI aujourd'hui : `run_local` ne recoit pas `gpu`. Le
-    jour ou quelqu'un branche la carte sur cette page, ce test tombe et oblige a
-    revoir la phrase montree au client, qui deviendrait fausse a son tour.
-    Sous-plan REG-1 de PLAN.md.
+def test_le_drapeau_gpu_passe_enfin_la_porte(sandbox):
+    """REG-1 referme. Le test qui figeait l'ancien etat a fait son travail : il
+    est tombe le jour du branchement, comme annonce dans PLAN.md.
     """
     source = (RACINE / "sandbox-manager" / "app.py").read_text(encoding="utf-8")
-    assert "threading.Thread(target=run_local, args=(jid, req.code), daemon=True)" in source
+    assert "threading.Thread(target=run_local, args=(jid, req.code, req.gpu), daemon=True)" in source
+    assert "def run_local(jid: str, code: str, gpu: bool = False)" in source
+
+
+def _job(sandbox, gpu):
+    jid = "essai-" + os.urandom(6).hex()
+    sandbox.write_job(jid, {"id": jid, "provider": "local", "gpu": gpu,
+                            "status": "queued", "artifacts": []})
+    return jid
+
+
+def test_sans_drapeau_la_carte_n_est_meme_pas_sondee(sandbox, monkeypatch):
+    """Le chemin de tous les jours ne paie pas une sonde inutile -- et surtout,
+    rien ne part sur la carte quand personne ne l'a demandee."""
+    sondes = []
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://faux:8000")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda *a, **k: sondes.append(1) or (True, "", VUE))
+    monkeypatch.setattr(sandbox, "local_execute",
+                        lambda jid, code: {"exit_code": 0, "stdout": "ok", "stderr": ""})
+    monkeypatch.setattr(sandbox, "maison_execute", lambda *a, **k: pytest.fail(
+        "parti sur la carte alors que personne ne l'a demandee"))
+    jid = _job(sandbox, gpu=False)
+    sandbox.run_local(jid, "print(1)", False)
+    fiche = sandbox.read_job(jid)
+    assert fiche["provider_effective"] == "local"
+    assert "placement" not in fiche, "rien a expliquer quand rien n'a ete demande"
+    assert sondes == []
+
+
+def test_avec_le_drapeau_et_la_carte_libre_le_travail_part_SUR_LA_CARTE(sandbox, monkeypatch):
+    """Bout en bout, et la duree courte est verifiee au passage.
+
+    Sans ce dernier point, /essai heriterait des 2 400 s de la video et un code
+    qui ne s'arrete pas tiendrait la carte quarante minutes.
+    """
+    recues = []
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://faux:8000")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda *a, **k: (True, "RTX 4090 : 24138 Mo libres sur 24564,"
+                                               " personne d'autre ne la tient.", VUE))
+    monkeypatch.setattr(sandbox, "local_execute", lambda *a, **k: pytest.fail(
+        "reste sur le processeur alors que la carte est libre"))
+    monkeypatch.setattr(sandbox, "maison_execute",
+                        lambda jid, code, secondes=None: recues.append(secondes) or
+                        {"exit_code": 0, "stdout": "ok", "stderr": ""})
+    jid = _job(sandbox, gpu=True)
+    sandbox.run_local(jid, "print(1)", True)
+    fiche = sandbox.read_job(jid)
+    assert fiche["provider_effective"] == "maison"
+    assert "tourne sur la carte" in fiche["placement"]
+    assert recues == [sandbox.ESSAI_MAISON_S]
+    assert sandbox.ESSAI_MAISON_S < 2400, "la duree de la video n'a rien a faire ici"
+
+
+def test_avec_le_drapeau_mais_la_carte_prise_le_travail_RESTE_sur_le_processeur(
+        sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://faux:8000")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda *a, **k: (False, "RTX 4090 : 15500 Mo deja pris sur 24564."
+                                                " Un autre calcul tient la carte, et on"
+                                                " ne l'arrete jamais.", VUE))
+    monkeypatch.setattr(sandbox, "local_execute",
+                        lambda jid, code: {"exit_code": 0, "stdout": "ok", "stderr": ""})
+    monkeypatch.setattr(sandbox, "maison_execute", lambda *a, **k: pytest.fail(
+        "a pris une carte que quelqu'un d'autre tenait"))
+    jid = _job(sandbox, gpu=True)
+    sandbox.run_local(jid, "print(1)", True)
+    fiche = sandbox.read_job(jid)
+    assert fiche["provider_effective"] == "local"
+    assert "ne l'arrete jamais" in fiche["placement"],         "le client doit lire POURQUOI sa carte n'a pas servi"
+
+
+def test_carte_libre_le_code_part_sur_la_carte(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://faux:8000")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda *a, **k: (True, "RTX 4090 : 24138 Mo libres sur 24564,"
+                                               " personne d'autre ne la tient.", VUE))
+    ou, phrase = sandbox.ou_lancer_essai()
+    assert ou == "maison"
+    assert "tourne sur la carte" in phrase
+
+
+def test_carte_prise_le_code_part_sur_le_processeur_et_on_n_arrete_personne(
+        sandbox, monkeypatch):
+    """LE cas qui protege le voisin.
+
+    Sur la machine de developpement, `llama-server` tient 15,5 Go en
+    permanence. Un Studio qui prendrait la carte de force ferait perdre le
+    travail de quelqu'un d'autre -- ici, il s'efface et il le dit.
+    """
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://faux:8000")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda *a, **k: (False, "RTX 4090 : 15500 Mo deja pris sur 24564."
+                                                " Un autre calcul tient la carte, et on"
+                                                " ne l'arrete jamais.", VUE))
+    ou, phrase = sandbox.ou_lancer_essai()
+    assert ou == "local"
+    assert "ne l'arrete jamais" in phrase
+    assert "tourne sur le processeur" in phrase
+
+
+def test_sans_bac_a_sable_gpu_le_repli_est_dit_et_la_sonde_n_est_pas_appelee(
+        sandbox, monkeypatch):
+    """Une carte vue par le gestionnaire ne veut pas dire un bac a sable pour
+    s'en servir : la surcouche peut ne pas etre appliquee."""
+    appels = []
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "")
+    monkeypatch.setattr(sandbox.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda *a, **k: appels.append(1) or (True, "", VUE))
+    ou, phrase = sandbox.ou_lancer_essai()
+    assert ou == "local"
+    assert "docker-compose.gpu.yml" in phrase
+    assert appels == [], "inutile de sonder la carte : aucun bac a sable pour s'en servir"
+
+
+def test_une_duree_demandee_ne_peut_que_RACCOURCIR_l_attente(sandbox):
+    """Le bac a sable GPU est regle a 2 400 s pour la video.
+
+    Un code tape dans /essai n'a pas a pouvoir tenir la carte quarante minutes.
+    Mais le champ qui raccourcit ne doit jamais pouvoir rallonger, sinon il
+    devient une porte.
+    """
+    source = (RACINE / "sandbox-worker" / "app.py").read_text(encoding="utf-8")
+    assert "min(TIMEOUT, int(req.secondes))" in source, \
+        "la duree demandee doit etre plafonnee par le reglage"
+    gestionnaire = (RACINE / "sandbox-manager" / "app.py").read_text(encoding="utf-8")
+    assert "min(plafond, int(secondes))" in gestionnaire
+    assert "ESSAI_MAISON_S = int(os.getenv(" in gestionnaire

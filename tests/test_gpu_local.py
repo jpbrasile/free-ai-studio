@@ -306,3 +306,49 @@ def test_les_lanceurs_n_ecrasent_pas_un_dossier_de_poids_deja_choisi():
     # L'ancienne forme, celle qui regardait a cote du montage.
     assert 'poids="$cache_hf/hub' not in sh
     assert r'$poids = Join-Path $cacheHF "hub' not in ps1
+
+
+# --- REG-1 : une carte libre pour un code dont on ignore l'appetit ----------
+# `utilisable()` compare a un besoin MESURE. Pour le code tape dans /essai il
+# n'y a pas de besoin mesurable, et il ne peut pas y en avoir : on regarde donc
+# l'autre bout, l'OCCUPATION. Tranche par le proprietaire le 21/09/2026.
+
+def test_une_carte_que_personne_ne_tient_est_libre(carte):
+    """Mesure du 21/09/2026, bureau Windows allume et rien d'autre :
+    426 Mo pris sur 24 564. Le bureau ne doit pas passer pour un locataire."""
+    carte(_Sortie(stdout=RELEVE_REEL))
+    libre, phrase, etat = gpu_local.libre_pour_un_code_inconnu()
+    assert libre is True
+    assert "24138" in phrase and "personne d'autre" in phrase
+    assert etat["libre_mo"] == 24138
+
+
+def test_une_carte_prise_n_est_pas_libre(carte):
+    """Le cas reel : `llama-server` tient 15,5 Go en permanence sur cette machine.
+
+    Le prendre de force ferait perdre le travail de quelqu'un d'autre.
+    """
+    carte(_Sortie(stdout="NVIDIA GeForce RTX 4090, 24564, 8600\n"))
+    libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
+    assert libre is False
+    assert "15964" in phrase, "la phrase doit dire COMBIEN est pris"
+    assert "on ne l'arrete jamais" in phrase
+
+
+def test_une_carte_invisible_n_est_pas_libre(monkeypatch):
+    """Ne pas voir la carte n'est pas la voir libre -- c'est le faux vert type."""
+    monkeypatch.setattr(gpu_local, "ACTIF", True)
+    monkeypatch.setattr(gpu_local.shutil, "which", lambda _: None)
+    libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
+    assert libre is False
+    assert "nvidia-smi absent" in phrase
+
+
+def test_le_seuil_separe_le_bureau_d_un_vrai_calcul(carte):
+    """Un seuil qui laisserait passer un vrai locataire ne servirait a rien,
+    et un seuil qui refuserait un bureau allume rendrait la case inutile."""
+    bureau = gpu_local.OCCUPATION_TOLEREE_MO
+    carte(_Sortie(stdout="NVIDIA GeForce RTX 4090, 24564, %d\n" % (24564 - bureau)))
+    assert gpu_local.libre_pour_un_code_inconnu()[0] is True
+    carte(_Sortie(stdout="NVIDIA GeForce RTX 4090, 24564, %d\n" % (24564 - bureau - 1)))
+    assert gpu_local.libre_pour_un_code_inconnu()[0] is False

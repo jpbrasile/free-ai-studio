@@ -104,6 +104,42 @@ def releve(delai_s: int | None = None) -> dict:
     }
 
 
+# Ce qu'on tolere de voir pris sur la carte tout en la disant LIBRE. Ce n'est
+# pas une prediction du besoin d'un code -- il n'y en a aucune de possible pour
+# un code jamais vu -- c'est le seuil qui separe << le bureau affiche des
+# fenetres >> de << un vrai calcul tient la carte >>. Mesure du 21/09/2026 sur
+# cette machine, bureau Windows allume et rien d'autre : 426 Mo pris sur
+# 24 564. Un vrai locataire se compte en gigaoctets : llama-server en tient
+# 15 500, un clip de la page Video 12 841.
+OCCUPATION_TOLEREE_MO = int(os.getenv("GPU_LOCAL_OCCUPATION_TOLEREE_MO", "2048"))
+
+
+def libre_pour_un_code_inconnu(delai_s: int | None = None) -> tuple[bool, str, dict]:
+    """La carte est-elle libre pour un code dont on ignore l'appetit ?
+
+    `utilisable()` compare a un besoin MESURE ; ici il n'y en a pas, et il ne
+    peut pas y en avoir. On regarde donc l'autre bout : est-ce que quelqu'un
+    d'autre s'en sert ? La phrase rendue dit la carte et les chiffres, parce
+    qu'un << non >> sans chiffre envoie chercher une panne qui n'existe pas.
+    Elle ne dit PAS ce qu'on va faire ensuite : c'est a l'appelant.
+    """
+    etat = releve(delai_s)
+    if not etat["vue"]:
+        return False, etat["motif"], etat
+
+    pris = max(0, etat["totale_mo"] - etat["libre_mo"])
+    if pris > OCCUPATION_TOLEREE_MO:
+        return False, (
+            "%s : %d Mo deja pris sur %d. Un autre calcul tient la carte, et on "
+            "ne l'arrete jamais." % (etat["nom"], pris, etat["totale_mo"])
+        ), etat
+
+    return True, (
+        "%s : %d Mo libres sur %d, personne d'autre ne la tient."
+        % (etat["nom"], etat["libre_mo"], etat["totale_mo"])
+    ), etat
+
+
 def utilisable(besoin_mo: int, delai_s: int | None = None) -> tuple[bool, str, dict]:
     """Peut-on lancer ICI un travail qui demande `besoin_mo` de memoire ?
 
