@@ -118,7 +118,17 @@ Kaggle, puis Colab — AUTOMATIQUEMENT, pas en secours cliquable
 > ~~**Ce que ce bloc annonçait jusqu'au 19/09/2026** : « GPU local suffisant ↓ sinon Modal
 > configuré ↓ sinon Colab / Kaggle en **secours manuel cliquable** ».~~ Inversé, et le
 > secours n'est pas manuel : `run_auto` pose `fallback_order = ["modal", "local", "kaggle",
-> "colab"]` et enchaîne tout seul. **Il n'existe aucun chemin GPU local** pour la vidéo.
+> "colab"]` et enchaîne tout seul. ~~**Il n'existe aucun chemin GPU local** pour la
+> vidéo.~~ **Vrai deux heures.** `ce36880` (19/09, 19:31) construit ce chemin, et
+> `d63d87d` — la correction ci-dessus, 19/09 17:24 — n'a jamais été retouchée après
+> lui. La page Vídeo a bien une carte : `ou_calculer.reponse()` tranche entre `maison`
+> et `modal` sur la **VRAM libre** à la seconde. Mesure du 21/09 sur la 4090 vide :
+> huit des neuf durées offertes partent à la maison, la neuvième chez le loueur.
+> **Trois règles distinctes, ne les confonds pas** : `auto` (`run_auto`) passe par le
+> bac à sable **processeur**, il ne touche jamais la carte ; `local` avec GPU demandé
+> (`ou_lancer_essai`) prend la carte si elle est **inoccupée** (besoin inconnu, donc on
+> regarde l'occupation) ; la **vidéo** la prend si le clip **tient dans le libre**
+> (besoin connu, mesuré ou majoré).
 > C'était le même défaut que `docs/MODAL_CATALOG.md` et que la section `policy` de
 > `modal/profiles.json` : trois descriptions de la même règle, toutes fausses dans le même
 > sens, dans les fichiers qu'un agent lit en premier. **Les trois sont corrigées ; celle de

@@ -2254,6 +2254,9 @@ def video_ou_calculer_lire(request: Request, authorization: Optional[str] = Head
         "defaut": ou_calculer.REGLAGE_DEFAUT,
         "carte_possible": bool(WORKER_GPU_URL),
         "durees_maison": video.DUREES_MAISON,
+        # Deux listes differentes, et la page ne doit pas les confondre : le
+        # menu offre neuf durees, deux seulement ont ete chronometrees ici.
+        "durees_mesurees": video.durees_mesurees(),
     }
 
 
@@ -2400,7 +2403,12 @@ def video_fichier(jid: str, cle: str = Query(default=""),
 
 @app.get("/video", response_class=HTMLResponse)
 def video_page():
-    return HTMLResponse(video.PAGE_HTML.replace("__CLE__", KEY))
+    # Le menu des durees est fabrique a chaque affichage : il suit la loi
+    # memoire, qui suit les clips mesures. Un menu ecrit en dur se serait
+    # perime des le premier clip plus long.
+    return HTMLResponse(video.PAGE_HTML
+                        .replace("__OPTIONS_DUREE__", video.options_duree_html())
+                        .replace("__CLE__", KEY))
 
 
 # --- Chanson ------------------------------------------------------------------

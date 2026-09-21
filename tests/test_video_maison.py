@@ -94,7 +94,14 @@ def test_carte_libre_le_clip_se_fabrique_a_la_maison(studio, monkeypatch):
     assert r.status_code == 200
     fiche = r.json()
     assert fiche["provider"] == "maison"
-    assert fiche["ou_calculer"]["besoin_mo"] == 12841
+    # Un MAJORANT, pas la mesure : il couvre les 12 841 Mo du clip du 19/09
+    # sans pretendre les valoir. C'est ce qui permet d'offrir autre chose que
+    # les deux durees mesurees (proprietaire, 21/09).
+    assert fiche["ou_calculer"]["besoin_mo"] >= 12841
+    assert fiche["ou_calculer"]["besoin_mo"] == studio.ou_calculer.besoin_mo(73)
+    # Le temps attendu voyage avec la decision : la page le montre AVANT que le
+    # client valide.
+    assert fiche["ou_calculer"]["secondes_estimees"] == 412
     # Le modele de la maison, pas celui qu'on loue : 24 images/s et 1280x704.
     assert fiche["video"]["maison"] is True
     assert fiche["video"]["images_par_seconde"] == 24
@@ -109,7 +116,9 @@ def test_les_cinq_secondes_mesurees_le_19_09_partent_aussi_a_la_maison(studio, m
     monkeypatch.setattr(studio.ou_calculer.gpu_local, "utilisable", sonde_libre)
     fiche = creer(studio, duree="5").json()
     assert fiche["provider"] == "maison"
-    assert fiche["ou_calculer"]["besoin_mo"] == 14902
+    assert fiche["ou_calculer"]["besoin_mo"] >= 14902
+    assert fiche["ou_calculer"]["besoin_mo"] == studio.ou_calculer.besoin_mo(121)
+    assert fiche["ou_calculer"]["secondes_estimees"] == 598
     assert fiche["video"]["secondes_video"] == 5
 
 
@@ -321,3 +330,140 @@ def test_le_message_des_34_go_nomme_le_script_de_la_machine(studio, monkeypatch)
     monkeypatch.setattr(video, "STUDIO_LANCEUR", "linux")
     prepare = video.preparer({"description": "un phare", "duree": "3"}, maison=True)
     assert prepare["demande"]["aide_poids"] == "./scripts/telecharger-modele-video.sh"
+
+
+def test_une_duree_JAMAIS_mesuree_part_desormais_a_la_maison(studio, monkeypatch):
+    """Le point de tout le changement du 21/09/2026.
+
+    Hier, 7 secondes n'existaient pas dans le menu ; si on les avait forcees,
+    le clip serait parti chez le loueur, motif << on ne lance pas sur un chiffre
+    suppose >>. Le chiffre ne servait qu'a une chose -- ai-je assez de place --
+    et un majorant y repond.
+    """
+    monkeypatch.setattr(studio.ou_calculer.gpu_local, "utilisable", sonde_libre)
+    fiche = creer(studio, duree="7").json()
+    assert fiche["provider"] == "maison"
+    assert fiche["video"]["secondes_video"] == 7
+    assert fiche["video"]["images_par_seconde"] == 24
+    assert fiche["ou_calculer"]["besoin_mo"] > 14902
+    assert fiche["ou_calculer"]["secondes_estimees"] > 598
+
+
+def test_le_menu_offre_plus_que_deux_durees_et_annonce_le_temps(studio):
+    """Ce que la page met dans son menu : chaque duree avec son temps attendu."""
+    offres = studio.video.durees_offertes()
+    assert len(offres) > 2, "le menu est encore fige"
+    pas = studio.video.pas_temporel()
+    for o in offres:
+        assert o["images"] % pas == 1, (
+            "le modele n'accepte qu'un multiple de %d plus un : %r" % (pas, o))
+        assert o["besoin_mo"] > 0
+        # Le temps n'est annonce QUE pour les durees qui tournent ici : celui
+        # du loueur n'est pas le meme, et le donner pour l'autre serait pire
+        # que ne rien donner.
+        assert (o["secondes_estimees"] is None) is not o["tient_ici"]
+
+    besoins = [o["besoin_mo"] for o in offres]
+    assert besoins == sorted(besoins), besoins
+    temps = [o["secondes_estimees"] for o in offres if o["tient_ici"]]
+    assert temps == sorted(temps), temps
+
+
+def test_le_menu_ne_se_vide_JAMAIS_meme_sur_une_petite_carte(studio):
+    """Premier jet : on retirait du menu ce que la carte ne tient pas. Sur une
+    carte de 12 Go le menu devenait VIDE, et le client n'avait plus rien a
+    choisir -- alors que le loueur sait fabriquer ces clips."""
+    petite = studio.video.durees_offertes(totale_mo=8192)
+    assert petite, "un menu vide est un cul-de-sac"
+    assert not any(o["tient_ici"] for o in petite)
+    assert all(o["secondes_estimees"] is None for o in petite)
+    grande = studio.video.durees_offertes(totale_mo=24564)
+    assert [o["duree"] for o in petite] == [o["duree"] for o in grande]
+    assert any(o["tient_ici"] for o in grande)
+
+
+def test_les_deux_tables_offrent_les_MEMES_durees(studio):
+    """Sinon le code remplacait en silence la duree demandee par 5 secondes.
+
+    Ce remplacement etait invisible : le client demandait 7 s et recevait 5 s
+    sans qu'aucune ligne ne le dise.
+    """
+    assert set(studio.video.DUREES) == set(studio.video.DUREES_MAISON)
+
+
+def test_la_page_dit_AU_PLUS_quand_le_chiffre_est_majore(studio):
+    """Grief no 2 de la relecture adverse du 21/09.
+
+    Le chiffre montre au client est un besoin RELEVE sur les deux durees
+    mesurees, et un majorant partout ailleurs. Annoncer un majorant comme un
+    releve est un nombre fabrique -- la faute exacte que ce depot retire
+    ailleurs. La boite << la carte est prise >> porte donc les deux phrases.
+    """
+    page = studio.video.PAGE_HTML
+    assert '", il en faut au plus "' in page
+    assert "d.besoin_est_mesure" in page
+
+
+def test_la_reponse_dit_si_le_chiffre_est_mesure_ou_majore(studio, monkeypatch):
+    monkeypatch.setattr(studio.ou_calculer.gpu_local, "utilisable", sonde_libre)
+    mesuree = creer(studio, duree="5").json()["ou_calculer"]
+    assert mesuree["besoin_est_mesure"] is True
+
+    majoree = creer(studio, duree="7").json()["ou_calculer"]
+    assert majoree["besoin_est_mesure"] is False
+# --- 10. La phrase sous le menu ----------------------------------------------
+
+def test_la_phrase_ne_dit_MESUREES_que_des_durees_chronometrees(studio):
+    """Le defaut du 21/09, trouve en OUVRANT la page apres l'avoir deployee.
+
+    La phrase listait les cles du menu. Tant que le menu tenait exactement les
+    deux durees chronometrees, elle disait vrai par coincidence ; le menu s'est
+    ouvert a neuf durees et elle a annonce << Durees mesurees ici : 1 et 2 et
+    ... et 9 secondes >>. Sept de ces neuf sont majorees. Un nombre fabrique,
+    et tous les tests passaient : aucun ne lisait la page.
+    """
+    mesurees = studio.video.durees_mesurees()
+    offertes = [o["duree"] for o in studio.video.durees_offertes()]
+    table = studio.video.table_maison()
+    assert mesurees, "aucune duree chronometree : la phrase n'aurait rien a dire"
+    assert len(mesurees) < len(offertes), (
+        "la phrase redirait le menu entier -- c'est le defaut qu'on repare")
+    for cle in offertes:
+        attendu = studio.ou_calculer.besoin_est_mesure(table[cle]["images"])
+        assert (cle in mesurees) is attendu, cle
+
+
+def test_la_page_tire_la_phrase_des_MESURES_et_non_du_MENU(studio):
+    """Le defaut etait dans le JavaScript, pas dans Python. Aucun test Python
+    ne pouvait le voir ; celui-ci lit la page elle-meme."""
+    with open(studio.video.__file__, encoding="utf-8") as fichier:
+        page = fichier.read()
+    assert "Object.keys(d.durees_maison" not in page, (
+        "la phrase se rebranche sur le menu : elle redira neuf durees mesurees")
+    assert "d.durees_mesurees" in page
+    assert "chronom" in page, "la phrase ne dit plus ce qu'elle nomme"
+
+
+def test_la_reponse_du_serveur_porte_les_DEUX_listes(studio, monkeypatch, tmp_path):
+    """La page ne peut pas distinguer ce que le serveur ne lui dit pas."""
+    monkeypatch.setattr(studio.ou_calculer, "FICHIER", tmp_path / "ou-calculer.json")
+    client = TestClient(studio.app, base_url=LOCAL)
+    vu = client.get("/video/ou-calculer", headers=CLE).json()
+    assert set(vu["durees_mesurees"]) < set(vu["durees_maison"]), (
+        "le menu et les mesures doivent rester deux listes differentes")
+def test_le_nombre_d_images_SUIT_la_granularite_DU_MODELE(studio, monkeypatch):
+    """Le test precedent ne pouvait pas voir d'ou venait le pas.
+
+    Il exigeait `images % pas == 1`. A 24 images par seconde, cette egalite
+    tient pour un pas de 2, 3, 4, 6, 8, 12 ou 24 : la granularite pouvait etre
+    recopiee a la main, fausse, et le test restait vert. On change ici la valeur
+    que le MODELE annonce, et on exige que le compte bouge.
+    """
+    fps = studio.video.fps_de("maison")
+    monkeypatch.setattr(studio.video, "pas_temporel", lambda: 4)
+    a_quatre = studio.video.images_pour(3, fps)
+    monkeypatch.setattr(studio.video, "pas_temporel", lambda: 5)
+    a_cinq = studio.video.images_pour(3, fps)
+    assert a_quatre % 4 == 1 and a_cinq % 5 == 1
+    assert a_quatre != a_cinq, (
+        "le compte ne suit pas le modele : la granularite est recopiee")

@@ -19,8 +19,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+from pathlib import Path
 
 import budget_modal
+import ou_calculer
 
 # Le compteur des depenses Modal est commun aux quatre usages -- la video, la
 # chanson, le dialogue et le bac a sable lui-meme. Il tient le fichier, le
@@ -92,6 +94,9 @@ def commande_telechargement() -> str:
 MODELES = {
     "rapide": {
         "titre": "Rapide (defaut)",
+        # La cadence du modele, ecrite dans SA fiche et non dans un `.get(..., 16)`
+        # enfoui : c'est une propriete du modele, elle se lit la ou on le decrit.
+        "images_par_seconde": 16,
         "hf": "Wan-AI/Wan2.1-VACE-1.3B-diffusers",
         "parametres": "1,3 milliard",
         # 19 Go de fichiers dans le depot (le lecteur de texte pese plus lourd
@@ -109,6 +114,9 @@ MODELES = {
     },
     "soigne": {
         "titre": "Soigne (plus lent, plus cher)",
+        # La cadence du modele, ecrite dans SA fiche et non dans un `.get(..., 16)`
+        # enfoui : c'est une propriete du modele, elle se lit la ou on le decrit.
+        "images_par_seconde": 16,
         "hf": "Wan-AI/Wan2.1-VACE-14B-diffusers",
         "parametres": "14 milliards",
         "poids_go": 75,
@@ -151,15 +159,176 @@ MODELES = {
     },
 }
 
-# Le modele de la maison tourne a 24 images par seconde, pas 16, et n'accepte
-# lui aussi qu'un nombre d'images de la forme 4k+1. Cette table ne porte que les
-# durees dont le besoin memoire a ete MESURE sur la carte -- voir
-# `ou_calculer.BESOIN_MO_MESURE`. Une duree absente d'ici part chez Modal avec
-# son motif : on ne lance pas un travail sur un chiffre suppose.
-DUREES_MAISON = {
-    "3": {"images": 73, "secondes": 3},
-    "5": {"images": 121, "secondes": 5},
-}
+# Jusqu'au 21/09/2026 ces deux tables etaient ecrites a la main, avec deux
+# lignes chacune, et une duree absente partait chez le loueur. Releve du
+# proprietaire : << deux durees, 3 s et 5 s : ce n'est pas normal, le client
+# doit pouvoir choisir dans la limite des capacites du llm et de la vram
+# possible >>. Elles se calculent maintenant.
+#
+# LA CADENCE ET LA FORME DES IMAGES. Le modele n'accepte qu'un nombre d'images
+# de la forme 4k+1. A 24 im/s comme a 16, `fps * secondes + 1` l'est toujours,
+# les deux cadences etant des multiples de 4 : la contrainte est donc satisfaite
+# par construction, et non par une table choisie a la main.
+#
+# LA BORNE HAUTE vient de la loi memoire (`ou_calculer`), qui refuse
+# d'extrapoler trop loin de ce qui a ete reellement mesure. Elle se deplace
+# d'elle-meme : un clip plus long mesure une fois, et la borne suit.
+def fps_de(qualite: str) -> int:
+    """La cadence de ce modele, lue dans sa fiche -- jamais recopiee ici."""
+    return int(MODELES[qualite]["images_par_seconde"])
+
+
+# Le modele n'accepte qu'un nombre d'images de la forme k * p + 1, ou p est la
+# compression TEMPORELLE de son autoencodeur. Ce n'est pas un reglage : c'est
+# une propriete du modele, ecrite dans `vae/config.json` sous le nom
+# `scale_factor_temporal`. Elle etait recopiee en commentaire dans deux
+# fichiers ; le jour ou le modele change, une recopie ment en silence.
+# Repli : la valeur lue sur Wan 2.2 TI2V-5B le 21/09/2026, utilisee seulement
+# tant que les poids ne sont pas descendus.
+PAS_TEMPOREL_REPLI = 4
+
+
+def pas_temporel() -> int:
+    """La granularite imposee par l'autoencodeur du modele de la maison.
+
+    Lue dans la fiche du modele quand les poids sont la ; a defaut, le repli
+    ci-dessus. Jamais une constante seule.
+    """
+    racine = Path(os.getenv("POIDS_VIDEO_DIR", "/cache/huggingface"))
+    for config in racine.glob("hub/models--Wan-AI--Wan2.2-TI2V-5B-Diffusers/"
+                              "snapshots/*/vae/config.json"):
+        try:
+            valeur = json.loads(config.read_text(encoding="utf-8")).get(
+                "scale_factor_temporal")
+        except (OSError, ValueError):
+            continue
+        if isinstance(valeur, int) and valeur > 0:
+            return valeur
+    return PAS_TEMPOREL_REPLI
+
+
+def images_pour(secondes: int, fps: int) -> int:
+    """Combien d'images pour cette duree, a cette cadence.
+
+    Arrondi a la granularite du modele : le compte doit etre k * p + 1. Avec
+    p = 4 et une cadence multiple de 4, `fps * secondes + 1` l'est deja ; ce
+    calcul tient quand meme si l'un des deux change.
+    """
+    pas = pas_temporel()
+    brut = fps * int(secondes)
+    return (brut // pas) * pas + 1
+
+
+def secondes_max_maison() -> int:
+    """La plus longue duree que la loi memoire accepte encore de majorer."""
+    plafond = max(ou_calculer.ANCRES) + 24 * ou_calculer.IMAGES_MAX_EXTRAPOLATION
+    return max(1, (plafond - 1) // fps_de("maison"))
+
+
+def table_maison() -> dict:
+    """Les durees offertes pour la carte d'ici, calculees et non recopiees."""
+    fps = fps_de("maison")
+    return {str(s): {"images": images_pour(s, fps), "secondes": s}
+            for s in range(1, secondes_max_maison() + 1)}
+
+
+def durees_offertes(totale_mo: int | None = None) -> list[dict]:
+    """Ce que la page met dans son menu, avec le temps attendu pour chacune.
+
+    Le temps est montre AVANT que le client valide (ordre du 21/09) : entre la
+    plus courte et la plus longue il y a un facteur quatre, et personne ne lance
+    un quart d'heure de calcul sans le savoir.
+
+    `totale_mo` borne la liste a ce que la carte peut PHYSIQUEMENT tenir. C'est
+    bien le total et non le libre : le total est une propriete de la machine, le
+    libre change a chaque seconde et sera regarde au lancement. Sans carte vue,
+    la liste entiere est rendue -- c'est le loueur qui fabriquera, et sa memoire
+    n'est pas celle d'ici.
+    """
+    if totale_mo is None:
+        etat = ou_calculer.gpu_local.releve()
+        totale_mo = etat["totale_mo"] if etat.get("vue") else None
+
+    offres = []
+    for cle, entree in table_maison().items():
+        besoin = ou_calculer.besoin_mo(entree["images"])
+        # `tient_ici` ne retire rien du menu : le loueur sait fabriquer ces
+        # clips, et un menu vide serait un cul-de-sac. Il dit seulement, duree
+        # par duree, si cette carte-ci peut la porter, carte vide.
+        tient_ici = (totale_mo is not None
+                     and besoin + ou_calculer.gpu_local.MARGE_MO <= totale_mo)
+        offres.append({
+            "duree": cle,
+            "secondes": entree["secondes"],
+            "images": entree["images"],
+            # Le temps est celui de la carte d'ici. `None` quand ce clip n'y
+            # tient pas : le temps chez le loueur n'est pas le meme, et une
+            # estimation prise pour l'autre serait pire que pas d'estimation.
+            "secondes_estimees": (ou_calculer.secondes_estimees(entree["images"])
+                                  if tient_ici else None),
+            "besoin_mo": besoin,
+            "tient_ici": tient_ici,
+        })
+    return offres
+
+
+def durees_mesurees() -> list[str]:
+    """Les durees dont la place memoire a ete RELEVEE sur une vraie carte.
+
+    La page nommait ici toutes les durees de son menu. Tant que le menu tenait
+    exactement les deux durees chronometrees, la phrase disait vrai par
+    coincidence ; le 21/09 le menu s'est ouvert a neuf durees et la phrase a
+    continue de les dire << mesurees >>. Elle se calcule desormais sur les
+    ancres, donc elle suit la mesure au lieu de la doubler.
+    """
+    return [cle for cle, entree in table_maison().items()
+            if ou_calculer.besoin_est_mesure(entree["images"])]
+
+
+DUREES_MAISON = table_maison()
+
+# Par defaut on garde 5 s : c'est ce que la page proposait, et l'un des deux
+# clips reellement mesures.
+DUREE_PAR_DEFAUT = "5"
+
+
+def _en_minutes(secondes: int) -> str:
+    """<< environ 13 min >>, ou << environ 4 min >>. Jamais de fausse precision.
+
+    Un temps estime annonce a la seconde se lirait comme une mesure. Il est
+    arrondi a la minute, et le mot << environ >> reste."""
+    minutes = max(1, int(round(secondes / 60.0)))
+    return "environ %d min" % minutes
+
+
+def options_duree_html() -> str:
+    """Le menu de la page, avec le temps attendu DANS chaque option.
+
+    Le client lit ce que son choix coutera en minutes au moment ou il choisit,
+    et non apres avoir appuye sur le bouton (ordre du 21/09/2026).
+    """
+    offres = durees_offertes()
+    ici = [o for o in offres if o["tient_ici"]]
+    defaut = DUREE_PAR_DEFAUT
+    if ici and not any(o["duree"] == defaut for o in ici):
+        # La carte ne tient pas la duree par defaut : on choisit la plus longue
+        # qu'elle porte, plutot que d'ouvrir sur une option payante.
+        defaut = ici[-1]["duree"]
+
+    morceaux = []
+    for offre in offres:
+        if offre["tient_ici"]:
+            dit = "%s sur votre carte" % _en_minutes(offre["secondes_estimees"])
+        else:
+            dit = "trop long pour votre carte, fabriqu\u00e9 chez le loueur"
+        morceaux.append(
+            '<option value="%s"%s>%d %s \u2014 %s</option>'
+            % (offre["duree"],
+               " selected" if offre["duree"] == defaut else "",
+               offre["secondes"],
+               "seconde" if offre["secondes"] == 1 else "secondes",
+               dit))
+    return "".join(morceaux)
 
 
 def images_maison(duree: str):
@@ -170,12 +339,14 @@ def images_maison(duree: str):
     entree = DUREES_MAISON.get(str(duree))
     return entree["images"] if entree else None
 
-# 16 images par seconde, et le modele n'accepte qu'un nombre d'images de la forme
-# 4k+1. D'ou ces valeurs qui ne sont pas rondes.
-DUREES = {
-    "3": {"images": 49, "secondes": 3},
-    "5": {"images": 81, "secondes": 5},
-}
+# 16 images par seconde, meme contrainte 4k+1, meme formule -- et les MEMES
+# durees offertes que pour la carte d'ici. C'est une necessite, pas une
+# symetrie de confort : quand le verdict envoie chez le loueur un clip demande
+# pour la maison, la duree doit exister des deux cotes. Sans cela le code
+# remplacait en SILENCE la duree demandee par 5 s, et le client recevait un
+# clip qu'il n'avait pas commande.
+DUREES = {str(s): {"images": images_pour(s, fps_de("rapide")), "secondes": s}
+          for s in range(1, secondes_max_maison() + 1)}
 
 NEGATIF = (
     "couleurs criardes, surexpose, statique, details flous, sous-titres, style, "
@@ -705,7 +876,7 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
 
 <div class="ligne">
   <label>Durée
-    <select id="duree"><option value="3">3 secondes</option><option value="5" selected>5 secondes</option></select>
+    <select id="duree">__OPTIONS_DUREE__</select>
   </label>
   <!-- « si on loue » ici aussi, et pour la même raison que le menu voisin :
        quand le clip est fabriqué sur la carte de cet ordinateur, ce menu ne
@@ -1038,11 +1209,18 @@ function chargerReglage(){
       document.getElementById("ouCalculer").hidden = false;
       document.getElementById("reglage").value = d.reglage;
       majLicence();   // la ligne de licence doit nommer le modèle de la maison
-      const durees = Object.keys(d.durees_maison || {}).join(" et ");
+      // Ce qui est CHRONOMETRE, jamais ce qui est offert : le menu compte neuf
+      // durees, deux ont ete relevees sur une vraie carte. Les nommer toutes
+      // << mesurees >> etait un nombre fabrique, vu en ouvrant la page.
+      const mesurees = (d.durees_mesurees || []).join(" et ");
       document.getElementById("reglageNote").textContent =
         "Fabriquer ici ne coûte rien. La carte est partagée : le Studio ne prend "
         + "jamais la place d'un calcul en cours."
-        + (durees ? (" Durées mesurées ici : " + durees + " secondes.") : "");
+        + (mesurees
+           ? (" Durées chronométrées sur cette carte : " + mesurees
+              + " secondes. Pour les autres, le temps est estimé et la place "
+              + "réservée est majorée.")
+           : "");
       return d;
     })
     .catch(() => null);
@@ -1077,7 +1255,9 @@ function demanderAuClient(d){
   const c = d.carte || {};
   const chiffres = (c.libre_mo != null && c.totale_mo != null)
     ? (c.nom + " : " + (c.libre_mo/1024).toFixed(1) + " Go libres sur "
-       + (c.totale_mo/1024).toFixed(1) + ", il en faut " + (d.besoin_mo/1024).toFixed(1) + ".")
+       + (c.totale_mo/1024).toFixed(1)
+       + (d.besoin_est_mesure ? ", il en faut " : ", il en faut au plus ")
+       + (d.besoin_mo/1024).toFixed(1) + ".")
     : (d.pourquoi || "");
   boite.hidden = false;
 

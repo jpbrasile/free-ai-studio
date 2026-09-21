@@ -125,10 +125,22 @@ def test_l_image_de_depart_part_chez_modal_tant_que_l_autre_classe_n_est_pas_ess
     assert "image de depart" in d["pourquoi"]
 
 
-# --- 2. Un besoin non mesure ne se devine pas --------------------------------
+# --- 2. Un MAJORANT, ancre sur ce qui a ete mesure ---------------------------
+# Jusqu'au 21/09/2026 cette section notait l'inverse : une duree absente de la
+# table partait chez le loueur, motif << on ne lance pas sur un chiffre
+# suppose >>. Le proprietaire a retire la regle, en deux phrases :
+#   << a quoi sert cette estimation, a savoir si on a assez de vram ? si c'est
+#      le cas un majorant pour eviter les oom suffit >>
+#   << deux durees, 3 s et 5 s : ce n'est pas normal, le client doit pouvoir
+#      choisir dans la limite des capacites du llm et de la vram possible >>
+# Le chiffre ne repond qu'a une question -- reste-t-il assez de place a cette
+# seconde -- et un majorant y repond aussi bien qu'une mesure, et mieux qu'un
+# refus : le refus figeait la page a deux durees, pour toujours.
+# Ces tests gardent donc l'exigence par l'autre bout : LA LOI NE PROMET JAMAIS
+# MOINS QU'UNE MESURE.
 
 def test_une_duree_sans_table_maison_part_chez_modal():
-    """`video.images_maison()` rend None pour une duree jamais mesuree ici."""
+    """`video.images_maison()` rend None quand la duree n'est pas offerte ici."""
     d = ou_calculer.decider(resume(), None,
                             reglage=ou_calculer.MAISON_SI_LIBRE, sonde=sonde_libre)
     assert d["ou"] == ou_calculer.MODAL
@@ -136,28 +148,119 @@ def test_une_duree_sans_table_maison_part_chez_modal():
     assert d["besoin_mo"] is None
 
 
-def test_une_duree_non_mesuree_part_chez_modal_avec_son_motif():
-    d = ou_calculer.decider(resume(), IMAGES_NON_MESUREES,
+def test_la_loi_ne_promet_JAMAIS_moins_qu_une_mesure():
+    """Le seul controle qui compte : aucune ancre au-dessus de la loi.
+
+    Une loi qui passerait sous une mesure ferait lancer sur la carte un clip
+    dont on SAIT qu'il ne tient pas -- dix minutes de calcul pour un
+    depassement memoire a la fin.
+    """
+    for images, ancre in ou_calculer.ANCRES.items():
+        assert ou_calculer.besoin_mo(images) >= ancre["memoire_mo"], (
+            "%d images : la loi promet %d Mo, la mesure en a pris %d"
+            % (images, ou_calculer.besoin_mo(images), ancre["memoire_mo"]))
+
+
+def test_la_loi_monte_avec_le_nombre_d_images():
+    """Plus d'images ne peut pas demander moins de place."""
+    besoins = [ou_calculer.besoin_mo(24 * s + 1) for s in range(1, 9)]
+    assert besoins == sorted(besoins), besoins
+
+
+def test_entre_deux_mesures_c_est_LA_MESURE_DU_DESSUS_qui_majore():
+    """Le coeur de la reparation du 21/09, apres la relecture adverse.
+
+    Ajouter des images ne peut pas faire BAISSER la memoire. Tout nombre
+    d'images situe sous un palier mesure tient donc dans ce palier : pas de
+    droite a ajuster, pas de marge a choisir, aucune hypothese sur la forme de
+    la courbe -- seulement qu'elle monte.
+
+    Le premier jet ajustait une droite et la relevait de 8 %. Resultat : 97
+    images (4 s) reservaient 14 981 Mo quand 121 images (5 s) n'en avaient
+    mesure que 14 902. La duree la plus courte demandait plus que la plus
+    longue, et pouvait se voir refuser a la maison quand l'autre passait.
+    """
+    assert ou_calculer.besoin_mo(97) == ou_calculer.ANCRES[121]["memoire_mo"]
+    assert ou_calculer.besoin_mo(49) == ou_calculer.ANCRES[73]["memoire_mo"]
+    assert ou_calculer.besoin_mo(25) == ou_calculer.ANCRES[73]["memoire_mo"]
+    # Et au-dessus de tout ce qui est mesure, la droite reprend la main.
+    assert ou_calculer.besoin_mo(145) > ou_calculer.ANCRES[121]["memoire_mo"]
+
+
+def test_la_marge_GRANDIT_avec_la_distance_aux_mesures():
+    """Ce que la marge est LA POUR DIRE : plus loin des mesures, moins on sait.
+
+    Mutation muette du 21/09 : en retournant le signe de la marge hors domaine
+    -- elle retrecit au lieu de grandir -- aucun test n'a rouge. La monotonie
+    tenait quand meme, la droite montant assez vite ; mais un majorant qui se
+    resserre a mesure qu'on s'eloigne de ce qui a ete mesure est un majorant qui
+    ment la ou il est le plus fragile.
+    """
+    origine, pente = ou_calculer._loi("memoire_mo")
+    n_max = max(ou_calculer.ANCRES)
+    marges = [ou_calculer.besoin_mo(n) / (origine + pente * n) - 1.0
+              for n in (n_max + 24, n_max + 48, n_max + 72)]
+    assert marges == sorted(marges), marges
+    assert marges[0] < marges[-1], "la marge doit GRANDIR, pas stagner"
+    assert marges[0] >= ou_calculer.MARGE_LOI, (
+        "au-dela des mesures on ne descend jamais sous la marge de base")
+
+
+def test_la_marge_ne_s_empile_JAMAIS_sur_une_mesure():
+    """Grief principal de la relecture, verifie par le calcul.
+
+    `gpu_local.utilisable()` ajoute deja 1 024 Mo. En majorant par-dessus un
+    point mesure, on refusait a la maison, sur une carte de 16 Go, le clip de
+    5 s dont la mesure dit qu'il y tient : 14 902 + 1 024 = 15 926 tient dans
+    16 384, mais 16 094 + 1 024 = 17 118 non. Majorer une mesure, ce n'est pas
+    etre prudent, c'est jeter la mesure.
+    """
+    for images, ancre in ou_calculer.ANCRES.items():
+        assert ou_calculer.besoin_mo(images) == ancre["memoire_mo"]
+        assert ou_calculer.besoin_mo(images) + 1024 <= 16384, (
+            "une carte de 16 Go doit garder les durees mesurees")
+
+
+def test_trop_loin_des_ancres_le_clip_part_chez_le_loueur():
+    """La loi majore pres des mesures. Loin, elle devinerait : on refuse.
+
+    Cette borne n'est pas un chiffre grave : elle se deplace d'elle-meme des
+    qu'un clip plus long a ete mesure.
+    """
+    tres_loin = max(ou_calculer.ANCRES) + 24 * (ou_calculer.IMAGES_MAX_EXTRAPOLATION + 1)
+    d = ou_calculer.decider(resume(), tres_loin,
                             reglage=ou_calculer.MAISON_SI_LIBRE, sonde=sonde_libre)
     assert d["ou"] == ou_calculer.MODAL
-    assert "pas encore ete mesuree" in d["pourquoi"]
-    assert str(IMAGES_NON_MESUREES) in d["pourquoi"]
-    assert d["besoin_mo"] is None
+    assert "trop loin de ce qui a ete mesure" in d["pourquoi"]
 
 
-def test_la_table_des_besoins_ne_porte_que_du_mesure():
-    """Les deux pics du 19/09. Aucun autre nombre, et surtout aucun extrapole.
+def test_une_duree_jamais_mesuree_mais_PROCHE_est_acceptee():
+    """C'est le point de tout le changement : 161 images partaient chez le
+    loueur hier, elles tiennent sur la carte aujourd'hui."""
+    d = ou_calculer.decider(resume(), IMAGES_NON_MESUREES,
+                            reglage=ou_calculer.MAISON_SI_LIBRE, sonde=sonde_libre)
+    assert d["ou"] == ou_calculer.MAISON
+    assert d["besoin_mo"] > ou_calculer.ANCRES[121]["memoire_mo"]
 
-    Le rapport entre les deux lignes est la raison meme de ce test : 66 %
-    d'images en plus ne prennent que 16 % de memoire en plus. Qui extrapolerait
-    la troisieme ligne a partir des deux premieres se tromperait -- dans le sens
-    qui fait planter un calcul de dix minutes a la derniere seconde."""
+
+def test_les_ancres_restent_ce_qui_a_ete_MESURE():
+    """`BESOIN_MO_MESURE` publie les mesures, jamais la loi.
+
+    Les deux pics du 19/09. Le nom est reste parce que README.md le cite ; ce
+    qu'il rend doit donc rester une mesure, sans quoi une page annoncerait un
+    chiffre calcule en le presentant comme releve.
+    """
     assert ou_calculer.BESOIN_MO_MESURE[73] == 12841
     assert ou_calculer.BESOIN_MO_MESURE[121] == 14902
     assert set(ou_calculer.BESOIN_MO_MESURE) == {73, 121}
+    # Sur un point mesure, on rend la mesure -- et `besoin_est_mesure()` permet
+    # a la page de ne pas annoncer un majorant comme un releve.
+    assert ou_calculer.besoin_mo(73) == 12841
+    assert ou_calculer.besoin_est_mesure(73)
+    assert not ou_calculer.besoin_est_mesure(97)
 
 
-def test_le_besoin_mesure_est_passe_a_la_sonde():
+def test_le_MAJORANT_est_passe_a_la_sonde_et_il_couvre_la_mesure():
     vu = {}
 
     def espion(besoin_mo, delai_s=None):
@@ -166,7 +269,16 @@ def test_le_besoin_mesure_est_passe_a_la_sonde():
 
     ou_calculer.decider(resume(), IMAGES_MESUREES,
                         reglage=ou_calculer.MAISON_SI_LIBRE, sonde=espion)
-    assert vu["besoin"] == 12841
+    assert vu["besoin"] == ou_calculer.besoin_mo(IMAGES_MESUREES)
+    assert vu["besoin"] >= 12841
+
+
+def test_le_temps_estime_reproduit_les_clips_reels():
+    """Montre au client AVANT qu'il valide. Sur les ancres, il doit retomber
+    sur ce que ces clips ont vraiment coute -- 412 s et 598 s."""
+    assert abs(ou_calculer.secondes_estimees(73) - 412) <= 1
+    assert abs(ou_calculer.secondes_estimees(121) - 598) <= 1
+    assert ou_calculer.secondes_estimees(193) > ou_calculer.secondes_estimees(121)
 
 
 # --- 3. Carte prise : on demande, on ne tranche pas --------------------------
@@ -220,7 +332,8 @@ def test_le_refus_pour_carte_prise_dit_ce_qui_reste_et_ce_qu_il_faut():
 
 def test_toutes_les_reponses_ont_les_memes_cles():
     """La page ne doit jamais deviner : la forme est la meme dans tous les cas."""
-    cles = {"ou", "reglage", "pourquoi", "besoin_mo", "carte", "prix_estime_usd", "sorties"}
+    cles = {"ou", "reglage", "pourquoi", "besoin_mo", "carte", "prix_estime_usd",
+            "sorties", "secondes_estimees", "besoin_est_mesure"}
     cas = [
         (resume(), IMAGES_MESUREES, ou_calculer.MAISON_SI_LIBRE, sonde_libre),
         (resume(), IMAGES_MESUREES, ou_calculer.MAISON_SI_LIBRE, sonde_prise),
