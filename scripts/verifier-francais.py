@@ -35,7 +35,7 @@ from pathlib import Path
 
 RACINE = Path(__file__).resolve().parent.parent
 BASE_DEFAUT = "http://127.0.0.1:8020"
-PAGES = ["/", "/essai", "/video", "/chanson", "/dialogue"]
+PAGES = ["/", "/essai", "/video", "/chanson", "/dialogue", "/composite"]
 
 # --- ce qu'on refuse dans le rendu -----------------------------------------
 # « 4.88 $ », « 15.00 $ » : le point décimal anglais devant l'unité.
@@ -71,6 +71,7 @@ MODULES = [
     "sandbox-manager/video.py",
     "sandbox-manager/chanson.py",
     "sandbox-manager/dialogue.py",
+    "sandbox-manager/composite.py",
 ]
 
 # Les formateurs eux-mêmes ont le droit de contenir le motif : c'est leur travail.

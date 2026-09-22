@@ -32,8 +32,9 @@ import pytest
 from conftest import RACINE
 
 REGISTRE = RACINE / "registry" / "apps.json"
-CHAMPS = ("id", "fonction", "fournisseur", "modele", "nature", "licence",
-          "territoire", "vram_min_go", "modes", "cout", "source", "verifie_le")
+CHAMPS = ("id", "fonction", "capacite", "entrees", "sorties", "fournisseur",
+          "modele", "nature", "licence", "territoire", "vram_min_go", "modes",
+          "cout", "cout_max_usd", "source", "verifie_le")
 MODES_CONNUS = {"api", "local", "modal", "kaggle", "colab"}
 
 
@@ -78,8 +79,8 @@ def test_les_champs_qui_engagent_ne_sont_jamais_vides(registre):
     pas un blanc : il se lit << sans objet >>.
     """
     for app in registre["applications"]:
-        for champ in ("id", "fonction", "fournisseur", "nature", "licence",
-                      "territoire", "cout", "source", "verifie_le"):
+        for champ in ("id", "fonction", "capacite", "fournisseur", "nature",
+                      "licence", "territoire", "cout", "source", "verifie_le"):
             valeur = app[champ]
             assert isinstance(valeur, str) and valeur.strip(), \
                 "%s : %s est vide" % (app["id"], champ)

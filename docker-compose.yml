@@ -136,6 +136,14 @@ services:
       # Meme raison que pour le routeur de chat : les variables du compose sont
       # figees a la creation du conteneur. Exclu du depot par .gitignore.
       - ./config:/config
+      # LECTURE SEULE, et seulement ce fichier : la page « Enchaîner » ne peut
+      # composer que les applications que le registre décrit. Le Dockerfile du
+      # service ne copie que `*.py`, donc le registre n'y est pas ; un module
+      # Python engendré depuis lui serait une SECONDE VÉRITÉ, et c'est
+      # exactement le défaut réparé le 20/09 (la même vérité recopiée à six
+      # endroits, quatre avaient divergé). Monté à /registry pour tomber sur le
+      # chemin que `composite.py` cherche par défaut, sans variable de plus.
+      - ./registry/apps.json:/registry/apps.json:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 15s

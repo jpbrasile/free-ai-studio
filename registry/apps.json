@@ -46,6 +46,9 @@
     {
       "id": "chat_auto",
       "fonction": "Chat, Free AI Auto",
+      "capacite": "conversation",
+      "entrees": ["texte"],
+      "sorties": ["texte"],
       "fournisseur": "Google",
       "modele": "gemini-3.5-flash-lite",
       "nature": "API propriétaire, palier gratuit",
@@ -54,6 +57,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit",
+      "cout_max_usd": 0,
       "source": "https://ai.google.dev/gemini-api/terms",
       "verifie_le": "2026-09-11",
       "code": "free-tier-manager/app.py PROVIDERS['gemini']['model']"
@@ -61,6 +65,9 @@
     {
       "id": "chat_max",
       "fonction": "Chat, Free AI Max",
+      "capacite": "conversation_quota_dedie",
+      "entrees": ["texte"],
+      "sorties": ["texte"],
       "fournisseur": "Google",
       "modele": "gemini-3.8-flash",
       "nature": "API propriétaire, palier gratuit, quota compté à part",
@@ -69,6 +76,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit",
+      "cout_max_usd": 0,
       "source": "https://ai.google.dev/gemini-api/terms",
       "verifie_le": "2026-09-11",
       "code": "free-tier-manager/app.py PROVIDERS['gemini_max']['model']"
@@ -76,6 +84,9 @@
     {
       "id": "chat_secours_openrouter",
       "fonction": "Chat, premier secours",
+      "capacite": "conversation_secours",
+      "entrees": ["texte"],
+      "sorties": ["texte"],
       "fournisseur": "OpenRouter",
       "modele": "openrouter/free",
       "nature": "API tierce, palier gratuit ; le modèle servi change d'une requête à l'autre, ouvert ou non",
@@ -84,6 +95,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit",
+      "cout_max_usd": 0,
       "source": "https://openrouter.ai/models",
       "verifie_le": "2026-09-11",
       "code": "free-tier-manager/app.py PROVIDERS['openrouter']['model']"
@@ -91,6 +103,9 @@
     {
       "id": "chat_secours_groq",
       "fonction": "Chat, second secours (si activé)",
+      "capacite": "conversation_secours",
+      "entrees": ["texte"],
+      "sorties": ["texte"],
       "fournisseur": "Groq",
       "modele": "openai/gpt-oss-20b",
       "nature": "modèle ouvert exécuté à distance, par un service propriétaire",
@@ -99,6 +114,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit",
+      "cout_max_usd": 0,
       "source": "https://huggingface.co/openai/gpt-oss-20b",
       "verifie_le": "2026-09-11",
       "code": "free-tier-manager/app.py PROVIDERS['groq']['model']"
@@ -106,6 +122,9 @@
     {
       "id": "image_lecture",
       "fonction": "Lecture d'image",
+      "capacite": "lecture_image",
+      "entrees": ["image"],
+      "sorties": ["texte"],
       "fournisseur": "Google",
       "modele": "gemini-3.5-flash-lite",
       "nature": "API propriétaire, palier gratuit ; le modèle du chat",
@@ -114,6 +133,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit",
+      "cout_max_usd": 0,
       "source": "https://ai.google.dev/gemini-api/terms",
       "verifie_le": "2026-09-11",
       "code": "free-tier-manager/app.py PROVIDERS['gemini']['model']"
@@ -121,6 +141,9 @@
     {
       "id": "image_fabrication",
       "fonction": "Fabrication d'image",
+      "capacite": "fabrication_image",
+      "entrees": ["texte"],
+      "sorties": ["image"],
       "fournisseur": "Google",
       "modele": "gemini-3.1-flash-lite-image",
       "nature": "API propriétaire, palier gratuit",
@@ -129,6 +152,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit",
+      "cout_max_usd": 0,
       "source": "https://ai.google.dev/gemini-api/terms",
       "verifie_le": "2026-09-11",
       "code": "free-tier-manager/app.py GEMINI_IMAGE_MODEL"
@@ -136,6 +160,9 @@
     {
       "id": "recherche_web",
       "fonction": "Recherche Web",
+      "capacite": "recherche_web",
+      "entrees": ["texte"],
+      "sorties": ["texte"],
       "fournisseur": "DuckDuckGo",
       "modele": null,
       "nature": "service tiers, sans compte",
@@ -144,6 +171,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit, sans compte",
+      "cout_max_usd": 0,
       "source": "https://duckduckgo.com/terms",
       "verifie_le": "2026-09-11",
       "code": null
@@ -151,6 +179,9 @@
     {
       "id": "voix_fr",
       "fonction": "Lire à haute voix, français",
+      "capacite": "synthese_vocale_fr",
+      "entrees": ["texte"],
+      "sorties": ["audio"],
       "fournisseur": "Piper, dans le routeur du Studio",
       "modele": "fr_FR-siwis-medium",
       "nature": "modèle ouvert exécuté sur le processeur de ce PC ; le texte ne quitte pas la machine",
@@ -159,6 +190,7 @@
       "vram_min_go": null,
       "modes": ["local"],
       "cout": "gratuit, sans clé",
+      "cout_max_usd": 0,
       "source": "https://huggingface.co/rhasspy/piper-voices/blob/main/fr/fr_FR/siwis/medium/MODEL_CARD",
       "verifie_le": "2026-09-15",
       "code": "free-tier-manager/app.py VOIX['fr']['nom']"
@@ -166,6 +198,9 @@
     {
       "id": "voix_en",
       "fonction": "Lire à haute voix, anglais",
+      "capacite": "synthese_vocale_en",
+      "entrees": ["texte"],
+      "sorties": ["audio"],
       "fournisseur": "Piper, dans le routeur du Studio",
       "modele": "en_US-norman-medium",
       "nature": "modèle ouvert exécuté sur le processeur de ce PC ; le texte ne quitte pas la machine",
@@ -174,6 +209,7 @@
       "vram_min_go": null,
       "modes": ["local"],
       "cout": "gratuit, sans clé",
+      "cout_max_usd": 0,
       "source": "https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/norman/medium/MODEL_CARD",
       "verifie_le": "2026-09-16",
       "code": "free-tier-manager/app.py VOIX['en']['nom']"
@@ -181,6 +217,9 @@
     {
       "id": "dictee_locale",
       "fonction": "Dictée « sur cet ordinateur », et repli quand Groq refuse",
+      "capacite": "transcription_locale",
+      "entrees": ["audio"],
+      "sorties": ["texte"],
       "fournisseur": "Whisper, dans le routeur du Studio",
       "modele": "small",
       "nature": "modèle ouvert exécuté sur le processeur de ce PC ; la voix ne quitte pas la machine",
@@ -189,6 +228,7 @@
       "vram_min_go": null,
       "modes": ["local"],
       "cout": "gratuit, sans clé",
+      "cout_max_usd": 0,
       "source": "https://huggingface.co/Systran/faster-whisper-small",
       "verifie_le": "2026-09-15",
       "code": "free-tier-manager/app.py WHISPER_LOCAL"
@@ -196,6 +236,9 @@
     {
       "id": "dictee_groq",
       "fonction": "Dictée « Groq si possible »",
+      "capacite": "transcription_distante",
+      "entrees": ["audio"],
+      "sorties": ["texte"],
       "fournisseur": "Groq",
       "modele": "whisper-large-v3",
       "nature": "modèle ouvert exécuté à distance, par un service propriétaire ; votre voix part chez Groq",
@@ -204,6 +247,7 @@
       "vram_min_go": null,
       "modes": ["api"],
       "cout": "gratuit avec une clé Groq",
+      "cout_max_usd": 0,
       "source": "https://huggingface.co/openai/whisper-large-v3",
       "verifie_le": "2026-09-15",
       "code": "free-tier-manager/app.py GROQ_DICTEE_MODELE"
@@ -211,6 +255,9 @@
     {
       "id": "video_rapide",
       "fonction": "Vidéo, qualité « Rapide » (si on loue)",
+      "capacite": "video_rapide",
+      "entrees": ["texte"],
+      "sorties": ["video"],
       "fournisseur": "Wan-AI",
       "modele": "Wan-AI/Wan2.1-VACE-1.3B-diffusers",
       "nature": "modèle ouvert exécuté à distance, sur une machine louée ou prêtée",
@@ -219,6 +266,7 @@
       "vram_min_go": null,
       "modes": ["modal", "kaggle", "colab"],
       "cout": "Modal : de 0,056 $ le clip de 1 s à 0,277 $ le clip de 5 s (0,155 $ pour 3 s). Les durées de 1 et 3 et 5 s ont été chronométrées sur un vrai clip loué ; les autres sont la droite de ces mesures, relevée pour ne jamais promettre moins cher. Tarif relevé chez Modal le 20/09/2026 ; Kaggle et Colab : gratuit",
+      "cout_max_usd": 0.277,
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B",
       "verifie_le": "2026-09-11",
       "code": "sandbox-manager/video.py MODELES['rapide']"
@@ -226,6 +274,9 @@
     {
       "id": "video_soignee",
       "fonction": "Vidéo, qualité « Soignée » (si on loue)",
+      "capacite": "video_soignee",
+      "entrees": ["texte"],
+      "sorties": ["video"],
       "fournisseur": "Wan-AI",
       "modele": "Wan-AI/Wan2.1-VACE-14B-diffusers",
       "nature": "modèle ouvert exécuté à distance, sur une machine louée",
@@ -234,6 +285,7 @@
       "vram_min_go": null,
       "modes": ["modal"],
       "cout": "Modal : environ 0,558 $ le clip de 1 s au PREMIER lancement du modèle (765 s d'A100), et environ 0,349 $ les fois suivantes (479 s). Les deux sont mesurés, le 21/09/2026, sur la même carte et avec la même phrase : la charge du modèle tombe de 382 s à 120 s une fois les 75 Go de poids sur le disque du loueur, tandis que le calcul lui-même ne bouge pas (353 s puis 345 s). Ce qui ne se reproduit pas vaut donc 262 s, et non 382. Aucune autre durée n'a été chronométrée sur ce modèle, donc aucune autre n'est chiffrée. L'A100 coûte 1,98 fois la L4 à la seconde (2,62 $/h contre 1,33 $/h, mémoire et processeur compris)",
+      "cout_max_usd": 0.558,
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-14B",
       "verifie_le": "2026-09-11",
       "code": "sandbox-manager/video.py MODELES['soigne']"
@@ -241,6 +293,9 @@
     {
       "id": "video_maison",
       "fonction": "Vidéo fabriquée À LA MAISON, sur la carte de ce PC",
+      "capacite": "video_maison",
+      "entrees": ["texte"],
+      "sorties": ["video"],
       "fournisseur": "Wan-AI",
       "modele": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
       "nature": "modèle ouvert exécuté sur la carte graphique de ce PC ; rien ne part chez personne",
@@ -249,6 +304,7 @@
       "vram_min_go": 14.4,
       "modes": ["local"],
       "cout": "gratuit, sans carte bancaire",
+      "cout_max_usd": 0,
       "source": "https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers",
       "verifie_le": "2026-09-21",
       "code": "sandbox-manager/video.py MODELES['maison']",
@@ -257,6 +313,9 @@
     {
       "id": "chanson",
       "fonction": "Chanson",
+      "capacite": "chanson",
+      "entrees": ["texte"],
+      "sorties": ["audio"],
       "fournisseur": "m-a-p",
       "modele": "m-a-p/YuE2-3B",
       "nature": "modèle ouvert exécuté à distance, sur une machine louée ou prêtée",
@@ -265,6 +324,7 @@
       "vram_min_go": null,
       "modes": ["modal", "kaggle", "colab"],
       "cout": "Modal : 0,52 $ au pire par chanson, sur le plafond partagé de 30 $/mois ; Kaggle et Colab : gratuit",
+      "cout_max_usd": 0.52,
       "source": "https://huggingface.co/m-a-p/YuE2-3B",
       "verifie_le": "2026-09-15",
       "code": "sandbox-manager/chanson.py MODELE",
@@ -273,6 +333,9 @@
     {
       "id": "dialogue",
       "fonction": "Dialogue à plusieurs voix",
+      "capacite": "dialogue",
+      "entrees": ["texte"],
+      "sorties": ["audio"],
       "fournisseur": "FireRedTeam",
       "modele": "FireRedTeam/FireRedTTS2",
       "nature": "modèle ouvert exécuté à distance, sur une machine louée ou prêtée",
@@ -281,6 +344,7 @@
       "vram_min_go": null,
       "modes": ["modal", "kaggle"],
       "cout": "Modal : sur le plafond partagé de 30 $/mois ; Kaggle : gratuit",
+      "cout_max_usd": null,
       "source": "https://huggingface.co/FireRedTeam/FireRedTTS2",
       "verifie_le": "2026-09-17",
       "code": "sandbox-manager/dialogue.py MODELE",

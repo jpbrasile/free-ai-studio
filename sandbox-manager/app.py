@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -16,11 +17,12 @@ from typing import Dict, Optional
 
 import httpx
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 import budget_modal
 import chanson
+import composite
 import depenses
 import dialogue
 # Les montants et les dates s'ecrivent en francais -- virgule decimale, date en
@@ -3065,6 +3067,85 @@ def dialogue_fichier(jid: str, cle: str = Query(default=""),
 def dialogue_page():
     return HTMLResponse(format_fr.avec_formateurs(
         dialogue.PAGE_HTML.replace("__CLE__", KEY)))
+
+
+@app.get("/composite", response_class=HTMLResponse)
+def composite_page():
+    return HTMLResponse(format_fr.avec_formateurs(
+        composite.PAGE_HTML.replace("__CLE__", KEY)))
+
+
+def _refus_composite(exc: composite.CompositeRefuse) -> HTTPException:
+    """Un refus du composite devient un refus HTTP qui porte SON motif.
+
+    409 et non 500 : rien n'est casse. La chaine demandee ne tient pas, et la
+    page a de quoi le dire en francais.
+    """
+    return HTTPException(409, exc.phrase, headers={"X-Composite-Ou": exc.ou,
+                                                   "X-Composite-Motif": exc.motif})
+
+
+async def _chaine_depuis(request: Request):
+    """La phrase -> un graphe -> une chaine de briques nommees."""
+    formulaire = await request.form()
+    phrase = str(formulaire.get("phrase") or "")
+    graphe = composite.compiler(phrase, composite.appeler_le_modele)
+    return formulaire, composite.lier(graphe)
+
+
+@app.post("/composite/verdict")
+async def composite_verdict(request: Request,
+                            authorization: Optional[str] = Header(default=None)):
+    """Dit AVANT de lancer si la chaine tient, et ce qu'elle coute au pire."""
+    auth(authorization)
+    try:
+        _, chaine = await _chaine_depuis(request)
+        verdict = composite.verifier(chaine)
+        # Le calcul a etabli les faits ; le modele les met en francais, et les
+        # montants sont verrouilles dans `rediger`. Hors boucle : c'est un appel
+        # reseau, il ne doit pas tenir le service pendant qu'il attend.
+        verdict["phrase"] = await asyncio.to_thread(composite.rediger, verdict)
+        return JSONResponse(verdict)
+    except composite.CompositeRefuse as exc:
+        raise _refus_composite(exc) from exc
+
+
+@app.post("/composite/lancer")
+async def composite_lancer(request: Request,
+                           authorization: Optional[str] = Header(default=None)):
+    """Lance la chaine, noeud par noeud, et rend ce qu'elle a produit.
+
+    Le verdict est RE-JOUE ici : la page peut avoir ete laissee ouverte, et une
+    chaine refusee ne doit pas partir parce qu'un bouton etait deja actif.
+    """
+    auth(authorization)
+    try:
+        formulaire, chaine = await _chaine_depuis(request)
+        verdict = composite.verifier(chaine)
+        if verdict["atteignable"] == composite.NON:
+            raise composite.CompositeRefuse(
+                ";".join(verdict["motifs"]) or "refuse", verdict["pourquoi"],
+                ou=composite.CONTROLE)
+
+        fichier = formulaire.get("fichier")
+        entree = await fichier.read() if fichier is not None and not isinstance(
+            fichier, str) else None
+
+        trace = await asyncio.to_thread(
+            composite.executer, chaine, composite.lancer_par_le_routeur, entree,
+            verdict)
+    except composite.CompositeRefuse as exc:
+        raise _refus_composite(exc) from exc
+
+    if trace["resultat"] != "rendu":
+        raise HTTPException(409, trace["motif"] or "La chaine n'a pas abouti.",
+                            headers={"X-Composite-Ou": trace["ou"] or "",
+                                     "X-Composite-Motif": trace["motif"] or ""})
+
+    sortie = trace["sortie"]
+    if isinstance(sortie, (bytes, bytearray)):
+        return Response(content=bytes(sortie), media_type="audio/wav")
+    return JSONResponse({"texte": str(sortie), "etapes": trace["etapes"]})
 
 
 @app.get("/", response_class=HTMLResponse)

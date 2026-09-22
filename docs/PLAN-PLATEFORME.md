@@ -79,7 +79,7 @@ décision** · **à faire**.
 | Elle couvre neuf fonctions | chat, image, recherche web, dictée, voix, dessins SVG, vidéo, chanson, dialogue. **Aucun fichier du dépôt ne porte cette liste** : elle est reconstituée à la main, page par page | `free-tier-manager/app.py`, `sandbox-manager/app.py` | fait, **mais non dénombré par le dépôt** — c'est déjà un symptôme du §5 | sept sur neuf |
 | Elle est testée | **209** fonctions `def test_` dans **12** fichiers portant des tests (`tests/*.py` en compte 13, `conftest.py` n'en porte aucune) — `grep -rh "def test_" tests/*.py \| wc -l`, 19/09. Le journal écrit « **214 tests passent** » au 18/09 (`PLAN.md:315`) : c'est le compte **collecté** par pytest, reproduit le 19/09 par `pytest --collect-only -q`. Deux instruments, deux nombres justes | `tests/` | fait | **non** : `main` ne porte que 5 fichiers de test sur 13 |
 | Une CI la vérifie | **10 étapes nommées** (`grep -c "^      - name:" .github/workflows/validate.yml`) — ~~9~~ le matin du 19/09, la dixième est « Échéances », posée le soir même par `176878c` —, plus **trois** actions sans nom (`checkout`, `setup-python`, `setup-node`, l. 11, 14, 49). Déclencheurs : `push` et `pull_request`, sans filtre de chemin | `.github/workflows/validate.yml` | fait | oui |
-| Un bac à sable isole le code étranger | `read_only`, `cap_drop: ALL`, `no-new-privileges`, `pids_limit: 128`, `mem_limit: 1g`, réseau `sandbox-internal` déclaré `internal: true` (`docker-compose.yml:211-213`) : **aucune sortie réseau** | `docker-compose.yml` | fait | **oui, déjà sur `main`** |
+| Un bac à sable isole le code étranger | `read_only`, `cap_drop: ALL`, `no-new-privileges`, `pids_limit: 128`, `mem_limit: 1g`, réseau `sandbox-internal` déclaré `internal: true` (`docker-compose.yml:245-246`) : **aucune sortie réseau** | `docker-compose.yml` | fait | **oui, déjà sur `main`** |
 
 ### Les phases du plan d'origine
 
@@ -691,6 +691,27 @@ parce que rien n'y distingue une description vivante d'une description morte. L'
 (un agent qui valide les contributions) repose entièrement sur le contraire. **C'est donc
 un préalable dur à l'automatisation, pas un travail de propreté.**
 
+#### Ajout 4 — les trois champs du composite entrent dans **cette** décision de schéma
+
+*Écrit le 22/09/2026, à l'ouverture de l'étape 5.*
+
+Le §9.9 a tranché : **le schéma se décide en une fois, à l'étape 1, et chaque champ
+écarté l'est nommément, avec son motif, dans le fichier de schéma lui-même.** Les trois
+champs dont le composite a besoin — `capacite`, `entrees`/`sorties`, `cout_max_usd` —
+relèvent de cette décision-là, et non d'une seconde prise à côté.
+
+La conséquence est contraignante, et c'est le but : **ils ne s'ajoutent pas « en
+attendant ».** Deux des treize champs tombés en silence recoupent d'ailleurs le besoin du
+composite — `vram_gb_q4` et `hardware_tested` sont exactement ce que le bras « carte »
+de `verifier()` consomme, aujourd'hui servi par `vram_min_go` seul. Les ajouter un par un,
+au fil des besoins, c'est reconduire la panne que le §9.9 a nommée : **un champ absent
+d'un schéma ne se remarque jamais.**
+
+**Ce qui a été fait le 22/09 est donc partiel, et s'écrit ainsi** : les trois champs
+existent, sont remplis et sont sous la garde de `tests/test_registre.py` ; **le schéma
+unique, lui, n'est pas écrit.** L'étape 1 reste ouverte, et elle le reste pour cette
+raison précise.
+
 ### Étape 2 — évaluations et barrières
 
 Elle **commence à l'intérieur de l'étape 1** : un schéma validé en CI *est déjà* une
@@ -736,6 +757,33 @@ agent repropose demain exactement la même chose.
 > sinon le taux d'erreur n'est pas rejouable, et un taux non rejouable n'est pas une
 > mesure.
 
+#### Amendement du 22/09 — le challenger, et la licence composée
+
+Deux choses amenées par le sous-plan reçu le 22/09, retenues **sous une autre forme que
+la sienne**.
+
+**a) Le sortant et le challenger deviennent le rejeu à entrées sauvegardées.** Le
+sous-plan propose de lancer systématiquement deux flux et de les comparer sur le trafic.
+Deux objections, et les deux sont déjà écrites ci-dessus : il n'y a **pas de trafic à
+échantillonner** dans un dépôt où chacun installe le Studio chez lui ; et lancer deux flux
+**double chaque exécution** sous un plafond déclaré à zéro, ce que le sous-plan ne dit
+nulle part. **Le mécanisme est gardé, l'instrument change** : ancien contre nouveau,
+**mêmes entrées sauvegardées**, aucun GPU, aucun dollar — la méthode qui a déjà donné
+« Modal : 1 coupe → 0 ; Kaggle : 2 coupes → 2, aux bornes identiques ». Un challenger ne
+part sur des entrées neuves que sur **demande explicite du client** — jamais par défaut.
+
+**b) La licence composée devient une barrière, pas un affichage.** Le §2.3 relève trois
+écarts de licence ; ils portent tous sur une brique **isolée**. Une chaîne pose une
+question que le fichier ne pose pas : **l'usage non commercial d'une seule brique rend la
+chaîne entière non commerciale.** La barrière est donc ici, à l'étape 2, et pas seulement
+à l'étape 5 — parce qu'un flux promu est un flux **distribué**, et que l'étape 3 ouvre
+les contributions à des tiers. Sans elle, le premier composite promu est une faute
+juridique, et ce défaut-là ne se voit pas en test.
+
+*Un fait qui rend la règle moins urgente qu'elle n'en a l'air, et il est mesuré : **le
+Studio ne sert aujourd'hui aucune chaîne** — chaque fonction est mono-brique. La règle est
+écrite pour le premier composite promu, pas pour réparer un passif.*
+
 ### Étape 3 — l'intégration validée, puis ouverte aux clients
 
 C'est le bout de la chaîne, et la demande explicite de l'utilisateur (19/09/2026) :
@@ -767,7 +815,14 @@ l'utilisateur : « pas de barre desserrée ».
 #### Une contradiction à régler avant, et elle est dans le dépôt
 
 **Le bac à sable n'a aucune sortie réseau** (`internal: true`,
-`docker-compose.yml:211-213`). C'est excellent pour exécuter du code qu'on n'a pas écrit —
+`docker-compose.yml:245-246`). C'est excellent pour exécuter du code qu'on n'a pas écrit —
+
+*(Renvoi corrigé le 22/09/2026, ici et au §1. Il disait `:211-213` ; la ligne était en
+`:237-238` à `5e0990c`, et elle est en `:245-246` une fois monté le registre en lecture
+seule de l'étape 5 — **le même renvoi a donc vieilli deux fois en trois jours, dont une
+par ma propre main**. Le numéro ci-dessus est celui d'après l'étape 5. Ce qui ne bouge
+pas, et qui est la vraie ancre : le réseau s'appelle `sandbox-internal` et porte
+`internal: true`.)*
 et **cela interdit exactement l'usage que cette étape lui assigne** : un agent qui essaie un
 outil SOTA doit télécharger un modèle, un paquet, une fiche.
 
@@ -806,6 +861,28 @@ blocage** pour les contributions.
 > travail de l'utilisateur — c'est ce que prévoit le plan d'origine (l. 40 : « Separate
 > budgets: maintenance (low prio, capped) vs user work ») ;
 > (c) les deux : local d'abord, reprise en CI ensuite.
+
+#### Amendement du 22/09 — les juges LLM sont admis **en tri**, jamais en promotion
+
+Le sous-plan reçu le 22/09 promeut un flux quand **deux modèles de familles différentes
+sont d'accord**. Ce document a déjà l'objection, écrite avant que la question ne se
+pose : « sans les évaluations de l'étape 2, un agent validateur ne valide pas : il
+tamponne », et « un agent qui peut déplacer la barre contre laquelle il valide ne valide
+rien ».
+
+Deux modèles d'accord n'est pas une preuve. Des modèles corrélés se trompent de façon
+corrélée, et « familles différentes » ne décorrèle pas le mode d'échec qui compte :
+**être convaincu par une sortie plausible.**
+
+> **Tranché : les juges LLM décident ce qu'un humain regarde en premier. Ils ne
+> promeuvent rien.** Ce qui promeut, c'est la CI déterministe **plus** un cas de référence
+> à réponse connue.
+
+Le même partage a été appliqué ailleurs le jour même, et il y a été **mesuré** : à
+l'étape 5, le modèle écrit la phrase française d'un verdict, mais les **montants** et
+l'**état** restent au calcul — parce que sur une chaîne refusée, le modèle avait rendu un
+mode d'emploi au lieu d'un refus. **Un modèle rédige ; il ne conclut pas.** C'est la même
+phrase des deux côtés.
 
 ### Étape 4 — ce qui rend l'étape 3 possible
 
@@ -1016,6 +1093,171 @@ vient d'une phrase utile écrite au bon endroit du mauvais dépôt.
 > code, c'est que **la copie est sans valeur sans les mesures**. Un clone parti aujourd'hui
 > a zéro ligne. La licence reste à trancher au §7 pour d'autres raisons — mais elle cesse
 > d'être ce qui protège la douve.
+
+### Étape 5 — les composites
+
+**Ouverte le 22/09/2026.** Décision du propriétaire, en réponse à un sous-plan reçu le
+même jour : **la chaîne d'abord, sur l'acquis** ; la découverte (Hugging Face, Kaggle,
+MCP) est le lot suivant. Motif de l'ordre, à inscrire parce qu'il vaut au-delà de ce
+cas : **deux nouveautés qui échouent ensemble ne se départagent pas.**
+
+**Ce qu'elle remplit, et c'est le cap de ce document qui l'avait ouverte.** L'en-tête
+énonce quatre paliers — briques → composites → flux payants → flux d'apprentissage —
+et définit le composite : « une chaîne de briques désignées par leur **fonction** et non
+par un nom de modèle ». Jusqu'au 22/09, le mot n'apparaissait que là : **deux
+occurrences dans les 1 890 lignes**, les deux dans ce seul paragraphe. Le palier était
+nommé et vide.
+
+*Coût : aucun dollar, aucune infrastructure. La chaîne témoin ne touche Modal nulle
+part — c'est une propriété choisie, pas un hasard.*
+
+#### 5.1 — Pourquoi le catalogue ouvert est reporté, et non abandonné
+
+Le sous-plan reçu commence par la découverte : encoder un catalogue, chercher dedans,
+filtrer. Quatre motifs de ne pas commencer par là, chacun mesuré le 22/09 :
+
+| Motif | Mesure |
+|---|---|
+| **La ressource qui rendait la découverte bon marché n'est pas sur ce disque** | le catalogue Hugging Face « pré-encodé » n'a aucune trace : le cache HF fait 34 Go et contient **quatre dépôts de poids**, aucun `datasets--*`. `sentence-transformers`, `faiss`, `chroma`, `qdrant`, `lancedb`, `sqlite-vec`, `pgvector` : **zéro occurrence** dans les deux dépôts |
+| **Un contrôle déterministe n'a rien à vérifier tant que les briques n'ont pas de type** | les 16 briques ne déclaraient ni ce qu'elles consomment ni ce qu'elles rendent. C'est **le** manque, et il tient en trois champs |
+| **La largeur n'est pas la valeur** | `vram_min_go` n'est rempli que pour `video_maison` (14,4, mesurée sur la carte de la maison) ; les quinze autres sont `null`, parce que ce sont des API. Un catalogue de centaines de milliers d'entrées non mesurées, ce sont autant de façons d'échouer tard |
+| **Le dépôt voisin bute sur le même champ** | `agentic-flow-fresh` : **96 composites, 2 déclarent leurs entrées et 2 leurs sorties**, et son propre plan en conclut « il n'y a pas de graphe à traverser ». Même champ manquant, deux dépôts, deux langages. *Relevé chez le voisin, **non remesuré ici** : la relecture adverse du 22/09 l'avait déjà mis hors de son périmètre, et le chemin cité n'existe pas sur sa branche courante. L'argument ne dépend pas du chiffre exact.* |
+
+Le catalogue ouvert reste au programme. Il devient un **fournisseur de candidats de plus**,
+branché sur une frontière déjà prouvée, au lieu d'être la frontière elle-même.
+
+#### 5.2 — Les huit points de l'étape
+
+**1. Trois champs sur les seize briques.** `capacite` (vocabulaire contrôlé, déduit des
+seize `fonction` existantes), `entrees`/`sorties` (types simples : `texte, audio, image,
+video, fichier`), `cout_max_usd` (**un nombre**, ou `null`). Le paragraphe `cout` reste :
+il porte sa mesure et sa date, et il est bon ; le nombre s'ajoute **à côté**, jamais à
+la place. Trois règles héritées, chacune payée ailleurs : *vide plutôt que deviné* ;
+*le code fait foi* — `tests/test_registre.py` refuse la divergence dans les deux sens, et
+les trois nouveaux champs entrent sous la même garde ; *la fraîcheur ne casse pas* —
+`python scripts/engendrer-depuis-registre.py --verifier` reste à 0.
+
+**2. Le compilateur : une phrase, un graphe.** `compiler(phrase)` est **le seul pas qui
+appelle un modèle**, et il passe par la passerelle qui existe déjà — aucun fournisseur
+nouveau, aucune clé nouvelle, aucun coût. Le graphe est une liste de nœuds
+`{capacite, entrees, sorties}` **sans aucun modèle lié** : c'est la définition du
+composite donnée en tête de ce document. Les arêtes se **dérivent** de la correspondance
+des types ; elles ne se listent pas à la main. Discipline reprise du dépôt voisin,
+où elle tient sur plusieurs dizaines de flux — *son compte exact est **non remesuré
+ici***. Ce qui se transfère est la discipline, pas le code : l'un est Julia et lié à
+la physique, l'autre est Python et grand public.
+
+**3. La liaison, et l'abstention.** `lier(graphe)` est **déterministe**, par
+correspondance exacte de capacité. **Quand deux briques se valent, on s'abstient et on le
+dit**, plutôt que d'en choisir une pour avoir l'air décidé. Le cas n'est pas théorique :
+`chat_secours_openrouter` et `chat_secours_groq` portent la même capacité
+`conversation_secours`. Un modèle de décision typée les départagera peut-être un jour ;
+pas ici, et pas tant qu'il n'y a que deux candidats.
+
+**4. Le contrôle déterministe, posé sur ce qui refuse déjà.** `verifier(chaine)` rend
+`atteignable ∈ {oui, partiel, inconnu, non}` plus un `pourquoi` en français affichable
+tel quel — la même forme que `ou_calculer.decider()`, **avant toute dépense**. Quatre
+bras, et chacun s'appuie sur quelque chose qui refuse déjà en production :
+
+| Bras | Sur quoi il s'appuie |
+|---|---|
+| **types** | les champs du point 1 ; la sortie du nœud *n* doit couvrir l'entrée du nœud *n+1* |
+| **coût** | `budget_modal.verifier()`, qui lève avant de lancer et facture le **pire cas**. Il est taillé pour **un** travail : une chaîne l'appelle **par nœud, juste avant chaque lancement**, et ne lui invente pas un total |
+| **carte** | `gpu_local.utilisable(besoin_mo)`, le besoin venant des ancres **mesurées**, jamais d'une estimation |
+| **licence** | l'**usage** seul — point 5 ci-dessous |
+
+**« Non » est un résultat, pas une panne.** Pour quelqu'un dont la règle est
+`MAX_DAILY_COST=0`, dire « non, pas gratuitement aujourd'hui, et voilà ce qui s'en
+approche » vaut mieux qu'une chaîne qui casse au sixième nœud sur dix.
+
+> **À savoir avant de s'appuyer dessus, et c'est une faiblesse du dépôt, pas une force :**
+> `ALLOW_PAID_GPU` et `MAX_DAILY_COST` sont déclarés dans `.env.example` et vérifiés par
+> la CI, **mais lus par aucun code Python**. Ce sont des valeurs par défaut documentées,
+> pas des barrières. La seule barrière réelle est `budget_modal.verifier()`.
+
+**5. Deux licences, et elles ne se composent pas de la même façon.** La licence d'**usage**
+se propage le long d'une chaîne : une brique non commerciale rend la chaîne entière non
+commerciale. Une seule des seize la porte — `chanson` (YuE2-3B, CC BY-NC 4.0). La licence
+de **distribution** ne se propage pas ainsi : `voix_fr` embarque Piper en GPL-3.0-or-later
+dans un dépôt MIT, et sa fiche dit « usage commercial permis ». **Le vérifieur ne
+contrôle que l'usage.** « GPL dans un composite » reste une question ouverte, au §7 ;
+le jour où elle est tranchée, elle devient un second bras — pas avant.
+
+> *Ce point a failli coûter le lot, et le dire sert à quelque chose.* Sa preuve de
+> clôture, écrite d'abord, exigeait qu'une chaîne contenant `voix_fr` soit **refusée** à
+> la composition — et la chaîne témoin **se termine par `voix_fr`**. Écrite telle quelle,
+> la garde réfutait le critère de réussite du lot qu'elle encadrait : soit le vérifieur
+> refusait et le témoin mourait dans son propre contrôle, soit il ne refusait pas et la
+> preuve était incurable. Trouvée par relecture adverse **avant** écriture. C'est ce que
+> produit la confusion de deux licences qui n'ont rien à voir.
+
+**6. L'exécution et sa trace.** Chaque nœud part par la route qu'il a déjà ; les pas en
+bac à sable passent par `run_auto()`, qui essaie `modal → local → kaggle → colab` et
+journalise chaque tentative avec son motif. La trace d'une chaîne reprend la forme déjà
+en service, `fallback_attempts`. **Le résultat n'est pas un booléen** : ce qui apprend,
+c'est **où** ça a cassé — compilation, liaison, contrôle, exécution, sortie. Un booléen
+ne fait pas tourner le volant. Et le bac à sable n'ayant **aucune sortie réseau**, tout
+téléchargement se fait dans une phase de préparation **hors** bac à sable.
+
+**7. La page, et le partage faits / rédaction.** Une page `/composite` : un champ, un
+bouton, le verdict avec son motif, puis le fichier. Elle passe par
+`format_fr.avec_formateurs()` comme les autres, et `scripts/verifier-francais.py` la
+surveille par ses deux bras. **Et on l'ouvre dans Chrome après déploiement** : des tests
+verts et une image reconstruite ne prouvent pas qu'une page s'affiche.
+
+> **Une décision de fond, prise le 22/09 sur remarque du propriétaire** — « pourquoi ne
+> pas faire confiance au LLM plutôt que tout ce que tu fais ». Elle est juste, et elle est
+> appliquée : **le calcul établit des faits structurés, le modèle écrit la phrase
+> française.** Deux choses ne partent jamais au modèle, et chacune a son motif mesuré :
+>
+> - **les montants** — chaque somme calculée doit se retrouver telle quelle dans la phrase
+>   rendue, et **aucune autre** ; sinon la phrase écrite reprend la main ;
+> - **l'état** (`oui / partiel / inconnu / non`) — écrit d'avance, mot pour mot. Motif :
+>   sur une chaîne refusée, le modèle a rendu un **mode d'emploi** au lieu d'un refus,
+>   sans le mot « non ». Mesuré, pas redouté.
+>
+> Le repli est la phrase écrite — seule réponse possible quand aucun modèle ne répond,
+> et il faut bien que le Studio sache dire « le chat est indisponible » sans demander au
+> chat de l'écrire. **Les noms des faits sont le vocabulaire montré au client** : le
+> jargon du dépôt qui entre en clé JSON ressort à l'écran, mesuré le jour même sur le
+> mot « briques ».
+
+**8. Les preuves, selon les règles de la maison.** Chaque preuve de clôture **rougit
+d'abord**, et sa sortie rouge est publiée : c'est la seule façon de savoir qu'elle regarde
+au bon endroit. **Une garde se retourne, elle ne se desserre pas.** **Rituel de mutation**
+à la clôture : N mutations introduites, N attrapées, et celles qui n'ont pas sonné sont
+**nommées** — une garde qui ne peut pas sonner se supprime ou se rend capable de sonner.
+
+#### 5.3 — Ce qui est fait, et où la preuve se relit
+
+Le lot 1 a été mené le 22/09. **Le journal en porte le détail, les chiffres et les
+défauts trouvés — `PLAN.md`, étape 14 — et c'est là qu'ils se relisent : ce document dit
+le cap, pas les mesures.**
+
+Ce qui compte ici est la forme de la preuve, parce qu'elle vaut pour les lots suivants :
+**le critère était chiffré d'avance** — une phrase plus un enregistrement en entrée, un
+fichier en sortie, et **le compteur Modal inchangé**, la chaîne témoin ne touchant Modal
+nulle part. Un critère écrit après coup se règle sur ce qu'on a obtenu.
+
+**Ce que l'étape 5 ne prouve pas** : rien sur la découverte, rien sur la qualité d'un
+modèle, rien sur ce qu'un débutant comprend de la page. Le §6 reste la seule mesure qui
+puisse invalider tout le reste.
+
+#### 5.4 — Trois points ouverts, dont un qui vieillit tout seul
+
+- **Le rang de l'étape 5 au §8** : proposé en huitième position, au propriétaire de
+  trancher.
+- **« GPL dans un composite »** : aucun fichier du dépôt ne la tranche. Servir une chaîne
+  qui appelle Piper n'est pas la distribuer, mais l'étape 3 ouvre les contributions à des
+  tiers. Au §7.
+- **Un renvoi `fichier:ligne` est une mesure périssable.** Celui du bac à sable a
+  vieilli **deux fois en trois jours** — `:211-213`, puis `:237-238`, puis `:245-246`,
+  la dernière fois par le montage de registre de cette étape même. Le protocole de
+  vérification demande de relire chaque renvoi à la main : un contrôle qui tient par la
+  discipline est un contrôle qui tombera. **Aucun automatisme n'est proposé ici** — ce
+  serait une surspécification tant que le rayon n'est pas compté, et le rayon est
+  **non mesuré**. Ce qui se fait à la place coûte zéro : **citer l'ancre nommée**
+  (`sandbox-internal`, `internal: true`) et le numéro après, jamais le numéro seul.
 
 ---
 
@@ -1306,7 +1548,15 @@ procédure, c'est un classement par **coût du retard** :
    `docs/SAUVEGARDES.md` est né avec sa date — il n'existait pas.
 4. **`modal/profiles.json` supprimé, `AGENTS.md:111` retirée** — une vérité fausse de
    moins, avant que le registre n'en hérite.
-5. **La fusion dans `main`** — pour que le dépôt public cesse de mentir sur lui-même.
+5. ~~**La fusion dans `main`** — pour que le dépôt public cesse de mentir sur
+   lui-même.~~ **FAIT le 22/09/2026, `6eab4f3`, poussé.** Et il porte sa leçon, qui a
+   coûté un aller-retour : **ce commit-là est parti rouge.** La CI de la branche était
+   rouge depuis le run `35586651755` (21/09), je ne l'ai pas lue avant de fusionner, et
+   l'échec est passé sur `main` (run `35702325358`). Vert deux commits plus tard, après
+   réparation : `7712a50`, puis `5e0990c` — run `35703959548`. **Le rang est clos parce
+   que la fusion est faite, pas parce qu'elle s'est bien passée**, et la règle qui en
+   sort est écrite ailleurs : lire la CI de la branche **avant** de fusionner, pas après
+   avoir poussé.
 6. **Le GPU local d'abord** — chantier ouvert le 19/09/2026 sur demande de l'utilisateur
    (« le gpu local ne devrait pas être utilisé de façon automatique ? »), **inséré ici, ce
    qui décale le registre et Piper d'un rang**. Motif : il rend **gratuit ce qui est payant
@@ -1324,7 +1574,16 @@ procédure, c'est un classement par **coût du retard** :
    piège du `last_image` **accepté puis ignoré en silence** par la 5B, est dans
    `docs/GPU-LOCAL.md`.
 7. **Le registre, puis le contrôle de fraîcheur en CI**, puis les évaluations.
-8. **La vérification de la licence de Piper**, avant toute réorganisation.
+8. **Les composites — l'étape 5**, ouverte le 22/09/2026 sur décision du propriétaire.
+   **Rang proposé, non tranché — le propriétaire arbitre.** Motif de la place proposée :
+   **après** les évaluations, parce qu'un composite promu sans barre est un tampon ;
+   **avant** Piper, parce qu'il ne dépend d'aucune réponse juridique — le vérifieur ne
+   contrôle que l'usage non commercial, et la question GPL reste ouverte à côté sans le
+   bloquer. Le lot 1 (la chaîne sur l'acquis) est **fait** ; le lot 2 (la découverte) ne
+   l'est pas.
+9. **La vérification de la licence de Piper**, avant toute réorganisation.
+   *(Rang 9 depuis le 22/09 : il était 8, et 7 avant le 19/09. C'est le rang qui bouge,
+   pas la décision — même formule qu'au §8, point 13.)*
 
 ---
 
