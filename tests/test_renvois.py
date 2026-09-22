@@ -8,6 +8,12 @@ trouvé **4 fautes sur les 4 renvois motivés** que le dépôt portait — dont 
 Ce que ces tests fixent, c'est surtout ce que la garde ne fait PAS : elle ignore
 les renvois sans motif. C'est ce qui lui permet d'entrer dans la CI sans imposer
 de reprendre à la main les 177 renvois muets du dépôt.
+
+Chaque ligne qui fabrique un faux renvoi porte le marqueur `renvoi-exemple` :
+ce fichier est le seul du dépôt dont l'objet même est d'écrire des renvois qui
+mentent, et sans ce marqueur la garde rougirait sur lui. Elle s'interdirait
+alors elle-même d'entrer dans la CI — ce qu'elle a fait, une fois, avant que le
+marqueur n'existe.
 """
 from __future__ import annotations
 
@@ -50,7 +56,7 @@ def fautes(tmp_path, monkeypatch, fichiers: dict[str, str]) -> list[str]:
 
 def test_un_renvoi_dont_le_motif_est_sur_la_ligne_ne_dit_rien(tmp_path, monkeypatch):
     assert fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `code.py:2` (`def depart`) pour le détail.",
+        "note.md": "Voir `code.py:2` (`def depart`) pour le détail.",  # renvoi-exemple
         "code.py": "# en tete\ndef depart():\n    return 0\n",
     }) == []
 
@@ -58,7 +64,7 @@ def test_un_renvoi_dont_le_motif_est_sur_la_ligne_ne_dit_rien(tmp_path, monkeypa
 def test_un_renvoi_decale_est_dit_AVEC_son_numero_reel(tmp_path, monkeypatch):
     """Dire « faux » ne suffit pas : sans le vrai numéro, la réparation est une enquête."""
     trouvees = fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `code.py:2` (`def depart`).",
+        "note.md": "Voir `code.py:2` (`def depart`).",  # renvoi-exemple
         "code.py": "# une ligne\n# deux\n# trois\ndef depart():\n    return 0\n",
     })
     assert len(trouvees) == 1, trouvees
@@ -67,7 +73,7 @@ def test_un_renvoi_decale_est_dit_AVEC_son_numero_reel(tmp_path, monkeypatch):
 
 def test_un_numero_au_dela_de_la_fin_du_fichier_est_dit(tmp_path, monkeypatch):
     trouvees = fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `code.py:99` (`def depart`).",
+        "note.md": "Voir `code.py:99` (`def depart`).",  # renvoi-exemple
         "code.py": "def depart():\n    return 0\n",
     })
     assert len(trouvees) == 1, trouvees
@@ -78,7 +84,7 @@ def test_un_chemin_nu_qui_existe_deux_fois_est_refuse_sans_en_choisir_un(
         tmp_path, monkeypatch):
     """`app.py` existe trois fois dans ce dépôt. En choisir un serait deviner."""
     trouvees = fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `app.py:1` (`salut`).",
+        "note.md": "Voir `app.py:1` (`salut`).",  # renvoi-exemple
         "un/app.py": "salut\n",
         "deux/app.py": "salut\n",
     })
@@ -88,7 +94,7 @@ def test_un_chemin_nu_qui_existe_deux_fois_est_refuse_sans_en_choisir_un(
 
 def test_un_fichier_absent_est_dit(tmp_path, monkeypatch):
     trouvees = fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `disparu.py:1` (`salut`).",
+        "note.md": "Voir `disparu.py:1` (`salut`).",  # renvoi-exemple
     })
     assert len(trouvees) == 1 and "introuvable" in trouvees[0], trouvees
 
@@ -111,12 +117,10 @@ def test_un_renvoi_SANS_motif_est_IGNORE(tmp_path, monkeypatch):
 
 def test_un_exemple_au_deux_points_ESPACE_n_est_pas_pris_pour_un_renvoi(
         tmp_path, monkeypatch):
-    """Un exemple doit pouvoir s'écrire sans être pris pour la chose qu'il illustre.
+    """La prose peut montrer la forme sans la prétendre vraie.
 
     La garde elle-même documente sa forme ; écrite collée, l'illustration
-    devenait un renvoi vers un fichier nommé « chemin/fichier.ext », et la CI
-    rougissait sur un mode d'emploi. L'espace autour des deux-points est
-    l'échappement, et il n'a besoin d'aucune machinerie.
+    devenait un renvoi vers un fichier nommé « chemin/fichier.ext ».
     """
     assert fautes(tmp_path, monkeypatch, {
         "note.md": "La forme est `chemin/fichier.ext : 123` (`motif`), "
@@ -124,12 +128,50 @@ def test_un_exemple_au_deux_points_ESPACE_n_est_pas_pris_pour_un_renvoi(
     }) == []
 
 
+# --- le marqueur, et le fait qu'il ne soit pas un interrupteur cache -----------
+
+
+def test_une_ligne_MARQUEE_ecrit_des_renvois_qui_ne_pretendent_rien(
+        tmp_path, monkeypatch):
+    """Là où la forme collée est indispensable — ici même — le marqueur la tient."""
+    assert fautes(tmp_path, monkeypatch, {
+        "note.md": "Exemple : `absent.py:7` (`rien`).  <!-- renvoi-exemple -->",
+    }) == []
+
+
+def test_la_MEME_ligne_SANS_marqueur_est_bien_refusee(tmp_path, monkeypatch):
+    """Le bras inverse, sans lequel le premier ne prouverait rien.
+
+    Un marqueur qui n'a jamais été mesuré contre son absence pourrait tout
+    ignorer sans que personne ne le voie.
+    """
+    trouvees = fautes(tmp_path, monkeypatch, {
+        "note.md": "Exemple : `absent.py:7` (`rien`).",  # renvoi-exemple
+    })
+    assert len(trouvees) == 1 and "introuvable" in trouvees[0], trouvees
+
+
+def test_les_exemples_ignores_sont_COMPTES_et_dits(tmp_path, monkeypatch):
+    """Un marqueur qu'on ne compte pas est un interrupteur caché."""
+    ecrits = []
+    for nom, contenu in {
+        "note.md": "Deux : `a.py:1` (`x`) et `b.py:2` (`y`).  <!-- renvoi-exemple -->",
+    }.items():
+        chemin = tmp_path / nom
+        chemin.write_text(contenu, encoding="utf-8")
+        ecrits.append(chemin)
+    monkeypatch.setattr(vr, "RACINE", tmp_path)
+    monkeypatch.setattr(vr, "fichiers_suivis", lambda motifs=None: list(ecrits))
+    _, _, exemples = vr.parcourir(ecrits)
+    assert exemples == 2, exemples
+
+
 # --- la forme abregee ----------------------------------------------------------
 
 
 def test_la_forme_abregee_herite_du_fichier_de_la_MEME_ligne(tmp_path, monkeypatch):
     assert fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `code.py:1` (`def depart`), `:3` (`def arret`).",
+        "note.md": "Voir `code.py:1` (`def depart`), `:3` (`def arret`).",  # renvoi-exemple
         "code.py": "def depart():\n    pass\ndef arret():\n",
     }) == []
 
@@ -140,7 +182,7 @@ def test_l_heritage_ne_franchit_PAS_la_fin_de_la_ligne(tmp_path, monkeypatch):
     ne fait. Sans ce bras, la portée pourrait s'élargir sans que rien ne sonne.
     """
     trouvees = fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `code.py:1` (`def depart`).\nEt puis `:3` (`def arret`).",
+        "note.md": "Voir `code.py:1` (`def depart`).\nEt puis `:3` (`def arret`).",  # renvoi-exemple
         "code.py": "def depart():\n    pass\ndef arret():\n",
     })
     assert len(trouvees) == 1, trouvees
@@ -149,7 +191,7 @@ def test_l_heritage_ne_franchit_PAS_la_fin_de_la_ligne(tmp_path, monkeypatch):
 
 def test_un_intervalle_accepte_le_motif_n_importe_ou_dedans(tmp_path, monkeypatch):
     assert fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `code.py:1-4` (`def arret`).",
+        "note.md": "Voir `code.py:1-4` (`def arret`).",  # renvoi-exemple
         "code.py": "def depart():\n    pass\n\ndef arret():\n",
     }) == []
 
@@ -157,7 +199,7 @@ def test_un_intervalle_accepte_le_motif_n_importe_ou_dedans(tmp_path, monkeypatc
 def test_un_intervalle_ne_couvre_pas_ce_qui_est_dehors(tmp_path, monkeypatch):
     """Sans ce bras, l'intervalle pourrait balayer tout le fichier sans sonner."""
     trouvees = fautes(tmp_path, monkeypatch, {
-        "note.md": "Voir `code.py:1-2` (`def arret`).",
+        "note.md": "Voir `code.py:1-2` (`def arret`).",  # renvoi-exemple
         "code.py": "def depart():\n    pass\n\ndef arret():\n",
     })
     assert len(trouvees) == 1, trouvees
@@ -172,6 +214,6 @@ def test_le_depot_lui_meme_n_a_aucun_renvoi_motive_faux():
     C'est ce test qui rougira le jour où une insertion décalera un renvoi —
     exactement ce qui est arrivé deux fois le 22/09/2026 sans aucun signal.
     """
-    trouvees, vus = vr.parcourir(vr.fichiers_suivis())
+    trouvees, vus, _ = vr.parcourir(vr.fichiers_suivis())
     assert trouvees == [], trouvees
     assert vus, "aucun renvoi motive : la garde ne garderait rien"

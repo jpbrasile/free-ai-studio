@@ -25,6 +25,12 @@ ne demande alors aucune enquête.
 
 CE QUE LA GARDE NE FAIT PAS, ET POURQUOI
 ----------------------------------------
+Elle ignore aussi les renvois d'une ligne qui porte le marqueur `renvoi-exemple` :
+ceux-là illustrent la forme au lieu de prétendre quelque chose de ce dépôt. Sans
+lui, les tests de cette garde — dont tout l'objet est d'écrire des renvois qui
+mentent — la feraient rougir, et elle s'interdirait elle-même d'entrer dans la
+CI. Le marqueur n'est jamais silencieux : le nombre d'exemples ignorés est dit.
+
 Elle ignore les renvois **sans** motif. Le dépôt en porte 177 qui n'en ont pas ;
 les faire rougir d'un coup imposerait de les reprendre un par un, ce qui est une
 décision du propriétaire et non la mienne. La garde ne bloque donc personne, et
@@ -47,13 +53,11 @@ from pathlib import Path
 
 RACINE = Path(__file__).resolve().parent.parent
 
-# Forme reconnue : `chemin/fichier.ext : 123` (`motif`) -- ou un intervalle
-# `... : 12-18`. ATTENTION, les deux-points sont ESPACES ci-dessus, et c'est
-# volontaire : ecrits colles, ces illustrations seraient de vrais renvois aux
-# yeux de la garde, qui irait chercher un fichier nomme << chemin/fichier.ext >>.
-# Un exemple doit s'ecrire de facon a ne pas etre pris pour la chose qu'il
-# illustre. Le seul renvoi COLLE de ce fichier est celui du mode d'emploi
-# ci-dessus, et il est vrai : la garde se verifie elle-meme.
+# Forme reconnue : `chemin/fichier.ext : 123` (`motif`), ou un intervalle
+# `... : 12-18`. Les deux-points sont ESPACES ici pour que ces illustrations ne
+# soient pas prises pour de vrais renvois -- la garde irait chercher un fichier
+# nomme << chemin/fichier.ext >>. Quand la forme COLLEE est indispensable, comme
+# dans les tests de cette garde, la ligne porte le marqueur ci-dessous.
 #
 # Le motif est entre accents graves : sans eux, une parenthese de prose qui suit
 # un renvoi serait prise pour un temoin, et la garde inventerait des fautes.
@@ -65,6 +69,13 @@ RACINE = Path(__file__).resolve().parent.parent
 # qu'aucun lecteur ne fait.
 RENVOI = re.compile(
     r"`([^`\s:]+\.[A-Za-z0-9_]+)?:(\d+)(?:-(\d+))?`\s*\(`([^`]+)`\)")
+
+# Une ligne qui porte ce marqueur ecrit des renvois pour l'EXEMPLE : ils ne
+# pretendent rien de ce depot-ci. Sans lui, les tests de cette garde -- dont
+# tout l'objet est de fabriquer des renvois faux -- la feraient rougir, et elle
+# s'interdirait elle-meme d'entrer dans la CI. Le marqueur est explicite, tenu a
+# la ligne, et JAMAIS silencieux : le nombre d'exemples ignores est affiche.
+MARQUE = "renvoi-exemple"
 
 # Ce qu'on ne parcourt pas : ni les dependances, ni ce que git ignore.
 EXCLUS = ("node_modules/", ".git/", "__pycache__/")
@@ -132,16 +143,20 @@ def verifier_un(source: Path, num_source: int, chemin: str, debut: int,
             % (ou, chemin, debut, motif, vue, ou_est_il(lignes, motif)))
 
 
-def parcourir(fichiers: list[Path]) -> tuple[list[str], list[tuple]]:
-    """Rend les fautes, et la liste des renvois motives rencontres."""
+def parcourir(fichiers: list[Path]) -> tuple[list[str], list[tuple], int]:
+    """Rend les fautes, les renvois motives rencontres, et les exemples ignores."""
     fautes: list[str] = []
     vus: list[tuple] = []
+    exemples = 0
     for fichier in fichiers:
         try:
             texte = fichier.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         for num, ligne in enumerate(texte.splitlines(), start=1):
+            if MARQUE in ligne:
+                exemples += len(RENVOI.findall(ligne))
+                continue
             # L'heritage du fichier ne franchit pas la fin de la ligne.
             dernier = ""
             for trouve in RENVOI.finditer(ligne):
@@ -161,7 +176,7 @@ def parcourir(fichiers: list[Path]) -> tuple[list[str], list[tuple]]:
                                     int(fin) if fin else None, motif)
                 if faute:
                     fautes.append(faute)
-    return fautes, vus
+    return fautes, vus, exemples
 
 
 def main(argv: list[str]) -> int:
@@ -174,20 +189,26 @@ def main(argv: list[str]) -> int:
 
     fichiers = ([Path(c).resolve() for c in args.chemins] if args.chemins
                 else fichiers_suivis())
-    fautes, vus = parcourir(fichiers)
+    fautes, vus, exemples = parcourir(fichiers)
 
     if args.lister:
         for fichier, num, chemin, debut, motif in vus:
             print("  %s:%d -> %s:%s (%s)"
                   % (fichier.relative_to(RACINE).as_posix(), num, chemin, debut, motif))
 
+    # Jamais silencieux : un marqueur qu'on ne compte pas est un interrupteur cache.
+    suite = (" %d exemple(s) ignore(s) (ligne marquee << %s >>)." % (exemples, MARQUE)
+             if exemples else "")
+
     if not fautes:
-        print("%d renvoi(s) motive(s) : chacun cite bien sa ligne." % len(vus))
+        print("%d renvoi(s) motive(s) : chacun cite bien sa ligne.%s"
+              % (len(vus), suite))
         return 0
 
     for faute in fautes:
         print(faute)
-    print("\n%d faute(s) sur %d renvoi(s) motive(s)." % (len(fautes), len(vus)))
+    print("\n%d faute(s) sur %d renvoi(s) motive(s).%s"
+          % (len(fautes), len(vus), suite))
     print("Un renvoi perime n'a aucun signe exterieur : il envoie le prochain "
           "lecteur sur une ligne qui a l'air d'une reponse.")
     return 1
