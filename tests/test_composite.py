@@ -143,31 +143,113 @@ def repondre(noeuds):
 # consulte nulle part `ROUTES` (6 briques sur 16) ni `BUDGET_PAR_BRIQUE`.
 
 def test_une_brique_sans_route_ne_peut_pas_etre_PROMISE(apps):
-    """Dix briques sur seize n'ont aucune route dans une chaine.
+    """Des briques du registre n'ont aucune route dans une chaine.
 
-    Avant ce test, `[fabrication_image]` rendait un verdict favorable ; le
-    client cliquait, le noeud partait vraiment chez le fournisseur pour les
-    etapes precedentes, et la chaine se cassait sur `brique_sans_route`.
+    Avant ce test, une telle brique rendait un verdict favorable ; le client
+    cliquait, les noeuds precedents partaient vraiment chez le fournisseur, et
+    la chaine se cassait sur `brique_sans_route`.
+
+    Le vehicule a change le 22/09 au soir, et le motif merite d'etre ecrit.
+    C'etait `image_fabrication`, qui a maintenant une route ; c'est desormais
+    `recherche_web`, qui n'en aura pas : le Studio ne sert aucune adresse de
+    recherche. `WEB_SEARCH_ENGINE` est un REGLAGE passe au frontal de chat
+    (`docker-compose.yml:220`), et le registre le dit deja lui-meme en portant
+    `code: null` la ou les quinze autres briques pointent une ligne de code.
+    Un test dont le vehicule guerit se repointe, il ne se desserre pas.
     """
-    chaine = composite.chaine_depuis_briques(["image_fabrication"], apps)
+    chaine = composite.chaine_depuis_briques(["recherche_web"], apps)
     verdict = composite.verifier(chaine)
     assert verdict["atteignable"] == composite.NON, verdict["pourquoi"]
     assert "brique_sans_route" in verdict["motifs"], verdict["motifs"]
-    assert "Fabrication d'image" in verdict["pourquoi"], verdict["pourquoi"]
+    assert "Recherche Web" in verdict["pourquoi"], verdict["pourquoi"]
 
 
-def test_une_brique_au_budget_ferme_ne_peut_pas_etre_PROMISE(apps):
-    """La garde de budget est fermee par defaut et RIEN ne la branche.
+def test_une_brique_sans_ligne_de_code_n_a_pas_de_route(par_id):
+    """Le registre porte deja la reponse : `code` dit la ligne qui fait foi.
 
-    `budget_modal.verifier()` n'est appelee par aucun chemin composite (grep
-    sur le depot : aucun appelant ne passe `garde_budget`). Un noeud qui peut
-    partir chez le loueur refuse donc a tous les coups -- le verdict doit le
-    dire AVANT, pas le laisser decouvrir au clic.
+    Une brique dont AUCUNE ligne ne fait foi n'a rien a brancher. Ce test lie
+    les deux affirmations pour qu'elles ne puissent plus diverger en silence :
+    le jour ou quelqu'un ecrit la route de la recherche Web, il devra d'abord
+    ecrire le code qu'elle appelle.
     """
-    chaine = composite.chaine_depuis_briques(["video_soignee"], apps)
-    verdict = composite.verifier(chaine)
+    assert par_id["recherche_web"]["code"] is None, par_id["recherche_web"]
+    assert "recherche_web" not in composite.ROUTES
+
+
+def test_un_budget_DEPASSE_se_dit_avant_le_clic(apps):
+    """Ce qui reste interdit, c'est de DEPASSER -- et c'est le module qui le dit.
+
+    Ce test remplace `test_une_brique_au_budget_ferme_ne_peut_pas_etre_PROMISE`,
+    dont la premisse est tombee le 22/09/2026 sur un ordre du proprietaire :
+    << les depenses sont de fausses depenses tant que l'on reste dans le budget
+    free >>. L'ancien refusait TOUTE brique pouvant partir chez un loueur, sans
+    rien mesurer ; il s'interdisait un credit qu'on a. Mesure du jour : les
+    quatre briques louables tiennent toutes dans le credit offert.
+
+    Ce n'est pas un desserrage : le refus est plus etroit ET plus dur. Il porte
+    maintenant sur un depassement DIT par `budget_verifier()` du module, avec
+    sa phrase, et il est ici joue sur ses quatre bras.
+    """
+    verdict = composite.verifier(
+        composite.chaine_depuis_briques(["dialogue"], apps),
+        sonde_budget=lambda _e: "Le budget du mois est épuisé.")
     assert verdict["atteignable"] == composite.NON, verdict["pourquoi"]
-    assert "budget_non_verifie" in verdict["motifs"], verdict["motifs"]
+    assert "budget_depasse" in verdict["motifs"], verdict["motifs"]
+    # La phrase du module est relayee telle quelle : la chaine n'en ecrit pas
+    # une plus vague par-dessus.
+    assert "Le budget du mois est épuisé." in verdict["pourquoi"]
+
+
+def test_un_clip_ne_meurt_PAS_d_un_loueur_ferme_il_reste_la_carte_d_ici(apps):
+    """Le loueur ferme n'est pas la fin du monde pour un clip -- et le code le dit.
+
+    Mesure du 22/09 dans `app.py` : `/video/creer` consulte
+    `ou_calculer.decider()` AVANT (l. 2309) et ne verifie le budget que si la
+    decision dit << modal >> (l. 2333) ; un clip part alors sur la carte d'ici,
+    gratuitement. `/chanson/creer` (l. 2541) et `/dialogue/creer` (l. 2923),
+    eux, appellent `budget_verifier` sans jamais consulter la decision.
+
+    Donc : meme sonde, meme depassement, DEUX verdicts differents. Repondre
+    << non >> au clip serait un faux-rouge, aussi faux que le faux-vert.
+    """
+    verdict = composite.verifier(
+        composite.chaine_depuis_briques(["video_soignee"], apps),
+        sonde_budget=lambda _e: "Le budget du mois est épuisé.")
+    assert verdict["atteignable"] == composite.PARTIEL, verdict["pourquoi"]
+    assert "loueur_ferme" in verdict["motifs"], verdict["motifs"]
+    assert "budget_depasse" not in verdict["motifs"], verdict["motifs"]
+    assert "carte de votre ordinateur" in verdict["pourquoi"]
+
+
+def test_un_budget_qui_TIENT_ne_refuse_RIEN(apps):
+    """L'autre bras, et c'est celui que l'ordre du proprietaire a ouvert.
+
+    Sans lui, une garde qui dirait << non >> a tout aurait de nouveau l'air de
+    marcher -- c'est exactement ce qui s'etait installe.
+    """
+    verdict = composite.verifier(
+        composite.chaine_depuis_briques(["video_soignee"], apps),
+        sonde_budget=lambda _e: None)
+    assert verdict["atteignable"] != composite.NON, verdict["pourquoi"]
+    assert "budget_depasse" not in verdict["motifs"], verdict["motifs"]
+    assert "loueur_ferme" not in verdict["motifs"], verdict["motifs"]
+
+
+def test_un_budget_qu_on_ne_peut_pas_RELEVER_n_autorise_pas(apps):
+    """Pas de mesure n'est pas une autorisation -- ni un refus : c'est INCONNU.
+
+    Le module peut manquer sur une installation partielle, ou sa garde peut
+    lever autre chose que `BudgetDepasse`. Le silence ne doit jamais valoir
+    autorisation : c'est la regle qui gouverne toutes les gardes de ce fichier.
+    """
+    def casse(_e):
+        raise RuntimeError("pas de module ici")
+
+    verdict = composite.verifier(
+        composite.chaine_depuis_briques(["video_soignee"], apps),
+        sonde_budget=casse)
+    assert verdict["atteignable"] == composite.INCONNU, verdict["pourquoi"]
+    assert "budget_non_mesure" in verdict["motifs"], verdict["motifs"]
 
 
 def test_la_chaine_temoin_reste_PROMISE(apps):
@@ -180,7 +262,11 @@ def test_la_chaine_temoin_reste_PROMISE(apps):
     verdict = composite.verifier(chaine)
     assert verdict["atteignable"] != composite.NON, verdict["pourquoi"]
     assert "brique_sans_route" not in verdict["motifs"], verdict["motifs"]
-    assert "budget_non_verifie" not in verdict["motifs"], verdict["motifs"]
+    # `budget_non_verifie` n'existe plus : il refusait sans mesurer. Les deux
+    # motifs qui l'ont remplace sont nommes ici, sinon cette ligne deviendrait
+    # vraie parce qu'elle ne regarde plus rien.
+    assert "budget_depasse" not in verdict["motifs"], verdict["motifs"]
+    assert "loueur_ferme" not in verdict["motifs"], verdict["motifs"]
 
 
 @pytest.mark.parametrize("brique", [
@@ -252,12 +338,23 @@ def test_deux_briques_a_la_MEME_adresse_sont_distinguees():
     """
     import json as _json
     par_chemin = {}
-    for brique, (_genre, chemin) in composite.ROUTES.items():
-        par_chemin.setdefault(chemin, []).append(brique)
-    for chemin, briques in sorted(par_chemin.items()):
+    for brique, (genre, chemin) in composite.ROUTES.items():
+        # Le groupe est (genre, adresse) et non l'adresse seule : `image_lecture`
+        # partage `/v1/chat/completions` avec les deux chats mais n'y envoie pas
+        # la meme requete -- elle porte une image la ou ils portent du texte.
+        # C'est l'enonce VRAI de l'invariant : deux briques qui batiraient la
+        # MEME requete doivent se distinguer.
+        par_chemin.setdefault((genre, chemin), []).append(brique)
+    for (_genre, chemin), briques in sorted(par_chemin.items()):
         if len(briques) < 2 or chemin == "/v1/audio/speech":
             continue
-        precisions = [composite.PRECISION.get(b) for b in briques]
+        # Un travail ne se distingue pas par `PRECISION`, qui vise le
+        # routeur du palier gratuit : les trois briques video partagent
+        # l'adresse `(<< travail >>, << video >>)` et se distinguent par ce que
+        # `TRAVAUX` fixe dans la demande -- la qualite pour les deux clips
+        # loues, le reglage << toujours-maison >> pour le troisieme.
+        precisions = [composite.TRAVAUX[b][1] if _genre == "travail"
+                      else composite.PRECISION.get(b) for b in briques]
         assert all(precisions), (chemin, briques, precisions)
         empreintes = {_json.dumps(p, sort_keys=True) for p in precisions}
         assert len(empreintes) == len(briques), (chemin, precisions)
@@ -312,6 +409,111 @@ def test_le_noeud_de_dictee_ENVOIE_le_moteur_au_routeur(apps, monkeypatch):
     etape = composite.chaine_depuis_briques(["dictee_locale"], apps)["etapes"][0]
     assert composite.lancer_par_le_routeur(etape, b"RIFF....WAVE") == "bonjour"
     assert b'name="moteur"\r\n\r\nlocal\r\n' in vues[0].content, vues[0].content[:400]
+
+
+# --- Le type de ce qui SORT : mesure d'abord, declaration ensuite -----------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"corps"
+WAV = b"RIFF" + b"\x00\x00\x00\x00" + b"WAVE" + b"corps"
+
+
+def test_une_image_en_sortie_n_est_PAS_annoncee_comme_un_son():
+    """Le defaut du 22/09 au soir, trouve en branchant la fabrication d'image.
+
+    La route de lancement annoncait `audio/wav` pour toute sortie binaire. Les
+    octets etaient bons, le statut etait 200, et le navigateur montrait un
+    lecteur audio muet. Aucun test existant ne pouvait le dire, parce qu'aucune
+    chaine ne pouvait finir autrement que par une voix.
+    """
+    mime, nom = composite.type_de_sortie(PNG, ["image"])
+    assert mime == "image/png", mime
+    assert nom == "sortie.png", nom
+
+
+def test_un_son_reste_un_son():
+    """L'autre bras : la correction ne casse pas ce qui marchait."""
+    mime, nom = composite.type_de_sortie(WAV, ["audio"])
+    assert mime == "audio/wav", mime
+    assert nom == "sortie.wav", nom
+
+
+def test_les_octets_l_emportent_sur_le_type_DECLARE():
+    """Une signature est une mesure, un champ declare est une promesse.
+
+    Si une brique declare rendre du son et rend une image, c'est l'image qui
+    part : le navigateur recevrait autrement un fichier etiquete faux, et le
+    defaut ne se verrait qu'a l'ouverture.
+    """
+    assert composite.type_de_sortie(PNG, ["audio"])[0] == "image/png"
+
+
+def test_une_sortie_que_RIEN_ne_reconnait_suit_le_type_declare():
+    """A defaut de mesure, la promesse -- jamais une supposition."""
+    assert composite.type_de_sortie(b"xyz", ["video"])[0] == "video/mp4"
+    assert composite.type_de_sortie(b"xyz", [])[0] == "application/octet-stream"
+
+
+def test_la_page_accepte_une_image_et_pas_seulement_un_son(apps):
+    """Deux routes d'image sans champ pour les recevoir ne servent a rien.
+
+    La brique `image_lecture` prend une image en entree. Tant que le champ de
+    fichier portait `accept="audio/*"`, aucune chaine partant d'une image
+    n'etait lancable depuis la page -- le verdict disait oui, et le client ne
+    pouvait rien deposer.
+    """
+    assert 'accept="audio/*,image/*"' in composite.PAGE_HTML, "champ trop etroit"
+    assert composite.ROUTES["image_lecture"][0] == "vision"
+
+
+def test_le_noeud_qui_LIT_une_image_envoie_l_image_et_son_type(apps, monkeypatch):
+    """Le maillon de la lecture d'image, et le type qui ne se devine pas.
+
+    Deux choses partent ensemble et une seule ne suffirait pas : l'image, et
+    l'etiquette de son format. Une image envoyee sous une etiquette au hasard
+    est acceptee par certains fournisseurs et refusee par d'autres -- le defaut
+    n'apparaitrait qu'une fois sur deux.
+    """
+    import base64
+    import httpx
+
+    vues = _routeur_simule(monkeypatch, httpx.Response(
+        200, json={"choices": [{"message": {"content": "Un chat roux."}}]}))
+    png = b"\x89PNG\r\n\x1a\n" + b"des octets d'image"
+    etape = dict(composite.chaine_depuis_briques(["image_lecture"], apps)["etapes"][0],
+                 demande="Qu'y a-t-il sur cette photo ?")
+    assert composite.lancer_par_le_routeur(etape, png) == "Un chat roux."
+    envoi = json.loads(vues[0].content)
+    parties = envoi["messages"][0]["content"]
+    assert parties[0]["type"] == "text", parties
+    assert "Qu'y a-t-il sur cette photo ?" in parties[0]["text"], parties
+    url = parties[1]["image_url"]["url"]
+    assert url.startswith("data:image/png;base64,"), url[:60]
+    assert base64.b64decode(url.split(",", 1)[1]) == png
+
+
+def test_une_image_de_format_inconnu_se_REFUSE_au_lieu_d_etre_etiquetee(apps):
+    """L'autre bras. Deviner marcherait parfois, et c'est le pire des cas."""
+    etape = composite.chaine_depuis_briques(["image_lecture"], apps)["etapes"][0]
+    with pytest.raises(composite.CompositeRefuse) as refus:
+        composite.lancer_par_le_routeur(etape, b"ceci n'est pas une image")
+    assert refus.value.motif == "image_de_format_inconnu", refus.value.motif
+
+
+def test_le_noeud_qui_FABRIQUE_une_image_rend_des_octets(apps, monkeypatch):
+    """La sortie declaree est `image` : ce qui sort doit etre l'image, pas son
+    encodage en base64. Une chaine qui rendrait le texte du base64 passerait le
+    controle de types et livrerait au client un fichier illisible."""
+    import base64
+    import httpx
+
+    png = b"\x89PNG\r\n\x1a\n" + b"fabriquee"
+    vues = _routeur_simule(monkeypatch, httpx.Response(
+        200, json={"data": [{"b64_json": base64.b64encode(png).decode("ascii")}]}))
+    etape = dict(composite.chaine_depuis_briques(["image_fabrication"], apps)["etapes"][0],
+                 demande="Dessine un chat roux")
+    assert composite.lancer_par_le_routeur(etape, None) == png
+    envoi = json.loads(vues[0].content)
+    assert "Dessine un chat roux" in envoi["prompt"], envoi
 
 
 def test_le_noeud_de_chat_ENVOIE_son_modele_ET_la_demande(apps, monkeypatch):
@@ -843,13 +1045,16 @@ def test_un_cout_sans_nombre_mesure_est_DIT_et_jamais_arrondi_a_zero(apps):
     Un plafond partage n'est pas le cout d'un travail. Repondre << gratuit >>
     serait un faux-vert.
 
-    Ce test exigeait l'etat << inconnu >>. Il ne l'exige plus depuis le 22/09,
-    et ce n'est pas un relachement : `dialogue` n'a aucune route dans une
-    chaine ET sa garde de budget refuse a tous les coups, donc l'etat vaut
-    << non >>, qui est un refus plus fort et vrai. Le bras du cout n'est pas
-    mort pour autant -- il ecrit toujours son motif et son fait, et la mesure
-    porte desormais sur eux. Le refus qui masque l'etat est NOMME ici, pour que
-    le prochain lecteur ne croie pas a une garde desserree.
+    Ce test a exige l'etat << inconnu >>, l'a perdu le 22/09 au matin sous DEUX
+    refus qui arrivaient avant (aucune route, budget ferme d'avance), et le
+    retrouve le 22/09 au soir : `dialogue` a maintenant sa route de travail, et
+    le budget ne refuse plus sans mesurer. Les deux masques sont tombes le meme
+    jour, et l'etat qu'ils cachaient etait bien celui-ci.
+
+    C'est le cliquet du masquage qui a rendu ce retour visible, et son texte
+    annoncait le jour ou : << le jour ou une route de loueur s'ouvrira, il
+    rougira de nouveau, et cette fois les deux etats redeviendront montrables
+    au client >>. Il a rougi, et l'etat est montrable.
     """
     verdict = composite.verifier(
         composite.chaine_depuis_briques(["dialogue"], apps))
@@ -859,28 +1064,37 @@ def test_un_cout_sans_nombre_mesure_est_DIT_et_jamais_arrondi_a_zero(apps):
     assert len(fait) == 1, verdict["faits"]
     assert fait[0]["plancher"] == "0,00 $", fait[0]
     assert "inconnu" in fait[0]["maximum"], fait[0]
-    assert verdict["atteignable"] == composite.NON
-    assert "brique_sans_route" in verdict["motifs"], verdict["motifs"]
+    assert verdict["atteignable"] == composite.INCONNU, verdict["motifs"]
+    assert "brique_sans_route" not in verdict["motifs"], verdict["motifs"]
 
 
-def test_aucune_chaine_reelle_n_atteint_PARTIEL_ni_INCONNU_aujourd_hui(apps):
+def test_le_masquage_des_etats_est_REMESURE_a_chaque_route_ouverte(apps):
     """Le cliquet du masquage. Ce n'est pas une garde : c'est un signal.
 
-    Mesure du 22/09, apres le bras de la route : sur les seize briques, six
-    sont lancables en chaine, et toutes les six sont gratuites, de licence
-    nommee et sans carte. Les etats `partiel` et `inconnu` ne sont donc
-    atteignables par AUCUNE chaine reelle -- non parce que leurs bras seraient
-    morts, mais parce qu'un refus plus fort arrive avant.
+    Il a rougi trois fois en un jour, et les trois fois il disait vrai :
+      - six briques lancables, `partiel` et `inconnu` atteignables par AUCUNE
+        chaine reelle -- non que leurs bras fussent morts, mais qu'un refus
+        plus fort arrivait avant ;
+      - huit, apres les deux routes d'image : rien ne bouge, les huit etant
+        gratuites, de licence nommee et sans carte ;
+      - TREIZE, ce soir, apres les cinq routes de travail et le budget mesure.
+        `inconnu` est revenu, porte par `dialogue` et son plafond mensuel sans
+        nombre par travail. Le texte d'hier annoncait ce jour-la ; il est venu.
 
-    Le jour ou une route s'ajoute, ce test rougit. C'est voulu : il dit au
-    prochain lecteur que les deux etats redeviennent montrables au client, et
-    que la garde du doute de `rediger` redevient atteignable en production.
+    `partiel` reste hors d'atteinte d'une chaine reelle, et pour une raison qui
+    peut changer demain : les quatre budgets de location tiennent aujourd'hui
+    dans le credit offert. C'est justement pourquoi la sonde est POSEE ici au
+    lieu d'etre relevee : un cliquet qui virerait au rouge parce qu'un compteur
+    a bouge chez un loueur ne dirait plus rien du code. Le bras `partiel`, lui,
+    est joue par
+    `test_un_clip_ne_meurt_PAS_d_un_loueur_ferme_il_reste_la_carte_d_ici`.
     """
     etats = {composite.verifier(
-        composite.chaine_depuis_briques([a["id"]], apps))["atteignable"]
+        composite.chaine_depuis_briques([a["id"]], apps),
+        sonde_budget=lambda _e: None)["atteignable"]
         for a in apps}
-    assert etats <= {composite.OUI, composite.NON}, etats
-    assert len(composite.ROUTES) == 6, sorted(composite.ROUTES)
+    assert etats == {composite.OUI, composite.NON, composite.INCONNU}, etats
+    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)
 
 
 def test_une_licence_qu_on_ne_peut_pas_nommer_rend_inconnu(apps):
@@ -962,23 +1176,54 @@ def test_la_trace_dune_chaine_entiere_nomme_chaque_brique(apps):
     assert all(e["resultat"] == "rendu" for e in trace["etapes"])
 # --- la garde de budget, par noeud et fermee par defaut ---------------------
 
-def test_un_noeud_qui_peut_partir_chez_le_loueur_ne_part_pas_sans_budget(apps):
+def test_un_noeud_qui_DEPASSE_ne_part_pas__sans_qu_on_ait_a_brancher_la_garde(apps):
     """Le seul defaut qui coute de l'argent est celui qui lance sans demander.
 
-    `budget_modal.verifier()` est taille pour UN travail : un usage parmi
-    quatre, une carte, une duree. Un total de chaine n'y entre pas. La chaine
-    delegue donc au module de la brique, qui porte deja SON `budget_verifier`,
-    et tant que l'appelant ne l'a pas passe, le noeud NE PART PAS.
+    Deux choses d'un coup, et c'est voulu : la garde est posee PAR DEFAUT (nul
+    besoin de passer `garde_budget` pour qu'elle morde), et elle mord sur un
+    depassement MESURE par le module, plus sur l'absence de mesure.
+
+    L'ancienne version de ce test exigeait qu'un noeud louable ne parte jamais
+    sans garde branchee. Sa premisse est tombee le 22/09/2026 : la garde est
+    branchee, et ce qu'elle refuse est le depassement, pas la location.
     """
     graphe = {"phrase": "", "noeuds": [{"capacite": "video_rapide"}]}
     chaine = composite.lier(graphe, apps)
     lancee = []
-    trace = composite.executer(chaine, lambda e, x: lancee.append(e) or "clip",
-                               entree="un chat qui dort")
+    # On remplace la SONDE, pas la garde : c'est le chemin par defaut qui est
+    # sous mesure ici.
+    avant = composite.budget_du_noeud
+    composite.budget_du_noeud = lambda _e: "Le budget du mois est épuisé."
+    try:
+        trace = composite.executer(chaine, lambda e, x: lancee.append(e) or "clip",
+                                   entree="un chat qui dort")
+    finally:
+        composite.budget_du_noeud = avant
     assert trace["resultat"] == "refus"
-    assert trace["motif"] == "budget_non_verifie"
+    assert trace["motif"] == "budget_depasse"
     assert trace["ou"] == composite.CONTROLE
     assert lancee == [], "le noeud a ete lance malgre le refus"
+
+
+def test_un_noeud_qui_TIENT_dans_le_credit_part_pour_de_bon(apps):
+    """Le bras que le refus d'avance rendait injouable.
+
+    Tant que la garde refusait par principe, aucun test ne POUVAIT montrer un
+    noeud louable qui part. Celui-ci le montre, et c'est la moitie du travail
+    demande le 22/09.
+    """
+    graphe = {"phrase": "", "noeuds": [{"capacite": "video_rapide"}]}
+    chaine = composite.lier(graphe, apps)
+    lancee = []
+    avant = composite.budget_du_noeud
+    composite.budget_du_noeud = lambda _e: None
+    try:
+        trace = composite.executer(chaine, lambda e, x: lancee.append(e) or "clip",
+                                   entree="un chat qui dort")
+    finally:
+        composite.budget_du_noeud = avant
+    assert trace["resultat"] == "rendu", trace
+    assert [e["brique"] for e in lancee] == ["video_rapide"], lancee
 
 
 def test_la_garde_de_budget_est_appelee_pour_chaque_noeud(apps):
@@ -1006,3 +1251,386 @@ def test_la_chaine_temoin_ne_touche_modal_nulle_part(apps):
     for etape in chaine["etapes"]:
         assert etape["brique"] not in composite.BUDGET_PAR_BRIQUE, etape["brique"]
         assert "modal" not in etape["modes"], etape["brique"]
+# --- Les cinq routes de TRAVAIL : creer, attendre, recuperer ----------------
+# Elles ne passent pas par le routeur du palier gratuit : elles s'adressent au
+# Studio lui-meme, aux adresses de ses propres pages. Les trois decisions du
+# proprietaire du 22/09 viennent de la, sans etre reecrites : `/video/creer`
+# consulte deja `ou_calculer.decider()`, rend 409 avec sa decision quand la
+# carte est prise, et chaque module porte son `budget_verifier`.
+
+def _studio_simule(monkeypatch, repondre):
+    """Le Studio repond comme `app.py` repond, et on lit ce qui part."""
+    import httpx
+
+    vues = []
+
+    def transport(requete):
+        vues.append(requete)
+        return repondre(requete)
+
+    vrai = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client",
+        lambda **kw: vrai(transport=httpx.MockTransport(transport), **kw))
+    monkeypatch.setenv("SANDBOX_MANAGER_KEY", "cle-interne-de-test")
+    # Le sondeur ne dort pas pendant un test, et il ne tourne pas non plus un
+    # quart d'heure. Deux reglages, aucun chemin de decision touche.
+    #
+    # `DELAI_S` vaut 900 s en service. Un sondeur qui cesserait de separer
+    # << pas ENCORE >> de << JAMAIS >> tournerait donc quinze minutes sur une
+    # adresse morte -- et le banc PENDRAIT au lieu de rougir. C'est arrive ce
+    # soir, au rituel de mutation : deux commandes perdues, et le `finally` du
+    # rituel jamais joue parce que le processus avait ete tue, laissant la
+    # mutation dans le fichier. Un test qui pend ne rapporte rien ; celui-ci
+    # rougit.
+    monkeypatch.setattr(composite, "ATTENTE_S", 0)
+    monkeypatch.setattr(composite, "DELAI_S", 2)
+    return vues
+
+
+def _studio_video(etats, adresse="/video/jobs/j1/fichier?cle=jeton-du-travail"):
+    """Un Studio qui accepte un clip, le fait attendre, puis rend son fichier.
+
+    `etats` est la suite de statuts que l'etat renvoie, un par interrogation.
+    Le fichier n'est servi QU'A l'adresse portant son jeton -- comme
+    `app.py:2395`, qui compare `hmac.compare_digest(cle, attendu)` et repond
+    401 sans lui. Un composite qui fabriquerait l'adresse recevrait donc 401,
+    et ce transport-ci le lui rendrait.
+    """
+    import httpx
+
+    restants = list(etats)
+
+    def repondre(requete):
+        chemin = requete.url.path
+        if chemin == "/video/creer":
+            return httpx.Response(200, json={"id": "j1", "status": "queued"})
+        if chemin == "/video/jobs/j1":
+            statut = restants.pop(0) if restants else "succeeded"
+            corps = {"id": "j1", "status": statut}
+            if statut == "succeeded":
+                corps["video_url"] = adresse
+            return httpx.Response(200, json=corps)
+        if chemin == "/video/jobs/j1/fichier":
+            if requete.url.params.get("cle") != "jeton-du-travail":
+                return httpx.Response(401, json={"detail": "Unauthorized"})
+            return httpx.Response(200, content=b"\x00\x00\x00\x18ftypmp42")
+        return httpx.Response(404, json={"detail": "inconnu"})
+
+    return repondre
+
+
+def test_un_travail_se_cree_attend_puis_rend_son_fichier(apps, monkeypatch):
+    """Le chemin entier d'un noeud qui fabrique un TRAVAIL, sans reseau.
+
+    C'est ce qui fait passer le Studio de huit briques chainables a treize :
+    les cinq briques qui creent un travail ne repondent pas sur le coup, elles
+    rendent un identifiant et se font attendre.
+    """
+    vues = _studio_simule(monkeypatch, _studio_video(["queued", "running"]))
+    etape = composite.chaine_depuis_briques(["video_rapide"], apps)["etapes"][0]
+    sortie = composite.lancer_par_le_routeur(
+        dict(etape, demande="un chat qui dort"), "un chat qui dort")
+    assert sortie[4:8] == b"ftyp", sortie[:16]
+    # La qualite part avec la demande : c'est ce qui distingue les deux clips
+    # loues l'un de l'autre, et le routeur ne la devine pas.
+    import json as _json
+    envoye = _json.loads(vues[0].content)
+    assert envoye["qualite"] == "rapide", envoye
+    assert envoye["description"] == "un chat qui dort", envoye
+    # Trois interrogations d'etat : queued, running, succeeded.
+    assert [v.url.path for v in vues].count("/video/jobs/j1") == 3, [
+        v.url.path for v in vues]
+
+
+def test_le_fichier_se_prend_a_l_adresse_que_l_ETAT_donne(apps, monkeypatch):
+    """Le defaut du 22/09 au soir, trouve en LISANT `app.py` et non en testant.
+
+    Le composite allait chercher `/video/jobs/<id>/fichier` avec la cle du
+    Studio dans l'entete. Cette route-la ne lit pas l'entete : elle compare un
+    jeton par travail passe en parametre (`hmac.compare_digest`, app.py:2395)
+    et repond 401 sans lui. Le nom du champ qui porte l'adresse change en plus
+    avec l'usage -- `video_url` pour la video (l. 2379), `son_url` pour la
+    chanson (l. 2599) et le dialogue (l. 2975).
+
+    Ce test fixe la regle : l'adresse se LIT dans la reponse d'etat, elle ne se
+    fabrique pas. Le transport rend 401 a toute adresse sans jeton, exactement
+    comme le service.
+    """
+    vues = _studio_simule(monkeypatch, _studio_video([]))
+    etape = composite.chaine_depuis_briques(["video_rapide"], apps)["etapes"][0]
+    composite.lancer_par_le_routeur(dict(etape, demande="un chat"), "un chat")
+    dernier = vues[-1]
+    assert dernier.url.path == "/video/jobs/j1/fichier", dernier.url
+    assert dernier.url.params.get("cle") == "jeton-du-travail", dernier.url
+
+
+def test_un_travail_fini_SANS_fichier_le_dit_au_lieu_de_rendre_du_vide(apps, monkeypatch):
+    """Un travail reussi qui ne depose rien n'est pas une sortie vide.
+
+    Sans ce bras, le pas suivant recevrait `None` et casserait plus loin, sur
+    un motif qui ne designerait plus le vrai coupable.
+    """
+    import httpx
+
+    def repondre(requete):
+        if requete.url.path == "/video/creer":
+            return httpx.Response(200, json={"id": "j1"})
+        return httpx.Response(200, json={"id": "j1", "status": "succeeded"})
+
+    _studio_simule(monkeypatch, repondre)
+    etape = composite.chaine_depuis_briques(["video_rapide"], apps)["etapes"][0]
+    with pytest.raises(composite.CompositeRefuse) as pris:
+        composite.lancer_par_le_routeur(dict(etape, demande="un chat"), "un chat")
+    assert pris.value.motif == "travail_sans_fichier", pris.value.motif
+
+
+def test_un_409_de_creer_devient_une_QUESTION_au_client(apps, monkeypatch):
+    """La carte est prise : ce n'est pas une panne, c'est une question.
+
+    `/video/creer` rend 409 avec la decision d'`ou_calculer.decider()` en
+    detail (app.py:2317), parce qu'aucune regle ecrite d'avance ne sait si le
+    client est presse. Le composite relaie la phrase francaise du module au
+    lieu d'en ecrire une plus vague -- c'est la troisieme decision du
+    proprietaire, et elle ne coute pas une ligne de logique nouvelle.
+    """
+    import httpx
+
+    decision = {"ou": "on-demande",
+                "pourquoi": "La carte de votre ordinateur est occupée. "
+                            "Attendre ne coûte rien ; louer coûte 0,12 $."}
+
+    _studio_simule(monkeypatch,
+                   lambda _r: httpx.Response(409, json={"detail": decision}))
+    etape = composite.chaine_depuis_briques(["video_rapide"], apps)["etapes"][0]
+    with pytest.raises(composite.CompositeRefuse) as pris:
+        composite.lancer_par_le_routeur(dict(etape, demande="un chat"), "un chat")
+    assert pris.value.motif == "arbitrage_du_client", pris.value.motif
+    assert "Attendre ne coûte rien" in pris.value.phrase, pris.value.phrase
+
+
+def test_un_404_pendant_l_attente_ne_devient_PAS_pas_encore_pret(apps, monkeypatch):
+    """Un sondeur separe << pas ENCORE >> de << JAMAIS >>.
+
+    Une boucle d'attente est le seul endroit ou une faute ne produit aucun
+    signal. Le 21/09/2026, un 404 traduit en << pas encore pret >> a coute
+    cinquante minutes sur une adresse morte. Ici tout statut >= 400 leve
+    immediatement, et seuls les etats que `app.py` ecrit vraiment font
+    attendre.
+    """
+    import httpx
+
+    def repondre(requete):
+        if requete.url.path == "/video/creer":
+            return httpx.Response(200, json={"id": "j1"})
+        return httpx.Response(404, json={"detail": "Travail inconnu"})
+
+    vues = _studio_simule(monkeypatch, repondre)
+    etape = composite.chaine_depuis_briques(["video_rapide"], apps)["etapes"][0]
+    with pytest.raises(composite.CompositeRefuse) as pris:
+        composite.lancer_par_le_routeur(dict(etape, demande="un chat"), "un chat")
+    assert pris.value.motif == "noeud_refuse", pris.value.motif
+    assert "Travail inconnu" in pris.value.phrase, pris.value.phrase
+    # DEUX requetes en tout -- la creation, puis une seule interrogation. Il
+    # n'a pas attendu une adresse morte, et c'est le nombre qui le prouve :
+    # sans le refus, ce compteur monterait jusqu'a l'epuisement du delai.
+    assert len(vues) == 2, [v.url.path for v in vues]
+
+
+def test_un_travail_PERDU_ne_fait_pas_attendre_non_plus(apps, monkeypatch):
+    """Les etats d'echec que `app.py` ecrit vraiment sont nommes, pas devines."""
+    import httpx
+
+    def repondre(requete):
+        if requete.url.path == "/video/creer":
+            return httpx.Response(200, json={"id": "j1"})
+        return httpx.Response(200, json={"id": "j1", "status": "failed",
+                                         "message": "le modèle a manqué de mémoire"})
+
+    _studio_simule(monkeypatch, repondre)
+    etape = composite.chaine_depuis_briques(["video_rapide"], apps)["etapes"][0]
+    with pytest.raises(composite.CompositeRefuse) as pris:
+        composite.lancer_par_le_routeur(dict(etape, demande="un chat"), "un chat")
+    assert pris.value.motif == "travail_echoue", pris.value.motif
+    assert "manqué de mémoire" in pris.value.phrase, pris.value.phrase
+
+
+def test_la_chanson_prend_son_style_de_la_DEMANDE_et_ses_paroles_du_pas_davant():
+    """Une chanson reclame DEUX choses, et elles ne viennent pas du meme endroit.
+
+    Le style est ce que le client a demande ; les paroles sont ce que le noeud
+    precedent a ecrit. Les confondre donnerait une chanson qui chante sa propre
+    consigne -- c'est le defaut que le noeud de chat avait deja eu.
+    """
+    usage, demande = composite.demande_du_travail(
+        {"brique": "chanson", "demande": "une berceuse douce"},
+        "dors mon petit, la nuit est longue")
+    assert usage == "chanson"
+    assert demande["style"] == "une berceuse douce", demande
+    assert demande["paroles"] == "dors mon petit, la nuit est longue", demande
+
+
+def test_le_clip_MAISON_porte_son_reglage_et_ne_demande_aucune_qualite():
+    """<< toujours-maison >> est un reglage, pas une qualite.
+
+    C'est ce qui distingue `video_maison` des deux clips loues a la meme
+    adresse, et c'est la premiere decision du proprietaire ecrite dans une
+    table plutot que dans du code : le local passe devant parce que la demande
+    le dit, et `ou_calculer.decider()` fait le reste.
+    """
+    _, demande = composite.demande_du_travail(
+        {"brique": "video_maison", "demande": "un chat qui dort"}, "")
+    assert demande["ou_calculer"] == "toujours-maison", demande
+    assert "qualite" not in demande, demande
+# --- 12. Les trois briques qui n'ont AUCUNE adresse, et pourquoi ------------
+
+def test_les_deux_secours_sont_des_POSITIONS_pas_des_adresses(par_id):
+    """On ne fabrique pas une route a une brique qui n'est pas une destination.
+
+    Mesure du 22/09, verifiee contre le code et non de memoire :
+    `free-tier-manager/app.py::chaine_de(modele)` ne prend QUE le modele et
+    rend un ORDRE d'essai de fournisseurs. Rien dans la requete ne permet de
+    demander OpenRouter ou Groq : le routeur y tombe quand les precedents
+    tombent. Les deux fiches le disent elles-memes -- leur champ `code` pointe
+    une entree de la table `PROVIDERS`, pas une adresse.
+
+    Leur donner une route serait donc inventer un champ que le service n'a pas,
+    et la brique servie ne serait pas celle qui est nommee. C'est la faute D7,
+    deja payee une fois sur les deux dictees.
+    """
+    source = (RACINE / "free-tier-manager" / "app.py").read_text(encoding="utf-8")
+    assert "def chaine_de(modele: str) -> List[str]:" in source, (
+        "la signature a change : si un fournisseur peut desormais etre nomme, "
+        "les deux secours deviennent des destinations et meritent une route")
+    for brique in ("chat_secours_openrouter", "chat_secours_groq"):
+        assert brique not in composite.ROUTES, brique
+        assert "PROVIDERS[" in par_id[brique]["code"], par_id[brique]["code"]
+    # Et elles partagent une capacite : c'est ce qui fait que `lier` s'abstient
+    # au lieu d'en choisir une pour avoir l'air decide.
+    assert (par_id["chat_secours_openrouter"]["capacite"]
+            == par_id["chat_secours_groq"]["capacite"] == "conversation_secours")
+
+
+def test_les_briques_sans_route_sont_EXACTEMENT_celles_qu_on_a_nommees(registre):
+    """Le cliquet de la liste : trois, et on sait dire pourquoi chacune.
+
+    Mesure du 22/09 au soir : treize briques sur seize ont une route. Les trois
+    qui n'en ont pas ne sont pas un reste -- chacune a son motif ecrit et
+    verifie contre le code. Le jour ou une quatrieme apparait, ou ou l'une de
+    ces trois trouve une adresse, ce test sonne et le motif se reecrit.
+    """
+    dehors = {a["id"] for a in registre["applications"]
+              if a["id"] not in composite.ROUTES}
+    assert dehors == {"chat_secours_openrouter", "chat_secours_groq",
+                      "recherche_web"}, dehors
+    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)
+
+
+# --- 10. Preferer le local : y a-t-il seulement un choix a faire ? ----------
+
+def test_aucune_capacite_n_oppose_aujourd_hui_une_brique_LOCALE_a_une_DISTANTE(apps):
+    """Le cliquet de la preference locale. Pas une garde : un signal.
+
+    L'ordre du proprietaire du 22/09 dit << privilegier le local si gpu existe
+    et est libre >>. Pour les clips, c'est deja obtenu SANS ecrire une ligne :
+    `/video/creer` consulte `ou_calculer.decider()`, dont le reglage par defaut
+    est `maison-si-libre`, et la chaine passe par cette route-la.
+
+    Ce qui n'est PAS obtenu, c'est l'arbitrage entre CANDIDATS dans `lier()` --
+    et la mesure dit pourquoi : une seule capacite porte plusieurs briques,
+    `conversation_secours`, et ses deux candidates sont distantes toutes les
+    deux. Ecrire une preference locale serait donc un controle qui ne peut pas
+    sonner, et un controle qui ne peut pas echouer se supprime au lieu de se
+    reporter. On le remplace par ce signal : le jour ou une capacite opposera
+    une brique locale a une distante, il rougit, et c'est ce jour-la qu'il
+    faudra ecrire la preference.
+    """
+    par_capacite = {}
+    for a in apps:
+        par_capacite.setdefault(a["capacite"], []).append(a)
+
+    a_choix = {c: b for c, b in par_capacite.items() if len(b) > 1}
+    assert set(a_choix) == {"conversation_secours"}, sorted(a_choix)
+
+    for capacite, briques in a_choix.items():
+        locales = [b["id"] for b in briques if "local" in b["modes"]]
+        assert not locales, (
+            "%s oppose desormais une brique locale a une distante (%s) : la "
+            "preference locale a maintenant un sujet, elle doit s'ecrire dans "
+            "lier()" % (capacite, locales))
+
+
+# --- 11. La question du client arrive JUSQU'A lui ---------------------------
+
+def test_un_refus_porte_sa_PHRASE_dans_la_trace_et_pas_seulement_son_motif(apps):
+    """Le defaut du 22/09 au soir, trouve en relisant le chemin complet.
+
+    `executer` gardait `refus.motif` et jetait `refus.phrase`. La route levait
+    ensuite 409 avec le motif. Quand la carte etait prise, le client lisait
+    donc << arbitrage_du_client >> -- un slug -- au lieu de la question
+    francaise que `ou_calculer.decider()` avait ecrite pour lui.
+
+    La decision etait prise, relayee, et jamais montree. Un motif nomme est
+    fait pour le journal ; une phrase est faite pour un debutant.
+    """
+    chaine = composite.chaine_depuis_briques(["chat_auto"], apps)
+
+    def refuser(_etape, _entree):
+        raise composite.CompositeRefuse(
+            "arbitrage_du_client",
+            "La carte de votre ordinateur est occupée. Attendre ne coûte "
+            "rien ; louer coûte 0,12 $.", ou=composite.EXECUTION)
+
+    trace = composite.executer(chaine, refuser, entree="bonjour",
+                               garde_budget=lambda _e: None)
+    assert trace["resultat"] == "refus"
+    assert trace["motif"] == "arbitrage_du_client"
+    assert "Attendre ne coûte rien" in (trace["phrase"] or ""), trace
+    # Au pas aussi : la trace dit OU ca a casse, et avec quels mots.
+    assert "Attendre ne coûte rien" in (trace["etapes"][-1]["phrase"] or "")
+
+
+def test_un_echec_NON_nomme_met_son_texte_dans_la_phrase_et_un_NOM_dans_le_motif(apps):
+    """Un meme champ ne peut pas avoir deux sens selon le chemin emprunte.
+
+    Le motif portait `str(erreur)` sur ce bras-la et un slug partout ailleurs.
+    Un journal qui compte les motifs comptait donc une categorie par message
+    d'erreur.
+    """
+    chaine = composite.chaine_depuis_briques(["chat_auto"], apps)
+
+    def casser(_etape, _entree):
+        raise ValueError("le service n'a pas repondu")
+
+    trace = composite.executer(chaine, casser, entree="bonjour",
+                               garde_budget=lambda _e: None)
+    assert trace["resultat"] == "echec"
+    assert trace["motif"] == "ValueError", trace["motif"]
+    assert trace["phrase"] == "le service n'a pas repondu", trace["phrase"]
+
+
+def test_la_route_montre_la_QUESTION_au_client_et_journalise_le_motif(sandbox, apps):
+    """Le dernier metre : ce que le navigateur recoit vraiment.
+
+    Sans ce test, la phrase pouvait arriver jusqu'a la trace et mourir dans la
+    route -- c'est exactement ou elle mourait. Le motif reste, dans l'en-tete,
+    parce qu'un journal en a besoin ; le corps de la reponse est en francais.
+    """
+    from fastapi.testclient import TestClient
+
+    def refuser(_etape, _entree):
+        raise sandbox.composite.CompositeRefuse(
+            "arbitrage_du_client",
+            "La carte de votre ordinateur est occupée. Attendre ne coûte "
+            "rien ; louer coûte 0,12 $.",
+            ou=sandbox.composite.EXECUTION)
+
+    sandbox.composite.lancer_par_le_routeur = refuser
+    client = TestClient(sandbox.app)
+    reponse = client.post(
+        "/composite/lancer",
+        headers={"Authorization": "Bearer " + sandbox.KEY},
+        data={"briques": "chat_auto", "phrase": "bonjour"})
+    assert reponse.status_code == 409, reponse.text
+    assert "Attendre ne coûte rien" in reponse.json()["detail"], reponse.text
+    assert reponse.headers["X-Composite-Motif"] == "arbitrage_du_client"

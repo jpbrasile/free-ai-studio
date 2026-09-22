@@ -48,9 +48,11 @@ Aucun appel reseau a l'import.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 import format_fr
@@ -346,7 +348,8 @@ def licence_indeterminee(licence: str) -> bool:
     return bool(_INDETERMINEE.search(licence or ""))
 
 
-def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None) -> dict:
+def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
+             sonde_budget=None) -> dict:
     """Le verdict, rendu dans la MEME forme que `ou_calculer.decider()` :
     un etat, plus un `pourquoi` en francais affichable tel quel.
 
@@ -406,26 +409,73 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None) -> dict:
                                      "encore dans un enchaînement"})
         etat = NON
 
-    # --- le budget : un noeud qui peut partir chez le loueur ne part pas -----
-    # `_budget_ferme` (paragraphe 4) refuse par defaut, et AUCUN appelant ne
-    # passe aujourd'hui de garde qui appellerait `budget_modal.verifier()`. Le
-    # refus est donc certain : il se dit ici, avant le clic, au lieu de se
-    # decouvrir au controle.
-    louables = [e for e in etapes
-                if BUDGET_PAR_BRIQUE.get(e["brique"]) and "modal" in e["modes"]]
-    if louables:
-        motifs.append("budget_non_verifie")
+    # --- le budget : MESURE, au lieu d'etre refuse d'avance -------------------
+    # Ordre du proprietaire, 22/09/2026 : << les depenses sont de fausses
+    # depenses tant que l'on reste dans le budget free >>. Le bras precedent
+    # refusait toute brique pouvant partir chez un loueur SANS RIEN MESURER --
+    # il s'interdisait un credit qu'on a. Il interroge maintenant la garde du
+    # module, la meme que `executer` posera juste avant le lancement, et ne
+    # refuse que sur un depassement dit par elle, avec sa phrase.
+    #
+    # Deux cas, et c'est le CODE qui les separe, pas une regle qu'on s'invente :
+    #   - `/chanson/creer` (app.py:2541) et `/dialogue/creer` (app.py:2923)
+    #     appellent `budget_verifier` sans jamais consulter
+    #     `ou_calculer.decider()` : le loueur est leur seule route ;
+    #   - `/video/creer` consulte la decision AVANT (app.py:2309) et ne verifie
+    #     le budget que si elle dit << modal >> (app.py:2333) : un clip peut
+    #     encore se fabriquer sur la carte d'ici, credit de location epuise.
+    # Donc : chanson et dialogue ⇒ NON, clip ⇒ PARTIEL, et la phrase dit lequel.
+    sonde = sonde_budget or budget_du_noeud
+    ferme, prive_du_loueur = [], []
+    for e in etapes:
+        if not BUDGET_PAR_BRIQUE.get(e["brique"]):
+            continue
+        try:
+            refus = sonde(e)
+        except Exception as exc:  # noqa: BLE001
+            # Pas de mesure n'est pas une autorisation -- ni un refus. C'est
+            # INCONNU, et on le dit : `MAX_DAILY_COST=0` merite mieux qu'un
+            # silence qui laisse partir.
+            if etat == OUI:
+                etat = INCONNU
+            motifs.append("budget_non_mesure")
+            pourquoi.append(
+                "Le budget de %s n'a pas pu être relevé d'ici (%s) : la "
+                "chaîne ne promet pas ce qu'elle n'a pas mesuré."
+                % (e["fonction"], exc.__class__.__name__))
+            faits.append({"quoi": "budget_non_mesure", "application": e["fonction"]})
+            continue
+        if not refus:
+            continue
+        (ferme if e["brique"] in LOUEUR_SEUL else prive_du_loueur).append((e, refus))
+
+    if ferme:
+        motifs.append("budget_depasse")
         pourquoi.append(
-            "%s peut partir chez un loueur, et une chaîne ne sait pas encore "
-            "vérifier son budget : elle ne la lance pas."
-            % ", ".join(e["fonction"] for e in louables))
-        faits.append({"quoi": "budget_non_verifie",
-                      "applications": [e["fonction"] for e in louables],
-                      "consequence": "cette chaîne ne peut pas être lancée : "
-                                     "le budget de ces applications ne se "
-                                     "vérifie pas encore depuis un "
-                                     "enchaînement"})
+            "%s ne peut partir que chez un loueur, et le crédit offert n'y "
+            "suffit plus aujourd'hui. %s"
+            % (", ".join(e["fonction"] for e, _ in ferme), ferme[0][1]))
+        faits.append({"quoi": "budget_depasse",
+                      "applications": [e["fonction"] for e, _ in ferme],
+                      "dit_par_le_module": ferme[0][1],
+                      "consequence": "cette chaîne ne peut pas être lancée "
+                                     "aujourd'hui sans dépenser"})
         etat = NON
+
+    if prive_du_loueur:
+        if etat == OUI:
+            etat = PARTIEL
+        motifs.append("loueur_ferme")
+        pourquoi.append(
+            "Le crédit offert chez le loueur ne suffit plus pour %s : ce pas "
+            "ne partira que sur la carte de votre ordinateur, si elle est "
+            "libre. %s"
+            % (", ".join(e["fonction"] for e, _ in prive_du_loueur),
+               prive_du_loueur[0][1]))
+        faits.append({"quoi": "loueur_ferme",
+                      "applications": [e["fonction"] for e, _ in prive_du_loueur],
+                      "dit_par_le_module": prive_du_loueur[0][1],
+                      "consequence": "ce pas ne part que sur la carte d'ici"})
 
     # --- la licence d'USAGE : non commercial est contagieux -------------------
     nc = [e for e in etapes if est_non_commercial(e["licence"])]
@@ -719,25 +769,63 @@ BUDGET_PAR_BRIQUE = {
     "dialogue": "dialogue",
 }
 
+# Celles dont le loueur est la SEULE route. Mesure du 22/09 dans `app.py` :
+# `/chanson/creer` (l. 2541) et `/dialogue/creer` (l. 2923) appellent
+# `budget_verifier` sans jamais consulter `ou_calculer.decider()` ; `/video/creer`
+# le consulte AVANT (l. 2309) et ne verifie le budget que si la decision dit
+# << modal >> (l. 2333) -- un clip part alors sur la carte d'ici, gratuitement.
+#
+# Ce que le registre en dit DIVERGE, et c'est note plutot que corrige ici :
+# `video_rapide` et `video_soignee` portent `modes: [modal, kaggle, colab]` sans
+# `local`, alors que `app.py:2321` les prepare bel et bien en mode maison. Le
+# code fait foi ; la fiche du registre est en retard. Sous-plan, pas raccroc.
+LOUEUR_SEUL = ("chanson", "dialogue")
 
-def _budget_ferme(etape):
-    """Par defaut, un noeud qui peut partir chez le loueur NE PART PAS.
 
-    Fermee par defaut, et c'est voulu : le seul defaut qui coute de l'argent est
-    celui qui lance sans avoir demande. Le module de la brique porte son propre
-    `budget_verifier(gpu, duree_max_s)` ; l'appelant le passe avec la duree et
-    la carte de CE travail, que la chaine ne connait pas et n'invente pas.
+def budget_du_noeud(etape) -> str | None:
+    """None si ce noeud tient dans le credit offert, la phrase du module sinon.
+
+    Decision du proprietaire, 22/09/2026 : << les depenses sont de fausses
+    depenses tant que l'on reste dans le budget free >>. Jusque-la, un noeud
+    pouvant partir chez le loueur etait refuse d'avance -- juste tant que rien
+    ne verifiait, et faux des lors qu'il existe un moyen de verifier. Il
+    s'interdisait un budget qu'on a.
+
+    Ce qui reste interdit, c'est de DEPASSER, et ce n'est pas cette fonction
+    qui le dit : c'est `budget_verifier(gpu, duree_max_s)` du module qui porte
+    la brique, avec SA memoire, SON usage, SA duree et SA phrase de secours. La
+    chaine n'invente aucun de ces quatre chiffres, et surtout pas un total : la
+    garde est taillee pour UN travail, et on l'appelle une fois par noeud.
     """
     usage = BUDGET_PAR_BRIQUE.get(etape["brique"])
-    if usage and "modal" in etape.get("modes", ()):
+    if not usage:
+        return None
+    import importlib
+
+    module = importlib.import_module(usage)
+    qualite = QUALITE_DU_NOEUD.get(etape["brique"])
+    gpu = (module.MODELES[qualite]["gpu"] if qualite
+           else getattr(module, "GPU_MODAL", None))
+    try:
+        module.budget_verifier(gpu, module.DUREE_MAX_S)
+    except module.BudgetDepasse as exc:
+        return str(exc)
+    return None
+
+
+def _budget_verifie(etape):
+    """La garde de `executer`, posee juste avant CE noeud et pas avant.
+
+    Elle refuse toujours -- mais sur un depassement mesure, plus sur une
+    absence de mesure.
+    """
+    refus = budget_du_noeud(etape)
+    if refus:
         raise CompositeRefuse(
-            "budget_non_verifie",
+            "budget_depasse",
             # << Rien n'est lance >> etait faux des le deuxieme noeud : les
             # precedents ont deja tourne pour de bon. La trace dit lesquels.
-            "<< %s >> peut partir chez le loueur et son budget n'a pas ete "
-            "verifie pour ce travail. Ce pas n'est pas lance."
-            % etape["fonction"],
-            ou=CONTROLE)
+            "%s Ce pas n'est pas lance." % refus, ou=CONTROLE)
 
 
 def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
@@ -753,15 +841,21 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
     compilation, liaison, controle, execution, sortie invalide. Un booleen ne
     fait pas tourner le volant.
     """
+    # `phrase` est le champ que le client LIT. Il manquait, et le motif tenait
+    # sa place : quand la carte etait prise, la page montrait le slug
+    # << arbitrage_du_client >> au lieu de la question francaise ecrite par
+    # `ou_calculer.decider()`. Un motif nomme est fait pour le journal ; une
+    # phrase est faite pour un debutant.
     trace = {"etapes": [], "resultat": None, "ou": None, "motif": None,
-             "sortie": None}
+             "phrase": None, "sortie": None}
 
     if verdict is not None and verdict["atteignable"] == NON:
         trace.update(resultat="refus", ou=CONTROLE,
-                     motif=";".join(verdict["motifs"]) or "refuse")
+                     motif=";".join(verdict["motifs"]) or "refuse",
+                     phrase=verdict["pourquoi"])
         return trace
 
-    garde_budget = garde_budget or _budget_ferme
+    garde_budget = garde_budget or _budget_verifie
     courant = entree
     for etape in chaine["etapes"]:
         # La demande du client voyage AVEC le pas. Elle etait portee par le
@@ -776,19 +870,28 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             courant = lancer(etape, courant)
         except CompositeRefuse as refus:
             trace["etapes"].append({"brique": etape["brique"], "resultat": "refus",
-                                    "motif": refus.motif})
-            trace.update(resultat="refus", ou=refus.ou, motif=refus.motif)
+                                    "motif": refus.motif, "phrase": refus.phrase})
+            trace.update(resultat="refus", ou=refus.ou, motif=refus.motif,
+                         phrase=refus.phrase)
             return trace
         except Exception as erreur:  # noqa: BLE001 -- on NOMME l'echec, on ne le masque pas
+            # Le motif reste un NOM, comme partout ailleurs, et le texte de
+            # l'erreur va dans la phrase. Il occupait le champ du motif, ce qui
+            # donnait deux sens a un meme champ selon le chemin emprunte.
             trace["etapes"].append({"brique": etape["brique"], "resultat": "echec",
-                                    "motif": type(erreur).__name__})
-            trace.update(resultat="echec", ou=EXECUTION, motif=str(erreur))
+                                    "motif": type(erreur).__name__,
+                                    "phrase": str(erreur)})
+            trace.update(resultat="echec", ou=EXECUTION,
+                         motif=type(erreur).__name__, phrase=str(erreur))
             return trace
 
         if courant is None:
             trace["etapes"].append({"brique": etape["brique"], "resultat": "vide",
                                     "motif": "sortie_vide"})
-            trace.update(resultat="echec", ou=SORTIE, motif="sortie_vide")
+            trace.update(
+                resultat="echec", ou=SORTIE, motif="sortie_vide",
+                phrase="« %s » n’a rien rendu, et la suite de la chaîne "
+                       "attendait quelque chose." % etape["fonction"])
             return trace
 
         trace["etapes"].append({"brique": etape["brique"], "resultat": "rendu",
@@ -820,7 +923,56 @@ ROUTES = {
     "chat_max": ("chat", "/v1/chat/completions"),
     "voix_fr": ("voix", "/v1/audio/speech"),
     "voix_en": ("voix", "/v1/audio/speech"),
+    "image_fabrication": ("image", "/v1/images/generations"),
+    "image_lecture": ("vision", "/v1/chat/completions"),
+    # Les cinq qui creent un TRAVAIL. Leur << chemin >> est un usage, pas une
+    # adresse : il donne les trois adresses d'un coup (voir TRAVAUX).
+    "video_rapide": ("travail", "video"),
+    "video_soignee": ("travail", "video"),
+    "video_maison": ("travail", "video"),
+    "chanson": ("travail", "chanson"),
+    "dialogue": ("travail", "dialogue"),
 }
+
+
+# Le Studio s'appelle LUI-MEME pour ces cinq briques, aux adresses que ses
+# propres pages utilisent. C'est voulu : une chaine ne double pas la machinerie
+# des travaux, elle s'en sert. Trois choses viennent donc sans etre reecrites --
+# la carte d'ici qui passe devant quand elle est libre, le budget verifie au
+# pire cas, et la question rendue au client quand la carte est prise.
+SANDBOX = os.getenv("COMPOSITE_SANDBOX_URL", "http://127.0.0.1:8000")
+
+# Ce que la chaine AJOUTE a la demande pour chaque travail. `video_maison` est
+# la seule qui IMPOSE la carte d'ici ; les deux autres laissent le reglage du
+# client trancher, et son defaut est << maison si libre >>.
+TRAVAUX = {
+    "video_rapide": ("video", {"qualite": "rapide"}),
+    "video_soignee": ("video", {"qualite": "soigne"}),
+    "video_maison": ("video", {"ou_calculer": "toujours-maison"}),
+    "chanson": ("chanson", {}),
+    "dialogue": ("dialogue", {}),
+}
+
+# La qualite video de chaque brique, pour aller chercher SA carte dans
+# `video.MODELES` au lieu d'ecrire << L4 >> et << A100 >> une deuxieme fois.
+QUALITE_DU_NOEUD = {"video_rapide": "rapide", "video_soignee": "soigne"}
+
+# Un travail se regarde toutes les N secondes. Les etats terminaux sont ceux
+# que `write_job` ecrit vraiment -- releves dans `app.py`, pas supposes.
+ATTENTE_S = float(os.getenv("COMPOSITE_ATTENTE_SECONDS", "5"))
+TRAVAIL_RENDU = ("succeeded",)
+TRAVAIL_PERDU = ("failed", "cancelled", "needs_configuration", "handoff_ready")
+
+# Les formats d'image que le Studio sait nommer, par leurs premiers
+# octets. Le type d'une image ne se DEVINE pas : une image envoyee sous
+# une etiquette fausse est acceptee par certains fournisseurs et refusee
+# par d'autres, donc le defaut n'apparaitrait qu'une fois sur deux.
+SIGNATURES_IMAGE = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
 
 
 # Ce que la chaine AJOUTE a sa demande pour que la brique servie soit celle
@@ -840,7 +992,52 @@ PRECISION = {
     "dictee_groq": {"moteur": "groq"},
     "chat_auto": {"model": "free-ai-auto"},
     "chat_max": {"model": "free-ai-max"},
+    "image_lecture": {"model": "free-ai-auto"},
 }
+
+
+# Ce qu'on annonce au navigateur pour la sortie d'une chaine, et sous quel nom
+# elle se telecharge. Une signature d'octets est une MESURE ; le type declare
+# par la brique est une promesse. On croit la mesure d'abord.
+MIME_PAR_TYPE = {
+    "audio": ("audio/wav", "sortie.wav"),
+    "image": ("image/png", "sortie.png"),
+    "video": ("video/mp4", "sortie.mp4"),
+    "fichier": ("application/octet-stream", "sortie.bin"),
+    "texte": ("text/plain; charset=utf-8", "sortie.txt"),
+}
+
+# Les signatures que le Studio sait lire dans les premiers octets d'un fichier.
+# Les images viennent de SIGNATURES_IMAGE : une seule table, pas deux.
+NOMS_PAR_MIME = {
+    "image/png": "sortie.png", "image/jpeg": "sortie.jpg",
+    "image/gif": "sortie.gif", "audio/wav": "sortie.wav",
+    "video/mp4": "sortie.mp4",
+}
+
+
+def type_de_sortie(octets, sorties=()) -> tuple[str, str]:
+    """(type MIME, nom propose) pour ce qu'une chaine vient de produire.
+
+    Jusqu'au 22/09/2026 au soir la route de lancement annoncait `audio/wav`
+    pour tout, parce que la seule chaine possible finissait par une voix. Des
+    que la fabrication d'image a eu une route, cette constante est devenue un
+    mensonge que rien n'aurait signale : les octets etaient bons, le statut
+    etait 200, et le navigateur affichait un lecteur audio muet.
+    """
+    brut = bytes(octets or b"")
+    for signature, mime in SIGNATURES_IMAGE:
+        if brut.startswith(signature):
+            return mime, NOMS_PAR_MIME[mime]
+    if brut[:4] == b"RIFF" and brut[8:12] == b"WAVE":
+        return "audio/wav", NOMS_PAR_MIME["audio/wav"]
+    if brut[4:8] == b"ftyp":
+        return "video/mp4", NOMS_PAR_MIME["video/mp4"]
+    # Rien de reconnu : on retombe sur ce que la derniere brique DECLARE
+    # rendre, et a defaut sur le type le plus neutre. Jamais sur une supposition
+    # qui ferait passer un fichier pour un autre.
+    declare = (list(sorties) or ["fichier"])[0]
+    return MIME_PAR_TYPE.get(declare, MIME_PAR_TYPE["fichier"])
 
 
 def _cle_du_routeur() -> str:
@@ -894,6 +1091,18 @@ def lancer_par_le_routeur(etape: dict, entree):
             "<< %s >> n'a pas encore de route dans une chaine. Ce pas n'est "
             "pas lance." % etape["fonction"], ou=EXECUTION)
     genre, chemin = route
+
+    # Les travaux ne passent pas par le routeur du palier gratuit : ils
+    # s'adressent au Studio lui-meme, avec sa propre cle.
+    if genre == "travail":
+        return lancer_un_travail(etape, entree)
+
+    # Ce qui est faux dans la demande se dit AVANT de demander une cle a qui
+    # que ce soit -- meme discipline qu'a la route du dialogue, ou un texte mal
+    # balise se refuse meme quand Modal n'est pas branche. Un fichier illisible
+    # n'a pas besoin d'un routeur joignable pour etre illisible.
+    image = _data_uri(etape, entree) if genre == "vision" else None
+
     entetes = {"Authorization": "Bearer " + _cle_du_routeur()}
 
     with httpx.Client(timeout=DELAI_S) as client:
@@ -922,12 +1131,196 @@ def lancer_par_le_routeur(etape: dict, entree):
             choix = (reponse.json().get("choices") or [{}])[0]
             return ((choix.get("message") or {}).get("content") or "").strip() or None
 
+        if genre == "image":
+            reponse = client.post(
+                ROUTEUR + chemin, headers=entetes,
+                json={"prompt": _consigne_du_chat(etape, entree), "n": 1})
+            _ou_refus(reponse, etape, "La fabrication d'image n'a pas abouti.")
+            images = reponse.json().get("data") or []
+            nu = (images[0] or {}).get("b64_json") if images else None
+            if not nu:
+                raise CompositeRefuse(
+                    "noeud_sans_sortie",
+                    "<< %s >> a repondu sans image. Ce pas n'est pas lance."
+                    % etape["fonction"], ou=EXECUTION)
+            return base64.b64decode(nu)
+
+        if genre == "vision":
+            reponse = client.post(
+                ROUTEUR + chemin, headers=entetes,
+                json=dict(PRECISION.get(etape["brique"], {}), stream=False,
+                          messages=[{"role": "user", "content": [
+                              {"type": "text",
+                               "text": _consigne_de_l_image(etape)},
+                              {"type": "image_url",
+                               "image_url": {"url": image}},
+                          ]}]))
+            _ou_refus(reponse, etape,
+                      "Aucun service gratuit qui sait lire une image ne repond.")
+            choix = (reponse.json().get("choices") or [{}])[0]
+            return ((choix.get("message") or {}).get("content") or "").strip() or None
+
         # la voix. Le routeur choisit la langue sur le texte lui-meme.
         texte = str(entree or "")
         reponse = client.post(ROUTEUR + chemin, headers=entetes,
                               json={"input": texte})
         _ou_refus(reponse, etape, "La lecture a haute voix n'a pas abouti.")
         return reponse.content or None
+
+
+def _cle_du_sandbox() -> str:
+    cle = os.getenv("SANDBOX_MANAGER_KEY", "").strip()
+    if not cle:
+        raise CompositeRefuse(
+            "sandbox_sans_cle",
+            "Le Studio ne peut pas se lancer un travail a lui-meme : sa cle "
+            "interne manque. Ce pas n'est pas lance.", ou=EXECUTION)
+    return cle
+
+
+def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
+    """Ce qui part vraiment a `/<usage>/creer`, depuis le texte recu.
+
+    Chaque usage a sa forme, et `preparer()` la refuse quand elle ne tient pas
+    -- avec sa propre phrase francaise, qu'on relaie telle quelle plutot que
+    d'en fabriquer une plus vague. La chanson demande DEUX choses d'un coup :
+    son style vient de ce que le client a demande, ses paroles de l'etape
+    precedente.
+    """
+    usage, fixe = TRAVAUX[etape["brique"]]
+    texte = str(entree or "").strip()
+    demande = (etape.get("demande") or "").strip()
+    if usage == "video":
+        return usage, dict(fixe, description=texte or demande)
+    if usage == "chanson":
+        return usage, dict(fixe, style=demande or "chanson en français",
+                           paroles=texte or demande)
+    return usage, dict(fixe, texte=texte or demande)
+
+
+def lancer_un_travail(etape: dict, entree):
+    """Creer, attendre, recuperer -- aux adresses des pages du Studio.
+
+    Le sondeur separe << pas ENCORE >> de << JAMAIS >>. Une boucle d'attente est
+    le seul endroit ou une faute ne produit aucun signal : un 404 traduit en
+    << pas encore pret >> a coute cinquante minutes sur une adresse morte, le
+    21/09/2026. Ici, tout statut >= 400 leve immediatement ; seuls les etats de
+    travail que `app.py` ecrit vraiment font attendre.
+    """
+    import httpx
+
+    usage, demande = demande_du_travail(etape, entree)
+    entetes = {"Authorization": "Bearer " + _cle_du_sandbox()}
+    base = "%s/%s" % (SANDBOX, usage)
+
+    with httpx.Client(timeout=DELAI_S) as client:
+        creation = client.post(base + "/creer", headers=entetes, json=demande)
+        if creation.status_code == 409:
+            raise CompositeRefuse("arbitrage_du_client",
+                                  _phrase_de_l_arbitrage(creation, etape),
+                                  ou=EXECUTION)
+        _ou_refus(creation, etape, "Ce travail n'a pas pu etre lance.")
+        jid = str((creation.json() or {}).get("id") or "")
+        if not jid:
+            raise CompositeRefuse(
+                "travail_sans_identifiant",
+                "<< %s >> a ete accepte sans identifiant de travail : le Studio "
+                "ne saurait pas en recuperer le resultat." % etape["fonction"],
+                ou=EXECUTION)
+
+        fin = time.monotonic() + DELAI_S
+        while True:
+            etat = client.get("%s/jobs/%s" % (base, jid), headers=entetes)
+            _ou_refus(etat, etape, "L'etat de ce travail n'est pas lisible.")
+            corps = etat.json() or {}
+            statut = str(corps.get("status") or "")
+            if statut in TRAVAIL_RENDU:
+                break
+            if statut in TRAVAIL_PERDU:
+                raise CompositeRefuse(
+                    "travail_echoue",
+                    "<< %s >> s'est arrete : %s. %s"
+                    % (etape["fonction"], statut,
+                       str(corps.get("message") or "").strip()),
+                    ou=EXECUTION)
+            if time.monotonic() >= fin:
+                raise CompositeRefuse(
+                    "travail_trop_long",
+                    "<< %s >> n'a pas fini en %d secondes. Il continue peut-etre "
+                    "sur sa propre page ; la chaine, elle, s'arrete ici."
+                    % (etape["fonction"], DELAI_S), ou=EXECUTION)
+            time.sleep(ATTENTE_S)
+
+        # L'adresse du fichier se LIT dans la reponse d'etat, elle ne se
+        # fabrique pas. Deux raisons, mesurees toutes les deux :
+        #   - la route du fichier ne lit pas l'entete d'autorisation ; elle
+        #     compare un jeton par travail passe en parametre
+        #     (`hmac.compare_digest(cle, attendu)`, app.py:2395). Une adresse
+        #     construite ici repondrait 401, quel que soit le porteur ;
+        #   - le nom du champ change avec l'usage : `video_url` (app.py:2379)
+        #     pour la video, `son_url` pour la chanson (l. 2599) et le dialogue
+        #     (l. 2975).
+        adresse = str(corps.get("video_url") or corps.get("son_url") or "")
+        if not adresse:
+            raise CompositeRefuse(
+                "travail_sans_fichier",
+                "<< %s >> s'est termine sans deposer de fichier : la chaine "
+                "n'a rien a passer au pas suivant." % etape["fonction"],
+                ou=EXECUTION)
+        fichier = client.get(SANDBOX + adresse, headers=entetes)
+        _ou_refus(fichier, etape, "Ce travail n'a rien rendu.")
+        return fichier.content or None
+
+
+def _phrase_de_l_arbitrage(reponse, etape: dict) -> str:
+    """Un 409 de `/creer` n'est pas une panne : c'est une question au client.
+
+    La carte est prise, et aucune regle ecrite d'avance ne sait s'il est
+    presse. Le module de decision rend deja une phrase francaise faite pour
+    etre montree telle quelle : on la reprend, on n'en ecrit pas une autre.
+    """
+    try:
+        decision = reponse.json().get("detail") or {}
+    except ValueError:
+        decision = {}
+    dit = str(decision.get("pourquoi") or "").strip()
+    return (dit or ("<< %s >> attend que vous choisissiez entre attendre la "
+                    "carte d'ici et louer une machine." % etape["fonction"]))
+
+
+def _data_uri(etape: dict, octets) -> str:
+    """Le type d'une image se LIT dans ses premiers octets, jamais se devine.
+
+    Un format que rien ne reconnait se refuse en le nommant. L'envoyer
+    sous une etiquette au hasard marcherait chez un fournisseur et pas
+    chez le suivant : le defaut n'apparaitrait qu'une fois sur deux, et
+    c'est la panne la plus chere a trouver.
+    """
+    if not isinstance(octets, (bytes, bytearray)):
+        raise CompositeRefuse(
+            "entree_du_mauvais_type",
+            "<< %s >> attend une image et a recu autre chose."
+            % etape["fonction"], ou=EXECUTION)
+    brut = bytes(octets)
+    for signature, mime in SIGNATURES_IMAGE:
+        if brut.startswith(signature):
+            return "data:%s;base64,%s" % (mime, base64.b64encode(brut).decode("ascii"))
+    raise CompositeRefuse(
+        "image_de_format_inconnu",
+        "<< %s >> a recu un fichier dont le format d'image n'est pas reconnu. "
+        "Le Studio sait lire du PNG, du JPEG et du GIF. Ce pas n'est pas lance."
+        % etape["fonction"], ou=EXECUTION)
+
+
+def _consigne_de_l_image(etape: dict) -> str:
+    """Ce que la chaine demande a propos de l'image.
+
+    Meme regle que pour le chat : c'est la demande du CLIENT qui gouverne,
+    et la phrase figee ne sert que lorsqu'il n'a rien precise.
+    """
+    demande = (etape.get("demande") or "").strip()
+    return (demande or "Décris cette image en français.") + (
+        "\n\nRépondez seulement par le résultat de cette étape.")
 
 
 def _consigne_du_chat(etape: dict, entree) -> str:
@@ -1004,8 +1397,8 @@ combien \u00e7a co\u00fbte, puis le fait.</p>
 <label for=phrase><strong>Ce que vous voulez</strong></label>
 <textarea id=phrase placeholder="R\u00e9sume cet enregistrement et lis-le-moi \u00e0 voix haute"></textarea>
 
-<label for=fichier class=gris>Un enregistrement, si votre demande en a besoin</label>
-<input type=file id=fichier accept="audio/*">
+<label for=fichier class=gris>Un enregistrement ou une photo, si votre demande en a besoin</label>
+<input type=file id=fichier accept="audio/*,image/*">
 
 <button id=voir>Voir si c\u2019est possible</button>
 <button id=lancer disabled>Lancer</button>
@@ -1081,10 +1474,20 @@ document.getElementById("lancer").onclick = async () => {
     }
     const octets = await r.corps.blob();
     const url = URL.createObjectURL(octets);
+    // Ce qu'on montre suit le type que le serveur ANNONCE. Fige sur <audio>
+    // jusqu'au 22/09 au soir : une chaine finissant par une image affichait un
+    // lecteur audio muet, avec les bons octets derriere.
+    const type = octets.type || "";
+    const nom = (r.corps.headers.get("X-Composite-Nom") || "sortie.bin");
+    let apercu;
+    if (type.startsWith("image/"))      apercu = "<img src='" + url + "' alt='' style='max-width:100%'>";
+    else if (type.startsWith("video/")) apercu = "<video controls src='" + url + "' style='max-width:100%'></video>";
+    else if (type.startsWith("audio/")) apercu = "<audio controls src='" + url + "'></audio>";
+    else                                apercu = "";
     document.getElementById("resultat").innerHTML =
       "<div class='bloc oui'><p class=etat>C\u2019est fait</p>"
-      + "<audio controls src='" + url + "'></audio><br>"
-      + "<a href='" + url + "' download='lecture.wav'>T\u00e9l\u00e9charger le fichier</a></div>";
+      + apercu + (apercu ? "<br>" : "")
+      + "<a href='" + url + "' download='" + nom + "'>T\u00e9l\u00e9charger le fichier</a></div>";
   } finally {
     b.disabled = false; b.textContent = "Lancer";
   }

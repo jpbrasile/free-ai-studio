@@ -3153,13 +3153,24 @@ async def composite_lancer(request: Request,
         raise _refus_composite(exc) from exc
 
     if trace["resultat"] != "rendu":
-        raise HTTPException(409, trace["motif"] or "La chaine n'a pas abouti.",
+        # La PHRASE d'abord : c'est elle que la page montre. Le motif reste,
+        # dans l'en-tete, pour le journal. L'inverse etait en service jusqu'au
+        # 22/09 au soir, et un client dont la carte etait prise lisait
+        # << arbitrage_du_client >>.
+        raise HTTPException(409,
+                            trace.get("phrase") or trace["motif"]
+                            or "La chaîne n'a pas abouti.",
                             headers={"X-Composite-Ou": trace["ou"] or "",
                                      "X-Composite-Motif": trace["motif"] or ""})
 
     sortie = trace["sortie"]
     if isinstance(sortie, (bytes, bytearray)):
-        return Response(content=bytes(sortie), media_type="audio/wav")
+        # Le type ANNONCE suit ce que les octets disent, et a defaut ce que la
+        # derniere brique declare rendre. Il etait fige sur `audio/wav`, ce qui
+        # ne se voyait pas tant qu'aucune chaine ne pouvait finir autrement.
+        mime, nom = composite.type_de_sortie(sortie, chaine["etapes"][-1]["sorties"])
+        return Response(content=bytes(sortie), media_type=mime,
+                        headers={"X-Composite-Nom": nom})
     return JSONResponse({"texte": str(sortie), "etapes": trace["etapes"]})
 
 
