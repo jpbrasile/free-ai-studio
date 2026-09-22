@@ -2199,10 +2199,39 @@ def run_kaggle_reprise(jid: str) -> None:
     attendre_kaggle(jid, ref, echeance, limite)
 
 
+def reprise_au_demarrage() -> dict:
+    """Lance la reprise et ECRIT son constat au journal, toujours.
+
+    Le constat etait calcule, rendu, puis jete par le fil qui l'appelait.
+    Mesure le 22/09/2026 au premier redeploiement reel : le temoin Kaggle de
+    318 h s'est bien ferme, sa fiche porte son motif, et le journal du
+    gestionnaire ne disait rien. Une reprise qui ne trouve rien et une reprise
+    qui n'a pas tourne rendaient donc le MEME silence -- et un fil daemon qui
+    leve meurt sans un mot, ce qui ressemble trait pour trait a << il n'y
+    avait rien a faire >>. Un sondeur separe << pas ENCORE >> de << JAMAIS >> ;
+    un journal muet ne separe rien.
+
+    Les cinq compteurs sont ecrits meme a zero : un zero est une reponse, et
+    c'est celle qu'on lit les bons jours.
+    """
+    try:
+        constat = reprendre_les_travaux()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Reprise au demarrage : elle a ECHOUE (%s). Les fiches "
+                      "n'ont pas ete revues ; aucune n'a ete touchee.",
+                      type(exc).__name__)
+        return {"echec": type(exc).__name__}
+    log.info("Reprise au demarrage : %d repris, %d attendus, %d orphelins, "
+             "%d non mesures, %d laisses.",
+             constat["repris"], constat["attendus"], constat["orphelins"],
+             constat["non_mesures"], constat["laisses"])
+    return constat
+
+
 if REPRISE_AU_DEMARRAGE:
     # Dans un fil, meme regle que le compteur Modal plus haut : le demarrage
     # n'attend jamais un service distant.
-    threading.Thread(target=reprendre_les_travaux, name="reprise-travaux",
+    threading.Thread(target=reprise_au_demarrage, name="reprise-travaux",
                      daemon=True).start()
 
 

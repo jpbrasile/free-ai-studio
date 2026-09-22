@@ -19,6 +19,7 @@ Ce que ces tests protegent, et qui a ete MESURE avant d'etre ecrit :
 """
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -355,3 +356,61 @@ def test_modal_NON_CONFIGURE_ne_vaut_pas_machine_partie(sandbox, monkeypatch):
     monkeypatch.setattr(sandbox, "modal_configured", lambda: False)
 
     assert sandbox.boites_du_travail("e" * 32) is None
+
+
+# --- Une reprise silencieuse ne se distingue pas d'une reprise absente ------
+
+def test_la_reprise_DIT_ce_qu_elle_a_fait_MEME_quand_il_n_y_a_rien(
+        sandbox, monkeypatch, tmp_path, caplog):
+    """Le silence de << rien a faire >> et celui de << ca n'a pas tourne >>.
+
+    Mesure du 22/09/2026 : redeploiement reel, le temoin Kaggle de 318 h s'est
+    bien ferme -- statut `failed`, motif nomme dans sa fiche -- et le journal
+    du gestionnaire ne portait AUCUNE ligne de reprise. Le constat chiffre
+    etait calcule, rendu, puis jete par le fil qui l'appelait. C'est le defaut
+    que je reproche au code depuis ce soir, dans mon propre code : un sondeur
+    separe << pas ENCORE >> de << JAMAIS >>, et un journal muet ne separe
+    rien.
+
+    Le dossier des fiches est POSE VIDE, et ce n'est pas un detail : l'espace
+    de travail est partage par toute la suite, si bien que `laisses` n'y est
+    jamais a zero. Ecrit sans cela, ce test portait son nom sans jouer son
+    cas -- la mutation << ne parler que s'il s'est passe quelque chose >> le
+    laissait vert. Meme faute que le matin meme, et trouvee de la meme facon :
+    un test nomme d'apres un cas qu'il n'atteint pas.
+    """
+    vide = tmp_path / "aucune-fiche"
+    vide.mkdir()
+    monkeypatch.setattr(sandbox, "JOBS", vide)
+
+    with caplog.at_level(logging.INFO, logger="sandbox-manager"):
+        constat = sandbox.reprise_au_demarrage()
+
+    # Les CINQ a zero : il n'y a vraiment rien, et c'est le cas qu'on teste.
+    assert constat == {"repris": 0, "attendus": 0, "orphelins": 0,
+                       "non_mesures": 0, "laisses": 0}, constat
+    dit = "\n".join(r.getMessage() for r in caplog.records)
+    assert "eprise" in dit, dit
+    # Les CINQ compteurs, pas seulement ceux qui ne sont pas a zero : un zero
+    # est une reponse, et c'est meme la seule qu'on lise les bons jours.
+    for mot in ("repris", "attendus", "orphelins", "non mesures", "laisses"):
+        assert mot in dit, (mot, dit)
+
+
+def test_une_reprise_qui_TOMBE_le_dit_au_lieu_de_se_taire(sandbox, monkeypatch, caplog):
+    """Un fil daemon qui leve meurt sans un mot. C'est le pire des silences.
+
+    Il ressemble trait pour trait a << il n'y avait rien a faire >>, et c'est
+    exactement l'inverse : rien n'a ete regarde.
+    """
+    def tombe():
+        raise RuntimeError("le disque des fiches est illisible")
+
+    monkeypatch.setattr(sandbox, "reprendre_les_travaux", tombe)
+
+    with caplog.at_level(logging.INFO, logger="sandbox-manager"):
+        constat = sandbox.reprise_au_demarrage()
+
+    assert constat.get("echec") == "RuntimeError", constat
+    dit = "\n".join(r.getMessage() for r in caplog.records)
+    assert "RuntimeError" in dit or "illisible" in dit, dit
