@@ -2,9 +2,10 @@
 """Refus au demarrage quand les cles seraient exposees.
 
 Le plan d'origine pose une regle dure : << Never store, proxy or share user API
-keys. Keys live client-side only, encrypted. >> Ce depot les ecrit EN CLAIR,
-dans config/keys.json et config/sandbox-keys.json. Tant que le Studio tourne sur
-le PC de son utilisateur, derriere un port publie sur 127.0.0.1, l'ecart est
+keys. Keys live client-side only, encrypted. >> Depuis le 22/09/2026 ce depot
+FERME les valeurs et garde les noms en clair, dans config/keys.json et
+config/sandbox-keys.json : voir coffre.py. Tant que le Studio tourne sur le PC de
+son utilisateur, derriere un port publie sur 127.0.0.1, l'ecart qui reste est
 theorique : les seules cles en jeu sont les siennes, sur sa machine.
 
 Le jour ou ce n'est plus vrai, rien ne bronchait. Ce module est le refus qui
@@ -29,12 +30,14 @@ Deux conditions, et elles ne sont pas de meme nature.
    propre liaison ne dirait donc rien. Ce qui compte est l'adresse d'HOTE sur
    laquelle le port est publie, et elle n'est connue que de compose.
 
-Ce que ce module ne fait PAS : chiffrer. Le chiffrement au repos est utile --
-il defend le cas du fichier qui s'echappe sans sa machine, sauvegarde egaree ou
-disque revendu -- mais il n'est pas un prealable, et mieux vaut un refus qui
-marche sans chiffrement qu'un chiffrement sans refus. Il n'y a donc ici aucun
-drapeau << les cles sont chiffrees >> : il serait faux, et un drapeau faux est
-pire que pas de drapeau.
+Ce que ce module ne fait PAS : chiffrer. C'est coffre.py qui ferme les valeurs,
+depuis le 22/09/2026, et il dit lui-meme ce qu'il ne ferme pas : sa cle est sur
+le meme disque que le magasin, donc il defend la sauvegarde ou le transcript qui
+part SANS elle, jamais le disque entier. Ce module-ci reste le refus, et le refus
+vaut sans le coffre : mieux vaut un refus qui marche sans chiffrement qu'un
+chiffrement sans refus. Il n'y a toujours aucun drapeau << vos cles sont
+protegees >> : il serait faux au-dela de ce que le coffre tient, et un drapeau
+faux est pire que pas de drapeau.
 
 ATTENTION -- ce fichier existe en deux exemplaires IDENTIQUES, un par service :
 free-tier-manager/ et sandbox-manager/ ecrivent chacun leur magasin de secrets,

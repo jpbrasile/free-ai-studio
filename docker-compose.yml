@@ -136,6 +136,11 @@ services:
       # Meme raison que pour le routeur de chat : les variables du compose sont
       # figees a la creation du conteneur. Exclu du depot par .gitignore.
       - ./config:/config
+      # La cle du coffre, et elle vit HORS de ./config : le geste qui a fui le
+      # 22/09/2026 balayait le dossier de configuration. Une cle rangee a cote du
+      # magasin qu'elle ferme ne ferme rien. Ce fichier ne porte aucun nom de
+      # service, donc un filtre par nom ne le ramene jamais. Exclu du depot.
+      - ./secrets:/secrets
       # LECTURE SEULE, et seulement ce fichier : la page « Enchaîner » ne peut
       # composer que les applications que le registre décrit. Le Dockerfile du
       # service ne copie que `*.py`, donc le registre n'y est pas ; un module
@@ -171,6 +176,11 @@ services:
       # permet a l'interface de brancher un fournisseur sans terminal. Il est
       # exclu du depot par .gitignore.
       - ./config:/config
+      # La cle du coffre, et elle vit HORS de ./config : le geste qui a fui le
+      # 22/09/2026 balayait le dossier de configuration. Une cle rangee a cote du
+      # magasin qu'elle ferme ne ferme rien. Ce fichier ne porte aucun nom de
+      # service, donc un filtre par nom ne le ramene jamais. Exclu du depot.
+      - ./secrets:/secrets
       # LECTURE SEULE, et seulement .git : de quoi lire le numero de version
       # installe pour le comparer a celui de GitHub. Ni le code, ni .env ne sont
       # exposes, et rien ici ne peut ecrire dans le depot.

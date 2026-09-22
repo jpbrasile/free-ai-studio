@@ -17,6 +17,8 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 
 import garde_exposition
+# Le magasin de cles garde les NOMS en clair et les VALEURS non (22/09/2026).
+import coffre
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Response
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -378,7 +380,8 @@ def ordre_affiche() -> List[str]:
     return ordre
 
 
-def stored_keys() -> Dict[str, str]:
+def _magasin_brut() -> Dict[str, str]:
+    """Le fichier tel qu'il est : valeurs FERMEES depuis le 22/09/2026."""
     try:
         data = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -389,12 +392,7 @@ def stored_keys() -> Dict[str, str]:
     return {k: v for k, v in data.items() if isinstance(v, str)}
 
 
-def store_key(env_name: str, value: str) -> None:
-    data = stored_keys()
-    if value:
-        data[env_name] = value
-    else:
-        data.pop(env_name, None)
+def _ecrire_le_magasin(data: Dict[str, str]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     blob = json.dumps(data, indent=2)
     tmp = CONFIG_DIR / "keys.json.tmp"
@@ -409,6 +407,49 @@ def store_key(env_name: str, value: str) -> None:
         KEYS_FILE.chmod(0o600)
     except OSError:
         pass
+
+
+def stored_keys() -> Dict[str, str]:
+    """Les cles EN CLAIR, pour le code qui appelle les fournisseurs.
+
+    Le FICHIER ne les porte plus en clair : `coffre.py`. Ce magasin-ci est celui
+    que le sous-plan ne nommait pas, et c'est pourtant LUI qui portait deux
+    vraies cles sur l'installation du proprietaire (mesure le 22/09/2026)."""
+    return coffre.ouvrir_le_magasin(_magasin_brut())
+
+
+def store_key(env_name: str, value: str) -> None:
+    """Ecrit une cle, FERMEE. Sans cle de coffre, `coffre.chiffrer` leve et rien
+    n'est ecrit."""
+    data = _magasin_brut()
+    if value:
+        data[env_name] = coffre.chiffrer(value)
+    else:
+        data.pop(env_name, None)
+    _ecrire_le_magasin(data)
+
+
+def migrer_le_magasin() -> bool:
+    """Ferme en place un magasin d'avant le coffre. Rend True s'il a bouge.
+
+    Tout se construit en memoire AVANT la moindre ecriture. Sans cle, on laisse
+    en clair et on le DIT : effacer les cles de quelqu'un pour les proteger
+    serait une reparation qui coute plus que le defaut."""
+    brut = _magasin_brut()
+    if not coffre.doit_migrer(brut):
+        return False
+    try:
+        ferme = coffre.fermer_ce_qui_est_en_clair(brut)
+    except coffre.CoffreSansCle as exc:
+        log.warning("magasin laisse EN CLAIR, faute de cle de coffre : %s", exc)
+        return False
+    _ecrire_le_magasin(ferme)
+    log.info("magasin de cles ferme (%d valeur(s))", len(ferme))
+    return True
+
+
+# Au demarrage : un magasin d'avant le coffre se ferme ici, une fois.
+migrer_le_magasin()
 
 
 def provider_key(name: str) -> str:

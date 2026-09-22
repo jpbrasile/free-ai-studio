@@ -3,6 +3,8 @@
 !.env.example
 # Cles saisies depuis la page /cles : meme sensibilite que .env.
 config/
+# La cle du coffre, qui ouvre les valeurs de config/.
+secrets/
 __pycache__/
 *.py[cod]
 .DS_Store

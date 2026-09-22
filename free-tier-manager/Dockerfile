@@ -6,6 +6,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # sable en a besoin aussi, et tests/test_garde_exposition.py echoue si les
 # deux exemplaires divergent d'un octet.
 COPY garde_exposition.py .
+# Le coffre des secrets. Meme raison que ci-dessus : le bac a sable en a besoin
+# aussi, et tests/test_coffre.py echoue si les deux exemplaires divergent.
+COPY coffre.py .
 COPY app.py .
 EXPOSE 8000
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

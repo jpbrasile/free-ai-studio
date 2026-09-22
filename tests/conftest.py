@@ -17,6 +17,11 @@ RACINE = Path(__file__).resolve().parents[1]
 _JETABLE = Path(tempfile.mkdtemp(prefix="free-ai-tests-"))
 os.environ.setdefault("FREE_AI_CONFIG_DIR", str(_JETABLE / "config"))
 os.environ.setdefault("SANDBOX_WORKSPACE", str(_JETABLE / "workspace"))
+# La cle du coffre vit hors de config/ ; son defaut est /secrets/coffre.cle, qui
+# sous Windows voudrait dire C:\secrets. Une suite de tests ne cree pas un
+# dossier a la racine du disque. UNE seule cle pour toute la suite : deux tests
+# qui s'ecrivent des cles differentes ne se reliraient pas.
+os.environ.setdefault("STUDIO_COFFRE_FICHIER", str(_JETABLE / "coffre.cle"))
 
 _numero = itertools.count()
 

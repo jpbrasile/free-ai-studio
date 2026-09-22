@@ -11,3 +11,8 @@ faster-whisper==1.2.1
 # (15/09/2026). GPL-3.0-or-later ; embarque espeak-ng. Roue de 34 Mo ; son
 # onnxruntime est deja la, apporte par faster-whisper.
 piper-tts==1.8.0
+# Le coffre des secrets : les magasins gardent les noms en clair et les valeurs
+# non (`coffre.py`). MEME epingle que l'autre service -- la CI installe les trois
+# fichiers dans un seul environnement. Mesure le 22/09/2026 : absent des DEUX
+# images avant ce jour, donc c'est bien une dependance neuve et non un transitif.
+cryptography==46.0.4

@@ -22,6 +22,10 @@ from pydantic import BaseModel, Field
 
 import budget_modal
 import chanson
+# Le magasin de secrets garde les NOMS en clair et les VALEURS non. Ce qui a
+# mordu le 22/09/2026 : un filtre de lecture sur la configuration a emporte les
+# jetons Modal. Ce que cela ne ferme PAS est dit en tete du module.
+import coffre
 import composite
 import depenses
 import dialogue
@@ -281,7 +285,8 @@ def add_artifact(jid: str, path: Path, source: str) -> dict:
     return info
 
 
-def stored_keys() -> Dict[str, str]:
+def _magasin_brut() -> Dict[str, str]:
+    """Le fichier tel qu'il est : valeurs FERMEES depuis le 22/09/2026."""
     try:
         data = json.loads(KEYS_FILE.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -292,12 +297,7 @@ def stored_keys() -> Dict[str, str]:
     return {k: v for k, v in data.items() if isinstance(v, str)}
 
 
-def store_key(name: str, value: str) -> None:
-    data = stored_keys()
-    if value:
-        data[name] = value
-    else:
-        data.pop(name, None)
+def _ecrire_le_magasin(data: Dict[str, str]) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     blob = json.dumps(data, indent=2)
     tmp = CONFIG_DIR / "sandbox-keys.json.tmp"
@@ -310,7 +310,48 @@ def store_key(name: str, value: str) -> None:
         KEYS_FILE.chmod(0o600)
     except OSError:
         pass
+
+
+def stored_keys() -> Dict[str, str]:
+    """Les secrets EN CLAIR, pour le code qui en a besoin -- le SDK Modal et la
+    CLI Kaggle lisent l'environnement, il faut bien leur donner la valeur.
+
+    Le FICHIER, lui, ne les porte plus en clair : `coffre.py`. Une valeur que la
+    cle presente n'ouvre pas est ecartee et dite, jamais devinee."""
+    return coffre.ouvrir_le_magasin(_magasin_brut())
+
+
+def store_key(name: str, value: str) -> None:
+    """Ecrit un secret, FERME. Sans cle de coffre, `coffre.chiffrer` leve et rien
+    n'est ecrit : retomber en clair << juste cette fois >> serait le defaut du
+    22/09 refait en silence."""
+    data = _magasin_brut()
+    if value:
+        data[name] = coffre.chiffrer(value)
+    else:
+        data.pop(name, None)
+    _ecrire_le_magasin(data)
     apply_stored_secrets()
+
+
+def migrer_le_magasin() -> bool:
+    """Ferme en place un magasin d'avant le coffre. Rend True s'il a bouge.
+
+    Tout se construit en memoire AVANT la moindre ecriture : si le chiffrement
+    echoue, le fichier d'origine n'est pas touche. Sans cle, on laisse en clair
+    et on le DIT -- effacer les cles de quelqu'un pour les proteger serait une
+    reparation qui coute plus que le defaut."""
+    brut = _magasin_brut()
+    if not coffre.doit_migrer(brut):
+        return False
+    try:
+        ferme = coffre.fermer_ce_qui_est_en_clair(brut)
+    except coffre.CoffreSansCle as exc:
+        log.warning("magasin laisse EN CLAIR, faute de cle de coffre : %s", exc)
+        return False
+    _ecrire_le_magasin(ferme)
+    log.info("magasin de secrets ferme (%d valeur(s))", len(ferme))
+    return True
 
 
 def apply_stored_secrets() -> None:
@@ -402,7 +443,10 @@ def backend_automatique() -> str:
     return "modal" if modal_configured() else "local"
 
 
-# Au demarrage : ce qui a ete saisi lors d'une session precedente redevient actif.
+# Au demarrage, DANS CET ORDRE : fermer d'abord ce qui traine en clair, puis
+# rendre actif ce qui a ete saisi lors d'une session precedente. L'inverse
+# laisserait une fenetre ou le magasin est encore lisible par un filtre.
+migrer_le_magasin()
 apply_stored_secrets()
 
 # Puis, DANS UN FIL, le compteur Modal va chercher le vrai chiffre une fois.

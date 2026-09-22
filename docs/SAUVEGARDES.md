@@ -47,6 +47,7 @@ il vit : c'est l'état de départ, pas un acquis.
 |---|---|---|
 | Le code et son histoire | les deux dépôts git (ce dépôt, et le distant GitHub) | les deux disparaissent ensemble — peu probable, et c'est la seule pièce déjà en double |
 | **Les clés saisies depuis les pages** `/cles` | le dossier de configuration du poste : `keys.json`, `sandbox-keys.json` | le dossier est effacé — et elles ne sont **dans aucun dépôt**, par construction |
+| **La clé du coffre**, qui ouvre les deux magasins ci-dessus | `secrets/coffre.cle`, **hors** du dossier de configuration (c'est tout son objet), ou `STUDIO_COFFRE_CLE` dans `.env` | elle est perdue — et alors les clés sauvegardées à la ligne du dessus ne s'ouvrent plus. **Sauvegarder `config/` sans elle, c'est sauvegarder un fichier illisible** : les deux vont ensemble, ou ni l'une ni l'autre |
 | Les compteurs de dépense | même dossier : `modal-budget.json`, `video-budget.json`, `chanson-budget.json`, `dialogue-budget.json` | idem — et on repart à zéro sans savoir ce qui a déjà été dépensé |
 | Les témoins de réglage du chat | même dossier : `open-webui-regle.json` et ses voisins | idem — le Studio les repose au démarrage suivant |
 | Les conversations et les comptes du chat | le volume Docker `open-webui-data` | le volume est supprimé — c'est le geste de dépannage documenté, il efface l'historique |
