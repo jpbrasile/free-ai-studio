@@ -505,8 +505,20 @@ def test_la_phrase_ne_dit_MESUREE_que_la_place_vraiment_relevee(studio):
     offertes = [o["duree"] for o in studio.video.durees_offertes()]
     table = studio.video.table_maison()
     assert mesurees, "aucune place relevee : la phrase n'aurait rien a dire"
-    assert len(mesurees) < len(offertes), (
-        "la phrase redirait le menu entier -- c'est le defaut qu'on repare")
+    # ON COMPTAIT, ET LE COMPTE NE VOULAIT RIEN DIRE SANS CARTE. `len(mesurees)
+    # < len(offertes)` tenait sur une machine a carte -- 7 places relevees, 8
+    # durees offertes. Sur un runner SANS carte, le menu retombe au plafond du
+    # loueur (5 s) tandis que la liste des places garde les 7 de la 4090 :
+    # << assert 7 < 5 >>, et la CI rougissait depuis le 21/09/2026 sans que le
+    # produit ait quoi que ce soit. Ce qui est vraiment garde n'est pas un
+    # compte, c'est que la phrase ne redise pas le menu : il reste au moins une
+    # duree offerte qui n'est PAS mesuree. Vrai des deux cotes, et faux le jour
+    # ou le defaut revient.
+    non_mesurees = [cle for cle in offertes if cle not in mesurees]
+    assert non_mesurees, (
+        "toutes les durees du menu sont annoncees mesurees : soit le defaut du "
+        "21/09 est revenu, soit la campagne les a vraiment toutes relevees -- "
+        "dans ce second cas c'est CE controle qui doit partir, pas la phrase")
     for cle in offertes:
         attendu = studio.ou_calculer.besoin_est_mesure(table[cle]["images"])
         assert (cle in mesurees) is attendu, cle
