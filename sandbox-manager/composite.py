@@ -248,20 +248,55 @@ def lier(graphe: dict, apps: list[dict] | None = None) -> dict:
                 "dites laquelle."
                 % (capacite, ", ".join(sorted(c["id"] for c in candidates))),
                 ou=LIAISON)
-        brique = candidates[0]
-        chaine.append({
-            "capacite": capacite,
-            "brique": brique["id"],
-            "fonction": brique["fonction"],
-            "entrees": list(brique["entrees"]),
-            "sorties": list(brique["sorties"]),
-            "modes": list(brique["modes"]),
-            "licence": brique["licence"],
-            "cout": brique["cout"],
-            "cout_max_usd": brique["cout_max_usd"],
-            "vram_min_go": brique["vram_min_go"],
-        })
+        chaine.append(_etape(candidates[0]))
     return {"phrase": graphe.get("phrase", ""), "etapes": chaine}
+
+
+def _etape(brique: dict) -> dict:
+    """La forme d'un pas de chaine, ecrite a UN seul endroit.
+
+    `lier` la fabrique depuis une capacite, `chaine_depuis_briques` depuis un
+    identifiant : deux entrees, une seule forme. Deux copies de cette forme
+    divergeraient le jour ou un champ s'ajoute, et le controle deterministe
+    lirait alors un champ absent sur la moitie des chaines.
+    """
+    return {
+        "capacite": brique["capacite"],
+        "brique": brique["id"],
+        "fonction": brique["fonction"],
+        "entrees": list(brique["entrees"]),
+        "sorties": list(brique["sorties"]),
+        "modes": list(brique["modes"]),
+        "licence": brique["licence"],
+        "cout": brique["cout"],
+        "cout_max_usd": brique["cout_max_usd"],
+        "vram_min_go": brique["vram_min_go"],
+    }
+
+
+def chaine_depuis_briques(ids, apps: list[dict] | None = None,
+                          phrase: str = "") -> dict:
+    """La chaine que la page a DEJA montree, rebatie sans appeler le modele.
+
+    << Lancer >> recompilait la phrase : un second appel au modele, qui n'est
+    pas deterministe. La chaine lancee pouvait donc differer de celle dont le
+    verdict venait d'etre lu -- autre profil de cles, autres briques, ou meme
+    un JSON illisible au moment de lancer une demande deja validee. La page
+    tient les briques qu'elle a montrees : on les rebatit, c'est gratuit et
+    c'est le meme resultat a chaque fois.
+    """
+    apps = apps if apps is not None else charger_registre()
+    par_id = {a["id"]: a for a in apps}
+    etapes = []
+    for ident in ids:
+        brique = par_id.get(ident)
+        if brique is None:
+            raise CompositeRefuse(
+                "brique_inconnue",
+                "<< %s >> n'est pas une application de ce Studio." % ident,
+                ou=LIAISON)
+        etapes.append(_etape(brique))
+    return {"phrase": phrase, "etapes": etapes}
 
 
 # ---------------------------------------------------------------------------
@@ -344,6 +379,54 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None) -> dict:
                           "attend": aval["entrees"]})
             etat = NON
 
+    # --- la route : cette brique peut-elle seulement PARTIR d'une chaine ? ---
+    # `ROUTES` et `BUDGET_PAR_BRIQUE` vivent au paragraphe 5 : on les LIT, on
+    # ne les recopie pas ici -- deux tables divergeraient le jour ou une route
+    # s'ajoute, et le verdict promettrait de nouveau ce qui ne part pas.
+    #
+    # Releve du 22/09, relecture adverse : dix briques sur seize n'avaient
+    # aucune route, et le verdict les promettait. Le client lisait << Oui,
+    # cette chaine tient >>, cliquait, et la chaine cassait au controle APRES
+    # avoir vraiment lance les noeuds precedents. La page promet de dire
+    # << avant de lancer >> : elle le disait pour deux briques sur seize.
+    sans_route = [e for e in etapes if e["brique"] not in ROUTES]
+    if sans_route:
+        motifs.append("brique_sans_route")
+        pourquoi.append(
+            ("%s n'a pas encore de route dans une chaîne : le Studio sait la "
+             "lancer depuis sa propre page, pas depuis un enchaînement."
+             if len(sans_route) == 1 else
+             "%s n'ont pas encore de route dans une chaîne : le Studio sait "
+             "les lancer depuis leur propre page, pas depuis un enchaînement.")
+            % ", ".join(e["fonction"] for e in sans_route))
+        faits.append({"quoi": "brique_sans_route",
+                      "applications": [e["fonction"] for e in sans_route],
+                      "consequence": "cette chaîne ne peut pas être lancée : "
+                                     "ces applications ne se branchent pas "
+                                     "encore dans un enchaînement"})
+        etat = NON
+
+    # --- le budget : un noeud qui peut partir chez le loueur ne part pas -----
+    # `_budget_ferme` (paragraphe 4) refuse par defaut, et AUCUN appelant ne
+    # passe aujourd'hui de garde qui appellerait `budget_modal.verifier()`. Le
+    # refus est donc certain : il se dit ici, avant le clic, au lieu de se
+    # decouvrir au controle.
+    louables = [e for e in etapes
+                if BUDGET_PAR_BRIQUE.get(e["brique"]) and "modal" in e["modes"]]
+    if louables:
+        motifs.append("budget_non_verifie")
+        pourquoi.append(
+            "%s peut partir chez un loueur, et une chaîne ne sait pas encore "
+            "vérifier son budget : elle ne la lance pas."
+            % ", ".join(e["fonction"] for e in louables))
+        faits.append({"quoi": "budget_non_verifie",
+                      "applications": [e["fonction"] for e in louables],
+                      "consequence": "cette chaîne ne peut pas être lancée : "
+                                     "le budget de ces applications ne se "
+                                     "vérifie pas encore depuis un "
+                                     "enchaînement"})
+        etat = NON
+
     # --- la licence d'USAGE : non commercial est contagieux -------------------
     nc = [e for e in etapes if est_non_commercial(e["licence"])]
     if nc:
@@ -384,9 +467,16 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None) -> dict:
             "chaîne coûte au moins %s, et on ne peut pas dire son maximum."
             % (", ".join(e["fonction"] for e in sans_nombre),
                format_fr.en_dollars(total)))
+        # << montant_minimum >> se lit comme un prix, et le 22/09 le modele l'a
+        # ecrit << ne coute que 0,00 $ >> sur deux tirages sur trois. Un
+        # plancher n'est pas un prix : le fait le dit en toutes lettres.
         faits.append({"quoi": "cout_sans_nombre",
                       "applications": [e["fonction"] for e in sans_nombre],
-                      "montant_minimum": format_fr.en_dollars(total)})
+                      "plancher": format_fr.en_dollars(total),
+                      "maximum": "inconnu, faute de mesure par travail",
+                      "consequence": "le plancher n'est pas un prix : on ne "
+                                     "peut pas dire ce que cette cha\u00eene "
+                                     "co\u00fbtera au pire"})
     elif total > 0:
         pourquoi.append(
             "Cette chaîne peut coûter jusqu'à %s au pire."
@@ -466,6 +556,24 @@ _REFUS_DIT = re.compile(
     r"ne peut pas|ne peuvent pas|impossible|interdit|interdis|refus|"
     r"n'est pas possible|pas autorise", re.I)
 
+# La jumelle de la precedente, pour l'etat << inconnu >>. Meme cause mesuree le
+# meme jour : un manque rendu comme une certitude. Ici c'etait un plancher
+# ecrit comme un prix (<< ne coute que 0,00 $ >>, deux tirages sur trois).
+_DOUTE_DIT = re.compile(
+    r"ne peut pas|ne peuvent pas|impossible|inconnu|incertain|"
+    r"pas mesur|sans mesure|non mesur|aucune mesure|pas de nombre|"
+    r"au moins|au minimum|plancher|on ignore|ne sait pas|"
+    r"n'est pas connu|difficile \u00e0 dire", re.I)
+
+# Les cles des faits qui portent une somme. Elles sont declarees ICI, a un seul
+# endroit, parce que le 22/09 un renommage (`montant_minimum` -> `plancher`) a
+# fait taire la garde sans rien casser : l'ensemble des sommes attendues est
+# devenu vide, et un ensemble vide ne rougit pas.
+CLES_DE_SOMME = ("montant", "plancher")
+
+# Et la cle qui porte des NOMS d'applications, declaree pour la meme raison.
+CLE_DES_NOMS = "applications"
+
 CONSIGNE_PHRASE = """Tu ecris pour quelqu'un qui debute et qui ne programme pas.
 Voici les faits etablis sur une chaine d'applications, en JSON :
 
@@ -489,7 +597,17 @@ CE QUI EST REFUSE et pourquoi -- n'explique jamais comment s'en servir quand
 meme."""
 
 # Une somme d'argent, sous la forme francaise que `format_fr` produit.
-_UNE_SOMME = re.compile(r"\d[\d\u00a0 ]*,\d{2}\s*\$")
+# Tout nombre ecrit en chiffres, quel que soit son format : << 0,00 >>,
+# << 5,1979 >>, << 1 234,56 >>, << 12.50 >>, << 10 >>. Mesure du 22/09 : un
+# motif qui n'acceptait que deux decimales laissait passer cinq inventions sur
+# six, dont le format meme du compteur Modal de ce depot.
+_UN_NOMBRE = re.compile(r"\d+(?:[.,\u00a0 ]\d+)*")
+
+
+def _nombres(texte: str) -> set:
+    """Les nombres d'un texte, l'espace des milliers retiree pour comparer."""
+    return {m.group(0).replace("\u00a0", "").replace(" ", "")
+            for m in _UN_NOMBRE.finditer(texte or "")}
 
 
 def rediger(verdict: dict, appeler_modele=None) -> str:
@@ -500,11 +618,16 @@ def rediger(verdict: dict, appeler_modele=None) -> str:
     defaut << Plusieurs etapes A BESOIN >> venait d'un gabarit a trou en Python,
     jamais d'un modele de langue.
 
-    Trois refus, et chacun rend la phrase ECRITE au lieu d'une phrase douteuse :
+    Six refus, et chacun rend la phrase ECRITE au lieu d'une phrase douteuse.
+    Chacun a ete pose sur un defaut MESURE, jamais sur une crainte :
 
-      - le modele ne repond pas, ou repond vide, ou repond trop long ;
+      - le modele ne repond pas, repond vide, ou repond trop long ;
       - le montant calcule ne se retrouve pas tel quel dans sa reponse ;
-      - une somme d'argent apparait qui n'est pas celle qu'on a calculee.
+      - le nom d'une application en ressort deforme (<< Groq si posible >>,
+        deux tirages sur sept le 22/09) ;
+      - un nombre apparait que les faits ne portent pas ;
+      - un << non >> est explique sans dire le refus ;
+      - un << je ne sais pas >> est ecrit comme une certitude.
 
     Le dernier est le verrou qui compte : un montant invente est exactement ce
     que ce depot refuse partout ailleurs. Et le repli n'est pas un pis-aller --
@@ -517,8 +640,9 @@ def rediger(verdict: dict, appeler_modele=None) -> str:
     if not faits:
         return ecrite
 
-    attendues = {f[cle] for f in faits for cle in ("montant", "montant_minimum")
+    attendues = {f[cle] for f in faits for cle in CLES_DE_SOMME
                  if f.get(cle)}
+    nommees = {n for f in faits for n in f.get(CLE_DES_NOMS) or ()}
     try:
         appeler = appeler_modele or appeler_le_modele
         rendu = (appeler(CONSIGNE_PHRASE
@@ -530,10 +654,21 @@ def rediger(verdict: dict, appeler_modele=None) -> str:
         return ecrite
     if any(somme not in rendu for somme in attendues):
         return ecrite
-    if {m.group(0).strip() for m in _UNE_SOMME.finditer(rendu)} - attendues:
+    # Le NOM d'une application se montre tel qu'il est ecrit sur la page.
+    # Mesure du 22/09 : << Dictee « Groq si posible » >>, deux tirages sur sept
+    # -- un nom que le client ne retrouvera nulle part. Ni la garde des sommes
+    # ni celle des nombres ne peuvent l'attraper : c'est un mot, pas un chiffre.
+    if any(nom not in rendu for nom in nommees):
+        return ecrite
+    # Un nombre que les faits ne portent pas est un nombre invente.
+    if _nombres(rendu) - _nombres(json.dumps(faits, ensure_ascii=False)):
         return ecrite
     # Un << non >> explique comme un mode d'emploi n'est pas un << non >>.
     if verdict.get("atteignable") == NON and not _REFUS_DIT.search(rendu):
+        return ecrite
+    # Et un << je ne sais pas >> ecrit comme un prix n'est pas un << je ne sais
+    # pas >>. Rien pour << partiel >> : mesure trois fois, juste trois fois.
+    if verdict.get("atteignable") == INCONNU and not _DOUTE_DIT.search(rendu):
         return ecrite
     # L'etat, lui, n'a jamais quitte le calcul.
     return (ENTETE.get(verdict.get("atteignable"), "") + " " + rendu).strip()
@@ -597,8 +732,11 @@ def _budget_ferme(etape):
     if usage and "modal" in etape.get("modes", ()):
         raise CompositeRefuse(
             "budget_non_verifie",
+            # << Rien n'est lance >> etait faux des le deuxieme noeud : les
+            # precedents ont deja tourne pour de bon. La trace dit lesquels.
             "<< %s >> peut partir chez le loueur et son budget n'a pas ete "
-            "verifie pour ce travail. Rien n'est lance." % etape["fonction"],
+            "verifie pour ce travail. Ce pas n'est pas lance."
+            % etape["fonction"],
             ou=CONTROLE)
 
 
@@ -626,6 +764,11 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
     garde_budget = garde_budget or _budget_ferme
     courant = entree
     for etape in chaine["etapes"]:
+        # La demande du client voyage AVEC le pas. Elle etait portee par le
+        # graphe, puis par la chaine, et lue par personne : le noeud de chat
+        # resumait, quoi qu'on lui ait demande. Copie, pas mutee : la chaine
+        # montree au client ne change pas sous ses pieds.
+        etape = dict(etape, demande=chaine.get("phrase", ""))
         try:
             # JUSTE AVANT le lancement, et par noeud : c'est la seule place ou
             # le pire cas est celui de CE travail-la.
@@ -680,6 +823,26 @@ ROUTES = {
 }
 
 
+# Ce que la chaine AJOUTE a sa demande pour que la brique servie soit celle
+# qu'elle a NOMMEE. Sans ce champ, deux briques arrivent a la meme adresse et
+# c'est le reglage global du routeur qui tranche : releve du 22/09, la voix
+# partait chez Groq sous l'etiquette de `dictee_locale`, dont le registre
+# promet << la voix ne quitte pas la machine >> ; et `chat_max` tournait sur
+# le modele de `chat_auto`.
+#
+# Les deux voix n'y figurent pas, et c'est MESURE : `/v1/audio/speech` decoupe
+# le texte et lit chaque segment dans sa propre langue, et n'accepte aucun
+# champ de langue. C'est une seule route portant deux fiches, pas une brique
+# servie pour une autre. Lui inventer un champ serait inventer une capacite
+# que le routeur n'a pas.
+PRECISION = {
+    "dictee_locale": {"moteur": "local"},
+    "dictee_groq": {"moteur": "groq"},
+    "chat_auto": {"model": "free-ai-auto"},
+    "chat_max": {"model": "free-ai-max"},
+}
+
+
 def _cle_du_routeur() -> str:
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
@@ -728,8 +891,8 @@ def lancer_par_le_routeur(etape: dict, entree):
     if route is None:
         raise CompositeRefuse(
             "brique_sans_route",
-            "<< %s >> n'a pas encore de route dans une chaine. Rien n'est "
-            "lance." % etape["fonction"], ou=EXECUTION)
+            "<< %s >> n'a pas encore de route dans une chaine. Ce pas n'est "
+            "pas lance." % etape["fonction"], ou=EXECUTION)
     genre, chemin = route
     entetes = {"Authorization": "Bearer " + _cle_du_routeur()}
 
@@ -742,6 +905,7 @@ def lancer_par_le_routeur(etape: dict, entree):
                     % etape["fonction"], ou=EXECUTION)
             reponse = client.post(
                 ROUTEUR + chemin, headers=entetes,
+                data=PRECISION.get(etape["brique"], {}),
                 files={"file": ("enregistrement.wav", bytes(entree), "audio/wav")})
             _ou_refus(reponse, etape, "La dictee n'a pas abouti.")
             return (reponse.json().get("text") or "").strip() or None
@@ -749,10 +913,9 @@ def lancer_par_le_routeur(etape: dict, entree):
         if genre == "chat":
             reponse = client.post(
                 ROUTEUR + chemin, headers=entetes,
-                json={"model": "free-ai-auto", "stream": False,
-                      "messages": [{"role": "user", "content":
-                                    "Resume ce texte en quelques phrases, en "
-                                    "francais :\n\n" + str(entree)}]})
+                json=dict(PRECISION.get(etape["brique"], {}), stream=False,
+                          messages=[{"role": "user",
+                                     "content": _consigne_du_chat(etape, entree)}]))
             _ou_refus(reponse, etape,
                       "Aucun service de chat gratuit ne repond. Ce noeud a "
                       "besoin d'une cle de palier gratuit configuree.")
@@ -765,6 +928,26 @@ def lancer_par_le_routeur(etape: dict, entree):
                               json={"input": texte})
         _ou_refus(reponse, etape, "La lecture a haute voix n'a pas abouti.")
         return reponse.content or None
+
+
+def _consigne_du_chat(etape: dict, entree) -> str:
+    """Ce que le noeud de chat envoie vraiment -- a part, pour etre lisible.
+
+    Jusqu'au 22/09 ce message etait fige sur << Resume ce texte >>, et la
+    demande du client -- portee par le graphe, puis par la chaine -- n'etait
+    lue par personne. Une chaine d'un seul noeud de chat recevait donc
+    << Resume ce texte ... : None >> et le Studio rendait << C'est fait >> avec
+    une reponse a une question que personne n'avait posee.
+
+    Ce qui n'est PAS fait ici, et qui reste ouvert : la demande part entiere a
+    chaque noeud, elle n'est pas decoupee en la part qui revient a celui-ci.
+    """
+    demande = (etape.get("demande") or "").strip()
+    if entree is None:
+        return demande or "Bonjour."
+    return ((demande or "Résume ce texte en quelques phrases, en français.")
+            + "\n\nVoici le texte de l'étape précédente. Répondez seulement "
+              "par le résultat de cette étape.\n\n" + str(entree))
 
 
 def _ou_refus(reponse, etape, phrase):
@@ -849,6 +1032,11 @@ function bloc(v){
 async function envoyer(chemin, avecFichier){
   const corps = new FormData();
   corps.append("phrase", document.getElementById("phrase").value);
+  // Les briques MONTREES repartent telles quelles : sans elles, la route
+  // recompilerait la phrase et pourrait lancer une autre chaine que celle
+  // dont le verdict vient d'etre lu.
+  if (avecFichier && derniere)
+    corps.append("briques", (derniere.etapes||[]).map(e => e.brique).join(","));
   const f = document.getElementById("fichier").files[0];
   if (avecFichier && f) corps.append("fichier", f);
   const r = await fetch(chemin, {method:"POST",

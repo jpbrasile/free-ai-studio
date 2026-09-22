@@ -134,6 +134,227 @@ def repondre(noeuds):
     return lambda _consigne: '{"noeuds": %s}' % json.dumps(noeuds)
 
 
+# --- D2 : une promesse de verdict est une promesse de LANCEMENT -------------
+#
+# Relecture adverse du 22/09 (GLM-5.3, outils en lecture seule) : << la
+# promesse de la page -- vous dit AVANT de lancer si c'est possible -- est
+# fausse pour 14 briques sur 16 : le client lit "Oui, cette chaine tient",
+# clique, et se casse au controle >>. Verifie contre le code : `verifier()` ne
+# consulte nulle part `ROUTES` (6 briques sur 16) ni `BUDGET_PAR_BRIQUE`.
+
+def test_une_brique_sans_route_ne_peut_pas_etre_PROMISE(apps):
+    """Dix briques sur seize n'ont aucune route dans une chaine.
+
+    Avant ce test, `[fabrication_image]` rendait un verdict favorable ; le
+    client cliquait, le noeud partait vraiment chez le fournisseur pour les
+    etapes precedentes, et la chaine se cassait sur `brique_sans_route`.
+    """
+    chaine = composite.chaine_depuis_briques(["image_fabrication"], apps)
+    verdict = composite.verifier(chaine)
+    assert verdict["atteignable"] == composite.NON, verdict["pourquoi"]
+    assert "brique_sans_route" in verdict["motifs"], verdict["motifs"]
+    assert "Fabrication d'image" in verdict["pourquoi"], verdict["pourquoi"]
+
+
+def test_une_brique_au_budget_ferme_ne_peut_pas_etre_PROMISE(apps):
+    """La garde de budget est fermee par defaut et RIEN ne la branche.
+
+    `budget_modal.verifier()` n'est appelee par aucun chemin composite (grep
+    sur le depot : aucun appelant ne passe `garde_budget`). Un noeud qui peut
+    partir chez le loueur refuse donc a tous les coups -- le verdict doit le
+    dire AVANT, pas le laisser decouvrir au clic.
+    """
+    chaine = composite.chaine_depuis_briques(["video_soignee"], apps)
+    verdict = composite.verifier(chaine)
+    assert verdict["atteignable"] == composite.NON, verdict["pourquoi"]
+    assert "budget_non_verifie" in verdict["motifs"], verdict["motifs"]
+
+
+def test_la_chaine_temoin_reste_PROMISE(apps):
+    """L'autre bras : la garde se retourne, elle ne refuse pas tout.
+
+    Sans ce bras, une garde qui dirait << non >> a tout aurait l'air de
+    marcher.
+    """
+    chaine = composite.chaine_depuis_briques(list(TEMOIN), apps)
+    verdict = composite.verifier(chaine)
+    assert verdict["atteignable"] != composite.NON, verdict["pourquoi"]
+    assert "brique_sans_route" not in verdict["motifs"], verdict["motifs"]
+    assert "budget_non_verifie" not in verdict["motifs"], verdict["motifs"]
+
+
+@pytest.mark.parametrize("brique", [
+    "chat_auto", "chat_max", "chat_secours_openrouter", "chat_secours_groq",
+    "image_lecture", "image_fabrication", "recherche_web", "voix_fr", "voix_en",
+    "dictee_locale", "dictee_groq", "video_rapide", "video_soignee",
+    "video_maison", "chanson", "dialogue"])
+def test_un_verdict_qui_ne_dit_pas_NON_tient_sa_promesse(apps, brique):
+    """L'invariant, sur les SEIZE : promis ⇒ lancable.
+
+    C'est la propriete que D2 violait, et elle se verifie sans reseau : une
+    brique promise doit avoir une route, et la garde de budget ne doit pas la
+    refuser au premier pas.
+    """
+    chaine = composite.chaine_depuis_briques([brique], apps)
+    verdict = composite.verifier(chaine)
+    if verdict["atteignable"] == composite.NON:
+        return  # rien n'est promis : rien a tenir
+    assert brique in composite.ROUTES, (
+        "%s est promise et n'a aucune route" % brique)
+    trace = composite.executer(chaine, lambda _e, _x: "rendu", entree=b"son",
+                               verdict=verdict)
+    assert trace["ou"] != composite.CONTROLE, trace
+
+
+# --- D6 : la demande du client atteint le noeud -----------------------------
+
+def test_la_demande_du_client_atteint_chaque_noeud(apps):
+    """Elle etait portee par le graphe et par la chaine, et jamais lue.
+
+    Mesure de la relecture : << Quel temps fera-t-il demain ? >> partait au
+    modele sous la forme << Resume ce texte en quelques phrases :\n\nNone >>,
+    et le Studio rendait << C'est fait >>.
+    """
+    chaine = composite.chaine_depuis_briques(["chat_auto"], apps)
+    chaine["phrase"] = "Quel temps fera-t-il demain ?"
+    vues = []
+    composite.executer(chaine, lambda e, _x: vues.append(e.get("demande")) or "ok")
+    assert vues == ["Quel temps fera-t-il demain ?"], vues
+
+
+def test_le_chat_porte_la_demande_du_client_pas_un_resume_fige():
+    """La consigne se fabrique a part, pour etre lisible sans reseau."""
+    etape = {"brique": "chat_auto", "fonction": "Chat",
+             "demande": "Traduis ce texte en anglais"}
+    consigne = composite._consigne_du_chat(etape, "Bonjour tout le monde")
+    assert "Traduis ce texte en anglais" in consigne
+    assert "Bonjour tout le monde" in consigne
+
+
+def test_un_noeud_seul_ne_recoit_jamais_le_mot_None():
+    """Sans entree, la demande EST le message. `str(None)` n'en est pas un."""
+    etape = {"brique": "chat_auto", "fonction": "Chat",
+             "demande": "Quel temps fera-t-il demain ?"}
+    consigne = composite._consigne_du_chat(etape, None)
+    assert "None" not in consigne, consigne
+    assert "Quel temps fera-t-il demain ?" in consigne
+
+
+# --- D7 et D8 : la brique servie est celle qui est nommee -------------------
+
+def test_deux_briques_a_la_MEME_adresse_sont_distinguees():
+    """Sinon le routeur tranche seul, et l'etiquette ment.
+
+    Exception nommee et mesuree : les deux voix partagent `/v1/audio/speech`
+    parce que le routeur lit CHAQUE segment dans sa propre langue
+    (`decouper_par_langue`) et n'accepte aucun champ de langue. Ce n'est pas
+    une brique servie pour une autre : c'est une seule route, et deux fiches.
+    """
+    import json as _json
+    par_chemin = {}
+    for brique, (_genre, chemin) in composite.ROUTES.items():
+        par_chemin.setdefault(chemin, []).append(brique)
+    for chemin, briques in sorted(par_chemin.items()):
+        if len(briques) < 2 or chemin == "/v1/audio/speech":
+            continue
+        precisions = [composite.PRECISION.get(b) for b in briques]
+        assert all(precisions), (chemin, briques, precisions)
+        empreintes = {_json.dumps(p, sort_keys=True) for p in precisions}
+        assert len(empreintes) == len(briques), (chemin, precisions)
+
+
+def test_la_dictee_locale_EXIGE_de_rester_sur_la_machine(par_id):
+    """Le registre promet << la voix ne quitte pas la machine >>.
+
+    Releve du 22/09 : les deux dictees partaient a la meme adresse sans dire
+    laquelle, et la route choisit Groq d'abord des qu'une cle est branchee. La
+    voix partait donc chez Groq sous l'etiquette de la brique locale. Ce test
+    lie le code a la promesse du registre : si la promesse change, il sonne.
+    """
+    assert "ne quitte pas la machine" in par_id["dictee_locale"]["nature"]
+    assert composite.PRECISION["dictee_locale"] == {"moteur": "local"}
+    assert composite.PRECISION["dictee_groq"] == {"moteur": "groq"}
+
+
+def test_chaque_chat_part_sur_SON_modele(par_id):
+    """`chat_max` tournait sur Flash-Lite sous l'etiquette de Flash."""
+    assert par_id["chat_max"]["modele"] != par_id["chat_auto"]["modele"]
+    assert composite.PRECISION["chat_auto"] == {"model": "free-ai-auto"}
+    assert composite.PRECISION["chat_max"] == {"model": "free-ai-max"}
+
+
+def _routeur_simule(monkeypatch, reponse):
+    """Remplace le transport d'httpx : on lit ce qui PART, rien ne sort."""
+    import httpx
+
+    vues = []
+
+    def transport(requete):
+        vues.append(requete)
+        return reponse
+
+    vrai = httpx.Client
+    monkeypatch.setattr(
+        httpx, "Client",
+        lambda **kw: vrai(transport=httpx.MockTransport(transport), **kw))
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-interne-de-test")
+    return vues
+
+
+def test_le_noeud_de_dictee_ENVOIE_le_moteur_au_routeur(apps, monkeypatch):
+    """Le maillon. Sans lui, la table et la route sont justes et la voix part.
+
+    Trouve MUET par le rituel de mutation : retirer l'envoi ne cassait rien.
+    """
+    import httpx
+
+    vues = _routeur_simule(monkeypatch, httpx.Response(200, json={"text": "bonjour"}))
+    etape = composite.chaine_depuis_briques(["dictee_locale"], apps)["etapes"][0]
+    assert composite.lancer_par_le_routeur(etape, b"RIFF....WAVE") == "bonjour"
+    assert b'name="moteur"\r\n\r\nlocal\r\n' in vues[0].content, vues[0].content[:400]
+
+
+def test_le_noeud_de_chat_ENVOIE_son_modele_ET_la_demande(apps, monkeypatch):
+    """Meme maillon, cote chat : `chat_max` tournait sous le modele d'Auto."""
+    import httpx
+
+    vues = _routeur_simule(monkeypatch, httpx.Response(
+        200, json={"choices": [{"message": {"content": "Hello"}}]}))
+    etape = dict(composite.chaine_depuis_briques(["chat_max"], apps)["etapes"][0],
+                 demande="Traduis ce texte en anglais")
+    assert composite.lancer_par_le_routeur(etape, "Bonjour") == "Hello"
+    envoi = json.loads(vues[0].content)
+    assert envoi["model"] == "free-ai-max", envoi
+    assert "Traduis ce texte en anglais" in envoi["messages"][0]["content"]
+    assert "Bonjour" in envoi["messages"][0]["content"]
+
+
+# --- D4 : ce qui est lance est ce qui a ete montre --------------------------
+
+def test_une_chaine_se_rebatit_des_BRIQUES_sans_rappeler_le_modele(apps):
+    """<< Lancer >> recompilait : un second appel au modele, non deterministe.
+
+    La page tient deja les briques qu'elle a montrees. Les rebatir est
+    deterministe, gratuit, et rend impossible l'ecart entre la chaine vue et
+    la chaine lancee.
+    """
+    graphe = composite.compiler(
+        "resume cet enregistrement et lis-le-moi",
+        repondre(["transcription_locale", "conversation", "synthese_vocale_fr"]),
+        apps)
+    liee = composite.lier(graphe, apps)
+    rebatie = composite.chaine_depuis_briques(
+        [e["brique"] for e in liee["etapes"]], apps, phrase=liee["phrase"])
+    assert rebatie == liee
+
+
+def test_une_brique_inconnue_se_refuse_avec_son_motif(apps):
+    with pytest.raises(composite.CompositeRefuse) as refus:
+        composite.chaine_depuis_briques(["brique_qui_nexiste_pas"], apps)
+    assert refus.value.motif == "brique_inconnue"
+    assert "brique_qui_nexiste_pas" in refus.value.phrase
+
+
 # --- SP-LICENCE-DUNE-CHAINE : la preuve de cloture --------------------------
 
 def test_une_chaine_qui_contient_la_chanson_est_refusee(apps):
@@ -276,18 +497,70 @@ def test_le_verdict_porte_des_faits_pas_seulement_une_phrase(apps):
 def test_le_modele_redige_et_sa_phrase_est_gardee(apps):
     """Quand le modele rend du bon francais avec le bon montant, on le garde."""
     verdict = _verdict_temoin(apps)
-    bonne = ("Cette cha\u00eene ne vous co\u00fbtera rien : 0,00 $. Une \u00e9tape a "
-             "besoin d'un service d\u00e9j\u00e0 branch\u00e9 dans la page Cl\u00e9s.")
+    # Elle NOMME l'application, comme le modele le fait en service reel : le
+    # fait porte ce nom, et depuis le 22/09 une phrase qui le perd ou le
+    # deforme retombe sur la phrase ecrite.
+    bonne = ("Cette cha\u00eene ne vous co\u00fbtera rien : 0,00 $. Chat, Free AI "
+             "Auto a besoin d'un service d\u00e9j\u00e0 branch\u00e9 dans la page Cl\u00e9s.")
     rendu = composite.rediger(verdict, lambda _c: bonne)
     # L'etat est ecrit d'avance par le calcul ; l'explication vient du modele.
     assert rendu.startswith("Oui, cette chaîne tient."), rendu
     assert bonne in rendu, rendu
 
 
+def test_sans_AUCUN_fait_la_phrase_ecrite_reste(apps):
+    """Rien a mettre en francais : le modele n'est meme pas consulte.
+
+    Trouve MUET par le rituel de mutation du 22/09 au soir : tous mes tests
+    passaient par un verdict portant un montant, et une autre garde attrapait
+    le cas avant celle-ci. Ici l'etat est << oui >> et la phrase du modele est
+    inoffensive -- si la garde tombe, cette phrase arrive a l'ecran.
+    """
+    verdict = {"atteignable": composite.OUI,
+               "pourquoi": "Cette cha\u00eene tient.",
+               "faits": []}
+    appele = []
+
+    def modele(_consigne):
+        appele.append(1)
+        return "Tout va bien."
+
+    assert composite.rediger(verdict, modele) == "Cette cha\u00eene tient."
+    assert appele == [], "le modele ne doit pas etre appele sans faits"
+
+
+def test_une_phrase_INTERMINABLE_est_refusee(apps):
+    """Un modele qui part en roue libre ne remplit pas l'ecran du debutant.
+
+    L'autre moitie de la mutation muette. Le verdict porte des faits SANS
+    montant -- la garde des sommes n'a donc rien a exiger, la garde des nombres
+    ne trouve aucun nombre invente, et l'etat est << oui >> : cette garde-ci est
+    la SEULE qui puisse encore refuser. Elle est donc joue seule, ce qui est
+    tout l'objet.
+    """
+    verdict = {"atteignable": composite.OUI,
+               "pourquoi": "Cette cha\u00eene tient.",
+               "faits": [{"quoi": "cle_requise",
+                          "applications": ["Chat"],
+                          "ou_la_configurer": "la page des identifiants"}]}
+    courte = "Il faut brancher une cl\u00e9 pour Chat."
+    longue = courte + (" C'est la m\u00eame chose, redite." * 40)
+    assert len(longue) > 700, len(longue)
+
+    # la courte passe : la garde se retourne, elle ne refuse pas tout
+    assert composite.rediger(verdict, lambda _c: courte) != verdict["pourquoi"]
+    # l'interminable retombe sur la phrase ecrite
+    assert composite.rediger(verdict, lambda _c: longue) == verdict["pourquoi"]
+
+
 def test_une_phrase_qui_PERD_le_montant_est_refusee(apps):
     """Le verdict porte un chiffre. Une phrase qui le laisse tomber ne le dit plus."""
     verdict = _verdict_temoin(apps)
-    sans = "Cette cha\u00eene est gratuite et tr\u00e8s simple \u00e0 utiliser."
+    # Elle NOMME l'application : sans cela, la garde des noms attraperait
+    # cette phrase avant celle du montant, et ce test cesserait de mesurer
+    # ce qu'il annonce (mesure du rituel de mutation, 22/09 au soir).
+    sans = ("Cette cha\u00eene est gratuite et tr\u00e8s simple \u00e0 utiliser "
+            "avec Chat, Free AI Auto.")
     assert composite.rediger(verdict, lambda _c: sans) == verdict["pourquoi"]
     assert "0,00" in verdict["pourquoi"], verdict["pourquoi"]
 
@@ -299,8 +572,38 @@ def test_une_phrase_qui_INVENTE_un_montant_est_refusee(apps):
     n'a calculee, qui fait refuser la phrase.
     """
     verdict = _verdict_temoin(apps)
-    inventee = ("Cette cha\u00eene est gratuite : 0,00 $, mais comptez environ "
-                "3,50 $ par mois.")
+    inventee = ("Cette cha\u00eene est gratuite : 0,00 $ avec Chat, Free AI "
+                "Auto, mais comptez environ 3,50 $ par mois.")
+    assert composite.rediger(verdict, lambda _c: inventee) == verdict["pourquoi"]
+
+
+# Six facons d'ecrire un montant, dont CINQ echappaient a la garde du 22/09.
+# Mesure de ce jour-la, avant correction : 1 attrape sur 6. Le trou venait d'un
+# motif ecrit contre un seul format -- deux decimales et un dollar -- alors que
+# `format_fr.en_dollars(valeur, decimales)` prend ses decimales en parametre et
+# que le compteur Modal du Studio s'affiche a quatre. La garde compte desormais
+# les NOMBRES, pas les sommes bien formees.
+SIX_FORMATS = [
+    "12,50 $",       # deux decimales : le seul que l'ancienne garde voyait
+    "5,1979 $",      # quatre decimales : le format du compteur Modal d'ici
+    "10 $",          # aucune decimale
+    "$12.50",        # ecriture americaine
+    "3,5 $",         # une decimale
+    "11,40 EUR",     # une autre monnaie
+]
+
+
+@pytest.mark.parametrize("somme", SIX_FORMATS)
+def test_un_montant_invente_est_refuse_QUEL_QUE_SOIT_son_format(apps, somme):
+    """Une garde ecrite contre un format ne garde que ce format.
+
+    Chaque phrase porte la somme CALCULEE -- elle passe donc la premiere garde,
+    celle qui exige que le montant soit dit. C'est la seconde somme, que
+    personne n'a calculee, qui doit faire retomber sur la phrase ecrite.
+    """
+    verdict = _verdict_temoin(apps)
+    inventee = ("Cette cha\u00eene est gratuite : 0,00 $ avec Chat, Free AI "
+                "Auto. Comptez %s en plus." % somme)
     assert composite.rediger(verdict, lambda _c: inventee) == verdict["pourquoi"]
 
 
@@ -355,6 +658,120 @@ def test_l_etat_du_verdict_ne_passe_jamais_par_le_modele(apps):
                "Chanson l'interdit pour un usage commercial. Le co\u00fbt maximum "
                "serait de 0,52 $.")
     assert composite.rediger(verdict, lambda _c: honnete).startswith("Non :")
+
+
+def _verdict_inconnu(apps):
+    """Un verdict `inconnu`, bati sur les FAITS REELS de `dialogue`.
+
+    L'etat est pose a la main, et il faut dire pourquoi plutot que de le
+    laisser croire mesure : depuis le 22/09, aucune chaine reelle ne vaut
+    `inconnu` -- les six briques lancables sont toutes gratuites, licenciees et
+    sans carte, et tout le reste est refuse avant (cliquet ci-dessus). Les
+    FAITS, eux, ne sont pas inventes : ils sortent de `verifier` sur
+    `[dialogue]`, et le test du cout les epingle separement. Le jour ou une
+    route s'ajoute, le cliquet rougit et cette construction redevient inutile.
+    """
+    reel = composite.verifier(
+        composite.chaine_depuis_briques(["dialogue"], apps))
+    assert any(f["quoi"] == "cout_sans_nombre" for f in reel["faits"]), reel
+    return dict(reel, atteignable=composite.INCONNU,
+                pourquoi=composite.ENTETE[composite.INCONNU]
+                + " Le co\u00fbt de Dialogue n'a pas de nombre par travail "
+                  "mesur\u00e9.")
+
+
+def test_un_plancher_n_est_pas_un_PRIX(apps):
+    """Le fait doit nommer les trois choses, sinon le modele en fait un prix.
+
+    Mesure du 22/09 : avec une cle nommee `montant_minimum`, le modele ecrivait
+    << ne coute que 0,00 $ >> sur deux tirages sur trois -- une certitude sur de
+    l'argent, la ou le calcul dit qu'il ne sait pas. Les noms des faits SONT le
+    vocabulaire montre : le fait porte le plancher, le maximum inconnu, et ce
+    que ca change.
+    """
+    fait = [f for f in _verdict_inconnu(apps)["faits"]
+            if f["quoi"] == "cout_sans_nombre"]
+    assert len(fait) == 1, fait
+    assert "plancher" in fait[0], fait[0]
+    assert "inconnu" in fait[0]["maximum"], fait[0]
+    assert "n'est pas un prix" in fait[0]["consequence"], fait[0]
+    # et la somme reste EXIGEE dans la phrase : un renommage qui viderait
+    # l'ensemble des sommes attendues ferait taire la garde sans rien casser.
+    assert "plancher" in composite.CLES_DE_SOMME, composite.CLES_DE_SOMME
+
+
+def test_un_INCONNU_ecrit_comme_une_certitude_est_refuse(apps):
+    """La jumelle de la garde du refus, pour l'etat qui dit << je ne sais pas >>.
+
+    Une phrase sans aucun mot de doute fait retomber sur la phrase ecrite. La
+    somme est presente et vient bien des faits : c'est l'ASSURANCE qui est
+    fausse, pas le nombre -- donc ni la garde des nombres ni l'entete
+    deterministe ne peuvent l'attraper.
+    """
+    verdict = _verdict_inconnu(apps)
+    trop_sure = ("Cette cha\u00eene ne co\u00fbte que 0,00 $ avec Dialogue "
+                 "\u00e0 plusieurs voix.")
+    assert composite.rediger(verdict, lambda _c: trop_sure) == verdict["pourquoi"]
+
+
+def test_un_INCONNU_qui_DIT_le_doute_passe(apps):
+    """Et la garde se retourne : elle laisse passer ce qui dit vrai.
+
+    Sans ce second bras, une garde qui refuse tout aurait l'air de marcher.
+    """
+    verdict = _verdict_inconnu(apps)
+    juste = ("Le plancher de cette cha\u00eene est 0,00 $, mais son maximum "
+             "reste inconnu : le co\u00fbt de Dialogue \u00e0 plusieurs voix n'a "
+             "pas de nombre par travail mesur\u00e9.")
+    rendu = composite.rediger(verdict, lambda _c: juste)
+    assert rendu != verdict["pourquoi"], rendu
+    assert rendu.startswith(composite.ENTETE[composite.INCONNU]), rendu
+
+
+def _verdict_a_deux_noms(apps):
+    """La chaine temoin dans sa variante distante : DEUX noms a rendre."""
+    verdict = composite.verifier(composite.chaine_depuis_briques(
+        ["dictee_groq", "chat_auto", "voix_fr"], apps))
+    noms = {n for f in verdict["faits"]
+            for n in f.get(composite.CLE_DES_NOMS, ())}
+    assert len(noms) == 2, noms
+    return verdict
+
+
+def test_un_nom_d_application_DEFORME_est_refuse(apps):
+    """Mesure du 22/09 : << Dictee « Groq si posible » >>, deux fois sur sept.
+
+    La phrase ci-dessous porte la bonne somme et n'invente aucun nombre : les
+    deux gardes precedentes la laissent passer. Seule celle des noms peut la
+    refuser, ce qui est tout l'objet.
+    """
+    verdict = _verdict_a_deux_noms(apps)
+    deforme = ("Cette cha\u00eene est gratuite : 0,00 $. Les applications "
+               "Dict\u00e9e \u00ab Groq si posible \u00bb et Chat, Free AI Auto "
+               "exigent une cl\u00e9.")
+    assert composite.rediger(verdict, lambda _c: deforme) == verdict["pourquoi"]
+
+
+def test_un_nom_d_application_INTACT_passe(apps):
+    """L'autre bras : la garde se retourne, elle ne refuse pas tout."""
+    verdict = _verdict_a_deux_noms(apps)
+    juste = ("Cette cha\u00eene est gratuite : 0,00 $. Les applications "
+             "Dict\u00e9e \u00ab Groq si possible \u00bb et Chat, Free AI Auto "
+             "exigent une cl\u00e9.")
+    rendu = composite.rediger(verdict, lambda _c: juste)
+    assert rendu != verdict["pourquoi"], rendu
+    assert rendu.startswith(composite.ENTETE[composite.OUI]), rendu
+
+
+def test_la_cle_des_noms_est_celle_que_les_faits_portent(apps):
+    """Un renommage qui viderait l'ensemble ferait taire la garde en silence.
+
+    Meme panne que celle du 22/09 au matin sur `montant_minimum` : le nom
+    change d'un cote, le lecteur reste de l'autre, l'ensemble devient vide, et
+    un ensemble vide ne rougit jamais.
+    """
+    verdict = _verdict_a_deux_noms(apps)
+    assert any(composite.CLE_DES_NOMS in f for f in verdict["faits"]), verdict["faits"]
 
 
 def test_un_refus_ne_devient_jamais_un_mode_d_emploi(apps):
@@ -420,16 +837,50 @@ def test_une_chaine_dont_les_types_ne_s_enchainent_pas_est_refusee(apps):
     assert "audio" in verdict["pourquoi"] and "texte" in verdict["pourquoi"]
 
 
-def test_un_cout_sans_nombre_mesure_rend_inconnu_et_non_zero(apps):
+def test_un_cout_sans_nombre_mesure_est_DIT_et_jamais_arrondi_a_zero(apps):
     """`dialogue` n'a qu'un plafond mensuel, aucun nombre par travail.
 
     Un plafond partage n'est pas le cout d'un travail. Repondre << gratuit >>
-    serait un faux-vert ; repondre << inconnu >> est la seule reponse honnete.
+    serait un faux-vert.
+
+    Ce test exigeait l'etat << inconnu >>. Il ne l'exige plus depuis le 22/09,
+    et ce n'est pas un relachement : `dialogue` n'a aucune route dans une
+    chaine ET sa garde de budget refuse a tous les coups, donc l'etat vaut
+    << non >>, qui est un refus plus fort et vrai. Le bras du cout n'est pas
+    mort pour autant -- il ecrit toujours son motif et son fait, et la mesure
+    porte desormais sur eux. Le refus qui masque l'etat est NOMME ici, pour que
+    le prochain lecteur ne croie pas a une garde desserree.
     """
-    graphe = {"phrase": "", "noeuds": [{"capacite": "dialogue"}]}
-    verdict = composite.verifier(composite.lier(graphe, apps))
-    assert verdict["atteignable"] == composite.INCONNU, verdict
-    assert "cout_sans_nombre" in verdict["motifs"]
+    verdict = composite.verifier(
+        composite.chaine_depuis_briques(["dialogue"], apps))
+    assert "cout_sans_nombre" in verdict["motifs"], verdict["motifs"]
+    assert verdict["cout_max_usd"] == 0
+    fait = [f for f in verdict["faits"] if f["quoi"] == "cout_sans_nombre"]
+    assert len(fait) == 1, verdict["faits"]
+    assert fait[0]["plancher"] == "0,00 $", fait[0]
+    assert "inconnu" in fait[0]["maximum"], fait[0]
+    assert verdict["atteignable"] == composite.NON
+    assert "brique_sans_route" in verdict["motifs"], verdict["motifs"]
+
+
+def test_aucune_chaine_reelle_n_atteint_PARTIEL_ni_INCONNU_aujourd_hui(apps):
+    """Le cliquet du masquage. Ce n'est pas une garde : c'est un signal.
+
+    Mesure du 22/09, apres le bras de la route : sur les seize briques, six
+    sont lancables en chaine, et toutes les six sont gratuites, de licence
+    nommee et sans carte. Les etats `partiel` et `inconnu` ne sont donc
+    atteignables par AUCUNE chaine reelle -- non parce que leurs bras seraient
+    morts, mais parce qu'un refus plus fort arrive avant.
+
+    Le jour ou une route s'ajoute, ce test rougit. C'est voulu : il dit au
+    prochain lecteur que les deux etats redeviennent montrables au client, et
+    que la garde du doute de `rediger` redevient atteignable en production.
+    """
+    etats = {composite.verifier(
+        composite.chaine_depuis_briques([a["id"]], apps))["atteignable"]
+        for a in apps}
+    assert etats <= {composite.OUI, composite.NON}, etats
+    assert len(composite.ROUTES) == 6, sorted(composite.ROUTES)
 
 
 def test_une_licence_qu_on_ne_peut_pas_nommer_rend_inconnu(apps):

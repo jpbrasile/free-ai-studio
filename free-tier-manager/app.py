@@ -3319,16 +3319,42 @@ async def audio_transcriptions(request: Request, authorization: Optional[str] = 
     # dictee en anglais, que Whisper traduisait. Le Studio decide : DICTEE_LANGUE.
     langue = DICTEE_LANGUE
 
+    # Le moteur NOMME par l'appelant. Deux briques du registre arrivent ici a
+    # la meme adresse -- `dictee_locale`, dont la fiche promet << la voix ne
+    # quitte pas la machine >>, et `dictee_groq`, dont la fiche promet le
+    # contraire -- et jusqu'au 22/09/2026 rien ne disait laquelle on voulait :
+    # le reglage global tranchait seul, donc la voix partait chez Groq sous
+    # l'etiquette de la brique locale. Defaut releve par une relecture adverse.
+    #
+    # Absent, ce champ ne change RIEN : /essai et Open WebUI n'en envoient pas.
+    # Nomme, il est STRICT -- aucun repli sous une autre etiquette, dans un
+    # sens comme dans l'autre, parce qu'un repli silencieux sert une brique
+    # pour une autre et dement la fiche qui vient d'etre montree au client.
+    moteur = str(formulaire.get("moteur") or "").strip().lower()
+    if moteur and moteur not in DICTEE_MODES:
+        return erreur_dictee(400, "Moteur de dictee inconnu : << %s >>." % moteur)
+    exige_groq, exige_local = moteur == "groq", moteur == "local"
+    if exige_groq and not provider_allowed("groq"):
+        return erreur_dictee(409, "La dictee chez Groq a ete demandee nommement, et "
+                                  "aucune cle Groq n'est branchee.")
+    if exige_groq and len(audio) > DICTEE_MAX_OCTETS:
+        return erreur_dictee(409, "Plus de 25 Mo : au-dela, la dictee gratuite de Groq "
+                                  "refuse.")
+
     # Le journal dit qui a transcrit et pourquoi, jamais ce qui a ete dit.
-    if not dictee_groq_possible():
-        motif = "choix : sur cet ordinateur" if dictee_mode() == "local" else "pas de cle Groq"
-    elif len(audio) > DICTEE_MAX_OCTETS:
+    if exige_local or (not exige_groq and not dictee_groq_possible()):
+        motif = ("demande : sur cet ordinateur" if exige_local else
+                 "choix : sur cet ordinateur" if dictee_mode() == "local" else
+                 "pas de cle Groq")
+    elif not exige_groq and len(audio) > DICTEE_MAX_OCTETS:
         motif = "plus de 25 Mo, la limite gratuite de Groq"
     else:
         texte, motif = await dicter_groq(audio, fichier.filename, fichier.content_type, langue)
         if texte is not None:
             log.info("Dictee : Groq (%s)", GROQ_DICTEE_MODELE)
             return JSONResponse({"text": texte})
+        if exige_groq:
+            return erreur_dictee(502, "La dictee chez Groq n'a pas abouti : %s" % motif)
         log.warning("Dictee : repli sur le Whisper local (%s)", motif)
 
     try:

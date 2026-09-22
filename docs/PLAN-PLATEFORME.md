@@ -780,9 +780,13 @@ chaîne entière non commerciale.** La barrière est donc ici, à l'étape 2, et
 les contributions à des tiers. Sans elle, le premier composite promu est une faute
 juridique, et ce défaut-là ne se voit pas en test.
 
-*Un fait qui rend la règle moins urgente qu'elle n'en a l'air, et il est mesuré : **le
-Studio ne sert aujourd'hui aucune chaîne** — chaque fonction est mono-brique. La règle est
-écrite pour le premier composite promu, pas pour réparer un passif.*
+*~~Un fait qui rend la règle moins urgente qu'elle n'en a l'air, et il est mesuré : le
+Studio ne sert aujourd'hui aucune chaîne — chaque fonction est mono-brique.~~*
+**Périmé le 22/09/2026 au soir, relevé par relecture adverse (GLM-5.3) : `151d988` a livré
+`/composite`, et la page sert des chaînes de trois nœuds.** La règle n'attend donc plus un
+futur : elle mord sur du code en service, et son bras d'usage non commercial refuse
+aujourd'hui toute chaîne contenant `chanson` — vérifié sur la page même, verdict
+« Ce n'est pas possible » avec son motif.
 
 ### Étape 3 — l'intégration validée, puis ouverte aux clients
 
@@ -1162,7 +1166,7 @@ bras, et chacun s'appuie sur quelque chose qui refuse déjà en production :
 | Bras | Sur quoi il s'appuie |
 |---|---|
 | **types** | les champs du point 1 ; la sortie du nœud *n* doit couvrir l'entrée du nœud *n+1* |
-| **coût** | `budget_modal.verifier()`, qui lève avant de lancer et facture le **pire cas**. Il est taillé pour **un** travail : une chaîne l'appelle **par nœud, juste avant chaque lancement**, et ne lui invente pas un total |
+| **coût** | `budget_modal.verifier()`, qui lève avant de lancer et facture le **pire cas**. Il est taillé pour **un** travail : une chaîne l'appellerait **par nœud, juste avant chaque lancement**, et ne lui inventerait pas un total. **Ce n'est pas ce qui est livré, et la phrase au présent était fausse — relevé du 22/09/2026 au soir, relecture adverse, vérifié contre le code** : `composite.py` n'importe pas `budget_modal`. Il **refuse** toute chaîne dont une brique peut partir chez un loueur (motif `budget_non_verifie`, **4 briques sur 16**). Refuser est honnête ; promettre une vérification qui n'existe pas ne l'est pas |
 | **carte** | `gpu_local.utilisable(besoin_mo)`, le besoin venant des ancres **mesurées**, jamais d'une estimation |
 | **licence** | l'**usage** seul — point 5 ci-dessous |
 
@@ -1191,10 +1195,17 @@ le jour où elle est tranchée, elle devient un second bras — pas avant.
 > preuve était incurable. Trouvée par relecture adverse **avant** écriture. C'est ce que
 > produit la confusion de deux licences qui n'ont rien à voir.
 
-**6. L'exécution et sa trace.** Chaque nœud part par la route qu'il a déjà ; les pas en
+**6. L'exécution et sa trace.** Chaque nœud part par la route qu'il a déjà. *~~Les pas en
 bac à sable passent par `run_auto()`, qui essaie `modal → local → kaggle → colab` et
 journalise chaque tentative avec son motif. La trace d'une chaîne reprend la forme déjà
-en service, `fallback_attempts`. **Le résultat n'est pas un booléen** : ce qui apprend,
+en service, `fallback_attempts`.~~* **Faux au présent, relevé le 22/09/2026 au soir par
+relecture adverse et vérifié : `composite.py` n'appelle ni `run_auto()` ni
+`fallback_attempts`** — il poste sur **six routes fixes** de la passerelle gratuite, et les
+deux noms n'apparaissent chez lui que dans des commentaires. Ce qui est livré est plus
+étroit et plus sûr : les briques qui passeraient par le bac à sable n'ont **pas** de route,
+et le vérifieur le dit avant de lancer au lieu de le découvrir en chemin. La forme
+`fallback_attempts` reste le gabarit de la trace le jour où ces routes s'ouvriront — au
+lot 2, pas avant. **Le résultat n'est pas un booléen** : ce qui apprend,
 c'est **où** ça a cassé — compilation, liaison, contrôle, exécution, sortie. Un booléen
 ne fait pas tourner le volant. Et le bac à sable n'ayant **aucune sortie réseau**, tout
 téléchargement se fait dans une phase de préparation **hors** bac à sable.

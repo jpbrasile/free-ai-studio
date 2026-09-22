@@ -3117,10 +3117,25 @@ async def composite_lancer(request: Request,
 
     Le verdict est RE-JOUE ici : la page peut avoir ete laissee ouverte, et une
     chaine refusee ne doit pas partir parce qu'un bouton etait deja actif.
+
+    Mais la chaine n'est PAS recompilee. Jusqu'au 22/09/2026 cette route
+    repassait par le modele, qui n'est pas deterministe : ce qui partait
+    pouvait n'etre pas ce dont le client venait de lire le verdict. La page
+    renvoie les briques qu'elle a montrees, on les rebatit depuis le registre,
+    et c'est cette chaine-la -- la meme -- qui est reverifiee puis lancee.
     """
     auth(authorization)
     try:
-        formulaire, chaine = await _chaine_depuis(request)
+        formulaire = await request.form()
+        briques = [b for b in str(formulaire.get("briques") or "").split(",") if b]
+        if not briques:
+            raise composite.CompositeRefuse(
+                "chaine_absente",
+                "Cette demande n'a pas encore \u00e9t\u00e9 regard\u00e9e. Cliquez "
+                "\u00ab Voir si c\u2019est possible \u00bb, puis \u00ab Lancer \u00bb.",
+                ou=composite.CONTROLE)
+        chaine = composite.chaine_depuis_briques(
+            briques, phrase=str(formulaire.get("phrase") or ""))
         verdict = composite.verifier(chaine)
         if verdict["atteignable"] == composite.NON:
             raise composite.CompositeRefuse(

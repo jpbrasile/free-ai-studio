@@ -184,6 +184,67 @@ def test_groq_transcrit(routeur, monkeypatch):
     assert b"ID3 faux mp3" in envoi.content
 
 
+def test_le_moteur_local_demande_nommement_ne_part_JAMAIS_chez_groq(routeur, monkeypatch):
+    """La promesse du registre : << la voix ne quitte pas la machine >>.
+
+    Cle Groq branchee, mode par defaut (groq) : sans ce champ, l'enregistrement
+    partait chez Groq. Nomme, il reste ici.
+    """
+    brancher_groq(monkeypatch)
+    groq, local = GroqSimule(), WhisperSimule()
+    r = dicter(routeur, monkeypatch, groq, local, champs={"moteur": "local"})
+    assert r.status_code == 200
+    assert r.json() == {"text": "texte de l'ordinateur"}
+    assert groq.requetes == [], "la voix est partie chez Groq"
+    assert len(local.appels) == 1
+
+
+def test_le_moteur_groq_demande_nommement_ne_retombe_pas_en_SILENCE(routeur, monkeypatch):
+    """Sans cle, la route transcrivait localement sans le dire.
+
+    Le verdict d'une chaine promet au client << sans cette cle, la chaine
+    s'arretera la, et le dira >>. Elle ne s'arretait pas : elle servait une
+    autre brique que celle qui avait ete nommee.
+    """
+    groq, local = GroqSimule(), WhisperSimule()
+    r = dicter(routeur, monkeypatch, groq, local, champs={"moteur": "groq"})
+    assert r.status_code == 409, r.text
+    assert local.appels == [], "le repli local a servi sous l'etiquette de Groq"
+    assert groq.requetes == []
+
+
+def test_groq_nomme_qui_echoue_le_DIT_au_lieu_de_replier(routeur, monkeypatch):
+    """Meme regle quand la cle existe mais que Groq refuse."""
+    brancher_groq(monkeypatch)
+    groq, local = GroqSimule(statut=503, corps={"error": "surcharge"}), WhisperSimule()
+    r = dicter(routeur, monkeypatch, groq, local, champs={"moteur": "groq"})
+    assert r.status_code == 502, r.text
+    assert local.appels == []
+
+
+def test_un_moteur_inconnu_est_refuse(routeur, monkeypatch):
+    """Un nom mal ecrit ne doit pas valoir << fais comme d'habitude >>."""
+    brancher_groq(monkeypatch)
+    groq, local = GroqSimule(), WhisperSimule()
+    r = dicter(routeur, monkeypatch, groq, local, champs={"moteur": "lokal"})
+    assert r.status_code == 400, r.text
+    assert groq.requetes == [] and local.appels == []
+
+
+def test_sans_moteur_le_reglage_du_studio_tranche_comme_avant(routeur, monkeypatch):
+    """L'autre bras : le champ est optionnel et ne change rien pour /essai.
+
+    Sans ce bras, un champ devenu obligatoire casserait Open WebUI sans qu'un
+    seul test ne sonne.
+    """
+    brancher_groq(monkeypatch)
+    groq, local = GroqSimule(), WhisperSimule()
+    r = dicter(routeur, monkeypatch, groq, local,
+               champs={"model": "free-ai-dictee", "language": "fr"})
+    assert r.status_code == 200
+    assert len(groq.requetes) == 1 and local.appels == []
+
+
 def test_langue_d_open_webui_ignoree(routeur, monkeypatch):
     # Open WebUI envoie toujours << fr >> (son WHISPER_LANGUAGE). Jusqu'au
     # 15/09/2026, le routeur le suivait : une dictee en anglais revenait
