@@ -311,7 +311,7 @@ def chaine_depuis_briques(ids, apps: list[dict] | None = None,
 # exactement la confusion qui aurait fait echouer ce lot apres coup.
 _NON_COMMERCIAL = (
     re.compile(r"\bBY-NC\b", re.I),
-    re.compile(r"\bnon[\s -]commercial", re.I),
+    re.compile(r"\bnon[\s-]commercial", re.I),
 )
 # Une licence qu'on ne peut pas nommer n'est pas une licence permissive : le
 # modele servi par le premier secours change d'une requete a l'autre.

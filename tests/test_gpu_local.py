@@ -27,12 +27,19 @@ import pytest
 
 RACINE = Path(__file__).resolve().parents[1]
 
+# `sandbox-manager` entre dans le chemin AVANT l'exec : le module a des freres
+# (`format_fr`) et un chargement par fichier seul ne les trouve pas. Le 22/09,
+# ce fichier passait dans la suite entiere et ECHOUAIT seul, parce qu'un autre
+# test avait deja mis `format_fr` dans `sys.modules`. Un test qui ne passe
+# qu'apres un autre est un vert d'emprunt.
+sys.path.insert(0, str(RACINE / "sandbox-manager"))
 _spec = importlib.util.spec_from_file_location(
     "gpu_local", RACINE / "sandbox-manager" / "gpu_local.py"
 )
 gpu_local = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = gpu_local
 _spec.loader.exec_module(gpu_local)
+format_fr = sys.modules["format_fr"]
 
 # Exactement ce que la carte a rendu le 19/09/2026 depuis le conteneur.
 RELEVE_REEL = "NVIDIA GeForce RTX 4090, 24564, 24138\n"
@@ -114,7 +121,11 @@ def test_carte_libre_accepte_et_donne_les_chiffres(carte):
     carte(_Sortie(stdout=RELEVE_REEL))
     oui, phrase, etat = gpu_local.utilisable(8000)
     assert oui is True
-    assert "24138" in phrase and "8000" in phrase
+    # Le chiffre doit rester lisible, ET groupe : la barre est la meme
+    # qu'avant, plus l'exigence que cinq chiffres ne se lisent pas d'affilee.
+    assert format_fr.en_memoire(24138) in phrase
+    assert format_fr.en_memoire(8000, "") in phrase
+    assert "24138" not in phrase, "cinq chiffres colles ne se lisent pas"
     assert etat["libre_mo"] == 24138
 
 
@@ -123,7 +134,7 @@ def test_carte_occupee_refuse_sans_arreter_personne(carte):
     carte(_Sortie(stdout="NVIDIA GeForce RTX 4090, 24564, 8600\n"))
     oui, phrase, _ = gpu_local.utilisable(16000)
     assert oui is False
-    assert "8600" in phrase
+    assert format_fr.en_memoire(8600) in phrase
     assert "on n'arrete personne" in phrase
 
 
@@ -319,7 +330,9 @@ def test_une_carte_que_personne_ne_tient_est_libre(carte):
     carte(_Sortie(stdout=RELEVE_REEL))
     libre, phrase, etat = gpu_local.libre_pour_un_code_inconnu()
     assert libre is True
-    assert "24138" in phrase and "personne d'autre" in phrase
+    assert format_fr.en_memoire(24138) in phrase
+    assert "24138" not in phrase, "cinq chiffres colles ne se lisent pas"
+    assert "personne d'autre" in phrase
     assert etat["libre_mo"] == 24138
 
 
@@ -331,7 +344,7 @@ def test_une_carte_prise_n_est_pas_libre(carte):
     carte(_Sortie(stdout="NVIDIA GeForce RTX 4090, 24564, 8600\n"))
     libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
     assert libre is False
-    assert "15964" in phrase, "la phrase doit dire COMBIEN est pris"
+    assert format_fr.en_memoire(15964) in phrase, "la phrase doit dire COMBIEN est pris"
     assert "on ne l'arrete jamais" in phrase
 
 

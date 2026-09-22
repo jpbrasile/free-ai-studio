@@ -37,6 +37,8 @@ import os
 import shutil
 import subprocess
 
+import format_fr
+
 # Ce que la sonde s'autorise a attendre. nvidia-smi repond en moins d'une
 # seconde sur une machine saine ; au-dela, quelque chose ne va pas et le travail
 # n'a pas a attendre pour le savoir.
@@ -130,13 +132,16 @@ def libre_pour_un_code_inconnu(delai_s: int | None = None) -> tuple[bool, str, d
     pris = max(0, etat["totale_mo"] - etat["libre_mo"])
     if pris > OCCUPATION_TOLEREE_MO:
         return False, (
-            "%s : %d Mo deja pris sur %d. Un autre calcul tient la carte, et on "
-            "ne l'arrete jamais." % (etat["nom"], pris, etat["totale_mo"])
+            "%s : %s deja pris sur %s. Un autre calcul tient la carte, et on "
+            "ne l'arrete jamais."
+            % (etat["nom"], format_fr.en_memoire(pris),
+               format_fr.en_memoire(etat["totale_mo"], ""))
         ), etat
 
     return True, (
-        "%s : %d Mo libres sur %d, personne d'autre ne la tient."
-        % (etat["nom"], etat["libre_mo"], etat["totale_mo"])
+        "%s : %s libres sur %s, personne d'autre ne la tient."
+        % (etat["nom"], format_fr.en_memoire(etat["libre_mo"]),
+           format_fr.en_memoire(etat["totale_mo"], ""))
     ), etat
 
 
@@ -154,14 +159,19 @@ def utilisable(besoin_mo: int, delai_s: int | None = None) -> tuple[bool, str, d
     besoin_total = max(0, int(besoin_mo)) + MARGE_MO
     if etat["libre_mo"] < besoin_total:
         return False, (
-            "%s : %d Mo libres, il en faut %d (%d demandes + %d de marge). "
+            "%s : %s libres, il en faut %s (%s demandes + %s de marge). "
             "La carte est partagee : on va chez Modal, on n'arrete personne."
-            % (etat["nom"], etat["libre_mo"], besoin_total, int(besoin_mo), MARGE_MO)
+            % (etat["nom"], format_fr.en_memoire(etat["libre_mo"]),
+               format_fr.en_memoire(besoin_total, ""),
+               format_fr.en_memoire(int(besoin_mo), ""),
+               format_fr.en_memoire(MARGE_MO, ""))
         ), etat
 
     return True, (
-        "%s : %d Mo libres pour %d demandes (marge %d)."
-        % (etat["nom"], etat["libre_mo"], int(besoin_mo), MARGE_MO)
+        "%s : %s libres pour %s demandes (marge %s)."
+        % (etat["nom"], format_fr.en_memoire(etat["libre_mo"]),
+           format_fr.en_memoire(int(besoin_mo), ""),
+           format_fr.en_memoire(MARGE_MO, ""))
     ), etat
 
 

@@ -1608,7 +1608,7 @@ function carteTexte(d){
   }
   return "Cet ordinateur a une carte : " + c.nom
     + (c.libre_mo !== null && c.libre_mo !== undefined
-       ? " (" + c.libre_mo + " Mo libres sur " + c.totale_mo + ")" : "")
+       ? " (" + moFr(c.libre_mo) + " libres sur " + moFr(c.totale_mo, "") + ")" : "")
     + ". La page Video s'en sert pour fabriquer des clips gratuitement. "
     // Depuis le 21/09/2026 cette page s'en sert aussi. La phrase dit la regle
     // exacte, parce qu'une case qui marche << parfois >> sans dire quand est

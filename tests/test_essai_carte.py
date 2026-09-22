@@ -35,6 +35,7 @@ Aucun appel reseau, aucun nvidia-smi : la sonde est remplacee par un faux.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -43,6 +44,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from conftest import RACINE
+
+# Les formateurs francais, charges seuls : `format_fr` n'importe que `re`. Le
+# banc a besoin de leur moitie JavaScript pour que `carteTexte` tourne comme sur
+# la vraie page, ou `avec_formateurs` les pose dans le premier `<script>`.
+_spec_fr = importlib.util.spec_from_file_location(
+    "format_fr_essai", RACINE / "sandbox-manager" / "format_fr.py")
+format_fr = importlib.util.module_from_spec(_spec_fr)
+_spec_fr.loader.exec_module(format_fr)
 
 VUE = {"vue": True, "nom": "NVIDIA GeForce RTX 4090", "totale_mo": 24564,
        "libre_mo": 24138, "marge_mo": 1024, "motif": ""}
@@ -82,8 +91,12 @@ def _rendu(tmp_path, etat):
     ECRITES, pas laquelle parle.
     """
     # MODAL_PLUS_VITE est declare hors de la fonction : sans lui, node leve.
+    # Les formateurs aussi : `carteTexte` appelle `moFr`, et une page qui
+    # appelle un formateur absent n'affiche plus rien du tout -- c'est le seul
+    # defaut de cette famille que la garde du francais traite a part.
     programme = ('const MODAL_PLUS_VITE = "Sur Modal, la carte consomme l\'offre '
                  'gratuite beaucoup plus vite qu\'un calcul sur processeur.";\n'
+                 + format_fr.JS_FORMATEURS
                  + _fonction_js("carteTexte")
                  + "\nconsole.log(carteTexte(" + json.dumps(etat) + "));\n")
     fichier = tmp_path / "carte.js"
@@ -133,7 +146,9 @@ def test_avec_une_carte_la_page_la_nomme_et_ne_la_nie_pas(tmp_path):
     texte = _rendu(tmp_path, {"carte": VUE, "bac_a_sable_gpu": True,
                               "utilisee_par_cette_page": False})
     assert "NVIDIA GeForce RTX 4090" in texte
-    assert "24138" in texte, "la memoire libre mesuree doit rester lisible"
+    # Lisible ET groupee : cinq chiffres d'affilee se comptent a la main.
+    assert format_fr.en_memoire(24138) in texte, "la memoire libre doit rester lisible"
+    assert "24138" not in texte, "cinq chiffres colles ne se lisent pas"
     assert "n'a pas de carte" not in texte
     assert "n'existe pas" not in texte
 

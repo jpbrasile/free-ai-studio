@@ -42,6 +42,11 @@ PAGES = ["/", "/essai", "/video", "/chanson", "/dialogue", "/composite"]
 MONTANT_A_POINT = re.compile(r"\d+\.\d+\s*(?:\$|USD)")
 # « 2026-09-21 » : la date de journal de machine.
 DATE_ISO = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+# « 24138 Mo » : quatre chiffres ou plus collés à une unité de mémoire. Le
+# lecteur compte alors les chiffres à la main pour savoir s'il lit vingt-quatre
+# mille ou deux cent quarante et un mille. Une fois groupé, « 24 138 Mo » ne
+# déclenche plus rien : `\d{4,}` ne franchit pas l'espace insécable.
+MEMOIRE_COLLEE = re.compile(r"\d{4,}\s*(?:[kMGT]o|[KMGT]i?B)\b")
 
 # --- ce qu'on refuse dans la source ----------------------------------------
 # Python : un montant écrit à la main au lieu de passer par le formateur.
@@ -62,6 +67,17 @@ JS_DATE = re.compile(r"toISOString\s*\(|toLocaleDateString\s*\(\s*\)")
 # franciser l'affichage, dont s'occupe le contrôle du dessus.
 PY_DATE = re.compile(r"%Y-%m-%d|\.isoformat\s*\(|strftime\(\s*[\"']%Y")
 MARQUE_RANGEMENT = "date-machine"
+# Python : une quantité de mémoire posée dans une phrase par `%d`, donc sans
+# groupement — « 24138 Mo libres sur 24564 ».
+PY_MEMOIRE = re.compile(r"%\d*d\s*(?:[kMGT]o|[KMGT]i?B)\b")
+# JavaScript : une valeur en méga-octets recollée telle quelle à une unité, dans
+# un sens ou dans l'autre. Les deux sens sont écrits : sans le second, il
+# suffirait d'inverser la concaténation pour sortir du contrôle sans rien
+# changer à ce que le client lit. Passer par `moFr(` ou par `fr(v/1024, 1)`
+# sépare la valeur de l'unité et ne déclenche donc rien.
+JS_MEMOIRE_NUE = re.compile(
+    r"_mo\s*\+\s*[\"'][^\"']*\b(?:[kMGT]o|[KMGT]i?B)\b"
+    r"|[\"'][^\"']*\b(?:[kMGT]o|[KMGT]i?B)\b[^\"']*[\"']\s*\+\s*[\w$.]*_mo\b")
 
 MODULES = [
     "sandbox-manager/budget_modal.py",
@@ -72,6 +88,9 @@ MODULES = [
     "sandbox-manager/chanson.py",
     "sandbox-manager/dialogue.py",
     "sandbox-manager/composite.py",
+    # Il écrit quatre phrases de mémoire destinées au client et n'a jamais été
+    # sous garde : c'est par là que « 24138 Mo » est arrivé sur `/essai`.
+    "sandbox-manager/gpu_local.py",
 ]
 
 # Les formateurs eux-mêmes ont le droit de contenir le motif : c'est leur travail.
@@ -100,14 +119,16 @@ def bras_rendu(base: str) -> list[str]:
                 "     en sachant que seule la source aura été vérifiée)" % (url, erreur)
             )
             continue
-        for nom, motif in (("montant à point", MONTANT_A_POINT), ("date ISO", DATE_ISO)):
+        for nom, motif in (("montant à point", MONTANT_A_POINT), ("date ISO", DATE_ISO),
+                           ("mémoire collée", MEMOIRE_COLLEE)):
             for trouve in dict.fromkeys(m.group(0) for m in motif.finditer(html)):
                 fautes.append("RENDU  %-10s %-16s « %s »" % (chemin, nom, trouve))
         # Une page qui APPELLE `fr(...)` sans que la page les PORTE n'affiche plus
         # rien du tout : le JavaScript s'arrête sur « fr is not defined » et la
         # bannière entière disparaît, sans un mot dans les journaux du serveur.
         # C'est le seul défaut de cette famille qui soit pire que l'anglais.
-        for appel, definition in (("fr(", "function fr("), ("dateFr(", "function dateFr(")):
+        for appel, definition in (("fr(", "function fr("), ("dateFr(", "function dateFr("),
+                                  ("moFr(", "function moFr(")):
             if appel in html and definition not in html:
                 fautes.append(
                     "RENDU  %-10s formateur manquant  la page appelle « %s » sans le définir\n"
@@ -131,6 +152,8 @@ def bras_source() -> list[str]:
                 ("montant JS", JS_MONTANT),
                 ("date affichée", JS_DATE_NUE),
                 ("date JS", JS_DATE),
+                ("mémoire Python", PY_MEMOIRE),
+                ("mémoire JS", JS_MEMOIRE_NUE),
             ]
             # Une date RANGÉE garde sa forme de machine : c'est ce qui la rend
             # triable. La marque est posée ligne par ligne, jamais sur un fichier.
@@ -153,16 +176,25 @@ def main(argv: list[str]) -> int:
         fautes = bras_rendu(args.base) + fautes
 
     if not fautes:
-        print("L'argent et les dates sont en francais sur les %d pages et les %d modules."
-              % (len(PAGES), len(MODULES)))
+        print("L'argent, les dates et la memoire sont en francais sur les %d pages "
+              "et les %d modules." % (len(PAGES), len(MODULES)))
         return 0
 
     for f in fautes:
         print(f)
-    montants = sum(1 for f in fautes if "montant" in f)
-    dates = sum(1 for f in fautes if "date" in f.lower())
-    print("\n%d endroit(s) : %d sur l'argent, %d sur les dates." % (len(fautes), montants, dates))
-    print("Le client lit ces lignes. Un point decimal et une date ISO ne sont pas du francais.")
+    # Le décompte a lui-même été pris en faute le 22/09 : il annonçait « 5
+    # endroit(s) : 0 sur l'argent, 0 sur les dates » le jour où la famille de la
+    # mémoire est née. Une famille qu'aucune ligne ne compte est une famille
+    # invisible, donc le reste est désormais DIT au lieu de disparaître.
+    FAMILLES = (("l'argent", "montant"), ("les dates", "date"), ("la memoire", "mémoire"))
+    comptes = [(titre, sum(1 for f in fautes if mot in f.lower())) for titre, mot in FAMILLES]
+    detail = ", ".join("%d sur %s" % (n, titre) for titre, n in comptes)
+    reste = len(fautes) - sum(n for _, n in comptes)
+    if reste:
+        detail += ", et %d qu'aucune famille ne compte" % reste
+    print("\n%d endroit(s) : %s." % (len(fautes), detail))
+    print("Le client lit ces lignes. Un point decimal, une date ISO et « 24138 Mo » "
+          "ne sont pas du francais.")
     return 1
 
 

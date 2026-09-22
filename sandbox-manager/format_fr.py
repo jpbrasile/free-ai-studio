@@ -6,6 +6,11 @@ POURQUOI CE FICHIER EXISTE. Le 21/09/2026 au soir, la page vidéo annonçait
 Point décimal anglais et date de journal de machine, sur la première ligne que
 le client lit — et elle parle de son argent. Le dégât est petit et permanent.
 
+UN TROISIÈME, LE 22/09/2026 : LA MÉMOIRE. `/essai` écrivait « 23397 Mo libres
+sur 24564 ». Cinq chiffres d'affilée, dans le même produit où l'argent et les
+dates étaient déjà francisés. Le relevé des écrivains en a trouvé **cinq**, dont
+quatre dans un module qui n'était sous aucune garde.
+
 DEUX LANGAGES, DONC DEUX FORMATEURS. Le montant est écrit tantôt par Python
 (la page est fabriquée sur le serveur), tantôt par le JavaScript de la page
 (les chiffres arrivent après, par le réseau). `toFixed` rend TOUJOURS un point,
@@ -37,6 +42,46 @@ def en_dollars(valeur: float | None, decimales: int = 2) -> str:
     if valeur is None:
         return "?"
     return en_nombre(valeur, decimales) + " $"
+
+
+# L'espace insécable groupe les milliers ET colle l'unité à son nombre. Deux
+# raisons, pas une : un nombre coupé en fin de ligne (« 24 » d'un côté,
+# « 138 Mo » de l'autre) se relit faux, et `\d{4,}` ne franchit pas cet espace —
+# la garde reconnaît donc d'elle-même un nombre déjà groupé, sans qu'il y ait
+# un laissez-passer à écrire nulle part.
+# Ecrit par son echappement, JAMAIS par le caractere lui-meme : a l'oeil, un
+# insecable est une espace ordinaire, et n'importe quel editeur le remplace
+# sans que personne ne le voie -- le groupement se defait alors en silence.
+INSECABLE = "\u00a0"
+
+
+def en_memoire(valeur: float | None, unite: str = "Mo") -> str:
+    """« 24 138 Mo ». Les milliers se groupent, l'unité ne se détache pas.
+
+    POURQUOI. `/essai` annonçait « 23397 Mo libres sur 24564 » : cinq chiffres
+    d'affilée, que le lecteur compte à la main pour savoir s'il lit vingt-trois
+    mille ou deux cent trente-trois mille. L'argent et les dates étaient déjà
+    francisés par les deux formateurs du dessus ; la mémoire ne l'était pas.
+
+    Le nombre ne bouge pas : c'est un groupement, pas un arrondi, et surtout pas
+    une conversion. Passer en giga-octets aurait fait lire « 23,6 Go libres, il
+    en faut 23,6 » sur un refus — deux valeurs distinctes ramenées à la même
+    apparence, donc un refus qui se contredit à l'écran.
+
+    `unite=""` rend le nombre groupé seul, pour les phrases qui portent
+    plusieurs quantités et n'écrivent l'unité qu'une fois.
+    """
+    if valeur is None:
+        return "?"
+    chiffres = "%d" % round(valeur)
+    signe, chiffres = ("-", chiffres[1:]) if chiffres.startswith("-") else ("", chiffres)
+    groupes = []
+    while len(chiffres) > 3:
+        groupes.insert(0, chiffres[-3:])
+        chiffres = chiffres[:-3]
+    groupes.insert(0, chiffres)
+    nombre = signe + INSECABLE.join(groupes)
+    return nombre + INSECABLE + unite if unite else nombre
 
 
 _ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}:\d{2}))?")  # formateur-francais
@@ -72,6 +117,20 @@ function dateFr(s){                                   // formateur-francais
   var m = String(s).match(/^(\\d{4})-(\\d{2})-(\\d{2})(?:[ T](\\d{2}:\\d{2}))?/);
   if (!m) return String(s);
   return m[3] + "/" + m[2] + "/" + m[1] + (m[4] ? " \\u00e0 " + m[4] : "");
+}
+function moFr(v, u){                                  // formateur-francais
+  // Le jumeau de `en_memoire`. Les chiffres de memoire arrivent par le reseau
+  // APRES le chargement : ils ne passent jamais par Python, et le bras du rendu
+  // de la garde ne les voit donc pas dans le HTML servi. C'est ici que ca se
+  // joue, et nulle part ailleurs.
+  if (v === null || v === undefined || isNaN(v)) return "?";
+  var s = String(Math.round(Number(v))), neg = s.charAt(0) === "-";
+  if (neg) s = s.slice(1);
+  var groupe = "";
+  while (s.length > 3){ groupe = "\\u00a0" + s.slice(-3) + groupe; s = s.slice(0, -3); }
+  var n = (neg ? "-" : "") + s + groupe;
+  u = (u === undefined) ? "Mo" : u;
+  return u ? n + "\\u00a0" + u : n;
 }
 """
 
