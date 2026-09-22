@@ -453,16 +453,44 @@ def test_une_sortie_que_RIEN_ne_reconnait_suit_le_type_declare():
     assert composite.type_de_sortie(b"xyz", [])[0] == "application/octet-stream"
 
 
-def test_la_page_accepte_une_image_et_pas_seulement_un_son(apps):
-    """Deux routes d'image sans champ pour les recevoir ne servent a rien.
+def test_la_page_accepte_CHAQUE_type_d_entree_qu_une_brique_lancable_declare(apps):
+    """Une route ouverte sans champ pour la nourrir ne sert a rien.
 
-    La brique `image_lecture` prend une image en entree. Tant que le champ de
-    fichier portait `accept="audio/*"`, aucune chaine partant d'une image
-    n'etait lancable depuis la page -- le verdict disait oui, et le client ne
-    pouvait rien deposer.
+    Ecrit d'abord sur la seule chaine `accept="audio/*,image/*"`, ce test
+    demandait d'etre recopie a chaque brique -- et un controle qu'on recopie est
+    un controle qu'on finit par ajuster au lieu de le lire. Il DERIVE maintenant
+    du registre : toute brique qui a une route et qui attend autre chose que du
+    texte doit trouver son type dans le champ de fichier. La brique suivante est
+    couverte sans que personne y pense.
+
+    Le cas paye : `document_lecture` est arrivee le 22/09/2026 avec
+    `entrees: ["fichier"]`, et le champ n'acceptait que `audio/*,image/*`. Le
+    verdict aurait dit oui et le client n'aurait rien pu deposer -- exactement la
+    faute que la version d'avant avait ete ecrite pour attraper, sur le type
+    qu'elle ne connaissait pas.
     """
-    assert 'accept="audio/*,image/*"' in composite.PAGE_HTML, "champ trop etroit"
+    import re as _re
+
+    champ = _re.search(r'<input type=file[^>]*accept="([^"]+)"',
+                       composite.PAGE_HTML)
+    assert champ, "le champ de fichier n'a plus d'attribut accept"
+    accepte = champ.group(1)
+
+    # Le type nu -> ce qui doit apparaitre dans `accept` pour lui.
+    ATTENDU = {"audio": "audio/*", "image": "image/*",
+               "fichier": "application/pdf", "video": "video/*"}
+    for app in apps:
+        if app["id"] not in composite.ROUTES:
+            continue
+        for type_nu in app["entrees"]:
+            if type_nu == "texte":
+                continue  # la demande elle-meme, pas un fichier a deposer
+            assert ATTENDU[type_nu] in accepte, (
+                "%s attend %r et le champ ne l'accepte pas : %s"
+                % (app["id"], type_nu, accepte))
+
     assert composite.ROUTES["image_lecture"][0] == "vision"
+    assert composite.ROUTES["document_lecture"][0] == "document"
 
 
 def test_le_noeud_qui_LIT_une_image_envoie_l_image_et_son_type(apps, monkeypatch):
@@ -1026,7 +1054,7 @@ def test_les_briques_sans_cle_sont_exactement_celles_que_le_registre_dit(apps):
     """La garde se retourne : si la prose de `cout` change, ceci sonne."""
     sans_cle = {a["id"] for a in apps if not composite.exige_une_cle(a["cout"])}
     assert sans_cle == {"recherche_web", "voix_fr", "voix_en", "dictee_locale",
-                        "video_maison"}, sans_cle
+                        "video_maison", "document_lecture"}, sans_cle
 
 
 def test_une_chaine_dont_les_types_ne_s_enchainent_pas_est_refusee(apps):
@@ -1091,9 +1119,13 @@ def test_le_masquage_des_etats_est_REMESURE_a_chaque_route_ouverte(apps):
         plus fort arrivait avant ;
       - huit, apres les deux routes d'image : rien ne bouge, les huit etant
         gratuites, de licence nommee et sans carte ;
-      - TREIZE, ce soir, apres les cinq routes de travail et le budget mesure.
-        `inconnu` est revenu, porte par `dialogue` et son plafond mensuel sans
-        nombre par travail. Le texte d'hier annoncait ce jour-la ; il est venu.
+      - TREIZE, le 22/09 au soir, apres les cinq routes de travail et le budget
+        mesure. `inconnu` est revenu, porte par `dialogue` et son plafond mensuel
+        sans nombre par travail. Le texte d'hier annoncait ce jour-la ; il est
+        venu ;
+      - QUATORZE, avec `document_lecture`. Les trois etats ne bougent pas : elle
+        est gratuite, de licence nommee (BSD-3) et sans carte, donc elle rejoint
+        le groupe `oui` sans rien y changer.
 
     LES DEUX sondes sont POSEES, et la seconde l'a ete apres coup : le
     22/09/2026 ce cliquet a rougi sur le runner et pas ici. La ligne
@@ -1116,7 +1148,7 @@ def test_le_masquage_des_etats_est_REMESURE_a_chaque_route_ouverte(apps):
         sonde_carte=CARTE_LIBRE)["atteignable"]
         for a in apps}
     assert etats == {composite.OUI, composite.NON, composite.INCONNU}, etats
-    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)
+    assert len(composite.ROUTES) == 14, sorted(composite.ROUTES)
 
 
 def test_une_licence_qu_on_ne_peut_pas_nommer_rend_inconnu(apps):
@@ -1536,16 +1568,19 @@ def test_les_deux_secours_sont_des_POSITIONS_pas_des_adresses(par_id):
 def test_les_briques_sans_route_sont_EXACTEMENT_celles_qu_on_a_nommees(registre):
     """Le cliquet de la liste : trois, et on sait dire pourquoi chacune.
 
-    Mesure du 22/09 au soir : treize briques sur seize ont une route. Les trois
-    qui n'en ont pas ne sont pas un reste -- chacune a son motif ecrit et
+    Mesure du 22/09 au soir : quatorze briques sur dix-sept ont une route. Les
+    trois qui n'en ont pas ne sont pas un reste -- chacune a son motif ecrit et
     verifie contre le code. Le jour ou une quatrieme apparait, ou ou l'une de
     ces trois trouve une adresse, ce test sonne et le motif se reecrit.
+
+    La dix-septieme brique, `document_lecture`, est arrivee AVEC sa route : elle
+    n'a donc pas fait bouger cette liste-ci, seulement le compte.
     """
     dehors = {a["id"] for a in registre["applications"]
               if a["id"] not in composite.ROUTES}
     assert dehors == {"chat_secours_openrouter", "chat_secours_groq",
                       "recherche_web"}, dehors
-    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)
+    assert len(composite.ROUTES) == 14, sorted(composite.ROUTES)
 
 
 # --- 10. Preferer le local : y a-t-il seulement un choix a faire ? ----------
@@ -1631,12 +1666,22 @@ def test_un_echec_NON_nomme_met_son_texte_dans_la_phrase_et_un_NOM_dans_le_motif
     assert trace["phrase"] == "le service n'a pas repondu", trace["phrase"]
 
 
-def test_la_route_montre_la_QUESTION_au_client_et_journalise_le_motif(sandbox, apps):
+def test_la_route_montre_la_QUESTION_au_client_et_journalise_le_motif(sandbox, apps,
+                                                                     monkeypatch):
     """Le dernier metre : ce que le navigateur recoit vraiment.
 
     Sans ce test, la phrase pouvait arriver jusqu'a la trace et mourir dans la
     route -- c'est exactement ou elle mourait. Le motif reste, dans l'en-tete,
     parce qu'un journal en a besoin ; le corps de la reponse est en francais.
+
+    LA RUSTINE PASSE PAR `monkeypatch`, et ce n'est pas un detail de style.
+    `sandbox` est un module neuf a chaque test, mais `sandbox.composite` est le
+    module `composite` charge UNE fois pour toute la suite : une affectation
+    directe y survivait a son test. Tout ce qui appelait ensuite
+    `lancer_par_le_routeur` recevait << arbitrage_du_client >>. Invisible
+    jusqu'au 22/09/2026, parce que personne ne l'appelait apres ; les trois
+    premiers tests a le faire -- ceux de la brique document -- echouaient en
+    suite complete et passaient tout seuls.
     """
     from fastapi.testclient import TestClient
 
@@ -1647,7 +1692,7 @@ def test_la_route_montre_la_QUESTION_au_client_et_journalise_le_motif(sandbox, a
             "rien ; louer coûte 0,12 $.",
             ou=sandbox.composite.EXECUTION)
 
-    sandbox.composite.lancer_par_le_routeur = refuser
+    monkeypatch.setattr(sandbox.composite, "lancer_par_le_routeur", refuser)
     client = TestClient(sandbox.app)
     reponse = client.post(
         "/composite/lancer",

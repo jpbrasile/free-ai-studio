@@ -55,6 +55,7 @@ import re
 import time
 from pathlib import Path
 
+import document
 import format_fr
 
 # --- Les types qui traversent une frontiere entre deux briques ---------------
@@ -932,6 +933,10 @@ ROUTES = {
     "voix_en": ("voix", "/v1/audio/speech"),
     "image_fabrication": ("image", "/v1/images/generations"),
     "image_lecture": ("vision", "/v1/chat/completions"),
+    # La seule qui ne sort NULLE PART : elle lit des octets et rend du texte,
+    # dans ce processus. Pas de routeur, pas de cle, pas de reseau -- donc son
+    # genre est traite avant meme qu'une cle soit demandee.
+    "document_lecture": ("document", ""),
     # Les cinq qui creent un TRAVAIL. Leur << chemin >> est un usage, pas une
     # adresse : il donne les trois adresses d'un coup (voir TRAVAUX).
     "video_rapide": ("travail", "video"),
@@ -1103,6 +1108,24 @@ def lancer_par_le_routeur(etape: dict, entree):
     # s'adressent au Studio lui-meme, avec sa propre cle.
     if genre == "travail":
         return lancer_un_travail(etape, entree)
+
+    # La lecture d'un document ne sort de nulle part. Elle est traitee AVANT
+    # `_cle_du_routeur()` : reclamer une cle pour un travail qui n'appelle
+    # personne ferait echouer la chaine sur une installation nue, et le motif
+    # rendu au client parlerait d'une cle absente au lieu du document.
+    if genre == "document":
+        if not isinstance(entree, (bytes, bytearray)):
+            raise CompositeRefuse(
+                "entree_du_mauvais_type",
+                "<< %s >> attend un fichier et a recu autre chose."
+                % etape["fonction"], ou=EXECUTION)
+        try:
+            return document.lire(entree)
+        except document.DocumentIllisible as refus:
+            # Le motif et la phrase du module sont repris TELS QUELS : les
+            # reformuler ici en ferait deux verites a maintenir.
+            raise CompositeRefuse(refus.motif, refus.phrase,
+                                  ou=EXECUTION) from refus
 
     # Ce qui est faux dans la demande se dit AVANT de demander une cle a qui
     # que ce soit -- meme discipline qu'a la route du dialogue, ou un texte mal
@@ -1404,8 +1427,8 @@ combien \u00e7a co\u00fbte, puis le fait.</p>
 <label for=phrase><strong>Ce que vous voulez</strong></label>
 <textarea id=phrase placeholder="R\u00e9sume cet enregistrement et lis-le-moi \u00e0 voix haute"></textarea>
 
-<label for=fichier class=gris>Un enregistrement ou une photo, si votre demande en a besoin</label>
-<input type=file id=fichier accept="audio/*,image/*">
+<label for=fichier class=gris>Un enregistrement, une photo ou un document, si votre demande en a besoin</label>
+<input type=file id=fichier accept="audio/*,image/*,application/pdf,.pdf,.txt,.md,.csv">
 
 <button id=voir>Voir si c\u2019est possible</button>
 <button id=lancer disabled>Lancer</button>

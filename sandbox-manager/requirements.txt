@@ -14,3 +14,9 @@ huggingface_hub==1.32.0
 # fichiers dans un seul environnement. Mesure le 22/09/2026 : absent des DEUX
 # images avant ce jour, donc c'est bien une dependance neuve et non un transitif.
 cryptography==46.0.4
+# Le lecteur de PDF de la brique `document_lecture` (`document.py`). BSD-3,
+# pur Python, AUCUNE dependance a l'execution sur Python >= 3.11 -- verifie
+# sur PyPI le 22/09/2026, et l'image est `python:3.12-slim`. Absent des deux
+# images avant ce jour : c'est une dependance neuve, pas un transitif. Il
+# n'est PAS ajoute a `free-tier-manager` : ce service ne lit aucun document.
+pypdf==6.19.0

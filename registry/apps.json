@@ -253,6 +253,25 @@
       "code": "free-tier-manager/app.py GROQ_DICTEE_MODELE"
     },
     {
+      "id": "document_lecture",
+      "fonction": "Ouvrir un document (PDF ou texte) pour que le Studio le lise",
+      "capacite": "lecture_document",
+      "entrees": ["fichier"],
+      "sorties": ["texte"],
+      "fournisseur": "pypdf, dans le Studio lui-même",
+      "modele": null,
+      "nature": "aucun modèle : le texte est extrait du fichier par une bibliothèque, sur cette machine ; le document ne sort pas du Studio et n'est envoyé à personne",
+      "licence": "BSD-3-Clause",
+      "territoire": "aucune restriction de pays",
+      "vram_min_go": null,
+      "modes": ["local"],
+      "cout": "gratuit, sans clé",
+      "cout_max_usd": 0,
+      "source": "https://pypi.org/project/pypdf/",
+      "verifie_le": "2026-09-22",
+      "code": "sandbox-manager/document.py lire"
+    },
+    {
       "id": "video_rapide",
       "fonction": "Vidéo, qualité « Rapide » (si on loue)",
       "capacite": "video_rapide",
