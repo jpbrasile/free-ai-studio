@@ -346,18 +346,38 @@ def mask(value: str) -> str:
     return ("*" * 6 + value[-4:]) if len(value) >= 8 else "*" * 8
 
 
+def poses_a_la_main_dans_le_env(*noms: str) -> bool:
+    """Ces identifiants viennent-ils du .env, et de lui seul ? (22/09/2026)
+
+    ENV_SECRETS est la photographie prise AVANT toute injection du magasin :
+    c'est le seul endroit qui distingue << ecrit a la main dans .env >> de
+    << pose par l'interface >>. Sans ce bras, les deux interrupteurs ci-dessous
+    ne reconnaissaient qu'un jeton passe par l'interface. Un jeton ecrit dans
+    .env, avec MODAL_ENABLED=false comme le depot le livre, donnait un Studio
+    qui repond << non configure >> avec des identifiants valides sous la main --
+    et vider le magasin de jetons REVOQUES eteignait le backend que .env tenait.
+    """
+    return all(ENV_SECRETS.get(nom, "").strip() for nom in noms)
+
+
 def modal_enabled() -> bool:
     if os.getenv("MODAL_ENABLED", "false").strip().lower() == "true":
         return True
     # MODAL_ENABLED=false protege une installation fraiche d'un usage cloud
     # accidentel. Coller un jeton dans l'interface est tout sauf accidentel :
     # cet acte vaut activation, et le bouton << Oublier >> la revoque.
+    # L'ecrire a la main dans .env ne l'est pas davantage : meme motif, meme
+    # conclusion.
+    if poses_a_la_main_dans_le_env("MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"):
+        return True
     keys = stored_keys()
     return bool(keys.get("MODAL_TOKEN_ID") and keys.get("MODAL_TOKEN_SECRET"))
 
 
 def kaggle_enabled() -> bool:
     if os.getenv("KAGGLE_ENABLED", "false").strip().lower() == "true":
+        return True
+    if poses_a_la_main_dans_le_env("KAGGLE_USERNAME", "KAGGLE_KEY"):
         return True
     keys = stored_keys()
     return bool(keys.get("KAGGLE_USERNAME") and keys.get("KAGGLE_KEY"))
