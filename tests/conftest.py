@@ -68,6 +68,12 @@ def sandbox(monkeypatch):
                 "MODAL_TOKEN_SECRET"):
         monkeypatch.delenv(nom, raising=False)
     monkeypatch.setenv("FREE_AI_CONFIG_DIR", str(_JETABLE / ("config-%d" % next(_numero))))
+    # La reprise des travaux orphelins ne part PAS toute seule ici. La suite
+    # charge ce module des dizaines de fois ; une reprise lancee a chaque
+    # chargement ecrirait dans les fiches d'un autre test, et un test qui echoue
+    # a cause de son voisin est pire qu'un test manquant. `test_reprise.py`
+    # appelle `reprendre_les_travaux()` lui-meme : c'est ce qu'il verifie.
+    monkeypatch.setenv("SANDBOX_REPRISE_AU_DEMARRAGE", "false")
     # write_job() donne le dossier du job au compte du worker (uid 10001) : sans
     # objet hors conteneur, et os.chown n'existe pas sous Windows.
     monkeypatch.setattr(os, "chown", lambda *args: None, raising=False)

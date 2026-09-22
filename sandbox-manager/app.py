@@ -30,6 +30,9 @@ import dialogue
 # pages via `format_fr.avec_formateurs`.
 import format_fr
 import garde_exposition
+# Que faire d'un travail qu'un redemarrage a laisse sans personne
+# derriere lui. Le raisonnement y est pur : il se teste sans reseau.
+import reprise
 # La sonde de la carte. Elle ne leve jamais : `vue` dit si une carte a ete
 # MESUREE, `motif` dit pourquoi quand elle ne l'a pas ete. C'est ce qui permet
 # a /essai de demander au lieu d'affirmer (releve du proprietaire, 20/09/2026).
@@ -864,6 +867,28 @@ def journal_kaggle(jid: str, ref: str) -> str:
         return f"(journal Kaggle non recupere : {type(exc).__name__})"
 
 
+def _echec_kaggle(jid: str, exc: BaseException) -> None:
+    """La fin d'un travail Kaggle qui s'est mal passe. Un seul endroit.
+
+    Le journal AVANT terminer_en_echec : celle-ci relit la fiche sur le
+    disque et ne remplace que le statut, l'heure et le message. Ce qui est
+    ecrit ici lui survit donc.
+
+    PAS sur un arret demande : le noyau tourne encore, il n'y a pas de
+    journal final a prendre, et faire patienter jusqu'a 180 s quelqu'un qui
+    vient d'appuyer sur << Arret >> serait lui repondre par une attente. Un
+    bouton d'arret doit s'arreter.
+    """
+    fiche = read_job(jid)
+    if fiche.get("remote_ref") and not fiche.get("arret_demande"):
+        texte = journal_kaggle(jid, fiche["remote_ref"])
+        if texte:
+            fiche = read_job(jid)
+            fiche["journal_kaggle"] = texte
+            write_job(jid, fiche)
+    terminer_en_echec(jid, f"{type(exc).__name__}: {str(exc)[:1000]}")
+
+
 def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
                machine_shape: Optional[str] = None, timeout_s: Optional[int] = None):
     """machine_shape et timeout_s ne servent qu'aux chansons ; sans eux, rien ne change."""
@@ -919,6 +944,10 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
     # pas de commande d'annulation, et l'API d'annulation demande un numero de
     # session qu'aucune reponse de l'envoi ni de l'etat ne donne.
     limite = int(timeout_s or os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
+    # La limite entre DANS la fiche : une reprise apres redemarrage doit
+    # recalculer l'echeance d'origine, et la variable d'environnement peut
+    # avoir change entre-temps. Sans elle, la reprise devinerait.
+    job["kaggle_limite_s"] = limite
     try:
         job["status"] = "submitting"
         job["remote_ref"] = ref
@@ -931,8 +960,30 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
         job["status"] = "running"
         job["submit_log"] = (p.stdout or "")[-1000:]
         write_job(jid, job)
-        pousse = time.time()
-        deadline = pousse + limite + KAGGLE_MARGE_S
+    except Exception as exc:  # noqa: BLE001
+        _echec_kaggle(jid, exc)
+        return
+    attendre_kaggle(jid, ref, time.time(), limite)
+
+
+def attendre_kaggle(jid: str, ref: str, pousse: float, limite: float) -> None:
+    """Surveille un notebook DEJA pousse, jusqu'a son echeance.
+
+    Sortie de `run_kaggle` le 22/09/2026 pour qu'une reprise apres
+    redemarrage emprunte la MEME boucle. La dupliquer garantirait qu'elles
+    divergent : la garde du refus d'acces -- celle qui evite d'attendre une
+    heure sur un slug inexistant -- a ete ajoutee apres coup a celle-ci, et
+    c'est exactement le genre de correctif qui n'atterrit que d'un cote.
+
+    `pousse` est l'heure de DEPART du notebook, pas celle de l'appel. Une
+    reprise qui repartirait de maintenant offrirait une heure neuve a un
+    travail deja vieux -- le cas mesure le 22/09 : une fiche Kaggle a
+    `running` depuis 318 h, dont les deux delais (le `-t` remis a Kaggle et
+    cette echeance-ci) n'avaient jamais pu jouer parce que tous deux
+    vivaient dans le fil mort.
+    """
+    deadline = pousse + limite + KAGGLE_MARGE_S
+    try:
         while time.time() < deadline:
             s = subprocess.run(["kaggle", "kernels", "status", ref], capture_output=True, text=True, timeout=30)
             text = ((s.stdout or "") + "\n" + (s.stderr or "")).lower()
@@ -970,23 +1021,8 @@ def run_kaggle(jid: str, code: str, gpu: bool, internet: bool,
         job = read_job(jid)
         job.update({"status": "succeeded", "finished_at": time.time(), "artifacts": arts})
         write_job(jid, job)
-    except Exception as exc:
-        # Le journal AVANT terminer_en_echec : celle-ci relit la fiche sur le
-        # disque et ne remplace que le statut, l'heure et le message. Ce qui est
-        # ecrit ici lui survit donc.
-        #
-        # PAS sur un arret demande : le noyau tourne encore, il n'y a pas de
-        # journal final a prendre, et faire patienter jusqu'a 180 s quelqu'un
-        # qui vient d'appuyer sur << Arret >> serait lui repondre par une
-        # attente. Un bouton d'arret doit s'arreter.
-        fiche = read_job(jid)
-        if fiche.get("remote_ref") and not fiche.get("arret_demande"):
-            texte = journal_kaggle(jid, fiche["remote_ref"])
-            if texte:
-                fiche = read_job(jid)
-                fiche["journal_kaggle"] = texte
-                write_job(jid, fiche)
-        terminer_en_echec(jid, f"{type(exc).__name__}: {str(exc)[:1000]}")
+    except Exception as exc:  # noqa: BLE001
+        _echec_kaggle(jid, exc)
 
 
 def make_colab_bundle(jid: str, code: str) -> Path:
@@ -1931,6 +1967,243 @@ def arreter_modal(jid: str) -> dict:
             pass
     return {"arretees": arretees,
             "detail": f"{arretees} machine(s) arrêtée(s) chez Modal."}
+
+
+# --- Reprendre ce qu'un redemarrage a laisse sans personne derriere lui -----
+#
+# DECISION DU PROPRIETAIRE, 22/09/2026 : readopter, et non arreter. Le fichier
+# est deja paye ; on va le chercher.
+#
+# Le raisonnement -- quoi faire de quelle fiche, et avec quelle echeance -- est
+# dans `reprise.py`, ou il se teste sans reseau. Ici, le branchement.
+
+# Le demarrage peut lancer la reprise : c'est son seul point d'appel en
+# production. Coupable par reglage, parce que la suite de tests charge ce module
+# des dizaines de fois, chaque fois sur un dossier de travaux different -- une
+# reprise qui partirait a chaque chargement ecrirait dans les fiches d'un autre
+# test. Les tests appellent `reprendre_les_travaux()` eux-memes : c'est
+# precisement ce qu'ils verifient.
+REPRISE_AU_DEMARRAGE = os.getenv(
+    "SANDBOX_REPRISE_AU_DEMARRAGE", "true").strip().lower() not in ("0", "false", "non")
+# Entre deux coups de sonde dans une machine reprise. Quinze secondes : la meme
+# cadence que la boucle Kaggle, et un `exec` distant n'est pas gratuit.
+REPRISE_ATTENTE_S = float(os.getenv("SANDBOX_REPRISE_ATTENTE_SECONDS", "15"))
+# Combien de temps on accepte d'attendre un calcul repris, compte depuis SON
+# depart et non depuis la reprise. Le defaut suit la duree de vie d'une machine
+# Modal : au-dela, elle n'existe plus, il n'y a plus rien a attendre.
+REPRISE_LIMITE_S = float(os.getenv("SANDBOX_REPRISE_LIMITE_SECONDS", "3600"))
+
+_MANIFESTE = ("import json,os; r='/tmp/free_ai_output'; "
+              "print(json.dumps([os.path.join(dp,f) for dp,_,fs in os.walk(r) for f in fs]))")
+
+
+def boites_du_travail(jid: str):
+    """Les machines Modal etiquetees par ce travail.
+
+    Rend une LISTE quand Modal a repondu -- vide si plus rien ne porte cette
+    etiquette -- et None quand on n'a pas pu lui demander. La distinction n'est
+    pas cosmetique : une liste vide fait conclure que la machine est partie et
+    ferme le travail en echec, alors que None doit laisser la fiche tranquille.
+    Un sondeur separe << pas ENCORE >> de << JAMAIS >>, et c'est ici la
+    difference entre un travail perdu et un travail qu'on n'a pas su joindre.
+    """
+    try:
+        import modal
+    except Exception:  # noqa: BLE001
+        return None
+    apply_stored_secrets()
+    if not modal_configured():
+        return None
+    nom = os.getenv("MODAL_APP_NAME", "free-ai-studio-sandbox").strip() or "free-ai-studio-sandbox"
+    try:
+        app_id = modal.App.lookup(nom, create_if_missing=False).app_id
+        return list(modal.Sandbox.list(app_id=app_id, tags={"free-ai-studio-job": jid}))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def processus_du_travail(boite) -> Optional[str]:
+    """Le calcul du client tourne-t-il encore DANS la machine ?
+
+    On ne demande pas a la machine : elle est creee avec `sleep` pour
+    entrypoint, donc elle survit au calcul et `poll()` ne repondrait pas a la
+    question. On cherche le processus. Rend la sortie de `pgrep`, ou None si la
+    sonde elle-meme n'a pas repondu -- et None ne vaut pas << termine >>.
+    """
+    try:
+        p = boite.exec("sh", "-c", "pgrep -f free_ai_job.py || true", timeout=30)
+        p.wait()
+        return p.stdout.read() or ""
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def ramasser_la_boite(boite, jid: str) -> list:
+    """Descend ce que le calcul a laisse dans /tmp/free_ai_output.
+
+    Meme chemin et meme nommage que `modal_execute`, pour qu'un fichier repris
+    soit indiscernable d'un fichier rendu du premier coup.
+    """
+    local_out = JOBS / jid / "modal-output"
+    local_out.mkdir(parents=True, exist_ok=True)
+    try:
+        mp = boite.exec("python", "-c", _MANIFESTE, timeout=30)
+        mp.wait()
+        chemins = json.loads(mp.stdout.read() or "[]")
+    except Exception:  # noqa: BLE001
+        chemins = []
+    arts: list = []
+    for idx, distant in enumerate(chemins[:1000]):
+        try:
+            rel = str(distant).removeprefix("/tmp/free_ai_output/")
+            cible = local_out / ("%04d-%s" % (idx, clean_name(rel.replace("/", "__"))))
+            boite.filesystem.copy_to_local(str(distant), cible)
+            arts.append(add_artifact(jid, cible, "modal"))
+        except Exception as exc:  # noqa: BLE001
+            arts.append({"name": str(distant), "source": "modal", "skipped": True,
+                         "reason": str(exc)[:300]})
+    return arts
+
+
+def _clore_par_ramassage(jid: str, boite) -> bool:
+    """Ramasse, puis ecrit la fin. Rend True si un fichier est revenu.
+
+    Le statut se DEDUIT de ce qu'on a ramasse, il ne se decide pas. Une machine
+    vide ne devient pas un succes parce qu'on l'a retrouvee : on ne sait pas ce
+    qui s'y est passe pendant notre absence, et le dire serait fabriquer un
+    resultat.
+    """
+    arts = ramasser_la_boite(boite, jid)
+    utiles = [a for a in arts if not a.get("skipped")]
+    if not utiles:
+        terminer_en_echec(jid, (
+            "Reprise apres redemarrage : la machine a ete retrouvee, mais elle "
+            "ne contenait aucun fichier. Ce qui s'y est passe pendant l'absence "
+            "du Studio n'est pas connu."))
+        return False
+    job = read_job(jid)
+    job.update({"status": "succeeded", "finished_at": time.time(),
+                "artifacts": arts, "repris_apres_redemarrage": True})
+    write_job(jid, job)
+    return True
+
+
+def _attendre_puis_ramasser(jid: str, boite, echeance: float) -> None:
+    """Le fil de reprise d'un calcul qui tournait encore.
+
+    Son echeance vient du DEPART du travail, pas de la reprise : offrir une
+    horloge neuve a un travail deja vieux le ferait patienter pour rien. C'est
+    la lecon du travail Kaggle reste << en cours >> 318 h.
+    """
+    while time.time() < echeance:
+        if reprise.travail_fini_dans_la_boite(processus_du_travail(boite)):
+            _clore_par_ramassage(jid, boite)
+            return
+        time.sleep(REPRISE_ATTENTE_S)
+    terminer_en_echec(jid, (
+        "Reprise apres redemarrage : le calcul tournait encore, et son delai "
+        "d'origine est echu. Le Studio cesse d'attendre."))
+
+
+def reprendre_les_travaux() -> dict:
+    """Passe les fiches en revue et rend un constat chiffre.
+
+    Ne touche jamais une fiche close, et ne promet jamais plus que ce qui est
+    fait : `non_mesures` compte les travaux qu'on n'a pas su joindre, et ceux-la
+    restent exactement comme ils etaient.
+    """
+    constat = {"repris": 0, "attendus": 0, "orphelins": 0,
+               "non_mesures": 0, "laisses": 0}
+    try:
+        dossiers = sorted(p for p in JOBS.iterdir() if p.is_dir())
+    except OSError:
+        return constat
+    for d in dossiers:
+        jid = d.name
+        try:
+            fiche = read_job(jid)
+        except Exception:  # noqa: BLE001
+            continue
+        quoi = reprise.que_faire(fiche)
+        if quoi == reprise.RIEN:
+            constat["laisses"] += 1
+            continue
+        if quoi == reprise.ORPHELIN:
+            terminer_en_echec(jid, (
+                "Reprise apres redemarrage : ce travail n'a plus personne "
+                "derriere lui et rien ne permet de le retrouver. Il tournait "
+                "sur cet ordinateur, ou bien il est parti sans laisser de "
+                "reference."))
+            constat["orphelins"] += 1
+            continue
+        if quoi == reprise.REPRENDRE_KAGGLE:
+            limite = float(fiche.get("kaggle_limite_s")
+                           or os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
+            if reprise.echeance_depassee(fiche, limite=limite,
+                                         marge=KAGGLE_MARGE_S,
+                                         maintenant=time.time()):
+                terminer_en_echec(jid, (
+                    "Reprise apres redemarrage : le delai d'origine de ce "
+                    "travail Kaggle est echu depuis longtemps. Kaggle a arrete "
+                    "le notebook lui-meme a l'echeance du -t qu'il avait recu ; "
+                    "seule la fiche disait encore << en cours >>."))
+                constat["orphelins"] += 1
+            else:
+                threading.Thread(target=run_kaggle_reprise, args=(jid,),
+                                 name="reprise-kaggle-%s" % jid[:8],
+                                 daemon=True).start()
+                constat["attendus"] += 1
+            continue
+        # Modal.
+        boites = boites_du_travail(jid)
+        if boites is None:
+            constat["non_mesures"] += 1
+            continue
+        if not boites:
+            terminer_en_echec(jid, (
+                "Reprise apres redemarrage : plus aucune machine ne porte "
+                "l'etiquette de ce travail chez Modal. Elle s'est arretee "
+                "pendant l'absence du Studio, et ce qu'elle a produit n'est "
+                "plus accessible. Rien n'est plus facture."))
+            constat["orphelins"] += 1
+            continue
+        boite = boites[0]
+        if reprise.travail_fini_dans_la_boite(processus_du_travail(boite)):
+            if _clore_par_ramassage(jid, boite):
+                constat["repris"] += 1
+            else:
+                constat["orphelins"] += 1
+            continue
+        echeance = reprise.depart(fiche) + REPRISE_LIMITE_S
+        threading.Thread(target=_attendre_puis_ramasser,
+                         args=(jid, boite, echeance),
+                         name="reprise-modal-%s" % jid[:8], daemon=True).start()
+        constat["attendus"] += 1
+    return constat
+
+
+def run_kaggle_reprise(jid: str) -> None:
+    """Reprend l'attente d'un notebook Kaggle deja pousse.
+
+    On ne repousse RIEN : le notebook est chez Kaggle depuis le depart, et le
+    relancer en ferait tourner deux sur le quota de l'utilisateur. On se
+    contente de reprendre la surveillance, avec l'echeance d'origine.
+    """
+    fiche = read_job(jid)
+    ref = str(fiche.get("remote_ref") or "").strip()
+    if not ref:
+        return
+    limite = float(fiche.get("kaggle_limite_s")
+                   or os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
+    echeance = reprise.echeance_kaggle(fiche, limite=limite, marge=KAGGLE_MARGE_S)
+    attendre_kaggle(jid, ref, echeance, limite)
+
+
+if REPRISE_AU_DEMARRAGE:
+    # Dans un fil, meme regle que le compteur Modal plus haut : le demarrage
+    # n'attend jamais un service distant.
+    threading.Thread(target=reprendre_les_travaux, name="reprise-travaux",
+                     daemon=True).start()
 
 
 @app.post("/jobs/{jid}/arreter")
