@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 
 import budget_modal
+import format_fr
 import ou_calculer
 
 # Le compteur des depenses Modal est commun aux quatre usages -- la video, la
@@ -380,9 +381,11 @@ def _en_dollars(usd: float) -> str:
     """<< 0,06 $ >>. La virgule est le separateur decimal en francais.
 
     Ecrit le 21/09/2026 apres avoir imprime le menu d'une machine sans carte :
-    ma propre ligne annoncait << environ 0.06 $ >>.
+    ma propre ligne annoncait << environ 0.06 $ >>. Le 22/09 la meme reparation
+    etait due a 42 autres endroits : le formateur est parti dans `format_fr`, et
+    ce nom-ci reste la porte d'entree des appels deja ecrits.
     """
-    return ("%.2f $" % usd).replace(".", ",")
+    return format_fr.en_dollars(usd)
 
 
 def _pourquoi_pas_ici(totale_mo: int | None, aucune_ne_tient: bool) -> str:
@@ -1346,9 +1349,9 @@ function budgetTexte(b){
                 && b.usd_reel >= b.usd_estime);
   return "Dépensé sur Modal ce mois-ci " + (reel ? "selon Modal" : "selon le Studio")
     + ", tous usages confondus : <b>"
-    + b.usd.toFixed(2) + " $</b> sur les " + b.plafond_usd.toFixed(2)
+    + fr(b.usd, 2) + " $</b> sur les " + fr(b.plafond_usd, 2)
     + " $ ouverts aux demandes. " + b.clips + " clip(s) sur cette page."
-    + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
+    + '<div class="jauge"><span style="width:' + fr(part, 1) + '%"></span></div>'
     + '<span class="avert">'
     + (reel
        // Les 8 % décrivent la MÉTHODE de comptage, pas le total affiché : ce total court
@@ -1356,24 +1359,24 @@ function budgetTexte(b){
        // tarifs du 20/09/2026, à des prix trop bas. Mesuré ce jour-là sur cette page :
        // 1,39 $ estimé contre 3,80 $ facturés, soit 37 % — annoncer 8 % sur CE nombre
        // serait faux de loin.
-       ? 'Chiffre <b>relevé chez Modal</b> le ' + b.usd_reel_le + ' : leur compte, pas '
+       ? 'Chiffre <b>relevé chez Modal</b> le ' + dateFr(b.usd_reel_le) + ' : leur compte, pas '
          + 'le nôtre. Notre estimation locale, d’après les prix relevés le '
-         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $. La méthode '
+         + dateFr(b.prix_releve_le) + ', dit ' + fr(b.usd_estime, 2) + ' $. La méthode '
          + 'sous-compte d’environ 8 %, le temps de processeur réellement utilisé dépassant '
          + 'le cœur réservé — et ce total peut contenir des travaux comptés avant le '
-         + b.prix_releve_le + ', à des tarifs plus bas. '
-       : 'Estimation locale d’après les prix relevés le ' + b.prix_releve_le
+         + dateFr(b.prix_releve_le) + ', à des tarifs plus bas. '
+       : 'Estimation locale d’après les prix relevés le ' + dateFr(b.prix_releve_le)
          + ', pas une facture : Modal n’a pas répondu. La méthode <b>sous-compte d’environ '
          + '8 %</b> (le processeur réellement utilisé dépasse le cœur réservé, et cela ne se '
          + 'sait qu’après), et ce total peut contenir des travaux comptés avant cette date, '
          + 'à des tarifs plus bas. ')
     + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
     + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
-    + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '
-    + b.reserve_autonome_usd.toFixed(2) + ' $ sont réservés au Sandbox et ne peuvent pas '
+    + 'budget de ' + fr(b.plafond_total_usd, 2) + ' $, dont '
+    + fr(b.reserve_autonome_usd, 2) + ' $ sont réservés au Sandbox et ne peuvent pas '
     + 'être entamés ici. '
     + 'Le Studio ne lit pas votre compte Modal : le crédit de '
-    + b.credit_offert_usd.toFixed(0) + ' $ par mois est celui que vous avez déclaré '
+    + fr(b.credit_offert_usd, 0) + ' $ par mois est celui que vous avez déclaré '
     + '(MODAL_CREDIT_MENSUEL_USD), non vérifié chez Modal. Modal exige une carte bancaire et facture '
     + 'au-delà du crédit, jusqu’à votre limite de dépense : '
     + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">réglez-la au plus bas chez Modal</a>.</span>';
@@ -1475,7 +1478,7 @@ function suivre(id){
           const ouFait = maison
             ? "fait à la maison, 0 $"
             : ("loué" + (j.ou_calculer && j.ou_calculer.prix_estime_usd != null
-                         ? (" — environ " + j.ou_calculer.prix_estime_usd.toFixed(3) + " $") : ""));
+                         ? (" — environ " + fr(j.ou_calculer.prix_estime_usd, 3) + " $") : ""));
           etat.innerHTML = '<span class="ok">✔ Vidéo prête</span> — ' + ouFait + (j.resume ?
             (", " + j.resume.secondes_calcul + " s de calcul, " + Math.round(j.resume.octets/1024) + " Ko") : "");
           const nom = nomDeFichier();
@@ -1579,7 +1582,7 @@ function fermerAttente(){
 }
 
 function prix(d){
-  return d.prix_estime_usd == null ? "" : (" — environ " + d.prix_estime_usd.toFixed(3) + " $");
+  return d.prix_estime_usd == null ? "" : (" — environ " + fr(d.prix_estime_usd, 3) + " $");
 }
 
 // La carte est prise. On montre CE QUI BLOQUE avec ses nombres, puis on attend
@@ -1589,10 +1592,10 @@ function demanderAuClient(d){
   const boite = document.getElementById("carteprise");
   const c = d.carte || {};
   const chiffres = (c.libre_mo != null && c.totale_mo != null)
-    ? (c.nom + " : " + (c.libre_mo/1024).toFixed(1) + " Go libres sur "
-       + (c.totale_mo/1024).toFixed(1)
+    ? (c.nom + " : " + fr((c.libre_mo/1024), 1) + " Go libres sur "
+       + fr((c.totale_mo/1024), 1)
        + (d.besoin_est_mesure ? ", il en faut " : ", il en faut au plus ")
-       + (d.besoin_mo/1024).toFixed(1) + ".")
+       + fr((d.besoin_mo/1024), 1) + ".")
     : (d.pourquoi || "");
   boite.hidden = false;
 

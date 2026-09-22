@@ -824,7 +824,7 @@ function majOu(){
   const texte = {
     modal: "Carte " + (ETAT ? ETAT.carte_modal : "L4") + " louée à la seconde. Relevé du "
       + "17/09 : environ 0,03 $ et 105 s pour un dialogue, une fois les poids en cache. "
-      + "Au pire " + (ETAT ? ETAT.cout_max_modal_usd.toFixed(2) : "?") + " $ si le calcul "
+      + "Au pire " + (ETAT ? fr(ETAT.cout_max_modal_usd, 2) : "?") + " $ si le calcul "
       + "va jusqu’au délai maximal.",
     kaggle: "Carte T4 gratuite, sur votre compte Kaggle. Mesuré le 17/09 : 12,95 Go de "
       + "mémoire utilisés sur 14,56 pour 147,5 s d’audio — il restait 1,61 Go. C’est gratuit "
@@ -846,9 +846,9 @@ function budgetTexte(b){
                 && b.usd_reel >= b.usd_estime);
   return "Dépensé sur Modal ce mois-ci " + (reel ? "selon Modal" : "selon le Studio")
     + ", tous usages confondus : <b>"
-    + b.usd.toFixed(2) + " $</b> sur les " + b.plafond_usd.toFixed(2)
+    + fr(b.usd, 2) + " $</b> sur les " + fr(b.plafond_usd, 2)
     + " $ ouverts aux demandes. " + b.dialogues + " dialogue(s) sur cette page."
-    + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
+    + '<div class="jauge"><span style="width:' + fr(part, 1) + '%"></span></div>'
     + '<span class="avert">'
     + (reel
        // Les 8 % décrivent la MÉTHODE de comptage, pas le total affiché : ce total court
@@ -856,23 +856,23 @@ function budgetTexte(b){
        // tarifs du 20/09/2026, à des prix trop bas. Mesuré ce jour-là sur cette page :
        // 1,39 $ estimé contre 3,80 $ facturés, soit 37 % — annoncer 8 % sur CE nombre
        // serait faux de loin.
-       ? 'Chiffre <b>relevé chez Modal</b> le ' + b.usd_reel_le + ' : leur compte, pas '
+       ? 'Chiffre <b>relevé chez Modal</b> le ' + dateFr(b.usd_reel_le) + ' : leur compte, pas '
          + 'le nôtre. Notre estimation locale, d’après les prix relevés le '
-         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $. La méthode '
+         + dateFr(b.prix_releve_le) + ', dit ' + fr(b.usd_estime, 2) + ' $. La méthode '
          + 'sous-compte d’environ 8 %, le temps de processeur réellement utilisé dépassant '
          + 'le cœur réservé — et ce total peut contenir des travaux comptés avant le '
-         + b.prix_releve_le + ', à des tarifs plus bas. '
-       : 'Estimation locale d’après les prix relevés le ' + b.prix_releve_le
+         + dateFr(b.prix_releve_le) + ', à des tarifs plus bas. '
+       : 'Estimation locale d’après les prix relevés le ' + dateFr(b.prix_releve_le)
          + ', pas une facture : Modal n’a pas répondu. La méthode <b>sous-compte d’environ '
          + '8 %</b> (le processeur réellement utilisé dépasse le cœur réservé, et cela ne se '
          + 'sait qu’après), et ce total peut contenir des travaux comptés avant cette date, '
          + 'à des tarifs plus bas. ')
     + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
     + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
-    + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '
-    + b.reserve_autonome_usd.toFixed(2) + ' $ sont réservés au Sandbox et ne peuvent pas '
+    + 'budget de ' + fr(b.plafond_total_usd, 2) + ' $, dont '
+    + fr(b.reserve_autonome_usd, 2) + ' $ sont réservés au Sandbox et ne peuvent pas '
     + 'être entamés ici. '
-    + 'Le crédit de ' + b.credit_offert_usd.toFixed(0)
+    + 'Le crédit de ' + fr(b.credit_offert_usd, 0)
     + ' $ par mois est celui que vous avez déclaré. '
     + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">Réglez votre '
     + 'limite de dépense chez Modal</a> : c’est le seul compte qui fait foi.</span>';

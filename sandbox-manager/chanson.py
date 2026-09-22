@@ -800,7 +800,7 @@ function majOu(){
   const ou = document.getElementById("ou").value;
   const texte = {
     modal: "Pipeline officiel sur une carte " + (ETAT ? ETAT.carte_modal : "L4")
-      + " louée à la seconde. Au pire " + (ETAT ? ETAT.cout_max_modal_usd.toFixed(2) : "?")
+      + " louée à la seconde. Au pire " + (ETAT ? fr(ETAT.cout_max_modal_usd, 2) : "?")
       + " $ par chanson (carte, processeur et 24 Gio de mémoire, jusqu’au délai maximal) ; "
       + "le prix réel dépend de la durée du calcul.",
     kaggle: "Carte T4 gratuite, sur votre compte Kaggle. Le pipeline officiel refuse cette carte : "
@@ -929,9 +929,9 @@ function budgetTexte(b){
                 && b.usd_reel >= b.usd_estime);
   return "Dépensé sur Modal ce mois-ci " + (reel ? "selon Modal" : "selon le Studio")
     + ", tous usages confondus : <b>"
-    + b.usd.toFixed(2) + " $</b> sur les " + b.plafond_usd.toFixed(2)
+    + fr(b.usd, 2) + " $</b> sur les " + fr(b.plafond_usd, 2)
     + " $ ouverts aux demandes. " + b.chansons + " chanson(s) sur cette page."
-    + '<div class="jauge"><span style="width:' + part.toFixed(1) + '%"></span></div>'
+    + '<div class="jauge"><span style="width:' + fr(part, 1) + '%"></span></div>'
     + '<span class="avert">'
     + (reel
        // Les 8 % décrivent la MÉTHODE de comptage, pas le total affiché : ce total court
@@ -939,31 +939,31 @@ function budgetTexte(b){
        // tarifs du 20/09/2026, à des prix trop bas. Mesuré ce jour-là sur cette page :
        // 1,39 $ estimé contre 3,80 $ facturés, soit 37 % — annoncer 8 % sur CE nombre
        // serait faux de loin.
-       ? 'Chiffre <b>relevé chez Modal</b> le ' + b.usd_reel_le + ' : leur compte, pas '
+       ? 'Chiffre <b>relevé chez Modal</b> le ' + dateFr(b.usd_reel_le) + ' : leur compte, pas '
          + 'le nôtre. Notre estimation locale, d’après les prix relevés le '
-         + b.prix_releve_le + ', dit ' + b.usd_estime.toFixed(2) + ' $. La méthode '
+         + dateFr(b.prix_releve_le) + ', dit ' + fr(b.usd_estime, 2) + ' $. La méthode '
          + 'sous-compte d’environ 8 %, le temps de processeur réellement utilisé dépassant '
          + 'le cœur réservé — et ce total peut contenir des travaux comptés avant le '
-         + b.prix_releve_le + ', à des tarifs plus bas. '
-       : 'Estimation locale d’après les prix relevés le ' + b.prix_releve_le
+         + dateFr(b.prix_releve_le) + ', à des tarifs plus bas. '
+       : 'Estimation locale d’après les prix relevés le ' + dateFr(b.prix_releve_le)
          + ', pas une facture : Modal n’a pas répondu. La méthode <b>sous-compte d’environ '
          + '8 %</b> (le processeur réellement utilisé dépasse le cœur réservé, et cela ne se '
          + 'sait qu’après), et ce total peut contenir des travaux comptés avant cette date, '
          + 'à des tarifs plus bas. ')
     + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
     + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
-    + 'budget de ' + b.plafond_total_usd.toFixed(2) + ' $, dont '
-    + b.reserve_autonome_usd.toFixed(2) + ' $ sont réservés au Sandbox et ne peuvent pas '
+    + 'budget de ' + fr(b.plafond_total_usd, 2) + ' $, dont '
+    + fr(b.reserve_autonome_usd, 2) + ' $ sont réservés au Sandbox et ne peuvent pas '
     + 'être entamés ici. '
     + 'Le crédit de '
-    + b.credit_offert_usd.toFixed(0) + ' $ par mois est celui que vous avez déclaré, non vérifié '
+    + fr(b.credit_offert_usd, 0) + ' $ par mois est celui que vous avez déclaré, non vérifié '
     + 'chez Modal, qui exige une carte bancaire et facture au-delà : '
     + '<a href="https://modal.com/settings/usage" target="_blank" rel="noopener">réglez votre '
     + 'limite de dépense au plus bas</a>. Kaggle ne coûte rien.</span>';
 }
 
 function montantTexte(v){
-  return (typeof v === 'number') ? v.toFixed(2) + ' $' : String(v);
+  return (typeof v === 'number') ? fr(v, 2) + ' $' : String(v);
 }
 
 function reelAfficher(d){
@@ -988,11 +988,11 @@ function reelAfficher(d){
   let texte;
   if(bouts.length){
     texte = 'Chez Modal, pour tout l’espace de travail ce mois-ci : ' + bouts.join(', ')
-      + '. Relevé le ' + d.releve_le + '. Ce compte-là fait foi, et il couvre aussi la vidéo '
+      + '. Relevé le ' + dateFr(d.releve_le) + '. Ce compte-là fait foi, et il couvre aussi la vidéo '
       + 'et les essais du bac à sable, que le compteur ci-dessus ne voit pas.';
   } else {
     texte = 'Modal a répondu, mais le Studio n’a reconnu aucun montant. '
-      + (d.raison || '') + ' Relevé le ' + d.releve_le + '.';
+      + (d.raison || '') + ' Relevé le ' + dateFr(d.releve_le) + '.';
   }
   if(d.brut){
     texte += '<details><summary>Voir la réponse de Modal</summary><pre id="brutModal"></pre></details>';
@@ -1227,8 +1227,8 @@ function suivreAuSon(visuel, secondesAudio){
       return;
     }
     const ecart = Math.round(Math.abs(totalPartition / son - 1) * 100);
-    let texte = "Le surlignage suit la partition écrite (" + totalPartition.toFixed(1)
-      + " s au tempo que le modèle a noté), recalée sur les " + son.toFixed(1)
+    let texte = "Le surlignage suit la partition écrite (" + fr(totalPartition, 1)
+      + " s au tempo que le modèle a noté), recalée sur les " + fr(son, 1)
       + " s réellement chantées.";
     if(ecart >= 15){
       texte += " L’écart entre les deux est de " + ecart + " % : le modèle n’a pas chanté "

@@ -449,7 +449,8 @@ def test_carte_prise_et_reglage_par_defaut_on_demande():
                             reglage=ou_calculer.MAISON_SI_LIBRE, sonde=sonde_prise)
     assert d["ou"] == ou_calculer.ON_DEMANDE
     assert ou_calculer.ATTENTE in d["sorties"] and ou_calculer.MODAL in d["sorties"]
-    assert "0.117" in d["pourquoi"]
+    # Virgule decimale : le client est francophone, et c'est son argent.
+    assert "0,117" in d["pourquoi"]
 
 
 def test_carte_prise_et_toujours_maison_on_attend_sans_rien_arreter():

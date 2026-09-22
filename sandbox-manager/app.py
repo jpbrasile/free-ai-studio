@@ -23,6 +23,10 @@ import budget_modal
 import chanson
 import depenses
 import dialogue
+# Les montants et les dates s'ecrivent en francais -- virgule decimale, date en
+# jour/mois/annee -- des deux cotes : ici en Python, et dans le JavaScript des
+# pages via `format_fr.avec_formateurs`.
+import format_fr
 import garde_exposition
 # La sonde de la carte. Elle ne leve jamais : `vue` dit si une carte a ete
 # MESUREE, `motif` dit pourquoi quand elle ne l'a pas ete. C'est ce qui permet
@@ -1504,9 +1508,9 @@ function budgetTexte(b){
   const reel = (b.usd_reel !== null && b.usd_reel !== undefined
                 && b.usd_reel >= b.usd_estime);
   return "Depense sur Modal ce mois-ci " + (reel ? "selon Modal" : "selon le Studio")
-    + ", tous usages confondus : " + b.usd.toFixed(2) + " $ sur "
-    + b.plafond_usd.toFixed(2) + " $. Ce que vous lancez ici est compte sur la part du "
-    + "Sandbox : " + b.reserve_autonome_usd.toFixed(2) + " $ que les pages video, chanson "
+    + ", tous usages confondus : " + fr(b.usd, 2) + " $ sur "
+    + fr(b.plafond_usd, 2) + " $. Ce que vous lancez ici est compte sur la part du "
+    + "Sandbox : " + fr(b.reserve_autonome_usd, 2) + " $ que les pages video, chanson "
     + "et dialogue ne peuvent pas entamer, mais qui se depensent d'ici. "
     // Les 8 % decrivent la METHODE de comptage, pas le total affiche : ce total
     // court sur tout le mois et peut contenir des travaux comptes AVANT la
@@ -1514,13 +1518,13 @@ function budgetTexte(b){
     // jour-la sur cette page : 1,39 $ estime contre 3,80 $ factures, soit 37 % --
     // annoncer << 8 % >> sur CE nombre-la serait faux de loin.
     + (reel
-       ? "Chiffre releve chez Modal le " + b.usd_reel_le + " ; notre estimation locale dit "
-         + b.usd_estime.toFixed(2) + " $. La methode sous-compte d'environ 8 % (le processeur "
+       ? "Chiffre releve chez Modal le " + dateFr(b.usd_reel_le) + " ; notre estimation locale dit "
+         + fr(b.usd_estime, 2) + " $. La methode sous-compte d'environ 8 % (le processeur "
          + "reellement utilise depasse le coeur reserve), et ce total peut contenir des travaux "
-         + "comptes avant le " + b.prix_releve_le + ", a des tarifs plus bas."
+         + "comptes avant le " + dateFr(b.prix_releve_le) + ", a des tarifs plus bas."
        : "Modal n'a pas repondu : c'est notre estimation locale. La methode sous-compte "
          + "d'environ 8 %, le processeur reellement utilise depassant le coeur reserve, et ce "
-         + "total peut contenir des travaux comptes avant le " + b.prix_releve_le
+         + "total peut contenir des travaux comptes avant le " + dateFr(b.prix_releve_le)
          + ", a des tarifs plus bas.");
 }
 
@@ -1708,7 +1712,7 @@ def essai_page():
     # json.dumps rend un litteral JavaScript valide : guillemets, sauts de ligne et
     # antislashs du code de demonstration sont echappes au lieu d'etre colles tels quels.
     page = page.replace('"__DEMO__"', json.dumps(CODE_DEMO))
-    return HTMLResponse(page)
+    return HTMLResponse(format_fr.avec_formateurs(page))
 
 
 @app.get("/etat")
@@ -2186,7 +2190,8 @@ def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
             "pourquoi": motif + (
                 " Attendre ne coûte rien ; louer chez %s coûte %s."
                 % (loueur.capitalize(),
-                   ("environ %.3f $" % prix) if prix is not None else "ce que la page affiche")),
+                   ("environ " + format_fr.en_dollars(prix, 3)) if prix is not None
+                   else "ce que la page affiche")),
             "besoin_mo": None,
             "carte": {"vue": False, "motif": motif},
             "prix_estime_usd": prix,
@@ -2413,9 +2418,10 @@ def video_page():
     # Le menu des durees est fabrique a chaque affichage : il suit la loi
     # memoire, qui suit les clips mesures. Un menu ecrit en dur se serait
     # perime des le premier clip plus long.
-    return HTMLResponse(video.PAGE_HTML
-                        .replace("__OPTIONS_DUREE__", video.options_duree_html())
-                        .replace("__CLE__", KEY))
+    return HTMLResponse(format_fr.avec_formateurs(
+        video.PAGE_HTML
+        .replace("__OPTIONS_DUREE__", video.options_duree_html())
+        .replace("__CLE__", KEY)))
 
 
 # --- Chanson ------------------------------------------------------------------
@@ -2622,7 +2628,8 @@ def chanson_fichier(jid: str, cle: str = Query(default=""),
 
 @app.get("/chanson", response_class=HTMLResponse)
 def chanson_page():
-    return HTMLResponse(chanson.PAGE_HTML.replace("__CLE__", KEY))
+    return HTMLResponse(format_fr.avec_formateurs(
+        chanson.PAGE_HTML.replace("__CLE__", KEY)))
 
 
 # abcjs 6.7.0 (MIT) : la bibliotheque qui dessine les portees sur /chanson.
@@ -3056,7 +3063,8 @@ def dialogue_fichier(jid: str, cle: str = Query(default=""),
 
 @app.get("/dialogue", response_class=HTMLResponse)
 def dialogue_page():
-    return HTMLResponse(dialogue.PAGE_HTML.replace("__CLE__", KEY))
+    return HTMLResponse(format_fr.avec_formateurs(
+        dialogue.PAGE_HTML.replace("__CLE__", KEY)))
 
 
 @app.get("/", response_class=HTMLResponse)

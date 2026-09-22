@@ -75,7 +75,10 @@ def test_la_demande_humaine_s_arrete_avant_la_reserve(budget):
         budget.verifier("chanson", "L4", 1800, 24576, quoi="Une chanson")
     texte = str(leve.value)
     assert "réservés au mode autonome" in texte
-    assert "15.00 $" in texte, "le refus doit chiffrer la reserve qu'il protege"
+    # Le montant attendu est FABRIQUE par le formateur, pas recopie : le jour ou
+    # la reserve change, la phrase et le test bougent ensemble.
+    assert _format_fr().en_dollars(budget.RESERVE_AUTONOME_USD) in texte, (
+        "le refus doit chiffrer la reserve qu'il protege")
 
     # Le bac a sable, lui, peut encore travailler : c'est a cela qu'elle sert.
     budget.verifier("autonome", "L4", 1800, 24576)
@@ -484,6 +487,27 @@ def test_le_demarrage_lance_l_amorce_dans_un_fil(sandbox):
 PAGES = [("chanson", "chansons"), ("video", "clips"), ("dialogue", "dialogues")]
 
 
+def _format_fr():
+    """Les formateurs francais, charges depuis leur source, une seule fois.
+
+    On ne recopie pas ici la virgule decimale ni la date a la francaise : un test
+    qui porte sa propre copie de la regle ne teste plus que lui-meme.
+    """
+    global _FORMAT_FR
+    if _FORMAT_FR is None:
+        import importlib.util
+
+        from conftest import RACINE
+        chemin = RACINE / "sandbox-manager" / "format_fr.py"
+        spec = importlib.util.spec_from_file_location("format_fr_du_test", chemin)
+        _FORMAT_FR = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_FORMAT_FR)
+    return _FORMAT_FR
+
+
+_FORMAT_FR = None
+
+
 def _budget_texte_js(nom_module: str) -> str:
     """Sort `budgetTexte` de la page, telle qu'elle part dans le navigateur."""
     from conftest import RACINE
@@ -508,7 +532,12 @@ def _rendu(tmp_path, nom_module, etat):
     faute de JS ici efface la banniere entiere, sans un mot dans les journaux
     du serveur.
     """
-    programme = (_budget_texte_js(nom_module)
+    # Les formateurs francais arrivent dans la page par `avec_formateurs` : la
+    # MEME source ici, sinon `fr` n'existe pas et node s'arrete sur
+    # << fr is not defined >> -- ce qui est exactement ce que verrait le client
+    # si un rendu oubliait l'appel (la garde `verifier-francais.py` le surveille).
+    programme = (_format_fr().JS_FORMATEURS
+                 + _budget_texte_js(nom_module)
                  + "\nconsole.log(budgetTexte(" + json.dumps(etat) + "));\n")
     fichier = tmp_path / ("banniere_" + nom_module + ".js")
     fichier.write_text(programme, encoding="utf-8")
@@ -539,8 +568,8 @@ def test_la_banniere_dit_selon_modal_quand_le_chiffre_vient_de_modal(
     texte = _rendu(tmp_path, nom_module, etat)
     assert "selon Modal" in texte
     assert "relevé chez Modal" in texte
-    assert "1.39" in texte, "l'estimation locale doit rester lisible a cote"
-    assert "3.80" in texte
+    assert "1,39" in texte, "l'estimation locale doit rester lisible a cote"
+    assert "3,80" in texte
     assert "pas une facture" not in texte
 
 
@@ -580,9 +609,10 @@ def test_la_page_d_essai_montre_le_budget_et_dit_d_ou_il_vient(budget, monkeypat
     texte = _rendu(tmp_path, "app", budget.lire())
     assert "selon Modal" in texte
     assert "releve chez Modal" in texte
-    assert "3.80" in texte and "1.39" in texte
+    assert "3,80" in texte and "1,39" in texte
     assert "part du Sandbox" in texte
-    assert "15.00 $ que les pages" in texte, "la part reservee doit etre nommee, en dollars"
+    assert (_format_fr().en_dollars(budget.RESERVE_AUTONOME_USD) + " que les pages") in texte, (
+        "la part reservee doit etre nommee, en dollars")
 
 
 def test_la_page_d_essai_previent_quand_modal_se_tait(budget, monkeypatch, tmp_path):
@@ -780,7 +810,9 @@ def test_le_total_affiche_dit_qu_il_contient_des_travaux_aux_anciens_tarifs(
     """
     etat = _etat_de_banniere(budget, monkeypatch, nom_module, champ, modal_repond)
     texte = _texte_nu(_rendu(tmp_path, nom_module, etat))
-    date = budget.PRIX_RELEVE_LE
+    # La date est RANGEE en clair (`2026-09-20`) et AFFICHEE a la francaise. Le
+    # test attend la forme affichee, obtenue par le meme formateur que la page.
+    date = _format_fr().en_date(budget.PRIX_RELEVE_LE)
     assert "tarifs plus bas" in texte, "le total passe pour homogene"
     assert ("avant le " + date) in texte or ("avant cette date" in texte and date in texte), (
         "la reserve ne nomme pas la date du releve de prix")

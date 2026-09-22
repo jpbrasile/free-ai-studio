@@ -123,7 +123,8 @@ def _interroger(cycle: str) -> dict:
         "montants": {},
         "brut": None,
         "raison": None,
-        "releve_le": time.strftime("%Y-%m-%d %H:%M:%S"),
+        # Rangee en clair, francisee a l'affichage par `dateFr`.
+        "releve_le": time.strftime("%Y-%m-%d %H:%M:%S"),  # date-machine
     }
     if _sans_jeton():
         base["raison"] = ("Aucun jeton Modal enregistré : le Studio ne peut pas demander "

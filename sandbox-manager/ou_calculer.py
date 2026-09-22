@@ -42,6 +42,7 @@ import json
 import os
 from pathlib import Path
 
+import format_fr
 import gpu_local
 
 # Les trois reglages du client. Le premier est le defaut quand une carte existe.
@@ -447,6 +448,6 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
     return reponse(ON_DEMANDE, (
         "La carte est prise par un autre calcul. " + phrase +
         " A vous de dire : attendre ne coute rien, louer chez " + loueur + " coute "
-        + (("environ %.3f $" % prix_estime_usd) if prix_estime_usd is not None
-           else "ce que la page affiche") + "."),
+        + (("environ " + format_fr.en_dollars(prix_estime_usd, 3))
+           if prix_estime_usd is not None else "ce que la page affiche") + "."),
         carte=carte, besoin=besoin, sorties=(ATTENTE, MODAL, "annuler"))

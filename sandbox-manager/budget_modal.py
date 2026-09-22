@@ -160,6 +160,8 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
+import format_fr
+
 CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
 FICHIER = CONFIG_DIR / "modal-budget.json"
 _VERROU = threading.RLock()
@@ -258,7 +260,9 @@ class BudgetDepasse(RuntimeError):
 
 
 def _mois_courant() -> str:
-    return time.strftime("%Y-%m")
+    # Cle de rangement, jamais affichee. Elle se compare (`"2026-09" < "2026-10"`),
+    # ce qu'une date ecrite a la francaise ne sait pas faire.
+    return time.strftime("%Y-%m")  # date-machine
 
 
 def premier_du_mois_suivant(mois: str) -> str:
@@ -543,20 +547,22 @@ def verifier(usage: str, gpu: Optional[str], duree_max_s: int, memoire_mb: int,
         if usage == "autonome":
             detail = (
                 f"Plafond Modal du mois atteint. Déjà dépensé : "
-                f"{etat['usd']:.2f} $ sur {PLAFOND_USD:.2f} $."
+                f"{format_fr.en_dollars(etat['usd'])} sur "
+                f"{format_fr.en_dollars(PLAFOND_USD)}."
             )
         else:
             detail = (
                 f"Budget Modal du mois atteint pour les demandes. Déjà dépensé, "
-                f"tous usages confondus : {etat['usd']:.2f} $ sur "
-                f"{PLAFOND_USD:.2f} $, dont {RESERVE_AUTONOME_USD:.2f} $ sont "
+                f"tous usages confondus : {format_fr.en_dollars(etat['usd'])} sur "
+                f"{format_fr.en_dollars(PLAFOND_USD)}, dont "
+                f"{format_fr.en_dollars(RESERVE_AUTONOME_USD)} sont "
                 f"réservés au mode autonome et ne peuvent pas être entamés ici."
             )
         # `suite` porte la sortie de secours propre a l'usage -- pour la chanson,
         # << Kaggle reste possible, gratuitement. >>. Un refus qui ne dit pas ce
         # qui reste ouvert se lit comme une panne.
         raise BudgetDepasse(
-            f"{detail} {quoi} peut coûter jusqu'à {pire:.2f} $, donc il n'est pas "
+            f"{detail} {quoi} peut coûter jusqu'à {format_fr.en_dollars(pire)}, donc il n'est pas "
             f"lancé. {suite + ' ' if suite else ''}Le compteur repart tout seul le "
             f"1er du mois prochain."
         )
@@ -608,7 +614,8 @@ def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int) 
         etat["appels"][usage] += 1
         if reel is not None:
             etat["usd_reel"] = reel
-            etat["usd_reel_le"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            # Rangee en clair, francisee a l'affichage par `dateFr`.
+            etat["usd_reel_le"] = time.strftime("%Y-%m-%d %H:%M:%S")  # date-machine
         _ecrire(etat)
     return vue(usage)
 
@@ -639,6 +646,7 @@ def amorcer() -> Optional[float]:
     with _VERROU:
         etat = _relire()
         etat["usd_reel"] = reel
-        etat["usd_reel_le"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        # Rangee en clair, francisee a l'affichage par `dateFr`.
+        etat["usd_reel_le"] = time.strftime("%Y-%m-%d %H:%M:%S")  # date-machine
         _ecrire(etat)
     return reel
