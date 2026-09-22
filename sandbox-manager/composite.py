@@ -579,13 +579,20 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                 "pu être sondée d'ici.")
             faits.append({"quoi": "carte_non_sondee"})
         else:
-            libre, phrase, _ = sonde(besoin_mo)
+            libre, phrase, releve = sonde(besoin_mo)
+            # << Occupee >> et << absente >> ne sont pas la meme nouvelle pour
+            # le client : l'une lui dit d'attendre, l'autre lui dit que cet
+            # ordinateur ne fera jamais ce pas. Le releve le sait (`vue`), le
+            # motif l'ignorait. Sans releve on ne sait pas : on garde alors le
+            # motif le moins affirmatif, jamais une absence inventee.
+            vue = releve.get("vue", True) if isinstance(releve, dict) else True
             pourquoi.append(phrase)
-            faits.append({"quoi": "carte", "libre": bool(libre), "releve": phrase})
+            faits.append({"quoi": "carte", "libre": bool(libre),
+                          "presente": bool(vue), "releve": phrase})
             if not libre:
                 if etat == OUI:
                     etat = PARTIEL
-                motifs.append("carte_occupee")
+                motifs.append("carte_occupee" if vue else "carte_absente")
 
     return _verdict(etat, motifs, pourquoi, chaine, total, faits)
 

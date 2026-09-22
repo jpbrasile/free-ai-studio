@@ -1068,6 +1068,20 @@ def test_un_cout_sans_nombre_mesure_est_DIT_et_jamais_arrondi_a_zero(apps):
     assert "brique_sans_route" not in verdict["motifs"], verdict["motifs"]
 
 
+# Deux cartes POSEES. Elles rendent la forme de `gpu_local.utilisable` : le
+# troisieme element est le releve, et c'est son `vue` qui separe une carte
+# absente d'une carte prise par quelqu'un d'autre.
+CARTE_LIBRE = lambda mo: (  # noqa: E731
+    True, "Carte posee par le test : libre pour %d Mo." % mo,
+    {"vue": True, "nom": "carte du test", "libre_mo": mo + 4096})
+CARTE_ABSENTE = lambda mo: (  # noqa: E731
+    False, "Carte posee par le test : aucune carte sur cette machine.",
+    {"vue": False, "nom": None, "libre_mo": None})
+CARTE_OCCUPEE = lambda mo: (  # noqa: E731
+    False, "Carte posee par le test : prise par un autre calcul.",
+    {"vue": True, "nom": "carte du test", "libre_mo": 512})
+
+
 def test_le_masquage_des_etats_est_REMESURE_a_chaque_route_ouverte(apps):
     """Le cliquet du masquage. Ce n'est pas une garde : c'est un signal.
 
@@ -1081,17 +1095,25 @@ def test_le_masquage_des_etats_est_REMESURE_a_chaque_route_ouverte(apps):
         `inconnu` est revenu, porte par `dialogue` et son plafond mensuel sans
         nombre par travail. Le texte d'hier annoncait ce jour-la ; il est venu.
 
-    `partiel` reste hors d'atteinte d'une chaine reelle, et pour une raison qui
-    peut changer demain : les quatre budgets de location tiennent aujourd'hui
-    dans le credit offert. C'est justement pourquoi la sonde est POSEE ici au
-    lieu d'etre relevee : un cliquet qui virerait au rouge parce qu'un compteur
-    a bouge chez un loueur ne dirait plus rien du code. Le bras `partiel`, lui,
-    est joue par
-    `test_un_clip_ne_meurt_PAS_d_un_loueur_ferme_il_reste_la_carte_d_ici`.
+    LES DEUX sondes sont POSEES, et la seconde l'a ete apres coup : le
+    22/09/2026 ce cliquet a rougi sur le runner et pas ici. La ligne
+    d'hier -- << `partiel` reste hors d'atteinte d'une chaine reelle >> --
+    etait FAUSSE, et seule une machine sans carte pouvait le montrer : ma
+    4090 repondait << 24138 Mo libres >>, le runner n'a aucune carte, et
+    `video_maison` seul y rend `partiel`. Le budget etait pose, la carte ne
+    l'etait pas -- aucun test du fichier ne posait `sonde_carte`. Un cliquet
+    qui change avec la machine ne dit plus rien du code, qu'il s'agisse du
+    compteur d'un loueur ou de la carte d'ici.
+
+    Les deux bras que ce cliquet ne joue donc PAS, et qui ont chacun le
+    leur : `partiel` par
+    `test_un_clip_ne_meurt_PAS_d_un_loueur_ferme_il_reste_la_carte_d_ici` et
+    `test_sans_carte_du_tout_le_clip_maison_rend_partiel_et_le_DIT`.
     """
     etats = {composite.verifier(
         composite.chaine_depuis_briques([a["id"]], apps),
-        sonde_budget=lambda _e: None)["atteignable"]
+        sonde_budget=lambda _e: None,
+        sonde_carte=CARTE_LIBRE)["atteignable"]
         for a in apps}
     assert etats == {composite.OUI, composite.NON, composite.INCONNU}, etats
     assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)
@@ -1634,3 +1656,69 @@ def test_la_route_montre_la_QUESTION_au_client_et_journalise_le_motif(sandbox, a
     assert reponse.status_code == 409, reponse.text
     assert "Attendre ne coûte rien" in reponse.json()["detail"], reponse.text
     assert reponse.headers["X-Composite-Motif"] == "arbitrage_du_client"
+
+
+def test_sans_carte_du_tout_le_clip_maison_rend_partiel_et_le_DIT(apps):
+    """Le bras que la CI a revele le 22/09/2026, et que rien ne jouait.
+
+    `video_maison` est la seule des seize briques qui demande la carte
+    (`vram_min_go` = 14,4 ; les quinze autres sont a `null` parce que ce sont
+    des API). Sur une machine sans carte -- le runner, l'ordinateur d'un
+    debutant -- elle ne rend pas `oui` : elle rend `partiel`, parce que la
+    chaine tient mais qu'un pas ne partira pas d'ici. Ce n'est pas une panne,
+    c'est le verdict juste, et il doit etre le meme partout.
+    """
+    chaine = composite.chaine_depuis_briques(["video_maison"], apps)
+    verdict = composite.verifier(chaine, sonde_budget=lambda _e: None,
+                                 sonde_carte=CARTE_ABSENTE)
+    assert verdict["atteignable"] == composite.PARTIEL, verdict["motifs"]
+    assert "carte_absente" in verdict["motifs"], verdict["motifs"]
+
+    # Et avec la carte, la meme chaine passe. Sans ce second bras, le controle
+    # ne pourrait pas echouer : il dirait << partiel >> quoi qu'il arrive.
+    avec = composite.verifier(chaine, sonde_budget=lambda _e: None,
+                              sonde_carte=CARTE_LIBRE)
+    assert avec["atteignable"] == composite.OUI, avec["motifs"]
+
+
+def test_une_carte_ABSENTE_et_une_carte_OCCUPEE_ne_disent_pas_la_meme_chose(apps):
+    """Deux refus, deux nouvelles differentes pour celui qui lit.
+
+    << Occupee >> dit d'attendre ; << absente >> dit que cet ordinateur ne fera
+    jamais ce pas. Le releve de `gpu_local` portait deja la difference (`vue`)
+    et le motif l'ecrasait : les deux sortaient en `carte_occupee`. Le verdict
+    reste `partiel` dans les deux cas -- c'est le motif qui change, et c'est
+    lui que la page lira pour choisir quoi proposer.
+    """
+    chaine = composite.chaine_depuis_briques(["video_maison"], apps)
+    absente = composite.verifier(chaine, sonde_budget=lambda _e: None,
+                                 sonde_carte=CARTE_ABSENTE)
+    occupee = composite.verifier(chaine, sonde_budget=lambda _e: None,
+                                 sonde_carte=CARTE_OCCUPEE)
+
+    assert "carte_absente" in absente["motifs"] and \
+        "carte_occupee" not in absente["motifs"], absente["motifs"]
+    assert "carte_occupee" in occupee["motifs"] and \
+        "carte_absente" not in occupee["motifs"], occupee["motifs"]
+    assert absente["atteignable"] == occupee["atteignable"] == composite.PARTIEL
+
+    # Le fait porte la meme distinction, pour qui lit les faits et non la phrase.
+    fait_a = [f for f in absente["faits"] if f["quoi"] == "carte"][0]
+    fait_o = [f for f in occupee["faits"] if f["quoi"] == "carte"][0]
+    assert fait_a["presente"] is False and fait_o["presente"] is True
+    assert fait_a["libre"] is False and fait_o["libre"] is False
+
+
+def test_une_sonde_SANS_releve_n_invente_pas_une_carte_absente(apps):
+    """Ne pas savoir n'est pas savoir que non.
+
+    Une sonde qui ne rend pas de releve -- un tiers, un bouchon plus vieux --
+    laisse le motif le moins affirmatif. Inventer << absente >> ferait dire au
+    Studio qu'il n'y a pas de carte sur une machine qui en a peut-etre une.
+    """
+    chaine = composite.chaine_depuis_briques(["video_maison"], apps)
+    verdict = composite.verifier(
+        chaine, sonde_budget=lambda _e: None,
+        sonde_carte=lambda mo: (False, "prise, et je ne dis rien de plus.", None))
+    assert "carte_occupee" in verdict["motifs"], verdict["motifs"]
+    assert "carte_absente" not in verdict["motifs"], verdict["motifs"]
