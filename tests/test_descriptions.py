@@ -52,6 +52,8 @@ def test_l_ordre_de_repli_du_catalogue_est_celui_du_code():
     assert policy["fallback_order"] == _ordre_du_code("ORDRE_AUTO")
     assert policy["fallback_order_sans_carte_ni_internet"] == \
         _ordre_du_code("ORDRE_AUTO_LOCAL_D_ABORD")
+    assert policy["fallback_order_carte_sans_internet"] == \
+        _ordre_du_code("ORDRE_AUTO_CARTE_D_ICI")
     assert policy["automatic_backend"] == "local"
 
 

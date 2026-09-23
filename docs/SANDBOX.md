@@ -7,17 +7,15 @@ Free AI Studio sépare **l'accès direct de l'utilisateur** et **l'orchestration
 Le provider `auto` est le mode recommandé :
 
 ```text
-Job sans carte ni Internet          Job avec carte ou Internet
-Agent → Local → artefacts           Agent → Modal → artefacts
-          ↓ worker indisponible               ↓ indisponible/configuration absente
-        Modal (si configuré)                Local
-          ↓ sinon                             ↓ worker indisponible
-        Colab handoff                       Kaggle (si configuré)
-                                              ↓ sinon
-                                            Colab handoff
+Sans carte ni Internet     Avec carte, sans Internet      Avec Internet
+Agent → Local              Agent → carte d'ici (libre ?)  Agent → Modal
+  ↓ worker indisponible      ↓ occupée ou absente           ↓ indisponible/configuration absente
+Modal (si configuré)       Modal (si configuré)           Local
+  ↓ sinon                    ↓ sinon                        ↓ worker indisponible
+Colab handoff              Local, Kaggle, Colab           Kaggle (si configuré), puis Colab
 ```
 
-Votre ordinateur passe **d'abord** quand il suffit (décision du 23/09/2026) : le bac à sable local tourne sur processeur, sans Internet, et un code qui ne demande ni l'un ni l'autre n'a aucune raison de partir sur une machine louée. Modal reste le **premier choix pour ce qui demande une carte ou Internet**, lorsqu'il est configuré. Une installation fraîche ne lance jamais Modal tant que `MODAL_ENABLED=true` et les tokens n'ont pas été fournis.
+Votre ordinateur passe **d'abord** quand il suffit (décision du 23/09/2026) : le bac à sable local tourne sur processeur, sans Internet, et un code qui ne demande ni l'un ni l'autre n'a aucune raison de partir sur une machine louée. Un code qui demande une **carte** passe sur celle d'ici quand elle est libre ; le bac à sable de la carte ne lit le cache des modèles qu'en **lecture seule**. Modal reste le **premier choix pour ce qui demande Internet**, et le secours d'une carte occupée, lorsqu'il est configuré. Une installation fraîche ne lance jamais Modal tant que `MODAL_ENABLED=true` et les tokens n'ont pas été fournis.
 
 Important : le fallback concerne les **pannes/configurations d'infrastructure**. Si le code est bien exécuté sur Modal ou Local mais termine avec une erreur, le Studio retourne cette erreur à l'agent au lieu de réexécuter automatiquement le même code ailleurs.
 
@@ -25,7 +23,7 @@ Important : le fallback concerne les **pannes/configurations d'infrastructure**.
 
 | Moteur | Accès utilisateur direct | Lancement par l'agent | Retour des résultats |
 |---|---|---|---|
-| Modal | Dashboard Modal | oui, premier choix pour carte ou Internet ; secours sinon | automatique |
+| Modal | Dashboard Modal | oui, premier choix pour Internet ; secours sinon | automatique |
 | Local | via Studio/API | oui, premier choix sans carte ni Internet | automatique |
 | Kaggle | **oui, kaggle.com/code** | oui si activé/configuré ; en `auto`, jobs `gpu=true` seulement | automatique via outputs kernel |
 | Colab | **oui, colab.research.google.com** | handoff notebook | import vers le registre d'artefacts |
@@ -129,7 +127,7 @@ Chaque élément de `artifacts` est une ressource réutilisable par l'agent de c
 ## Client pratique
 
 ```bash
-# Automatique : ici d'abord, Modal pour carte ou Internet
+# Automatique : ici d'abord (processeur, ou carte si libre), Modal pour Internet
 python scripts/sandbox.py submit mon_script.py --wait
 
 # Forcer Modal

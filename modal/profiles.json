@@ -14,6 +14,13 @@
       "kaggle",
       "colab"
     ],
+    "fallback_order_carte_sans_internet": [
+      "maison",
+      "modal",
+      "local",
+      "kaggle",
+      "colab"
+    ],
     "fallback_order": [
       "modal",
       "local",
@@ -22,7 +29,7 @@
     ],
     "fallback_is_automatic": true,
     "allow_paid_gpu_default": false,
-    "notes": "Use Modal only while usage is expected to remain covered by free credit; never assume unlimited free compute. Local first (owner, 2026-09-23): a job needing neither GPU nor Internet runs on the local CPU worker first (`fallback_order_sans_carte_ni_internet`); a GPU or Internet job keeps `fallback_order`. Both mirror ORDRE_AUTO_LOCAL_D_ABORD and ORDRE_AUTO in sandbox-manager/app.py and are pinned by tests/test_descriptions.py; Kaggle is attempted only for gpu=true jobs."
+    "notes": "Use Modal only while usage is expected to remain covered by free credit; never assume unlimited free compute. Local first (owner, 2026-09-23): a job needing neither GPU nor Internet runs on the local CPU worker first (`fallback_order_sans_carte_ni_internet`); a GPU job without Internet tries this machine's card first when it is free, cache read-only (`fallback_order_carte_sans_internet`); an Internet job keeps `fallback_order`. Both mirror ORDRE_AUTO_LOCAL_D_ABORD, ORDRE_AUTO_CARTE_D_ICI and ORDRE_AUTO in sandbox-manager/app.py and are pinned by tests/test_descriptions.py; Kaggle is attempted only for gpu=true jobs."
   },
   "profiles": {
     "IMAGE_FAST": {

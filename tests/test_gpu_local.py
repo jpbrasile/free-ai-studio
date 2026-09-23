@@ -185,7 +185,9 @@ def test_le_compose_et_le_script_visent_le_meme_dossier_de_poids():
     compose = (RACINE / "docker-compose.gpu.yml").read_text(encoding="utf-8")
     script = (RACINE / "scripts" / "telecharger-modele-video.ps1").read_text(encoding="utf-8")
 
-    montage = [l.strip() for l in compose.splitlines()
+    # `:ro` retire : depuis le 23/09 le bac a sable monte le dossier en lecture
+    # seule, le decideur en ecriture. C'est le DOSSIER qui doit etre le meme.
+    montage = [l.strip().removesuffix(":ro") for l in compose.splitlines()
                if "/cache/huggingface" in l and "- $" in l]
     # Deux depuis le 20/09 : le bac a sable LIT les poids, le decideur les
     # TELECHARGE (regle du proprietaire : vider une ressource ne doit pas fermer

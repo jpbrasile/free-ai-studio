@@ -110,10 +110,17 @@ services:
       # telecharges >> alors qu'ils sont sur le disque, et un debutant
       # retelecharge une heure pour rien. Le defaut est donc le cache du profil
       # lui-meme : n'importe quel shell, Windows ou Linux, le resout.
-      - ${GPU_MODELES_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/huggingface}:/cache/huggingface
-    # PAS de `read_only` ici, contrairement au bac a sable sur processeur : le
-    # cache des modeles s'ecrit, et les bibliotheques CUDA posent leurs fichiers
-    # de compilation. Tout le reste du cloisonnement est garde, y compris le
+      #
+      # EN LECTURE SEULE depuis le 23/09/2026 (decision du proprietaire, option
+      # a) : ce bac a sable execute du code quelconque -- celui d'un agent, en
+      # mode auto ou local -- et ce dossier est le cache des modeles de la
+      # personne, 34 Go de video compris. C'est le gestionnaire qui telecharge
+      # (POIDS_VIDEO_DIR, plus haut) ; ici on ne fait que lire, HF_HUB_OFFLINE
+      # pose. Mesure le jour meme : un clip de 1 s fabrique avec ce montage.
+      - ${GPU_MODELES_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/huggingface}:/cache/huggingface:ro
+    # PAS de `read_only` sur le reste du conteneur, contrairement au bac a sable
+    # sur processeur : les bibliotheques CUDA posent leurs fichiers de
+    # compilation. Tout le reste du cloisonnement est garde, y compris le
     # reseau interne et le compte non privilegie.
     cap_drop:
       - ALL

@@ -12,7 +12,10 @@ Parcours **réel**, relu dans le code le 23/09/2026 (`run_auto` et ses deux ordr
 Job sans carte ni Internet (depuis le 23/09/2026)
 → le bac à sable local d'abord ; Modal seulement s'il ne répond pas
 
-Job avec carte ou Internet :
+Job avec carte, sans Internet
+→ la carte d'ici si elle est libre (cache en lecture seule) ; sinon Modal, puis local, Kaggle, Colab
+
+Job avec Internet :
 Modal configuré, et le mois en cours sous le plafond
 → Modal
 sinon — non configuré, plafond atteint, ou panne

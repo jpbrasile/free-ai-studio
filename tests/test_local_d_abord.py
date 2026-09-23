@@ -56,13 +56,61 @@ def test_ordinateur_indisponible_modal_prend_le_relais(sandbox, monkeypatch):
     assert job["fallback_attempts"][0]["result"] == "unavailable"
 
 
-def test_un_job_qui_demande_une_carte_ou_internet_part_chez_modal(sandbox, monkeypatch):
-    # Le bac a sable local n'a ni carte ni reseau : ce n'est pas la ressource.
-    for gpu, internet, lettre in ((True, False, "f"), (False, True, "0")):
+def test_un_job_qui_demande_internet_part_chez_modal(sandbox, monkeypatch):
+    # Aucun bac a sable d'ici n'a de reseau : ce n'est pas la ressource.
+    for gpu, lettre in ((True, "f"), (False, "0")):
         appels = _brancher(sandbox, monkeypatch)
-        job = _lancer(sandbox, gpu, internet, lettre)
-        assert appels == ["modal"], (gpu, internet, appels)
+        job = _lancer(sandbox, gpu, True, lettre)
+        assert appels == ["modal"], (gpu, appels)
         assert job["fallback_order"][0] == "modal"
+
+
+def _carte(sandbox, monkeypatch, libre):
+    """La sonde de la carte d'ici, posee ; `maison_execute` compte ses appels."""
+    appels = _brancher(sandbox, monkeypatch)
+    monkeypatch.setattr(sandbox, "ou_lancer_essai", lambda: (
+        ("maison", "RTX 4090 libre.") if libre else ("local", "RTX 4090 occupee par julia.exe.")))
+
+    def maison(jid, code, secondes=None):
+        appels.append("maison")
+        return dict(OK)
+
+    monkeypatch.setattr(sandbox, "maison_execute", maison)
+    return appels
+
+
+def test_un_job_carte_passe_sur_la_carte_d_ici_quand_elle_est_libre(sandbox, monkeypatch):
+    appels = _carte(sandbox, monkeypatch, libre=True)
+    job = _lancer(sandbox, True, False, "1")
+    assert appels == ["maison"], appels
+    assert job["provider_effective"] == "maison"
+    assert job["fallback_order"][0] == "maison"
+    assert job["placement"] == "RTX 4090 libre."
+
+
+def test_carte_d_ici_occupee_modal_prend_le_relais_et_la_fiche_dit_pourquoi(sandbox, monkeypatch):
+    appels = _carte(sandbox, monkeypatch, libre=False)
+    job = _lancer(sandbox, True, False, "2")
+    assert appels == ["modal"], appels
+    assert job["provider_effective"] == "modal"
+    premier = job["fallback_attempts"][0]
+    assert premier["provider"] == "maison" and premier["result"] == "not_free", premier
+    assert "julia.exe" in premier["detail"]
+
+
+def test_le_bac_a_sable_de_la_carte_ne_lit_le_cache_qu_en_lecture_seule():
+    """Option (a) du proprietaire, 23/09/2026 : du code quelconque tourne sur la
+    carte d'ici, a cote du cache des modeles de la personne. Le montage de ce
+    bac a sable doit finir par `:ro` ; celui du gestionnaire, qui telecharge,
+    reste en ecriture."""
+    import yaml
+
+    from conftest import RACINE
+    services = yaml.safe_load((RACINE / "docker-compose.gpu.yml").read_text(encoding="utf-8"))["services"]
+    cache = [v for v in services["sandbox-worker-gpu"]["volumes"] if "/cache/huggingface" in v]
+    assert cache and all(v.endswith(":/cache/huggingface:ro") for v in cache), cache
+    ecrit = [v for v in services["sandbox-manager"]["volumes"] if "/cache/huggingface" in v]
+    assert ecrit and all(v.endswith(":/cache/huggingface") for v in ecrit), ecrit
 
 
 def test_les_pages_et_l_api_disent_le_meme_ordre(sandbox, monkeypatch):

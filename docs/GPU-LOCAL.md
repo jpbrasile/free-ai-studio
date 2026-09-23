@@ -357,6 +357,12 @@ NVIDIA GeForce RTX 4090 : 24 138 Mo libres pour 12 841 demandés (marge 1 024) �
 carte** depuis `docker compose` (24 138 MiB) ; et le compte non privilégié (uid 10001) **lit
 les 34 Go** montés depuis `C:\Users\…\.cache\huggingface`.
 
+> **23/09/2026 : ce montage est en lecture seule** (`:ro`) dans le bac à sable de la carte,
+> qui exécute aussi du code quelconque depuis que le mode `auto` y envoie les jobs avec
+> carte. Mesuré le jour même : un clip de 1 s (25 images, 1280 × 704) sort en 224 s, modèle
+> chargé en 24 s (pic de mémoire non relevé) ; seul signe, une ligne « Ignoring corrupted tree cache
+> file … Permission denied » sur un index que Hugging Face ignore sans conséquence.
+
 **Et deux défauts que rien d'autre ne pouvait montrer :**
 
 - **40 secondes perdues par clip, et vingt lignes rouges.** Le journal ouvre sur cinq

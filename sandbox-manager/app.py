@@ -440,16 +440,20 @@ def kaggle_configured() -> bool:
 # first before modal if ressources available >>. Le bac a sable local tourne sur
 # processeur, sans Internet : il a la ressource d'un job qui ne demande ni carte
 # ni reseau, et celui-la part donc ici d'abord, gratuitement. Un job qui demande
-# une carte ou Internet garde Modal en tete : le bac a sable local n'a ni l'une
-# ni l'autre, et le bac a sable GPU d'ici monte en ecriture tout le cache des
-# modeles de la personne -- on n'y envoie pas du code quelconque sans qu'elle
-# l'ait decide.
+# une carte SANS Internet part sur la carte d'ici quand elle est libre
+# (`ou_lancer_essai`, la meme sonde que le mode << local >>) : le bac a sable GPU
+# ne lit plus le cache des modeles qu'en LECTURE SEULE (docker-compose.gpu.yml,
+# decision du proprietaire du 23/09, option a). Un job qui demande Internet garde
+# Modal en tete : aucun bac a sable d'ici n'a de reseau.
 ORDRE_AUTO = ["modal", "local", "kaggle", "colab"]
 ORDRE_AUTO_LOCAL_D_ABORD = ["local", "modal", "kaggle", "colab"]
+ORDRE_AUTO_CARTE_D_ICI = ["maison", "modal", "local", "kaggle", "colab"]
 
 
 def ordre_auto(gpu: bool, internet: bool) -> list[str]:
-    return list(ORDRE_AUTO if gpu or internet else ORDRE_AUTO_LOCAL_D_ABORD)
+    if internet:
+        return list(ORDRE_AUTO)
+    return list(ORDRE_AUTO_CARTE_D_ICI if gpu else ORDRE_AUTO_LOCAL_D_ABORD)
 
 
 def backend_automatique() -> str:
@@ -460,7 +464,8 @@ def backend_automatique() -> str:
 
 
 def backend_carte_ou_internet() -> str:
-    """Ou part d'abord un job << auto >> qui demande une carte ou Internet."""
+    """Ou part d'abord un job << auto >> qui demande Internet -- ou une carte,
+    quand celle d'ici est occupee ou absente."""
     return "modal" if modal_configured() else "local"
 
 
@@ -1211,6 +1216,27 @@ def _essayer_local(jid: str, code: str, attempts: list) -> bool:
     return False
 
 
+def _essayer_maison(jid: str, code: str, attempts: list) -> bool:
+    """La carte d'ici, si la sonde la dit libre. Sinon la raison est ecrite dans
+    la fiche : un passage chez Modal sans un mot laisserait croire la carte en
+    panne."""
+    ou, phrase = ou_lancer_essai()
+    if ou != "maison":
+        attempts.append({"provider": "maison", "result": "not_free", "detail": phrase[:500]})
+        return False
+    try:
+        job = read_job(jid)
+        job.update({"status": "running", "provider_effective": "maison", "placement": phrase})
+        write_job(jid, job)
+        data = maison_execute(jid, code, ESSAI_MAISON_S)
+        attempts.append({"provider": "maison", "result": "executed", "exit_code": data.get("exit_code")})
+        finish_execution(jid, "maison", data, attempts)
+        return True
+    except BackendUnavailable as exc:
+        attempts.append({"provider": "maison", "result": "unavailable", "detail": str(exc)[:500]})
+    return False
+
+
 def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool = True):
     attempts: list[dict] = []
     ordre = ordre_auto(gpu, internet)
@@ -1220,6 +1246,10 @@ def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool
 
     if ordre[0] == "local":
         if _essayer_local(jid, code, attempts) or _essayer_modal(jid, code, gpu, internet, attempts):
+            return
+    elif ordre[0] == "maison":
+        if (_essayer_maison(jid, code, attempts) or _essayer_modal(jid, code, gpu, internet, attempts)
+                or _essayer_local(jid, code, attempts)):
             return
     elif _essayer_modal(jid, code, gpu, internet, attempts) or _essayer_local(jid, code, attempts):
         return
@@ -1507,7 +1537,7 @@ function carte(b){
 async function charger(){
   const d = await (await fetch("/cles/etat")).json();
   const nom = {modal:"Modal, une machine distante", kaggle:"Kaggle", local:"votre ordinateur, isole dans Docker"}[d.backend_automatique];
-  document.getElementById("banniere").textContent = "Actuellement, le code envoye au Sandbox s'execute sur : " + nom + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique ou Internet part chez Modal." : "");
+  document.getElementById("banniere").textContent = "Actuellement, le code envoye au Sandbox s'execute sur : " + nom + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique passe sur la vôtre si elle est libre, sinon chez Modal ; un code qui demande Internet part chez Modal." : "");
   const zone = document.getElementById("cartes");
   zone.innerHTML = "";
   d.backends.forEach(b => zone.appendChild(carte(b)));
@@ -1630,7 +1660,7 @@ document.getElementById("code").value = DEMO;
 fetch("/etat").then(r => r.json()).then(d => {
   const b = document.getElementById("banniere");
   b.textContent = "En mode automatique, le code s'execute sur : "
-    + (OU[d.backend_automatique] || d.backend_automatique) + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique ou Internet part chez Modal." : "");
+    + (OU[d.backend_automatique] || d.backend_automatique) + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique passe sur la vôtre si elle est libre, sinon chez Modal ; un code qui demande Internet part chez Modal." : "");
   if(!d.modal.configure){ b.textContent += " Modal n'est pas branche : rien ne part sur une machine distante."; }
 }).catch(() => {
   document.getElementById("banniere").textContent = "Etat non verifiable : le service Sandbox ne repond pas.";
@@ -1924,6 +1954,7 @@ def providers(request: Request, authorization: Optional[str] = Header(default=No
         "default": "auto",
         "automatic_order": ORDRE_AUTO_LOCAL_D_ABORD,
         "automatic_order_gpu_or_internet": ORDRE_AUTO,
+        "automatic_order_gpu_without_internet": ORDRE_AUTO_CARTE_D_ICI,
         "modal": {
             "configured": modal_configured(),
             "enabled": modal_enabled(),
@@ -3594,8 +3625,8 @@ def home():
         """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>Sandbox — Free AI Studio</title><style>body{font-family:system-ui;max-width:980px;margin:35px auto;padding:0 18px;line-height:1.5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.card{border:1px solid #aaa;border-radius:14px;padding:18px}.primary{border-width:2px}a.button{display:inline-block;border:1px solid #777;border-radius:9px;padding:9px 12px;text-decoration:none;margin:4px 4px 4px 0}.flow{padding:12px;border-radius:10px;background:#eee;font-family:ui-monospace,monospace}</style>
 <h1>🧪 Sandbox</h1><p id=etat style='padding:12px;border-radius:10px;border:1px solid #bbb'>Vérification de l’état…</p>
-<p>L’agent utilise <strong>votre ordinateur d’abord</strong> quand il suffit : un code qui ne demande ni carte graphique ni Internet s’exécute ici, gratuitement. Un code qui demande une carte graphique ou Internet part chez Modal s’il est configuré. En cas d’indisponibilité d’infrastructure, il bascule vers le suivant, puis Kaggle, puis un handoff Colab. Une erreur dans votre code n’est jamais dupliquée automatiquement sur un autre fournisseur.</p>
-<div class=flow>Sans carte ni Internet : Local → Modal → Colab &nbsp; | &nbsp; Avec carte ou Internet : Modal → Local → Kaggle → Colab</div>
+<p>L’agent utilise <strong>votre ordinateur d’abord</strong> quand il suffit : un code qui ne demande ni carte graphique ni Internet s’exécute ici, gratuitement. Un code qui demande une carte graphique passe sur la vôtre si elle est libre, sinon chez Modal s’il est configuré ; un code qui demande Internet part chez Modal. En cas d’indisponibilité d’infrastructure, il bascule vers le suivant, puis Kaggle, puis un handoff Colab. Une erreur dans votre code n’est jamais dupliquée automatiquement sur un autre fournisseur.</p>
+<div class=flow>Sans carte ni Internet : Local → Modal → Colab &nbsp; | &nbsp; Avec carte : votre carte si libre → Modal → Local → Kaggle → Colab &nbsp; | &nbsp; Avec Internet : Modal → Local → Kaggle → Colab</div>
 <div class=grid>
 <div class='card primary'><h2>Local <span id=b-local></span></h2><p>Premier choix. Python isolé dans Docker, sur le processeur de votre ordinateur, sans Internet ni secrets du Studio.</p></div>
 <div class=card><h2>⚡ Modal <span id=b-modal></span></h2><p>Machine distante, pour ce qui demande une carte graphique ou Internet ; secours si votre ordinateur ne répond pas. Résultats récupérés comme ressources de l’agent.</p><a class=button href='https://modal.com/' target=_blank rel='noopener'>Ouvrir Modal ↗</a></div>
@@ -3617,7 +3648,7 @@ def home():
    var e = document.getElementById('etat');
    var nom = {modal:'Modal (machine distante)', kaggle:'Kaggle', local:'votre ordinateur, isole dans Docker'}[d.backend_automatique];
    e.style.background = '#e8f6ec'; e.style.borderColor = '#7fb98f';
-   e.textContent = "Le code envoye ici s'execute sur : " + nom + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique ou Internet part chez Modal." : "")
+   e.textContent = "Le code envoye ici s'execute sur : " + nom + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique passe sur la vôtre si elle est libre, sinon chez Modal ; un code qui demande Internet part chez Modal." : "")
      + (d.modal.configure ? "" : " Modal n'est pas configure : rien ne part sur une machine distante, et rien ne peut etre facture.");
  }).catch(function(){
    var e = document.getElementById('etat');
