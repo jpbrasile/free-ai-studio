@@ -2057,18 +2057,22 @@ def list_jobs(authorization: Optional[str] = Header(default=None)):
 def lien_de_telechargement(usage: str, jid: str) -> str:
     """L'adresse signee du fichier d'un travail fini, ou "" s'il n'en a pas."""
     if usage == "video":
-        trouve, cle, jeton = video_fichiers, "video", jeton_video
+        trouve, cle, jeton, ext = video_fichiers, "video", jeton_video, ".mp4"
     elif usage == "chanson":
-        trouve, cle, jeton = chanson_fichiers, "son", jeton_chanson
+        trouve, cle, jeton, ext = chanson_fichiers, "son", jeton_chanson, ".flac"
     else:
-        trouve, cle, jeton = dialogue_fichiers, "son", jeton_dialogue
+        trouve, cle, jeton, ext = dialogue_fichiers, "son", jeton_dialogue, ".wav"
     try:
         if not trouve(jid).get(cle):
             return ""
+        nom = derniers.nom_de_fichier(read_job(jid).get("titre") or usage, ext)
     except HTTPException:
         return ""
     signe = jeton(jid)
-    return "/%s/jobs/%s/fichier?cle=%s&telecharger=1" % (usage, jid, signe) if signe else ""
+    if not signe:
+        return ""
+    # Le fichier telecharge porte le titre du travail, pas « video.mp4 ».
+    return "/%s/jobs/%s/fichier?cle=%s&telecharger=1&nom=%s" % (usage, jid, signe, nom)
 
 
 def _route_derniers(usage: str):
@@ -2881,6 +2885,7 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
         "created_at": time.time(),
         "artifacts": [],
         "video": plan["resume_public"],
+        "titre": derniers.titre(payload, "video"),
         # Pourquoi ce clip part la plutot qu'ailleurs, garde avec le travail :
         # la page le montre en deux mots, et un journal le relit six mois plus
         # tard sans avoir a refaire le raisonnement.
@@ -2899,6 +2904,7 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "id": jid,
         "status": job.get("status"),
         "created_at": job.get("created_at"),
+        "titre": job.get("titre") or "",
         "stdout": job.get("stdout", ""),
         "stderr": job.get("stderr", ""),
         "message": job.get("error") or (
@@ -3094,6 +3100,7 @@ async def chanson_creer(request: Request, authorization: Optional[str] = Header(
         "created_at": time.time(),
         "artifacts": [],
         "chanson": plan["resume_public"],
+        "titre": derniers.titre(payload, "chanson"),
     })
     threading.Thread(target=run_chanson, args=(jid, code, ou), daemon=True).start()
     return read_job(jid)
@@ -3126,6 +3133,7 @@ def chanson_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "id": jid,
         "status": job.get("status"),
         "created_at": job.get("created_at"),
+        "titre": job.get("titre") or "",
         "stdout": job.get("stdout", ""),
         "stderr": job.get("stderr", ""),
         "message": job.get("error") or "",
@@ -3478,6 +3486,7 @@ async def dialogue_creer(request: Request, authorization: Optional[str] = Header
         "created_at": time.time(),
         "artifacts": [],
         "dialogue": plan["resume_public"],
+        "titre": derniers.titre(payload, "dialogue"),
         # LA VERITE TERRAIN DU NETTOYAGE. Sans le texte reellement envoye, il
         # est impossible de dire ce que le modele a AJOUTE : resume.json n'en
         # garde que le NOMBRE de repliques, ce qui ne sert a rien ici. Ce champ
@@ -3497,6 +3506,7 @@ def dialogue_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "id": jid,
         "status": job.get("status"),
         "created_at": job.get("created_at"),
+        "titre": job.get("titre") or "",
         "stdout": job.get("stdout", ""),
         "stderr": job.get("stderr", ""),
         # Le journal du noyau Kaggle, quand il y en a un. Le 17/09/2026, sur le

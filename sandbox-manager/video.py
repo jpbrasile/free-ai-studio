@@ -1400,7 +1400,7 @@ function afficherJournal(t){
   document.getElementById("journal").textContent = condenser(t);
 }
 
-function nomDeFichier(){
+function nomDeFichier(titre){
   // Dix clips fabriques, et le dossier Telechargements contient video.mp4,
   // video(1).mp4, video(2).mp4 : plus personne ne sait lequel est lequel. Le nom
   // porte donc la date, l'heure, et le debut de la phrase demandee.
@@ -1409,7 +1409,7 @@ function nomDeFichier(){
     + String(d.getMonth()+1).padStart(2,"0") + "-"
     + String(d.getDate()).padStart(2,"0");
   const heure = String(d.getHours()).padStart(2,"0") + "h" + String(d.getMinutes()).padStart(2,"0");
-  const mots = (document.getElementById("description").value || "")
+  const mots = (titre || document.getElementById("description").value || "")
     .normalize("NFD").replace(/[^\x00-\x7F]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "").slice(0, 40).replace(/-+$/, "");
@@ -1418,7 +1418,7 @@ function nomDeFichier(){
 
 function suivre(id){
   const etat = document.getElementById("etat");
-  minuteur = setInterval(() => {
+  const tour = () => {
     fetch("/video/jobs/" + id, {headers:{"Authorization":"Bearer "+CLE}})
       .then(r => r.json())
       .then(j => {
@@ -1441,7 +1441,7 @@ function suivre(id){
                          ? (" — environ " + fr(j.ou_calculer.prix_estime_usd, 3) + " $") : ""));
           etat.innerHTML = '<span class="ok">✔ Vidéo prête</span> — ' + ouFait + (j.resume ?
             (", " + j.resume.secondes_calcul + " s de calcul, " + Math.round(j.resume.octets/1024) + " Ko") : "");
-          const nom = nomDeFichier();
+          const nom = nomDeFichier(j.titre);
           const lienTelecharger = j.video_url + "&telecharger=1&nom=" + encodeURIComponent(nom);
           document.getElementById("resultat").innerHTML =
             '<video controls autoplay loop src="' + j.video_url + '"></video>'
@@ -1465,7 +1465,11 @@ function suivre(id){
         }
       })
       .catch(() => {});
-  }, 4000);
+  };
+  // Un premier tour tout de suite : relu depuis « Vos travaux », un travail
+  // fini s'affiche sans attendre quatre secondes.
+  minuteur = setInterval(tour, 4000);
+  tour();
 }
 
 // --- Où le clip se fabrique --------------------------------------------------
@@ -1615,6 +1619,7 @@ function envoyer(extra){
     qualite: QUALITE_LOUEE,
     ou: document.getElementById("ou").value,
     ou_calculer: reglageActuel(),
+    titre: (document.getElementById("titre") || {}).value || "",
   }, IMAGES, extra || {});
   bouton.disabled = true;
   if(!extra || !extra.attendre){

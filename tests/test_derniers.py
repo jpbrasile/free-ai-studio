@@ -103,7 +103,7 @@ def test_chaque_page_porte_la_liste_APRES_son_propre_script(sandbox, usage):
 
 
 def _script_injecte(usage: str) -> str:
-    bloc = derniers.dans_la_page("<body></body>", usage)
+    bloc = derniers.dans_la_page('<body><button id="lancer"></button></body>', usage)
     return re.search(r"<script>(.*)</script>", bloc, re.S).group(1)
 
 
@@ -190,7 +190,7 @@ def test_un_travail_fini_porte_son_lien_de_telechargement(sandbox, monkeypatch, 
     liste = TestClient(sandbox.app, base_url=LOCAL).get("/video/derniers", headers=CLE).json()
     f1 = next(t for t in liste if t["id"] == "f1")
     assert f1["telecharger"].startswith("/video/jobs/f1/fichier?cle=")
-    assert f1["telecharger"].endswith("&telecharger=1")
+    assert f1["telecharger"].endswith("&telecharger=1&nom=video.mp4")
     # En cours ou sans fichier : pas de lien, plutot qu'un lien vers rien.
     assert next(t for t in liste if t["id"] == "v2")["telecharger"] == ""
     assert next(t for t in liste if t["id"] == "v1")["telecharger"] == ""
@@ -267,3 +267,81 @@ def test_la_page_propose_d_arreter_ET_supprimer_un_travail_en_cours(tmp_path, jo
     vus = _jouer("video", derniers.lister(jobs, "video"), tmp_path)
     assert "Arrêter et supprimer" in vus["html"]
     assert vus["html"].count("🗑️ Supprimer") == 2  # les deux finis
+
+
+# --- Titres et lecture depuis la liste (proprietaire, 23/09) -----------------
+# << on a bien l'historique des chansons mais on ne peut pas les jouer ;
+# rajouter un titre lors des creations ; generalise a tout >>
+
+@pytest.mark.parametrize("usage,payload,attendu", [
+    ("video", {"titre": "  Le phare  ", "description": "x"}, "Le phare"),
+    ("video", {"description": "un phare dans la tempête"}, "un phare dans la tempête"),
+    ("chanson", {"paroles": "[verse]\nSous la pluie de Brest\n[chorus]\nla la", "style": "pop"},
+     "Sous la pluie de Brest"),
+    ("chanson", {"paroles": "", "style": "pop, voix douce"}, "pop, voix douce"),
+    ("dialogue", {"texte": "[S1]Tu as vu le studio ?\n[S2]Oui."}, "Tu as vu le studio ?"),
+])
+def test_le_titre_est_celui_tape_SINON_le_debut_du_texte(usage, payload, attendu):
+    assert derniers.titre(payload, usage) == attendu
+
+
+def test_un_titre_trop_long_est_coupe_proprement():
+    t = derniers.titre({"titre": "mot " * 40}, "video")
+    assert len(t) <= derniers.TITRE_MAX and t.endswith("…")
+
+
+def test_le_nom_du_fichier_vient_du_titre_sans_accent_ni_espace():
+    assert derniers.nom_de_fichier("Été à Brest !", ".flac") == "ete-a-brest.flac"
+    assert derniers.nom_de_fichier("", ".mp4") == "travail.mp4"
+
+
+def test_la_liste_montre_le_titre(tmp_path):
+    fiche(tmp_path, "c9", chanson={"secondes_max": 60}, titre="Sous la pluie de Brest")
+    assert derniers.lister(tmp_path, "chanson")[0]["libelle"] == "Sous la pluie de Brest"
+
+
+def test_un_clip_cree_garde_son_titre(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "")
+    monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: None)
+    r = TestClient(sandbox.app, base_url=LOCAL).post("/video/creer", headers=CLE, json={
+        "description": "un phare", "duree": "3", "ou": "modal", "titre": "Phare breton"})
+    assert r.status_code == 200
+    assert r.json()["titre"] == "Phare breton"
+
+
+@pytest.mark.parametrize("usage", derniers.USAGES)
+def test_chaque_creation_enregistre_un_titre(usage):
+    source = (RACINE / "sandbox-manager" / "app.py").read_text(encoding="utf-8")
+    assert '"titre": derniers.titre(payload, "%s"),' % usage in source
+
+
+@pytest.mark.parametrize("usage", derniers.USAGES)
+def test_l_etat_du_travail_rend_le_titre(sandbox, monkeypatch, tmp_path, usage):
+    monkeypatch.setattr(sandbox, "JOBS", tmp_path)
+    fiche(tmp_path, "t1", **{usage: {}, "titre": "Mon titre"})
+    r = TestClient(sandbox.app, base_url=LOCAL).get("/%s/jobs/t1" % usage, headers=CLE)
+    assert r.json()["titre"] == "Mon titre"
+
+
+@pytest.mark.parametrize("usage", derniers.USAGES)
+def test_chaque_page_a_un_champ_titre_ENVOYE_avec_la_demande(sandbox, usage):
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/" + usage, headers=CLE).text
+    assert page.index('id="titre"') < page.index('<button id="lancer"')
+    assert 'titre: (document.getElementById("titre") || {}).value || ""' in page
+
+
+@pytest.mark.parametrize("usage", derniers.USAGES)
+def test_un_travail_relu_s_affiche_TOUT_DE_SUITE(sandbox, usage):
+    """Avant : le premier tour du suivi venait 4 a 5 s apres le clic."""
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/" + usage, headers=CLE).text
+    debut = page.index("function suivre(")
+    corps = page[debut:page.index("\n}\n", debut)]
+    assert "minuteur = setInterval(tour," in corps and corps.rstrip().endswith("tour();")
+
+
+def test_chaque_ligne_a_un_VRAI_bouton_pour_ecouter(tmp_path, jobs):
+    vus = _jouer("chanson", derniers.lister(jobs, "chanson"), tmp_path)
+    assert "▶ Écouter" in vus["html"]
+    vus = _jouer("video", derniers.lister(jobs, "video"), tmp_path)
+    assert "▶ Voir" in vus["html"] and "Suivre" in vus["html"]

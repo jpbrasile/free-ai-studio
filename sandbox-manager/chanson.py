@@ -1060,12 +1060,12 @@ function afficherJournal(t){
   document.getElementById("journal").textContent = condenser(t);
 }
 
-function nomDeFichier(extension){
+function nomDeFichier(extension, titre){
   const d = new Date();
   const jour = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-"
     + String(d.getDate()).padStart(2,"0");
   const heure = String(d.getHours()).padStart(2,"0") + "h" + String(d.getMinutes()).padStart(2,"0");
-  const source = document.getElementById("paroles").value.replace(/\[[^\]]*\]/g, " ")
+  const source = titre || document.getElementById("paroles").value.replace(/\[[^\]]*\]/g, " ")
     || document.getElementById("style").value;
   const mots = source.normalize("NFD").replace(/[^\x00-\x7F]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "").slice(0, 40).replace(/-+$/, "");
@@ -1078,7 +1078,7 @@ function echapper(t){
 
 function afficherChanson(j){
   const r = j.resume || {};
-  const nom = nomDeFichier(".flac");
+  const nom = nomDeFichier(".flac", j.titre);
   const lien = j.son_url + "&telecharger=1&nom=" + encodeURIComponent(nom);
   let html = '<audio id="lecteur" controls src="' + j.son_url + '"></audio>'
     + '<div class="ligne"><a class="bouton" href="' + lien + '" download="' + nom + '">⬇️ Télécharger la chanson</a>'
@@ -1243,7 +1243,7 @@ function suivreAuSon(visuel, secondesAudio){
 
 function suivre(id){
   const etat = document.getElementById("etat");
-  minuteur = setInterval(() => {
+  const tour = () => {
     fetch("/chanson/jobs/" + id, {headers:{"Authorization":"Bearer "+CLE}})
       .then(r => r.json())
       .then(j => {
@@ -1277,7 +1277,11 @@ function suivre(id){
         }
       })
       .catch(() => {});
-  }, 5000);
+  };
+  // Un premier tour tout de suite : relue depuis « Vos travaux », une chanson
+  // finie s'affiche sans attendre cinq secondes.
+  minuteur = setInterval(tour, 5000);
+  tour();
 }
 
 document.getElementById("lancer").addEventListener("click", () => {
@@ -1293,6 +1297,7 @@ document.getElementById("lancer").addEventListener("click", () => {
     // sa licence -- puis le serveur compose avec le modele qui CHANTE, alors
     // qu'on vient de choisir l'instrumental. Rien a l'ecran ne le dirait.
     lora: estLora(),
+    titre: (document.getElementById("titre") || {}).value || "",
   };
   bouton.disabled = true;
   etat.textContent = "Envoi…";

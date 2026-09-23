@@ -965,12 +965,12 @@ function afficherJournal(t){
   document.getElementById("journal").textContent = condenser(t);
 }
 
-function nomDeFichier(){
+function nomDeFichier(titre){
   const d = new Date();
   const jour = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-"
     + String(d.getDate()).padStart(2,"0");
   const heure = String(d.getHours()).padStart(2,"0") + "h" + String(d.getMinutes()).padStart(2,"0");
-  const mots = document.getElementById("texte").value.replace(/\[S\d+\]/g, " ")
+  const mots = (titre || document.getElementById("texte").value).replace(/\[S\d+\]/g, " ")
     .normalize("NFD").replace(/[^\x00-\x7F]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "").slice(0, 40).replace(/-+$/, "");
   return jour + "-" + heure + "-" + (mots || "dialogue") + ".wav";
@@ -1045,7 +1045,7 @@ function blocNettoyage(j){
 
 function afficherDialogue(j){
   const r = j.resume || {};
-  const nom = nomDeFichier();
+  const nom = nomDeFichier(j.titre);
   const lien = j.son_url + "&telecharger=1&nom=" + encodeURIComponent(nom);
   let html = '<audio id="lecteur" controls src="' + j.son_url + '"></audio>'
     + '<div class="ligne"><a class="bouton" href="' + lien + '" download="' + nom + '">⬇️ Télécharger le dialogue</a>'
@@ -1113,7 +1113,7 @@ function suivre(id){
   // cette ligne, un minuteur oublié interrogerait le serveur en double pour
   // toujours — une page laissée ouverte finirait par marteler la route.
   if(minuteur){ clearInterval(minuteur); minuteur = null; }
-  minuteur = setInterval(() => {
+  const tour = () => {
     fetch("/dialogue/jobs/" + id, {headers:{"Authorization":"Bearer "+CLE}})
       .then(r => r.json())
       .then(j => {
@@ -1173,14 +1173,19 @@ function suivre(id){
         }
       })
       .catch(() => {});
-  }, 5000);
+  };
+  // Un premier tour tout de suite : relu depuis « Vos travaux », un dialogue
+  // fini s'affiche sans attendre cinq secondes.
+  minuteur = setInterval(tour, 5000);
+  tour();
 }
 
 document.getElementById("lancer").addEventListener("click", () => {
   const bouton = document.getElementById("lancer");
   const etat = document.getElementById("etat");
   const corps = {texte: document.getElementById("texte").value,
-                 ou: document.getElementById("ou").value};
+                 ou: document.getElementById("ou").value,
+                 titre: (document.getElementById("titre") || {}).value || ""};
   bouton.disabled = true;
   etat.textContent = "Envoi…";
   document.getElementById("resultat").innerHTML = "";
