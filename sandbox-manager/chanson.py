@@ -206,7 +206,7 @@ Deux chemins, choisis d'apres la carte :
   rien changer ;
 - carte Turing (le T4 de Kaggle et de Colab gratuits) : le pipeline officiel
   refuse de demarrer. Ce script applique alors une partie des correctifs du carnet
-  Kaggle << YuE2-3B - Frontier Full-Song Music Generation >> (AIQUEST Academy,
+  Kaggle « YuE2-3B - Frontier Full-Song Music Generation » (AIQUEST Academy,
   licence Apache 2.0), numerotes comme dans le carnet : float16, attention SDPA,
   integration en float32, decodage par tuiles, decodeur sur la 2e carte s'il y en
   a deux. Ce chemin n'est pas celui des auteurs du modele : le resume le dit.

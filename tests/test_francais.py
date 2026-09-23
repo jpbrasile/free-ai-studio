@@ -168,6 +168,31 @@ def test_la_garde_MORD_sur_les_deux_langages():
     assert not garde.JS_MEMOIRE_NUE.search('fr((c.libre_mo/1024), 1) + " Go libres"')
 
 
+def test_la_garde_des_guillemets_MORD_sur_une_phrase_et_pas_sur_un_commentaire():
+    """La garde du 22/09 avait ete retiree : elle lisait les lignes, attrapait
+    les commentaires, et toute apostrophe y ouvrait un faux litteral.
+
+    Celle-ci lit les litteraux par `ast`. Elle doit rougir sur une phrase reelle
+    (la forme de `ou_calculer.py` avant reparation) et se taire sur tout ce que
+    le client ne voit pas.
+    """
+    garde = _garde()
+    fautive = 'x = "Vous avez regle << toujours a la maison >>."\n'
+    assert [n for n, _ in garde.guillemets_montres(fautive)] == [1]
+    muettes = (
+        'def f():\n    """Une docstring << citee >>."""\n'
+        '# un commentaire << cite >>, l\'apostrophe n\'ouvre rien\n'
+        'PAGE = """<!-- note << HTML >> -->\n// note << JS >>\nvar a = 1; // << fin >>\n"""\n'
+        'y = "« Vrais guillemets »."\n'
+    )
+    assert garde.guillemets_montres(muettes) == []
+
+
+def test_aucune_phrase_montree_n_ecrit_des_chevrons():
+    """Le client lit « ceci », jamais << ceci >>."""
+    assert _garde().bras_guillemets() == []
+
+
 def test_le_module_qui_ecrit_les_phrases_de_carte_est_SOUS_garde():
     """`gpu_local` ecrit quatre phrases de memoire et n'etait surveille par rien.
 

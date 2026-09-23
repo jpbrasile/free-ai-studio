@@ -1647,20 +1647,20 @@ function carteTexte(d){
   if(!c.vue){
     return "Cet ordinateur n'a pas de carte graphique utilisable par le Studio"
       + (c.motif ? " (" + c.motif + ")" : "")
-      + ". Sur << Votre ordinateur >>, le code tourne sur le processeur. "
+      + ". Sur « Votre ordinateur », le code tourne sur le processeur. "
       + MODAL_PLUS_VITE;
   }
   return "Cet ordinateur a une carte : " + c.nom
     + (c.libre_mo !== null && c.libre_mo !== undefined
        ? " (" + moFr(c.libre_mo) + " libres sur " + moFr(c.totale_mo, "") + ")" : "")
-    + ". La page Video s'en sert pour fabriquer des clips gratuitement. "
+    + ". La page Vidéo s'en sert pour fabriquer des clips gratuitement. "
     // Depuis le 21/09/2026 cette page s'en sert aussi. La phrase dit la regle
     // exacte, parce qu'une case qui marche << parfois >> sans dire quand est
     // aussi trompeuse qu'une case grisee sans raison.
-    + "Cochez << carte graphique >> et le code partira dessus, a une condition "
-    + "verifiee au moment du lancement : que personne d'autre ne la tienne. "
-    + "Sinon il tourne sur le processeur, et la reponse vous dit laquelle des "
-    + "deux a servi. Un calcul deja en cours n'est jamais arrete. "
+    + "Cochez « carte graphique » et le code partira dessus, à une condition "
+    + "vérifiée au moment du lancement : que personne d'autre ne la tienne. "
+    + "Sinon il tourne sur le processeur, et la réponse vous dit laquelle des "
+    + "deux a servi. Un calcul déjà en cours n'est jamais arrêté. "
     + MODAL_PLUS_VITE;
 }
 
@@ -2207,10 +2207,10 @@ def reprendre_les_travaux() -> dict:
                                          marge=KAGGLE_MARGE_S,
                                          maintenant=time.time()):
                 terminer_en_echec(jid, (
-                    "Reprise apres redemarrage : le delai d'origine de ce "
-                    "travail Kaggle est echu depuis longtemps. Kaggle a arrete "
-                    "le notebook lui-meme a l'echeance du -t qu'il avait recu ; "
-                    "seule la fiche disait encore << en cours >>."))
+                    "Reprise après redémarrage : le délai d'origine de ce "
+                    "travail Kaggle est échu depuis longtemps. Kaggle a arrêté "
+                    "le notebook lui-même à l'échéance du -t qu'il avait reçu ; "
+                    "seule la fiche disait encore « en cours »."))
                 constat["orphelins"] += 1
             else:
                 threading.Thread(target=run_kaggle_reprise, args=(jid,),

@@ -135,7 +135,7 @@ def test_carte_occupee_refuse_sans_arreter_personne(carte):
     oui, phrase, _ = gpu_local.utilisable(16000)
     assert oui is False
     assert format_fr.en_memoire(8600) in phrase
-    assert "on n'arrete personne" in phrase
+    assert "on n'arrête personne" in phrase
 
 
 def test_la_marge_est_prise_sur_le_libre(carte):
@@ -345,7 +345,7 @@ def test_une_carte_prise_n_est_pas_libre(carte):
     libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
     assert libre is False
     assert format_fr.en_memoire(15964) in phrase, "la phrase doit dire COMBIEN est pris"
-    assert "on ne l'arrete jamais" in phrase
+    assert "on ne l'arrête jamais" in phrase
 
 
 def test_une_carte_invisible_n_est_pas_libre(monkeypatch):

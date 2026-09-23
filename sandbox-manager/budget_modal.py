@@ -447,7 +447,7 @@ def _ecrire(etat: dict) -> None:
                 "GRAND des deux : l'estimation compte trop peu (1,39 $ contre "
                 "3,80 $ mesures le 20/09/2026), et le releve, lui, a quelques "
                 "minutes de retard sur le dernier calcul. Le compte qui fait foi "
-                "reste celui de Modal, page << Usage & billing >>. Supprimez ce "
+                "reste celui de Modal, page « Usage & billing ». Supprimez ce "
                 "fichier pour repartir de zero.",
     }, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(FICHIER)

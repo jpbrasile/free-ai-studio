@@ -67,8 +67,8 @@ def releve(delai_s: int | None = None) -> dict:
     chemin = shutil.which("nvidia-smi")
     if not chemin:
         return _rien(
-            "nvidia-smi absent du conteneur : la carte n'y est pas passee "
-            "(surcouche docker-compose.gpu.yml non appliquee, ou machine sans carte)"
+            "nvidia-smi absent du conteneur : la carte n'y est pas passée "
+            "(surcouche docker-compose.gpu.yml non appliquée, ou machine sans carte)"
         )
 
     try:
@@ -132,8 +132,8 @@ def libre_pour_un_code_inconnu(delai_s: int | None = None) -> tuple[bool, str, d
     pris = max(0, etat["totale_mo"] - etat["libre_mo"])
     if pris > OCCUPATION_TOLEREE_MO:
         return False, (
-            "%s : %s deja pris sur %s. Un autre calcul tient la carte, et on "
-            "ne l'arrete jamais."
+            "%s : %s déjà pris sur %s. Un autre calcul tient la carte, et on "
+            "ne l'arrête jamais."
             % (etat["nom"], format_fr.en_memoire(pris),
                format_fr.en_memoire(etat["totale_mo"], ""))
         ), etat
@@ -159,8 +159,8 @@ def utilisable(besoin_mo: int, delai_s: int | None = None) -> tuple[bool, str, d
     besoin_total = max(0, int(besoin_mo)) + MARGE_MO
     if etat["libre_mo"] < besoin_total:
         return False, (
-            "%s : %s libres, il en faut %s (%s demandes + %s de marge). "
-            "La carte est partagee : on va chez Modal, on n'arrete personne."
+            "%s : %s libres, il en faut %s (%s demandés + %s de marge). "
+            "La carte est partagée : on va chez Modal, on n'arrête personne."
             % (etat["nom"], format_fr.en_memoire(etat["libre_mo"]),
                format_fr.en_memoire(besoin_total, ""),
                format_fr.en_memoire(int(besoin_mo), ""),
@@ -168,7 +168,7 @@ def utilisable(besoin_mo: int, delai_s: int | None = None) -> tuple[bool, str, d
         ), etat
 
     return True, (
-        "%s : %s libres pour %s demandes (marge %s)."
+        "%s : %s libres pour %s demandés (marge %s)."
         % (etat["nom"], format_fr.en_memoire(etat["libre_mo"]),
            format_fr.en_memoire(int(besoin_mo), ""),
            format_fr.en_memoire(MARGE_MO, ""))

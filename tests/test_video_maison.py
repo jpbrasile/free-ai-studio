@@ -145,7 +145,7 @@ def test_j_attends_garde_la_demande_sur_la_carte_d_ici(studio, monkeypatch):
     assert r.status_code == 409
     decision = r.json()["detail"]
     assert decision["ou"] == "attente"
-    assert "on n'arrete jamais" in decision["pourquoi"]
+    assert "on n'arrête jamais" in decision["pourquoi"]
 
 
 def test_le_client_presse_paye_et_part_tout_de_suite(studio, monkeypatch):

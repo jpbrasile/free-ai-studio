@@ -101,7 +101,7 @@ def test_toujours_maison_ne_peut_pas_forcer_une_commande_que_la_maison_ignore():
     d = ou_calculer.decider(resume(image_fin=True), IMAGES_MESUREES,
                             reglage=ou_calculer.TOUJOURS_MAISON, sonde=sonde_libre)
     assert d["ou"] == ou_calculer.MODAL
-    assert "ne peut pas etre fabrique ici" in d["pourquoi"]
+    assert "ne peut pas être fabriqué ici" in d["pourquoi"]
 
 
 def test_les_deux_commandes_manquantes_sont_nommees_ensemble():
@@ -457,7 +457,7 @@ def test_carte_prise_et_toujours_maison_on_attend_sans_rien_arreter():
     d = ou_calculer.decider(resume(), IMAGES_MESUREES,
                             reglage=ou_calculer.TOUJOURS_MAISON, sonde=sonde_prise)
     assert d["ou"] == ou_calculer.ATTENTE
-    assert "on n'arrete jamais" in d["pourquoi"]
+    assert "on n'arrête jamais" in d["pourquoi"]
 
 
 def test_carte_libre_on_fabrique_ici_et_ca_ne_coute_rien():

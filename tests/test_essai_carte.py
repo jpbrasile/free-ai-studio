@@ -170,7 +170,7 @@ def test_avec_une_carte_la_page_dit_LA_CONDITION_et_pas_seulement_oui(tmp_path):
     assert "que personne d'autre ne la tienne" in texte, \
         "la condition doit etre ecrite, sinon la case marche << parfois >>"
     assert "processeur" in texte, "le repli doit etre annonce avant, pas subi"
-    assert "jamais arrete" in texte, \
+    assert "jamais arrêté" in texte, \
         "un client doit savoir qu'on n'interrompt pas le calcul d'un autre"
 
 

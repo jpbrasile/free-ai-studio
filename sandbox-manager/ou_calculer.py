@@ -388,9 +388,9 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
         quoi = " et ".join(ignorees)
         if reglage == TOUJOURS_MAISON:
             return reponse(MODAL, (
-                "Vous avez regle << toujours a la maison >>, mais %s demande un modele "
+                "Vous avez réglé « toujours à la maison », mais %s demande un modèle "
                 "que la carte d'ici ne peut pas faire tourner. Ce clip part chez %s, "
-                "ou il est refuse si vous preferez : il ne peut pas etre fabrique ici."
+                "ou il est refusé si vous préférez : il ne peut pas être fabriqué ici."
                 % (quoi, loueur)), sorties=(MODAL, "annuler"))
         return reponse(MODAL, (
             "%s se fabrique avec un modele que la carte d'ici ne peut pas porter. "
@@ -399,7 +399,7 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
     # 2. Le contournement permanent. Rien a sonder : c'est le comportement
     #    d'avant ce chantier, et il reste disponible en un reglage.
     if reglage == TOUJOURS_MODAL:
-        return reponse(MODAL, "Vous avez regle << toujours sur une machine louee >> (%s)." % loueur)
+        return reponse(MODAL, "Vous avez réglé « toujours sur une machine louée » (%s)." % loueur)
 
     # 3. Un besoin non mesure ne se devine pas.
     if images is None:
@@ -441,8 +441,8 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
     # C'est ICI que le client decide.
     if reglage == TOUJOURS_MAISON:
         return reponse(ATTENTE, (
-            "La carte est prise et vous avez regle << toujours a la maison >> : "
-            "on attend qu'elle se libere, on n'arrete jamais le travail qui la tient. "
+            "La carte est prise et vous avez réglé « toujours à la maison » : "
+            "on attend qu'elle se libère, on n'arrête jamais le travail qui la tient. "
             + phrase), carte=carte, besoin=besoin)
 
     return reponse(ON_DEMANDE, (

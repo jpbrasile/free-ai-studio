@@ -19,6 +19,10 @@ Deux bras, et ils ne servent pas à la même chose :
   ou une date sans passer par les deux formateurs. Une garde qui ne peut pas
   échouer ne protège rien.
 
+  BRAS 3 — LES GUILLEMETS. Les phrases montrées au client s'écrivent avec
+  « vrais guillemets », jamais `<< >>`. Il lit les littéraux de chaîne, pas les
+  lignes (voir `guillemets_montres`).
+
 Usage :
     python scripts/verifier-francais.py [--base http://127.0.0.1:8020] [--sans-rendu]
 
@@ -27,6 +31,7 @@ Sortie 0 = tout est en français. Sortie 1 = la liste des endroits fautifs.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 import urllib.error
@@ -165,18 +170,69 @@ def bras_source() -> list[str]:
     return fautes
 
 
+COMMENTAIRE_HTML = re.compile(r"<!--.*?-->", re.S)
+
+
+def _docstrings(arbre: ast.AST) -> set[int]:
+    ids: set[int] = set()
+    for n in ast.walk(arbre):
+        if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            if (n.body and isinstance(n.body[0], ast.Expr)
+                    and isinstance(n.body[0].value, ast.Constant)):
+                ids.add(id(n.body[0].value))
+    return ids
+
+
+def guillemets_montres(source: str) -> list[tuple[int, str]]:
+    """Les lignes de littéraux qui écrivent `<<`/`>>` là où le client lit.
+
+    Lit les LITTÉRAUX DE CHAÎNE par `ast`, pas les lignes : le 22/09, un motif
+    sur les lignes attrapait les commentaires, et toute apostrophe française y
+    ouvrait un faux littéral (40 touches sur 52). Restent hors du compte ce que
+    personne ne voit : les docstrings, et dans le HTML et le JavaScript
+    embarqués, les commentaires `<!-- -->` et `//`.
+    """
+    arbre = ast.parse(source)
+    docs = _docstrings(arbre)
+    touches: list[tuple[int, str]] = []
+    for n in ast.walk(arbre):
+        if not (isinstance(n, ast.Constant) and isinstance(n.value, str)) or id(n) in docs:
+            continue
+        texte = COMMENTAIRE_HTML.sub(lambda m: "\n" * m.group(0).count("\n"), n.value)
+        for i, ligne in enumerate(texte.split("\n")):
+            nue = ligne.strip()
+            if nue.startswith(("//", "#")):
+                continue
+            nue = nue.split(" //")[0]
+            if "<<" in nue or ">>" in nue:
+                touches.append((n.lineno + i, nue))
+    return touches
+
+
+def bras_guillemets() -> list[str]:
+    """Des « vrais guillemets » dans les phrases montrées, jamais << >>."""
+    fautes: list[str] = []
+    for rel in MODULES:
+        fichier = RACINE / rel
+        if not fichier.exists():
+            continue
+        for n, ligne in guillemets_montres(fichier.read_text(encoding="utf-8")):
+            fautes.append("SOURCE %s:%d  %-14s %s" % (rel, n, "guillemets", ligne[:90]))
+    return fautes
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--base", default=BASE_DEFAUT, help="adresse du service (defaut : %s)" % BASE_DEFAUT)
     ap.add_argument("--sans-rendu", action="store_true", help="ne verifier que la source")
     args = ap.parse_args(argv)
 
-    fautes = bras_source()
+    fautes = bras_source() + bras_guillemets()
     if not args.sans_rendu:
         fautes = bras_rendu(args.base) + fautes
 
     if not fautes:
-        print("L'argent, les dates et la memoire sont en francais sur les %d pages "
+        print("L'argent, les dates, la memoire et les guillemets sont en francais sur les %d pages "
               "et les %d modules." % (len(PAGES), len(MODULES)))
         return 0
 
@@ -186,7 +242,8 @@ def main(argv: list[str]) -> int:
     # endroit(s) : 0 sur l'argent, 0 sur les dates » le jour où la famille de la
     # mémoire est née. Une famille qu'aucune ligne ne compte est une famille
     # invisible, donc le reste est désormais DIT au lieu de disparaître.
-    FAMILLES = (("l'argent", "montant"), ("les dates", "date"), ("la memoire", "mémoire"))
+    FAMILLES = (("l'argent", "montant"), ("les dates", "date"), ("la memoire", "mémoire"),
+                ("les guillemets", "guillemets"))
     comptes = [(titre, sum(1 for f in fautes if mot in f.lower())) for titre, mot in FAMILLES]
     detail = ", ".join("%d sur %s" % (n, titre) for titre, n in comptes)
     reste = len(fautes) - sum(n for _, n in comptes)

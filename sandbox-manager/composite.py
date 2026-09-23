@@ -241,13 +241,13 @@ def lier(graphe: dict, apps: list[dict] | None = None) -> dict:
         if not candidates:
             raise CompositeRefuse(
                 "capacite_absente",
-                "Aucune application de ce Studio ne fait << %s >>." % capacite,
+                "Aucune application de ce Studio ne fait « %s »." % capacite,
                 ou=LIAISON)
         if len(candidates) > 1:
             raise CompositeRefuse(
                 "plusieurs_briques_se_valent",
-                "Deux applications font << %s >> (%s) et rien ne les departage. "
-                "Je prefere m'abstenir plutot que d'en choisir une au hasard : "
+                "Deux applications font « %s » (%s) et rien ne les départage. "
+                "Je préfère m'abstenir plutôt que d'en choisir une au hasard : "
                 "dites laquelle."
                 % (capacite, ", ".join(sorted(c["id"] for c in candidates))),
                 ou=LIAISON)
@@ -296,7 +296,7 @@ def chaine_depuis_briques(ids, apps: list[dict] | None = None,
         if brique is None:
             raise CompositeRefuse(
                 "brique_inconnue",
-                "<< %s >> n'est pas une application de ce Studio." % ident,
+                "« %s » n'est pas une application de ce Studio." % ident,
                 ou=LIAISON)
         etapes.append(_etape(brique))
     return {"phrase": phrase, "etapes": etapes}
@@ -644,9 +644,9 @@ N'invente aucun chiffre et n'en retire aucun : chaque montant present dans les
 faits doit se retrouver ecrit exactement pareil, et aucune autre somme d'argent
 ne doit apparaitre. Ne promets rien que les faits ne disent pas.
 
-N'emploie pas les mots << brique >>, << noeud >>, << graphe >> ni << composite >> :
+N'emploie pas les mots « brique », « noeud », « graphe » ni « composite » :
 la personne qui te lit ne programme pas et ne les connait pas. Dis
-<< application >> et << etape >>. Quand un fait porte un remede -- ou aller, ce
+« application » et « étape ». Quand un fait porte un remede -- ou aller, ce
 qui se passe sans lui -- dis-le : c'est la partie utile.
 
 Le verdict est deja annonce juste avant ta phrase ; tu n'as pas a l'annoncer, et
@@ -1080,9 +1080,9 @@ def appeler_le_modele(consigne: str) -> str:
         if reponse.status_code >= 400:
             raise CompositeRefuse(
                 "chat_indisponible",
-                "Aucun service de chat gratuit ne repond pour lire votre "
-                "demande. Le chat a besoin d'une cle de palier gratuit "
-                "configuree (page << Cles >>).", ou=COMPILATION)
+                "Aucun service de chat gratuit ne répond pour lire votre "
+                "demande. Le chat a besoin d'une clé de palier gratuit "
+                "configurée (page « Clés »).", ou=COMPILATION)
         choix = (reponse.json().get("choices") or [{}])[0]
         return (choix.get("message") or {}).get("content") or ""
 
@@ -1100,8 +1100,8 @@ def lancer_par_le_routeur(etape: dict, entree):
     if route is None:
         raise CompositeRefuse(
             "brique_sans_route",
-            "<< %s >> n'a pas encore de route dans une chaine. Ce pas n'est "
-            "pas lance." % etape["fonction"], ou=EXECUTION)
+            "« %s » n'a pas encore de route dans une chaîne. Cette étape "
+            "n'est pas lancée." % etape["fonction"], ou=EXECUTION)
     genre, chemin = route
 
     # Les travaux ne passent pas par le routeur du palier gratuit : ils
@@ -1117,7 +1117,7 @@ def lancer_par_le_routeur(etape: dict, entree):
         if not isinstance(entree, (bytes, bytearray)):
             raise CompositeRefuse(
                 "entree_du_mauvais_type",
-                "<< %s >> attend un fichier et a recu autre chose."
+                "« %s » attend un fichier et a reçu autre chose."
                 % etape["fonction"], ou=EXECUTION)
         try:
             return document.lire(entree)
@@ -1140,13 +1140,13 @@ def lancer_par_le_routeur(etape: dict, entree):
             if not isinstance(entree, (bytes, bytearray)):
                 raise CompositeRefuse(
                     "entree_du_mauvais_type",
-                    "<< %s >> attend un enregistrement et a recu autre chose."
+                    "« %s » attend un enregistrement et a reçu autre chose."
                     % etape["fonction"], ou=EXECUTION)
             reponse = client.post(
                 ROUTEUR + chemin, headers=entetes,
                 data=PRECISION.get(etape["brique"], {}),
                 files={"file": ("enregistrement.wav", bytes(entree), "audio/wav")})
-            _ou_refus(reponse, etape, "La dictee n'a pas abouti.")
+            _ou_refus(reponse, etape, "La dictée n'a pas abouti.")
             return (reponse.json().get("text") or "").strip() or None
 
         if genre == "chat":
@@ -1156,8 +1156,8 @@ def lancer_par_le_routeur(etape: dict, entree):
                           messages=[{"role": "user",
                                      "content": _consigne_du_chat(etape, entree)}]))
             _ou_refus(reponse, etape,
-                      "Aucun service de chat gratuit ne repond. Ce noeud a "
-                      "besoin d'une cle de palier gratuit configuree.")
+                      "Aucun service de chat gratuit ne répond. Cette étape a "
+                      "besoin d'une clé de palier gratuit configurée.")
             choix = (reponse.json().get("choices") or [{}])[0]
             return ((choix.get("message") or {}).get("content") or "").strip() or None
 
@@ -1171,7 +1171,7 @@ def lancer_par_le_routeur(etape: dict, entree):
             if not nu:
                 raise CompositeRefuse(
                     "noeud_sans_sortie",
-                    "<< %s >> a repondu sans image. Ce pas n'est pas lance."
+                    "« %s » a répondu sans image. Cette étape n'est pas lancée."
                     % etape["fonction"], ou=EXECUTION)
             return base64.b64decode(nu)
 
@@ -1186,7 +1186,7 @@ def lancer_par_le_routeur(etape: dict, entree):
                                "image_url": {"url": image}},
                           ]}]))
             _ou_refus(reponse, etape,
-                      "Aucun service gratuit qui sait lire une image ne repond.")
+                      "Aucun service gratuit qui sait lire une image ne répond.")
             choix = (reponse.json().get("choices") or [{}])[0]
             return ((choix.get("message") or {}).get("content") or "").strip() or None
 
@@ -1194,7 +1194,7 @@ def lancer_par_le_routeur(etape: dict, entree):
         texte = str(entree or "")
         reponse = client.post(ROUTEUR + chemin, headers=entetes,
                               json={"input": texte})
-        _ou_refus(reponse, etape, "La lecture a haute voix n'a pas abouti.")
+        _ou_refus(reponse, etape, "La lecture à haute voix n'a pas abouti.")
         return reponse.content or None
 
 
@@ -1203,8 +1203,8 @@ def _cle_du_sandbox() -> str:
     if not cle:
         raise CompositeRefuse(
             "sandbox_sans_cle",
-            "Le Studio ne peut pas se lancer un travail a lui-meme : sa cle "
-            "interne manque. Ce pas n'est pas lance.", ou=EXECUTION)
+            "Le Studio ne peut pas se lancer un travail à lui-même : sa clé "
+            "interne manque. Cette étape n'est pas lancée.", ou=EXECUTION)
     return cle
 
 
@@ -1249,19 +1249,19 @@ def lancer_un_travail(etape: dict, entree):
             raise CompositeRefuse("arbitrage_du_client",
                                   _phrase_de_l_arbitrage(creation, etape),
                                   ou=EXECUTION)
-        _ou_refus(creation, etape, "Ce travail n'a pas pu etre lance.")
+        _ou_refus(creation, etape, "Ce travail n'a pas pu être lancé.")
         jid = str((creation.json() or {}).get("id") or "")
         if not jid:
             raise CompositeRefuse(
                 "travail_sans_identifiant",
-                "<< %s >> a ete accepte sans identifiant de travail : le Studio "
-                "ne saurait pas en recuperer le resultat." % etape["fonction"],
+                "« %s » a été accepté sans identifiant de travail : le Studio "
+                "ne saurait pas en récupérer le résultat." % etape["fonction"],
                 ou=EXECUTION)
 
         fin = time.monotonic() + DELAI_S
         while True:
             etat = client.get("%s/jobs/%s" % (base, jid), headers=entetes)
-            _ou_refus(etat, etape, "L'etat de ce travail n'est pas lisible.")
+            _ou_refus(etat, etape, "L'état de ce travail n'est pas lisible.")
             corps = etat.json() or {}
             statut = str(corps.get("status") or "")
             if statut in TRAVAIL_RENDU:
@@ -1269,15 +1269,15 @@ def lancer_un_travail(etape: dict, entree):
             if statut in TRAVAIL_PERDU:
                 raise CompositeRefuse(
                     "travail_echoue",
-                    "<< %s >> s'est arrete : %s. %s"
+                    "« %s » s'est arrêté : %s. %s"
                     % (etape["fonction"], statut,
                        str(corps.get("message") or "").strip()),
                     ou=EXECUTION)
             if time.monotonic() >= fin:
                 raise CompositeRefuse(
                     "travail_trop_long",
-                    "<< %s >> n'a pas fini en %d secondes. Il continue peut-etre "
-                    "sur sa propre page ; la chaine, elle, s'arrete ici."
+                    "« %s » n'a pas fini en %d secondes. Il continue peut-être "
+                    "sur sa propre page ; la chaîne, elle, s'arrête ici."
                     % (etape["fonction"], DELAI_S), ou=EXECUTION)
             time.sleep(ATTENTE_S)
 
@@ -1294,8 +1294,8 @@ def lancer_un_travail(etape: dict, entree):
         if not adresse:
             raise CompositeRefuse(
                 "travail_sans_fichier",
-                "<< %s >> s'est termine sans deposer de fichier : la chaine "
-                "n'a rien a passer au pas suivant." % etape["fonction"],
+                "« %s » s'est terminé sans déposer de fichier : la chaîne "
+                "n'a rien à passer à l'étape suivante." % etape["fonction"],
                 ou=EXECUTION)
         fichier = client.get(SANDBOX + adresse, headers=entetes)
         _ou_refus(fichier, etape, "Ce travail n'a rien rendu.")
@@ -1314,7 +1314,7 @@ def _phrase_de_l_arbitrage(reponse, etape: dict) -> str:
     except ValueError:
         decision = {}
     dit = str(decision.get("pourquoi") or "").strip()
-    return (dit or ("<< %s >> attend que vous choisissiez entre attendre la "
+    return (dit or ("« %s » attend que vous choisissiez entre attendre la "
                     "carte d'ici et louer une machine." % etape["fonction"]))
 
 
@@ -1329,7 +1329,7 @@ def _data_uri(etape: dict, octets) -> str:
     if not isinstance(octets, (bytes, bytearray)):
         raise CompositeRefuse(
             "entree_du_mauvais_type",
-            "<< %s >> attend une image et a recu autre chose."
+            "« %s » attend une image et a reçu autre chose."
             % etape["fonction"], ou=EXECUTION)
     brut = bytes(octets)
     for signature, mime in SIGNATURES_IMAGE:
@@ -1337,8 +1337,8 @@ def _data_uri(etape: dict, octets) -> str:
             return "data:%s;base64,%s" % (mime, base64.b64encode(brut).decode("ascii"))
     raise CompositeRefuse(
         "image_de_format_inconnu",
-        "<< %s >> a recu un fichier dont le format d'image n'est pas reconnu. "
-        "Le Studio sait lire du PNG, du JPEG et du GIF. Ce pas n'est pas lance."
+        "« %s » a reçu un fichier dont le format d'image n'est pas reconnu. "
+        "Le Studio sait lire du PNG, du JPEG et du GIF. Cette étape n'est pas lancée."
         % etape["fonction"], ou=EXECUTION)
 
 
