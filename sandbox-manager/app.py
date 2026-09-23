@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -3727,14 +3728,21 @@ async def composite_lancer(request: Request,
                                      "X-Composite-Motif": trace["motif"] or ""})
 
     sortie = trace["sortie"]
+    # Toujours du JSON depuis le 23/09 (« on a la voix mais pas le texte ») :
+    # les textes rendus en chemin voyagent avec le fichier final.
+    textes = [{"fonction": e.get("fonction", e["brique"]), "texte": e["texte"]}
+              for e in trace["etapes"] if e.get("texte")]
+    derniere = chaine["etapes"][-1]["fonction"]
     if isinstance(sortie, (bytes, bytearray)):
         # Le type ANNONCE suit ce que les octets disent, et a defaut ce que la
         # derniere brique declare rendre. Il etait fige sur `audio/wav`, ce qui
         # ne se voyait pas tant qu'aucune chaine ne pouvait finir autrement.
         mime, nom = composite.type_de_sortie(sortie, chaine["etapes"][-1]["sorties"])
-        return Response(content=bytes(sortie), media_type=mime,
-                        headers={"X-Composite-Nom": nom})
-    return JSONResponse({"texte": str(sortie), "etapes": trace["etapes"]})
+        return JSONResponse({"fichier": base64.b64encode(bytes(sortie)).decode("ascii"),
+                             "type": mime, "nom": nom, "textes": textes,
+                             "derniere": derniere, "etapes": trace["etapes"]})
+    return JSONResponse({"texte": str(sortie), "textes": textes, "derniere": derniere,
+                         "etapes": trace["etapes"]})
 
 
 @app.get("/", response_class=HTMLResponse)

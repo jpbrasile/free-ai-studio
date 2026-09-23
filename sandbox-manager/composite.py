@@ -70,6 +70,8 @@ TYPES = ("texte", "audio", "image", "video", "fichier")
 # « aucun » : pas de fichier. None : on ne sait pas (appel sans ce champ), et
 # le verdict ne juge alors pas l'entree -- comme avant le 23/09.
 SANS_FICHIER = "aucun"
+# Le texte rendu par une etape, tel que la page le montre.
+TEXTE_MONTRE_MAX = 20000
 NOMS_DES_TYPES = {"texte": "du texte", "audio": "un enregistrement", "image": "une image",
                   "video": "une vidéo", "fichier": "un document"}
 
@@ -1192,8 +1194,13 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
                        "attendait quelque chose." % etape["fonction"])
             return trace
 
-        trace["etapes"].append({"brique": etape["brique"], "resultat": "rendu",
-                                "motif": None})
+        rendu = {"brique": etape["brique"], "resultat": "rendu", "motif": None,
+                 "fonction": etape.get("fonction", etape["brique"])}
+        # Le texte de chaque etape est GARDE : « on a la voix mais pas le texte »
+        # (23/09). Borne : c'est un apercu pour la page, pas une archive.
+        if isinstance(courant, str):
+            rendu["texte"] = courant[:TEXTE_MONTRE_MAX]
+        trace["etapes"].append(rendu)
 
     trace.update(resultat="rendu", sortie=courant)
     return trace
@@ -1765,6 +1772,7 @@ button{font:inherit;padding:10px 16px;border:1px solid #777;border-radius:10px;
        background:#f6f6f6;cursor:pointer;margin-top:12px}
 button[disabled]{opacity:.55;cursor:progress}
 .bloc{border:1px solid #bbb;border-radius:12px;padding:14px 16px;margin-top:18px}
+pre.texte{white-space:pre-wrap;background:#f6f6f6;border-radius:8px;padding:10px;font-family:inherit}
 .oui{border-color:#2d7a33}.non{border-color:#a33}.inconnu,.partiel{border-color:#b7791f}
 .etat{font-weight:600}
 ol{margin:10px 0 0 0;padding-left:22px}
@@ -1821,6 +1829,11 @@ function bloc(v){
     "<p class=etat>" + (noms[v.atteignable]||v.atteignable) + "</p>" +
     "<p>" + (v.phrase || v.pourquoi) + "</p>" +
     (etapes ? "<ol>" + etapes + "</ol>" : "") + "</div>";
+}
+
+function echapper(s){
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function typeDuFichier(f){
@@ -1890,22 +1903,40 @@ document.getElementById("lancer").onclick = async () => {
         + (v.ou || r.corps.headers.get("X-Composite-Ou") || "?") + "</p><p>" + (v.detail || "") + "</p></div>";
       return;
     }
-    const octets = await r.corps.blob();
-    const url = URL.createObjectURL(octets);
+    const d = await r.corps.json();
+    let apercu = "", lien = "";
+    if (d.fichier) {
+      const brut = atob(d.fichier);
+      const tab = new Uint8Array(brut.length);
+      for (let i = 0; i < brut.length; i++) tab[i] = brut.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([tab], {type: d.type || ""}));
     // Ce qu'on montre suit le type que le serveur ANNONCE. Fige sur <audio>
     // jusqu'au 22/09 au soir : une chaine finissant par une image affichait un
     // lecteur audio muet, avec les bons octets derriere.
-    const type = octets.type || "";
-    const nom = (r.corps.headers.get("X-Composite-Nom") || "sortie.bin");
-    let apercu;
-    if (type.startsWith("image/"))      apercu = "<img src='" + url + "' alt='' style='max-width:100%'>";
-    else if (type.startsWith("video/")) apercu = "<video controls src='" + url + "' style='max-width:100%'></video>";
-    else if (type.startsWith("audio/")) apercu = "<audio controls src='" + url + "'></audio>";
-    else                                apercu = "";
+      const type = d.type || "";
+      const nom = echapper(d.nom || "sortie.bin");
+      if (type.startsWith("image/"))      apercu = "<img src='" + url + "' alt='' style='max-width:100%'>";
+      else if (type.startsWith("video/")) apercu = "<video controls src='" + url + "' style='max-width:100%'></video>";
+      else if (type.startsWith("audio/")) apercu = "<audio controls src='" + url + "'></audio>";
+      lien = "<a href='" + url + "' download='" + nom + "'>T\u00e9l\u00e9charger le fichier</a>";
+    }
+    // Le texte transmis a la derniere etape en tete (le texte LU, pour une
+    // voix) ; les autres, replies. Echappes : ils viennent d'un modele.
+    const textes = (d.textes || []).slice();
+    const dernier = d.fichier ? textes.pop() : null;
+    let blocTextes = "";
+    if (!d.fichier && d.texte != null)
+      blocTextes += "<pre class=texte>" + echapper(d.texte) + "</pre>";
+    if (dernier)
+      blocTextes += "<p><strong>Le texte transmis \u00e0 \u00ab " + echapper(d.derniere || "")
+        + " \u00bb</strong></p><pre class=texte>" + echapper(dernier.texte) + "</pre>";
+    const autres = d.fichier ? textes : textes.slice(0, -1);
+    for (const t of autres)
+      blocTextes += "<details><summary>Rendu par " + echapper(t.fonction) + "</summary><pre class=texte>"
+        + echapper(t.texte) + "</pre></details>";
     document.getElementById("resultat").innerHTML =
       "<div class='bloc oui'><p class=etat>C\u2019est fait</p>"
-      + apercu + (apercu ? "<br>" : "")
-      + "<a href='" + url + "' download='" + nom + "'>T\u00e9l\u00e9charger le fichier</a></div>";
+      + apercu + (apercu ? "<br>" : "") + blocTextes + lien + "</div>";
   } finally {
     b.disabled = false; b.textContent = "Lancer";
   }

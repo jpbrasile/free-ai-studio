@@ -1261,8 +1261,11 @@ def test_la_trace_nomme_l_etape_ou_la_chaine_a_casse(apps):
     assert trace["ou"] == composite.EXECUTION
     assert trace["motif"] == "sans_cle"
     # Le premier noeud a bien rendu : la trace le dit, au lieu d'un << faux >>.
-    assert trace["etapes"][0] == {"brique": "dictee_locale", "resultat": "rendu",
-                                  "motif": None}
+    # Depuis le 23/09, l'etape rendue porte aussi sa fonction et son texte.
+    premiere = trace["etapes"][0]
+    assert {k: premiere[k] for k in ("brique", "resultat", "motif")} == {
+        "brique": "dictee_locale", "resultat": "rendu", "motif": None}
+    assert premiere["texte"] == "quelque chose"
     assert trace["etapes"][1]["brique"] == "chat_auto"
 
 
