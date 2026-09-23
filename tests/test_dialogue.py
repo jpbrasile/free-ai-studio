@@ -643,33 +643,59 @@ def test_la_page_propose_kaggle_mesure_et_refuse_toujours_colab(sandbox, di):
     assert "/dialogue/colab" not in page
     # La borne mesuree et le verrou du Studio partage doivent vivre DANS la page,
     # la ou l'on choisit -- pas seulement cote serveur.
-    assert "kaggle_max_caracteres" in page, (
-        "la page doit dire jusqu'ou Kaggle a ete mesure, a l'endroit du choix."
+    assert "ETAT.max_caracteres" in page, (
+        "la page doit dire la borne du modele, a l'endroit du choix."
     )
     assert "kaggle_permis" in page, (
         "la page doit griser Kaggle quand le Studio est partage."
     )
 
 
-def test_kaggle_refuse_ce_qui_depasse_ce_qui_a_tourne(di):
-    """La borne Kaggle est un RELEVE, pas un reglage de confort.
+LE_DIALOGUE_DU_23_09 = "\n".join(
+    ("[S1]Did you see the lighthouse last night? It was blinking in a pattern "
+     "I had never noticed." if i % 2 == 0 else
+     "[S2]I did. The keeper told me they changed the lamp, and the new one runs "
+     "on a timer now.") for i in range(63))
 
-    2 725 caracteres, 35 repliques, 147,5 s d'audio : c'est exactement ce qui a
-    tourne, pour un pic de 12,95 Go sur 14,56. Au-dela, personne n'a jamais
-    essaye -- l'extrapolation donnerait ~13,2 Go et tiendrait sans doute, mais
-    c'est en prenant une extrapolation pour un fait qu'un faux verdict a ete
-    publie le matin du 17/09. Le meme texte passe sur Modal, dont la carte a
-    24 Go.
+
+@pytest.mark.parametrize("ou", ["modal", "kaggle"])
+def test_le_dialogue_que_le_MODELE_a_lache_est_refuse_PARTOUT(di, ou):
+    """Mesure du 23/09 sur la 4090 : 63 repliques, le modele s'arrete a la 36e.
+
+    Jusque-la la borne de 6 000 caracteres l'acceptait sur Modal, et le refus
+    Kaggle envoyait vers Modal. C'est le modele qui deborde, pas la carte :
+    refuse partout, et aucun endroit n'est propose en echange.
     """
-    texte = "[S1]" + "la " * 1200
-    assert di.KAGGLE_MAX_CARACTERES < len(texte) <= di.MAX_CARACTERES
     with pytest.raises(ValueError) as exc:
-        di.preparer({"texte": texte}, "kaggle")
+        di.preparer({"texte": LE_DIALOGUE_DU_23_09}, ou)
     message = str(exc.value)
-    assert "Kaggle" in message
-    assert "Modal" in message, "un refus doit dire ou aller, pas seulement non."
-    # Le meme texte, sur Modal : accepte. La borne est propre a l'endroit.
-    di.preparer({"texte": texte}, "modal")
+    assert "modèle" in message and "coupez-le en deux" in message, message
+    assert "Modal" not in message, "aucune carte ne fait mieux : ne pas y envoyer."
+
+
+@pytest.mark.parametrize("ou", ["modal", "kaggle"])
+def test_le_dialogue_qui_a_ABOUTI_passe_partout(di, ou):
+    """2 725 caracteres, 35 repliques : le seul dialogue long qui ait abouti."""
+    ligne = "[S1]" + "a" * 73  # 34 x 77 + 34 retours + 73 = 2 725
+    texte = "\n".join([ligne] * 34 + ["[S2]" + "b" * 69])
+    assert len(texte) == di.MAX_CARACTERES == 2725
+    assert len(di.preparer({"texte": texte}, ou)["demande"]["repliques"]) == 35
+    with pytest.raises(ValueError):
+        di.preparer({"texte": texte + "c"}, ou)
+
+
+def test_la_36e_replique_est_refusee_meme_courte(di):
+    """C'est le nombre de repliques qui remplit le contexte, pas seulement les signes."""
+    texte = "\n".join(["[S1]Oui.", "[S2]Non."] * 18)
+    assert len(texte) < di.MAX_CARACTERES
+    with pytest.raises(ValueError) as exc:
+        di.preparer({"texte": texte}, "modal")
+    assert "36 répliques" in str(exc.value)
+
+
+def test_la_zone_de_texte_de_la_page_porte_la_MEME_borne(di):
+    """Sinon la page laisse taper ce que le serveur refusera."""
+    assert 'maxlength="%d"' % di.MAX_CARACTERES in di.PAGE_HTML
 
 
 def test_le_choix_de_l_endroit_change_ce_qui_part(di):

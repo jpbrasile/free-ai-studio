@@ -20,7 +20,7 @@ VIVE (~12,7 Go, une seule carte) avec une chanson de 7 Go ; ce modele-ci pese
 
 CE QUE KAGGLE COUTE, ET QU'IL FAUT DIRE : x3,35 le temps reel (494 s de calcul
 pour 148 s d'audio), soit de l'ordre de douze minutes d'attente de bout en bout
-pour trois minutes de dialogue, telechargement des poids compris. C'est gratuit,
+pour deux minutes et demie de dialogue, telechargement des poids compris. C'est gratuit,
 pas rapide.
 
 LA BORNE EST CELLE DE LA MESURE, PAS CELLE DE L'ANNONCE. 147,5 s ne sont pas les
@@ -110,13 +110,6 @@ KAGGLE_MACHINE = os.getenv("DIALOGUE_KAGGLE_MACHINE", "NvidiaTeslaT4")
 # laisse une marge large -- Kaggle coupe lui-meme a l'echeance, et un notebook
 # coupe trop tot serait un quota perdu pour rien.
 KAGGLE_DELAI_S = int(os.getenv("DIALOGUE_KAGGLE_TIMEOUT_SECONDS", "3600"))
-# LA BORNE EST UN RELEVE, PAS UN REGLAGE. 2 725 caracteres, 35 repliques,
-# 147,5 s d'audio : c'est exactement ce qui a tourne, pour un pic de 12,95 Go sur
-# 14,56. Au-dela, personne ne sait -- l'extrapolation donnerait ~13,2 Go et
-# tiendrait sans doute, mais << sans doute >> n'est pas une mesure, et c'est ce
-# raccourci qui a produit un faux verdict le matin meme. Sur Modal, ou la carte a
-# 24 Go, MAX_CARACTERES reste seul en vigueur.
-KAGGLE_MAX_CARACTERES = 2725
 
 MODELE = {
     "hf": "FireRedTeam/FireRedTTS2",
@@ -320,10 +313,31 @@ COMMANDES_MODAL = (
 # git est necessaire dans l'image pour le clone ci-dessus.
 APT_MODAL = ("git",)
 
-# Bornes de la demande. Trois minutes de dialogue, plafond annonce par les
-# auteurs ; le reste est taille pour rester dessous sans calcul savant.
-MAX_CARACTERES = 6000
-MAX_REPLIQUES = 80
+# BORNES DE LA DEMANDE : CELLES DU MODELE, LES MEMES PARTOUT.
+#
+# Jusqu'au 23/09/2026 : 6 000 caracteres et 80 repliques, << tailles pour rester
+# dessous sans calcul savant >> -- jamais mesures -- et une borne a part pour
+# Kaggle, 2 725, dont la phrase de refus disait << ce n'est pas une limite du
+# modele... choisissez Modal >>. La mesure l'a dementi : sur la 4090, un
+# dialogue de 5 836 caracteres et 63 repliques a rendu 35 repliques, puis
+# FireRedTTS-2 a refuse la 36e (<< Inputs too long, must be below max_seq_len -
+# max_generation_len: 2725 >>). Le modele garde dans son contexte chaque
+# replique deja rendue, texte ET son : c'est ce contexte qui deborde, quelle
+# que soit la carte. Modal aurait donc loue une carte pour un rendu voue a
+# echouer a mi-chemin.
+#
+# Les deux nombres sont ceux du SEUL dialogue long qui ait abouti (Kaggle,
+# 17/09) : 2 725 caracteres, 35 repliques, 147,5 s d'audio. La vraie frontiere
+# est quelque part entre ce dialogue et celui du 23/09 ; personne ne l'a
+# cherchee, et refuser un peu trop tot coute une phrase, pas une carte payee.
+MAX_CARACTERES = 2725
+MAX_REPLIQUES = 35
+_POURQUOI_LA_BORNE = (
+    "Le modèle garde en mémoire chaque réplique déjà dite, et cette mémoire est "
+    "pleine vers la 35e : au-delà il s'arrête en route, sur n'importe quelle carte. "
+    "Le plus long dialogue qui ait abouti faisait 2 725 caractères et 35 répliques, "
+    "environ deux minutes et demie. Raccourcissez-le, ou coupez-le en deux "
+    "dialogues.")
 LOCUTEURS_MAX = int(MODELE["locuteurs_max"])
 # La balise se colle au texte, sans espace : c'est la forme exacte des exemples
 # des auteurs ([S1]..., [S2]...). preparer() la reconstruit pour que ce soit
@@ -620,31 +634,21 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
 
     Refuse AVANT de lancer tout ce qui ferait echouer le travail une fois la
     carte payee : ligne sans balise, balise hors des quatre locuteurs, replique
-    vide, texte trop long -- et, sur Kaggle, un dialogue plus long que celui qui
-    y a reellement tourne.
+    vide, texte trop long pour le modele -- la meme borne partout, parce que
+    c'est le modele qui deborde, pas la carte.
     """
     texte = str(payload.get("texte") or "").replace("\r\n", "\n").strip()
     if not texte:
         raise ValueError(
             "Écrivez le dialogue, une réplique par ligne, en commençant chaque ligne "
             "par [S1] ou [S2].")
+    # Une seule borne pour les trois endroits : c'est le MODELE qui deborde,
+    # pas la carte (voir MAX_CARACTERES). Aucun endroit n'est donc propose en
+    # echange -- tous echoueraient au meme point.
     if len(texte) > MAX_CARACTERES:
         raise ValueError(
             f"Dialogue trop long ({len(texte)} caractères, {MAX_CARACTERES} au plus). "
-            f"Le modèle ne tient que trois minutes.")
-    # LA BORNE KAGGLE EST CELLE DE LA MESURE. Le seul dialogue long qui y ait
-    # tourne faisait 2 725 caracteres, pour un pic de 12,95 Go sur 14,56 -- il
-    # restait 1,61 Go. Au-dela, personne ne sait : refuser coute une phrase, un
-    # depassement de memoire coute douze minutes d'attente et un quota.
-    if ou == "kaggle" and len(texte) > KAGGLE_MAX_CARACTERES:
-        raise ValueError(
-            f"Sur Kaggle, ce dialogue est trop long ({len(texte)} caractères, "
-            f"{KAGGLE_MAX_CARACTERES} au plus). Ce n'est pas une limite du modèle mais celle "
-            f"de ce qui a été mesuré : la carte T4 gratuite a rendu 147,5 s d'audio en "
-            f"laissant 1,61 Go de marge, et au-delà personne n'a jamais essayé. Le Studio "
-            f"refuse plutôt que de vous faire attendre douze minutes un rendu dont personne "
-            f"ne connaît le résultat. Raccourcissez, ou choisissez Modal, dont la carte a "
-            f"24 Go.")
+            f"{_POURQUOI_LA_BORNE}")
 
     repliques = []
     locuteurs = []
@@ -675,7 +679,8 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
         raise ValueError("Le dialogue ne contient aucune réplique.")
     if len(repliques) > MAX_REPLIQUES:
         raise ValueError(
-            f"Dialogue trop découpé ({len(repliques)} répliques, {MAX_REPLIQUES} au plus).")
+            f"Dialogue trop long ({len(repliques)} répliques, {MAX_REPLIQUES} au plus). "
+            f"{_POURQUOI_LA_BORNE}")
 
     distincts = sorted(set(locuteurs))
     pour_modal = ou == "modal"
@@ -759,7 +764,7 @@ les voix se répondent, façon podcast. Jusqu’à trois minutes et quatre locut
 <div id="banniere" class="banniere">Vérification en cours…</div>
 
 <label class="titre" for="texte">Le dialogue</label>
-<textarea id="texte" maxlength="6000" placeholder="[S1]Tu as vu qu’on peut faire parler deux voix maintenant ?
+<textarea id="texte" maxlength="2725" placeholder="[S1]Tu as vu qu’on peut faire parler deux voix maintenant ?
 [S2]Attends, c’est le modèle qui invente les deux ?
 [S1]Oui, on écrit juste le texte, une réplique par ligne.
 [S2]Et il fait les silences, les hésitations, tout ça ?
@@ -829,9 +834,9 @@ function majOu(){
     kaggle: "Carte T4 gratuite, sur votre compte Kaggle. Mesuré le 17/09 : 12,95 Go de "
       + "mémoire utilisés sur 14,56 pour 147,5 s d’audio — il restait 1,61 Go. C’est gratuit "
       + "mais lent : environ <b>3,3 fois le temps réel</b>, soit une douzaine de minutes "
-      + "d’attente pour trois minutes de dialogue, téléchargement des poids compris. Le texte "
-      + "est limité à " + (ETAT ? ETAT.kaggle_max_caracteres : "2725") + " caractères, "
-      + "c’est-à-dire à ce qui y a réellement tourné."
+      + "d’attente pour deux minutes et demie de dialogue, téléchargement des poids compris. Le texte "
+      + "est limité à " + (ETAT ? ETAT.max_caracteres : "2725") + " caractères, "
+      + "comme partout : c’est la limite du modèle, pas de la carte."
   }[ou];
   document.getElementById("ou-texte").innerHTML = texte || "";
 }

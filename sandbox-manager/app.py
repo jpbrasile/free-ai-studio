@@ -3325,7 +3325,6 @@ def dialogue_etat(request: Request, authorization: Optional[str] = Header(defaul
             dialogue.prix_seconde(dialogue.GPU_MODAL) * dialogue.DUREE_MAX_S, 3),
         "locuteurs_max": dialogue.LOCUTEURS_MAX,
         "max_caracteres": dialogue.MAX_CARACTERES,
-        "kaggle_max_caracteres": dialogue.KAGGLE_MAX_CARACTERES,
         "modal_configure": modal_configured(),
         "kaggle_configure": kaggle_configured(),
         "kaggle_permis": raison is None,
