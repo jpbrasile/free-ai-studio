@@ -499,8 +499,13 @@ apply_stored_secrets()
 # et jusqu'au delai d'attente quand il ne repond pas : le demarrage n'attend
 # jamais un service distant. apply_stored_secrets() a deja pose le jeton, et si
 # rien ne repond amorcer() rend None sans rien ecrire.
-threading.Thread(target=budget_modal.amorcer, name="amorce-budget",
-                 daemon=True).start()
+# Coupee sous test, comme la reprise : la suite charge ce module des dizaines de
+# fois, et un fil parti a un chargement lancait le VRAI `modal billing` pendant
+# le test suivant, puis ecrivait sa reponse dans le cache des depenses que ce
+# test venait de vider (23/09/2026, test_sans_jeton_rien_n_est_lance).
+if os.getenv("SANDBOX_AMORCE_BUDGET", "true").strip().lower() not in ("0", "false", "non"):
+    threading.Thread(target=budget_modal.amorcer, name="amorce-budget",
+                     daemon=True).start()
 
 
 def collect_local_artifacts(jid: str, source: str) -> list[dict]:

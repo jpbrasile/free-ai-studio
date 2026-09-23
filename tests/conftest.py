@@ -17,6 +17,13 @@ RACINE = Path(__file__).resolve().parents[1]
 _JETABLE = Path(tempfile.mkdtemp(prefix="free-ai-tests-"))
 os.environ.setdefault("FREE_AI_CONFIG_DIR", str(_JETABLE / "config"))
 os.environ.setdefault("SANDBOX_WORKSPACE", str(_JETABLE / "workspace"))
+# L'amorce du budget ne part pas sous test, POUR TOUTE LA SESSION : des tests
+# chargent app.py sans la fixture `sandbox` (test_coffre, test_kaggle), et le
+# fil parti a leur chargement lancait le VRAI `modal billing` avec le jeton
+# factice d'un voisin, puis remplissait le cache des depenses sous
+# test_sans_jeton_rien_n_est_lance (trace du 23/09/2026). Les tests de
+# l'amorce appellent amorcer() eux-memes.
+os.environ["SANDBOX_AMORCE_BUDGET"] = "false"
 # La cle du coffre vit hors de config/ ; son defaut est /secrets/coffre.cle, qui
 # sous Windows voudrait dire C:\secrets. Une suite de tests ne cree pas un
 # dossier a la racine du disque. UNE seule cle pour toute la suite : deux tests
