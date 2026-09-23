@@ -3647,7 +3647,8 @@ async def _chaine_depuis(request: Request):
     """La phrase -> un graphe -> une chaine de briques nommees."""
     formulaire = await request.form()
     phrase = str(formulaire.get("phrase") or "")
-    graphe = composite.compiler(phrase, composite.appeler_le_modele)
+    graphe = composite.compiler(phrase, composite.appeler_le_modele,
+                                entree=composite.entree_lue(formulaire.get("entree")))
     return formulaire, composite.lier(graphe)
 
 
@@ -3657,8 +3658,8 @@ async def composite_verdict(request: Request,
     """Dit AVANT de lancer si la chaine tient, et ce qu'elle coute au pire."""
     auth(authorization)
     try:
-        _, chaine = await _chaine_depuis(request)
-        verdict = composite.verifier(chaine)
+        formulaire, chaine = await _chaine_depuis(request)
+        verdict = composite.verifier(chaine, entree=composite.entree_lue(formulaire.get("entree")))
         # Le calcul a etabli les faits ; le modele les met en francais, et les
         # montants sont verrouilles dans `rediger`. Hors boucle : c'est un appel
         # reseau, il ne doit pas tenir le service pendant qu'il attend.
@@ -3694,13 +3695,17 @@ async def composite_lancer(request: Request,
                 ou=composite.CONTROLE)
         chaine = composite.chaine_depuis_briques(
             briques, phrase=str(formulaire.get("phrase") or ""))
-        verdict = composite.verifier(chaine)
+        fichier = formulaire.get("fichier")
+        # Le VRAI fichier decide ici, pas ce que la page a annonce : une
+        # image ne part plus jamais comme du texte (23/09, 540 498 jetons).
+        joint = (composite.type_d_entree(fichier.filename, fichier.content_type)
+                 if fichier is not None and not isinstance(fichier, str) else composite.SANS_FICHIER)
+        verdict = composite.verifier(chaine, entree=joint)
         if verdict["atteignable"] == composite.NON:
             raise composite.CompositeRefuse(
                 ";".join(verdict["motifs"]) or "refuse", verdict["pourquoi"],
                 ou=composite.CONTROLE)
 
-        fichier = formulaire.get("fichier")
         entree = await fichier.read() if fichier is not None and not isinstance(
             fichier, str) else None
 

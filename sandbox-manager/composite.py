@@ -66,6 +66,30 @@ import format_fr
 # sonner.
 TYPES = ("texte", "audio", "image", "video", "fichier")
 
+# Ce que la page dit du fichier joint, sans jamais l'envoyer pour le verdict.
+# « aucun » : pas de fichier. None : on ne sait pas (appel sans ce champ), et
+# le verdict ne juge alors pas l'entree -- comme avant le 23/09.
+SANS_FICHIER = "aucun"
+NOMS_DES_TYPES = {"texte": "du texte", "audio": "un enregistrement", "image": "une image",
+                  "video": "une vidéo", "fichier": "un document"}
+
+
+def type_d_entree(nom: str | None, mime: str | None) -> str:
+    """Le type qu'un fichier joint apporte a la chaine, d'apres son nom et son MIME."""
+    nom, mime = (nom or "").lower(), (mime or "").lower()
+    if not nom and not mime:
+        return SANS_FICHIER
+    for genre in ("image", "audio", "video"):
+        if mime.startswith(genre + "/"):
+            return genre
+    return "fichier"
+
+
+def entree_lue(valeur) -> str | None:
+    """Le champ `entree` d'un formulaire, borne aux valeurs connues."""
+    valeur = str(valeur or "").strip()
+    return valeur if valeur in TYPES or valeur == SANS_FICHIER else None
+
 # --- Ce que le verdict peut valoir ------------------------------------------
 OUI = "oui"            # la chaine tient, et le cout est connu
 PARTIEL = "partiel"    # elle tient, mais une contrainte du client tombe
@@ -146,7 +170,8 @@ La demande : %s
 """
 
 
-def compiler(phrase: str, appeler_modele, apps: list[dict] | None = None) -> dict:
+def compiler(phrase: str, appeler_modele, apps: list[dict] | None = None,
+             entree: str | None = None) -> dict:
     """La phrase -> un graphe de noeuds `{capacite, entrees, sorties}`.
 
     `appeler_modele(consigne) -> texte` est injecte : en production c'est la
@@ -167,7 +192,18 @@ def compiler(phrase: str, appeler_modele, apps: list[dict] | None = None) -> dic
 
     catalogue = "\n".join(
         "- %s : %s" % (a["capacite"], a["fonction"]) for a in apps)
-    brut = appeler_modele(CONSIGNE % (catalogue, phrase.strip()))
+    consigne = CONSIGNE % (catalogue, phrase.strip())
+    # 23/09 : « resume et dis-moi en anglais a voix haute », une PHOTO jointe.
+    # Le compositeur ne savait rien du fichier : il a choisi le chat (texte ->
+    # texte), et l'image est partie comme du texte -- 540 498 jetons, refusee
+    # par les trois services. On lui dit donc ce qui est joint, et par quoi
+    # la chaine peut commencer.
+    if entree and entree != SANS_FICHIER:
+        premieres = sorted({a["capacite"] for a in apps if entree in a["entrees"]})
+        consigne += ("\nLa personne joint %s (type « %s »). La premiere fonction doit "
+                     "accepter ce type : %s.\n" % (NOMS_DES_TYPES.get(entree, entree), entree,
+                                                ", ".join(premieres) or "aucune ne le peut"))
+    brut = appeler_modele(consigne)
 
     noeuds = _lire_json(brut)
     if noeuds is None:
@@ -351,7 +387,7 @@ def licence_indeterminee(licence: str) -> bool:
 
 
 def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
-             sonde_budget=None, sonde_mesure=None) -> dict:
+             sonde_budget=None, sonde_mesure=None, entree: str | None = None) -> dict:
     """Le verdict, rendu dans la MEME forme que `ou_calculer.decider()` :
     un etat, plus un `pourquoi` en francais affichable tel quel.
 
@@ -383,6 +419,28 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                           "rend": amont["sorties"], "aval": aval["fonction"],
                           "attend": aval["entrees"]})
             etat = NON
+
+    # --- l'entree : ce qui est joint, la premiere etape le prend-elle ? -------
+    # None = on ne sait pas (appel sans le champ) : rien n'est juge.
+    premiere = etapes[0]
+    if entree == SANS_FICHIER and "texte" not in premiere["entrees"]:
+        motifs.append("entree_manquante")
+        pourquoi.append(
+            "%s attend %s : joignez-le avant de lancer."
+            % (premiere["fonction"], " ou ".join(NOMS_DES_TYPES.get(t, t) for t in premiere["entrees"])))
+        faits.append({"quoi": "entree_manquante", "application": premiere["fonction"],
+                      "attend": premiere["entrees"]})
+        etat = NON
+    elif entree not in (None, SANS_FICHIER) and entree not in premiere["entrees"]:
+        motifs.append("entree_incompatible")
+        pourquoi.append(
+            "Vous joignez %s, mais la première étape, %s, attend %s : "
+            "elle ne saurait pas quoi en faire."
+            % (NOMS_DES_TYPES.get(entree, entree), premiere["fonction"],
+               " ou ".join(NOMS_DES_TYPES.get(t, t) for t in premiere["entrees"])))
+        faits.append({"quoi": "entree_incompatible", "joint": entree,
+                      "application": premiere["fonction"], "attend": premiere["entrees"]})
+        etat = NON
 
     # --- la route : cette brique peut-elle seulement PARTIR d'une chaine ? ---
     # `ROUTES` et `BUDGET_PAR_BRIQUE` vivent au paragraphe 5 : on les LIT, on
@@ -1765,6 +1823,20 @@ function bloc(v){
     (etapes ? "<ol>" + etapes + "</ol>" : "") + "</div>";
 }
 
+function typeDuFichier(f){
+  if (!f) return "aucun";
+  const t = (f.type || "").toLowerCase();
+  for (const genre of ["image", "audio", "video"]) if (t.startsWith(genre + "/")) return genre;
+  return "fichier";
+}
+
+// Un verdict rendu pour un autre fichier ne vaut plus : on l'efface.
+document.getElementById("fichier").addEventListener("change", () => {
+  derniere = null;
+  document.getElementById("lancer").disabled = true;
+  document.getElementById("verdict").innerHTML = "";
+});
+
 async function envoyer(chemin, avecFichier){
   const corps = new FormData();
   corps.append("phrase", document.getElementById("phrase").value);
@@ -1775,6 +1847,9 @@ async function envoyer(chemin, avecFichier){
     corps.append("briques", (derniere.etapes||[]).map(e => e.brique).join(","));
   const f = document.getElementById("fichier").files[0];
   if (avecFichier && f) corps.append("fichier", f);
+  // Le TYPE seulement, jamais le contenu : le verdict doit savoir si la
+  // premiere etape prend une image, un son ou un document (23/09).
+  corps.append("entree", typeDuFichier(f));
   const r = await fetch(chemin, {method:"POST",
     headers:{"Authorization":"Bearer " + CLE}, body:corps});
   return {ok:r.ok, statut:r.status, corps:r};
@@ -1812,7 +1887,7 @@ document.getElementById("lancer").onclick = async () => {
       const v = await r.corps.json();
       document.getElementById("resultat").innerHTML =
         "<div class='bloc non'><p class=etat>\u00c7a s\u2019est arr\u00eat\u00e9 \u00e0 l\u2019\u00e9tape "
-        + (v.ou || "?") + "</p><p>" + (v.detail || "") + "</p></div>";
+        + (v.ou || r.corps.headers.get("X-Composite-Ou") || "?") + "</p><p>" + (v.detail || "") + "</p></div>";
       return;
     }
     const octets = await r.corps.blob();
