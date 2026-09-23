@@ -939,6 +939,8 @@ async def safe_status() -> Dict[str, Any]:
 WEBUI_URL = os.getenv("OPEN_WEBUI_INTERNAL_URL", "http://open-webui:8080")
 WEBUI_ADMIN_EMAIL = "admin@localhost"
 WEBUI_ADMIN_PASSWORD = "admin"
+WEBUI_JETON_ESSAIS = 4
+WEBUI_JETON_PAUSE = 3.0
 REGLAGES_FAITS = CONFIG_DIR / "open-webui-regle.json"
 IMAGE_SIZE_DEFAUT = "1024x1024"
 
@@ -964,17 +966,30 @@ SUGGESTIONS = [
 async def webui_jeton(client: httpx.AsyncClient) -> Optional[str]:
     """Ouvre une session d'administration. Avec WEBUI_AUTH=false, Open WebUI
     cree et accepte admin@localhost/admin ; avec un vrai compte, il refuse et
-    les reglages restent a faire a la main, ce que le journal dit."""
-    try:
-        r = await client.post(
-            f"{WEBUI_URL}/api/v1/auths/signin",
-            json={"email": WEBUI_ADMIN_EMAIL, "password": WEBUI_ADMIN_PASSWORD},
-        )
-    except httpx.HTTPError:
-        return None
-    if r.status_code != 200:
-        return None
-    return r.json().get("token")
+    les reglages restent a faire a la main, ce que le journal dit.
+
+    Une erreur 5xx ou une coupure se retente : essai du 23/09/2026 sur un
+    Docker vide, deux connexions a 8 ms d'intervalle ont cree admin@localhost
+    ensemble, la seconde a pris un 500 (UNIQUE constraint), et le routeur a
+    conclu << Open WebUI demande un compte >> jusqu'au redemarrage suivant --
+    images et recherche web restaient eteintes. Un refus (4xx) reste definitif :
+    c'est un vrai compte."""
+    for essai in range(WEBUI_JETON_ESSAIS):
+        if essai:
+            await asyncio.sleep(WEBUI_JETON_PAUSE)
+        try:
+            r = await client.post(
+                f"{WEBUI_URL}/api/v1/auths/signin",
+                json={"email": WEBUI_ADMIN_EMAIL, "password": WEBUI_ADMIN_PASSWORD},
+            )
+        except httpx.HTTPError:
+            continue
+        if r.status_code >= 500:
+            continue
+        if r.status_code != 200:
+            return None
+        return r.json().get("token")
+    return None
 
 
 async def reparer_connexion_webui(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:

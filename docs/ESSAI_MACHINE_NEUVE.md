@@ -43,7 +43,9 @@ dans le script** : un report redevient une décision qu'on voit passer.
   et `demarrer.cmd` la vérifie.
 - 8 Go de mémoire au moins.
 - De la place sur le disque. Compter 25 Go, une estimation : Docker Desktop, WSL, l'image
-  d'Open WebUI (5,1 Go) et les trois services construits sur place.
+  d'Open WebUI (5,1 Go) et les quatre services construits sur place. Mesuré le 23/09/2026
+  sur un clone neuf : les cinq images occupent 6,5 Go (Open WebUI 5,09 Go ; les quatre
+  services 1,4 Go). Docker Desktop et WSL n'ont pas été mesurés.
 - La virtualisation activée : Gestionnaire des tâches, Performance, Processeur, ligne
   « Virtualisation ». Si elle est désactivée, c'est un obstacle réel pour un débutant : le
   noter, ne pas le corriger en silence.
@@ -85,6 +87,17 @@ Toute aide donnée se note, avec les mots employés.
 | 5 | Fabriquer une image | | | |
 | 6 | Ouvrir le diagnostic et dire ce qu'il affiche | | | |
 
+**Quand une tâche compte « non ».** Écrit avant la séance, le 23/09/2026, pour ne pas le
+décider en voyant le résultat. Une tâche compte « non » dès que quelqu'un a dit ou montré
+quoi faire, ou dès que la personne abandonne. Elle ne compte pas « non » parce qu'elle a
+été longue : il n'y a pas de durée plafond. La durée se note à part, et les téléchargements
+de la tâche 1 dépendent de la ligne, pas de la personne. Une panne du Studio compte
+« non » : la personne n'y est pour rien, mais l'indicateur mesure ce qu'elle obtient.
+
+Tâche 5 : le 13/09, « Image » a rendu du texte sur l'autre ordinateur, et la cause n'a pas
+été établie. Si cela revient, noter la réponse exacte et copier le diagnostic (bouton
+**Copier ce diagnostic**) avant de toucher à quoi que ce soit.
+
 Indicateur : le nombre de « oui » sur 6. Le reporter, daté, dans `PLAN.md` (étape 5), avec
 l'état de départ de la section 1 et la version testée : la page du Studio l'affiche
 (« version installée … »).
@@ -102,6 +115,14 @@ Si Docker affiche « Virtualization support not detected », la virtualisation e
 dans le BIOS ou l'UEFI. C'est un blocage : il se note comme tel.
 
 ## 4. À observer en plus, propre à Windows
+
+- **ZIP d'abord, puis clone.** `demarrer.cmd` conseille à qui a pris le ZIP de reprendre le
+  dossier avec VS Code (`Git: Clone`). Le ZIP s'extrait en `free-ai-studio-main`, le clone en
+  `free-ai-studio` : deux projets Docker, mais les mêmes noms de conteneurs. Essai à blanc du
+  23/09/2026 dans un Docker vide : le second démarrage échoue (`Conflict. The container name
+  "/free-ai-studio-voix" is already in use`), le premier Studio reste intact. `demarrer.ps1`
+  ne reconnaît pas ce message et dit « la cause n'est pas de celles que ce script
+  reconnaît ». Si la personne passe par là, noter ce qu'elle fait ensuite.
 
 - **Avertissement au double-clic.** Un `demarrer.cmd` venu d'un ZIP fait-il paraître
   « Fichier ouvert — Avertissement de sécurité » ou SmartScreen ? La personne sait-elle quoi
@@ -121,9 +142,10 @@ dans le BIOS ou l'UEFI. C'est un blocage : il se note comme tel.
 ## 5. Après
 
 Garder le Studio ou le retirer appartient au propriétaire de l'ordinateur. Pour le retirer :
-désinstaller Docker Desktop (Paramètres, Applications), supprimer le raccourci « Free AI
-Studio - mises a jour » du dossier Démarrage (touches Windows+R, taper `shell:startup`),
-puis supprimer le dossier du Studio.
+désinstaller Docker Desktop (Paramètres, Applications), supprimer **les deux** raccourcis
+du dossier Démarrage (touches Windows+R, taper `shell:startup`) : « Free AI Studio - mises
+a jour » et « Free AI Studio - sonde de la carte ». `demarrer.cmd` pose le second sur toute
+machine, avec ou sans carte graphique. Supprimer enfin le dossier du Studio.
 
 Ce que l'essai ne mesure pas : macOS, Linux, les autres versions de Windows ; une seule
 personne sur un seul ordinateur ne fait pas une statistique.

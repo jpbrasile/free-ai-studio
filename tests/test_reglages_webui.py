@@ -76,6 +76,51 @@ def test_arena_en_panne_pas_de_temoin(routeur):
     assert not routeur.ARENA_FAIT.exists()
 
 
+def jeton_face_a(routeur, monkeypatch, reponses):
+    """Rejoue webui_jeton contre une suite de reponses a la connexion."""
+    monkeypatch.setattr(routeur, "WEBUI_JETON_PAUSE", 0)
+    vues = []
+
+    def webui(requete):
+        vues.append(requete.url.path)
+        reponse = reponses[min(len(vues), len(reponses)) - 1]
+        if isinstance(reponse, Exception):
+            raise reponse
+        return reponse
+
+    async def une_fois():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(webui)) as client:
+            return await routeur.webui_jeton(client)
+    return asyncio.run(une_fois()), len(vues)
+
+
+def test_connexion_en_course_retentee(routeur, monkeypatch):
+    # Essai du 23/09/2026 : deux connexions simultanees creent admin@localhost
+    # ensemble, la seconde prend un 500. Le routeur doit retenter, pas renoncer.
+    jeton, appels = jeton_face_a(routeur, monkeypatch, [
+        httpx.Response(500, json={"detail": "UNIQUE constraint failed"}),
+        httpx.Response(200, json={"token": "t"}),
+    ])
+    assert (jeton, appels) == ("t", 2)
+
+
+def test_connexion_coupee_retentee(routeur, monkeypatch):
+    jeton, appels = jeton_face_a(routeur, monkeypatch, [
+        httpx.ConnectError("coupe"), httpx.Response(200, json={"token": "t"})])
+    assert (jeton, appels) == ("t", 2)
+
+
+def test_vrai_compte_refus_definitif(routeur, monkeypatch):
+    # Un 4xx veut dire un vrai compte : retenter ne changerait rien.
+    jeton, appels = jeton_face_a(routeur, monkeypatch, [httpx.Response(400)])
+    assert (jeton, appels) == (None, 1)
+
+
+def test_panne_durable_abandon_borne(routeur, monkeypatch):
+    jeton, appels = jeton_face_a(routeur, monkeypatch, [httpx.Response(500)])
+    assert (jeton, appels) == (None, routeur.WEBUI_JETON_ESSAIS)
+
+
 def test_installation_existante_recoit_le_reglage(routeur, monkeypatch):
     # Le temoin des reglages de confort existe deja : Arena est retire quand
     # meme, et les reglages de confort ne sont pas refaits.
