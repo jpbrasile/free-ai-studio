@@ -3726,12 +3726,56 @@ async def dessin(nom: str, telecharger: int = 0):
     return Response(content=chemin.read_bytes(), media_type="image/svg+xml", headers=entetes)
 
 
+# Friction du 23/09/2026 : « on ne peut pas demander une chaine depuis le
+# chat ». Le chat ne savait rien des pages du Studio. Il ne LANCE toujours
+# rien : une chaine, une video ou une chanson coute ou fait sortir des
+# donnees, et c'est la page qui le montre avant le clic. Il donne le lien.
+# Les appels internes (la chaine elle-meme, via X-Studio-Interne) n'ont
+# pas cette consigne : elle fausserait la lecture de leurs phrases.
+CONSIGNE_STUDIO = (
+    "Tu es le chat de Free AI Studio. Ce chat ne fabrique lui-même ni vidéo, ni "
+    "chanson, ni dialogue à deux voix, et n’enchaîne pas plusieurs étapes : ces "
+    "travaux se font sur des pages du Studio, qui montrent le coût et ce qui quitte "
+    "l’ordinateur avant de lancer. Quand on te demande l’un d’eux, dis-le en une "
+    "phrase et donne le lien :\n"
+    "- une vidéo : http://localhost:8020/video\n"
+    "- une chanson : http://localhost:8020/chanson\n"
+    "- un dialogue à deux voix : http://localhost:8020/dialogue\n"
+    "- plusieurs étapes à la suite (par exemple « résume ce PDF, puis lis-le à deux "
+    "voix ») : http://localhost:8020/composite?phrase= suivi de la demande de la "
+    "personne, espaces remplacés par %20. La page y pose la demande, sans rien lancer.\n"
+    "N’invente aucune autre page. Pour tout le reste, réponds normalement, sans "
+    "parler de ces pages."
+)
+
+
+def avec_consigne_studio(payload: dict) -> dict:
+    """Pose la consigne du Studio en tete, sans ecraser celle de la personne.
+
+    Une consigne systeme deja la (reglage d'Open WebUI) est gardee : la
+    notre passe devant, dans le MEME message, certains services refusant
+    deux messages systeme."""
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return payload
+    premier = messages[0] if messages else None
+    if (isinstance(premier, dict) and premier.get("role") == "system"
+            and isinstance(premier.get("content"), str)):
+        if premier["content"].startswith(CONSIGNE_STUDIO):
+            return payload
+        tete = {**premier, "content": CONSIGNE_STUDIO + "\n\n" + premier["content"]}
+        return {**payload, "messages": [tete] + messages[1:]}
+    return {**payload, "messages": [{"role": "system", "content": CONSIGNE_STUDIO}] + messages}
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, authorization: Optional[str] = Header(default=None)):
     if not auth_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     payload = await request.json()
+    if not request.headers.get("x-studio-interne"):
+        payload = avec_consigne_studio(payload)
     if boost_active():
         # Exact budget accounting is prioritized over streaming during a paid Boost.
         payload["stream"] = False

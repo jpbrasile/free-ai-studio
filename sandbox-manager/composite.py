@@ -1292,6 +1292,12 @@ def _cle_du_routeur() -> str:
     return cle
 
 
+# Le chat du Studio recoit une consigne qui presente les pages (routeur,
+# CONSIGNE_STUDIO). Les appels de la chaine n'en veulent pas : elle fausserait
+# la lecture de la phrase et les resumes. Cet en-tete dit « appel interne ».
+ENTETE_INTERNE = {"X-Studio-Interne": "1"}
+
+
 def appeler_le_modele(consigne: str) -> str:
     """Le SEUL appel a un modele de toute la chaine, et il est gratuit.
 
@@ -1304,7 +1310,7 @@ def appeler_le_modele(consigne: str) -> str:
     with httpx.Client(timeout=DELAI_S) as client:
         reponse = client.post(
             ROUTEUR + "/v1/chat/completions",
-            headers={"Authorization": "Bearer " + _cle_du_routeur()},
+            headers={"Authorization": "Bearer " + _cle_du_routeur(), **ENTETE_INTERNE},
             json={"model": "free-ai-auto", "stream": False,
                   "messages": [{"role": "user", "content": consigne}]})
         if reponse.status_code >= 400:
@@ -1363,7 +1369,7 @@ def lancer_par_le_routeur(etape: dict, entree):
     # n'a pas besoin d'un routeur joignable pour etre illisible.
     image = _data_uri(etape, entree) if genre == "vision" else None
 
-    entetes = {"Authorization": "Bearer " + _cle_du_routeur()}
+    entetes = {"Authorization": "Bearer " + _cle_du_routeur(), **ENTETE_INTERNE}
 
     with httpx.Client(timeout=DELAI_S) as client:
         if genre == "transcription":
@@ -1732,6 +1738,18 @@ ou Groq. Chaque \u00e9tape dit ensuite ce qui quitte votre ordinateur, et chez q
 <script>
 const CLE = "__CLE__";
 let derniere = null;
+
+// Le chat donne un lien /composite?phrase=... (friction du 23/09 : « on ne
+// peut pas demander une chaine depuis le chat »). La phrase est seulement
+// POSEE dans la case : rien n'est envoye ni lance avant un clic, le verdict
+// et ce qui quitte l'ordinateur restent sous les yeux d'abord.
+try {
+  const venue = new URLSearchParams(location.search).get("phrase");
+  if (venue) {
+    document.getElementById("phrase").value = venue.slice(0, 2000);
+    document.getElementById("voir").focus();
+  }
+} catch (e) {}
 
 function bloc(v){
   const noms = {oui:"C\u2019est possible", partiel:"Possible, avec une r\u00e9serve",

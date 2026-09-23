@@ -28,13 +28,14 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
+| 23/09/2026 | `/video` | « phare lancé » sur Kaggle, parti sur la carte de cet ordinateur : le réglage par défaut « À la maison si la carte est libre » passe avant « Si on loue : Kaggle », et rien ne le rappelle au moment de choisir Kaggle | non | le propriétaire |
 | 23/09/2026 | `/video` | « vraiment très lent pour une vidéo d'une seconde » : clip Kaggle ebffade9, 29 min 22 s au total, dont 23 min 48 s de calcul (47 s par étape) pour 1 s de vidéo. Le journal dit « Precision : bfloat16 » sur un T4, qui ne le fait qu'en émulation : corrigé (float16 selon la génération de la carte, comme chanson et dialogue). Reste à mesurer le gain par un vrai clip, et à vérifier que l'image n'est pas abîmée en float16 | oui | le propriétaire |
-| 23/09/2026 | le chat | on ne peut pas demander une chaîne depuis le chat : il renvoie à Open WebUI, qui ne connaît pas `/composite`. La carte « Enchaîner » de l'accueil donne l'adresse, mais demander dans le chat reste impossible | non | le propriétaire |
 
 ## Levées
 
 | Date | Page | Ce qui gênait | Bloquait ? | Levée par | Vue par |
 |---|---|---|---|---|---|
+| 23/09/2026 | le chat | on ne pouvait pas demander une chaîne depuis le chat : il renvoyait à Open WebUI, qui ne connaît pas `/composite`. Le chat reçoit maintenant les pages du Studio et donne un lien `/composite?phrase=…` qui pose la demande dans la case, sans rien lancer ; les appels internes de la chaîne en sont exclus | non | ce commit (tests seulement, à essayer dans le chat) | le propriétaire |
 | 23/09/2026 | `/video` | la vidéo sur Kaggle échouait (`CUBLAS_STATUS_ALLOC_FAILED`, travail `ef554b3c…`) : la table des mots du lecteur de texte était recréée au hasard, environ 2 Go de trop sur un T4 de 14,6 Go. Rattachée à la main : le clip ebffade9 a réussi, le journal dit « Table des mots … rattachée » et 14,5 Go libres avant le calcul | oui | 5c05a3c, vérifié en vrai | le propriétaire |
 | 23/09/2026 | `/video` | « en appuyant sur suivre elle ne s'affiche pas » : le suivi ne disait que « En cours depuis 1072 s », sous un formulaire resté sur 5 secondes et Modal ; le clip suivi faisait 1 s chez Kaggle, sa fiche disait « carte L4 », et « le modèle se télécharge une seule fois » est faux chez Kaggle. Le suivi dit maintenant titre, durée, fournisseur et carte, avec l'attente propre à Kaggle | non | ce commit (tests seulement) | le propriétaire |
 | 23/09/2026 | `/chanson` | « elle coupe avant la fin (vue sur la partition) » : chanson Kaggle e1b68125, 60 s chantées pour une partition écrite de 72,3 s. Rien ne disait quelle durée choisir. Une chanson coupée dit maintenant la durée à choisir la prochaine fois, en précisant qu'une relance écrit une autre partition | non | ce commit (tests seulement) | le propriétaire |
