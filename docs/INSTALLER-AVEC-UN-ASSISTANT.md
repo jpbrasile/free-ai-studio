@@ -59,6 +59,13 @@ Ton rôle ici : installer, vérifier, et rendre la main. Tu n'es pas là pour am
 
    **La clé se colle sur la page, jamais dans ta conversation.**
 
+   Une clé que la page Clés ne prend pas (la Management Key d'OpenRouter pour le Boost,
+   Hugging Face, Cloudflare) va dans `.env`, et c'est encore la personne qui la saisit :
+   sous Windows, double-clic sur `saisir-une-cle.cmd` ; sous Linux ou macOS,
+   `./scripts/saisir-cle.sh` dans **son** terminal. La saisie ne s'affiche pas, le script
+   écrit `.env` et propose de relancer les services. Tu lui dis quel nom choisir dans la
+   liste ; tu ne lances pas ce script toi-même et tu ne demandes jamais la valeur.
+
 ## Ce que tu ne fais jamais
 
 - **Modifier le code du dépôt.** Aucun fichier suivi par git. Le bouton « Mettre à jour » du
@@ -66,8 +73,9 @@ Ton rôle ici : installer, vérifier, et rendre la main. Tu n'es pas là pour am
   se perd. Si quelque chose casse, tu le décris ; la correction se fait dans le dépôt
   d'origine.
 - **Lire, afficher ou recopier un secret** : les valeurs de `.env`, `config/keys.json`,
-  `config/sandbox-keys.json`. Pour savoir si une clé est en place, la page Clés et
-  l'auto-test le disent sans la montrer.
+  `config/sandbox-keys.json`. Pour savoir si une clé est en place, la page Clés, l'auto-test
+  et la liste de `saisir-une-cle.cmd` (« [deja renseignee] ») le disent sans la montrer.
+  N'écris pas non plus une clé dans `.env` à la place de la personne.
 - **Payer ou engager une dépense** : saisir une carte, acheter des crédits, activer un
   modèle payant ou le Boost, relever un plafond (`FREE_ONLY`, `ALLOW_PAID_MODELS`,
   `ALLOW_PAID_GPU`, `MAX_DAILY_COST`, `MODAL_BUDGET_USD_PAR_MOIS`).

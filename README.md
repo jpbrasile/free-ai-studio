@@ -78,16 +78,29 @@ deuxième veilleur.
 Il reste alors **une seule chose** à faire : sur la page, cliquer **Clés** et coller une clé
 Google Gemini gratuite. Elle suffit pour écrire, lire une image et fabriquer une image.
 
+Les clés que la page Clés ne prend pas (Management Key d'OpenRouter pour le Boost, Hugging
+Face, Cloudflare) : **double-clic sur `saisir-une-cle.cmd`**, choisir le nom dans la liste,
+coller la clé. Rien ne s'affiche pendant la saisie ; le script l'écrit dans `.env` et
+propose de relancer les services. Sous Linux ou macOS : `./scripts/saisir-cle.sh`.
+
 **Si quelque chose ne marche pas**, le Studio se diagnostique lui-même :
 <http://127.0.0.1:8010/diagnostic> teste la chaîne maillon par maillon, dit où elle casse,
 propose un bouton **Réparer la liaison** et un bouton **Copier ce diagnostic** — de quoi
 montrer l'état exact à quelqu'un sans avoir à le décrire. Aucune clé n'y figure. Les pannes
-déjà rencontrées et ce qui les a réglées : [docs/DEPANNAGE.md](docs/DEPANNAGE.md).
+déjà rencontrées et ce qui les a réglées : [docs/DEPANNAGE.md](docs/DEPANNAGE.md). Et si
+vous restez bloqué : le chemin de secours ci-dessous.
 
-## Installation avec un assistant de codage
+## Chemin de secours : un assistant de codage
 
-L'assistant récupère lui-même le Studio et l'installe. Vous installez trois choses, puis
-vous lui dites une phrase.
+Le chemin normal reste les cinq gestes ci-dessus. Celui-ci sert quand `demarrer.cmd`
+s'arrête sur **ARRET** et que son conseil ne suffit pas, quand vous ne savez plus où en est
+l'installation, ou si vous avez déjà un assistant de codage sous la main. L'assistant
+récupère le Studio s'il manque, lance le même `demarrer.cmd`, lit ses messages et le
+diagnostic à votre place, et vous dit quoi cliquer.
+
+Le Studio est open source : l'assistant peut tout lire du code. Il ne voit pas vos clés :
+elles se saisissent sur la page **Clés** ou avec `saisir-une-cle.cmd`, jamais dans la
+conversation.
 
 ### 1. Installer
 - Docker Desktop, ouvert, baleine verte (geste 1 de la section précédente) ;
@@ -125,7 +138,8 @@ Si le dossier `free-ai-studio` est déjà là, ouvrez l'assistant dedans et dite
 
 > Lis docs/INSTALLER-AVEC-UN-ASSISTANT.md et installe Free AI Studio sur cet ordinateur.
 
-Le guide dit à l'assistant ce qu'il lance, ce qu'il ne touche jamais (le code, vos clés,
+Si l'installation s'est arrêtée en route, ajoutez ce que la fenêtre de `demarrer.cmd` a
+affiché. Le guide dit à l'assistant ce qu'il lance, ce qu'il ne touche jamais (le code, vos clés,
 les paiements) et ce qu'il vous rend à la fin.
 
 ### 3. Installation manuelle alternative
