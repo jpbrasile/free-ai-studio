@@ -488,10 +488,18 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
     # Le vrai pire cas de la chaine, tel que les gardes le comptent : servi plus
     # bas a la phrase du cout. None des qu'un pas n'a pas de mesure propre.
     pire_des_gardes = None
+    # Le pire cas de CHAQUE pas mesure par sa garde. Il donne aussi un maximum
+    # au pas que le registre laisse sans nombre (dialogue, 23/09/2026 : registre
+    # vide, garde 0,759 $) -- un nombre de la garde, pas une estimation.
+    pire_par_pas: dict[int, float] = {}
     if sonde_mesure and not ferme:
-        louables = [sonde_mesure(e) for e in etapes if BUDGET_PAR_BRIQUE.get(e["brique"])]
-        if louables and all(m and not m["refus"] for m in louables):
-            pire_des_gardes = sum(m["cout_max_usd"] for m in louables)
+        louables = [(e, sonde_mesure(e)) for e in etapes
+                    if BUDGET_PAR_BRIQUE.get(e["brique"])]
+        for e, m in louables:
+            if m and not m["refus"] and m["cout_max_usd"] is not None:
+                pire_par_pas[id(e)] = m["cout_max_usd"]
+        if louables and len(pire_par_pas) == len(louables):
+            pire_des_gardes = sum(pire_par_pas.values())
     if cumul:
         faits.append({"quoi": "budget_cumule",
                       "applications": cumul["applications"],
@@ -545,7 +553,9 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
         etat = INCONNU
 
     # --- le cout : des nombres mesures, ou rien -------------------------------
-    sans_nombre = [e for e in etapes if e["cout_max_usd"] is None]
+    sans_nombre = [e for e in etapes
+                   if e["cout_max_usd"] is None and id(e) not in pire_par_pas]
+    sans_mesure = [e for e in etapes if e["cout_max_usd"] is None and id(e) in pire_par_pas]
     total = sum(e["cout_max_usd"] or 0 for e in etapes)
     if sans_nombre:
         if etat == OUI:
@@ -566,6 +576,23 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                       "consequence": "le plancher n'est pas un prix : on ne "
                                      "peut pas dire ce que cette cha\u00eene "
                                      "co\u00fbtera au pire"})
+    elif sans_mesure:
+        # Un maximum sans cout habituel : le pire cas se dit, l'<< environ >> se
+        # tait. Tous les pas louables sont mesures ici (sinon `sans_nombre`).
+        pire = pire_des_gardes + sum(e["cout_max_usd"] or 0 for e in etapes
+                                     if id(e) not in pire_par_pas)
+        noms = ", ".join(e["fonction"] for e in sans_mesure)
+        pourquoi.append(
+            "Au pire, si chaque calcul lou\u00e9 allait jusqu'\u00e0 son d\u00e9lai, cette "
+            "cha\u00eene co\u00fbte %s. " % format_fr.en_dollars(pire)
+            + ("%s n'a pas encore de co\u00fbt mesur\u00e9 par travail : on ne peut pas "
+               "dire son co\u00fbt habituel, seulement ce maximum."
+               if len(sans_mesure) == 1 else
+               "%s n'ont pas encore de co\u00fbt mesur\u00e9 par travail : on ne peut pas "
+               "dire leur co\u00fbt habituel, seulement ce maximum.") % noms)
+        faits.append({"quoi": "cout_maximum",
+                      "montant": format_fr.en_dollars(pire),
+                      "sans_mesure_par_travail": [e["fonction"] for e in sans_mesure]})
     elif total > 0 and pire_des_gardes is not None and pire_des_gardes > total:
         # Le registre porte le cout MESURE d'un travail (0,277 $ pour un clip de
         # 5 s) ; la garde du budget, le pire cas qu'elle refuse d'entamer (0,883 $,

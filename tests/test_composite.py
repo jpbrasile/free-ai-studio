@@ -122,6 +122,7 @@ import sys  # noqa: E402
 
 sys.path.insert(0, str(RACINE / "sandbox-manager"))
 import composite  # noqa: E402
+import format_fr  # noqa: E402
 
 
 @pytest.fixture
@@ -900,9 +901,14 @@ def _verdict_inconnu(apps):
     FAITS, eux, ne sont pas inventes : ils sortent de `verifier` sur
     `[dialogue]`, et le test du cout les epingle separement. Le jour ou une
     route s'ajoute, le cliquet rougit et cette construction redevient inutile.
+
+    Depuis le 23/09, la garde du module donne un maximum a `dialogue` : le cout
+    << sans nombre >> ne se voit plus que quand elle ne rend rien -- d'ou la
+    sonde muette.
     """
     reel = composite.verifier(
-        composite.chaine_depuis_briques(["dialogue"], apps))
+        composite.chaine_depuis_briques(["dialogue"], apps),
+        sonde_mesure=lambda _e: None)
     assert any(f["quoi"] == "cout_sans_nombre" for f in reel["faits"]), reel
     return dict(reel, atteignable=composite.INCONNU,
                 pourquoi=composite.ENTETE[composite.INCONNU]
@@ -1083,9 +1089,13 @@ def test_un_cout_sans_nombre_mesure_est_DIT_et_jamais_arrondi_a_zero(apps):
     annoncait le jour ou : << le jour ou une route de loueur s'ouvrira, il
     rougira de nouveau, et cette fois les deux etats redeviendront montrables
     au client >>. Il a rougi, et l'etat est montrable.
+
+    Depuis le 23/09, la garde du module donne un maximum a `dialogue` (test
+    suivant) : ce cas-ci ne vaut plus que quand elle ne rend rien.
     """
     verdict = composite.verifier(
-        composite.chaine_depuis_briques(["dialogue"], apps))
+        composite.chaine_depuis_briques(["dialogue"], apps),
+        sonde_mesure=lambda _e: None)
     assert "cout_sans_nombre" in verdict["motifs"], verdict["motifs"]
     assert verdict["cout_max_usd"] == 0
     fait = [f for f in verdict["faits"] if f["quoi"] == "cout_sans_nombre"]
@@ -1094,6 +1104,44 @@ def test_un_cout_sans_nombre_mesure_est_DIT_et_jamais_arrondi_a_zero(apps):
     assert "inconnu" in fait[0]["maximum"], fait[0]
     assert verdict["atteignable"] == composite.INCONNU, verdict["motifs"]
     assert "brique_sans_route" not in verdict["motifs"], verdict["motifs"]
+
+
+def test_le_dialogue_a_un_MAXIMUM_celui_de_sa_garde(apps, tmp_path, monkeypatch):
+    """Le registre n'a pas de cout par dialogue ; la garde du module, si.
+
+    Avant le 23/09, le verdict disait << on ne peut pas dire son maximum >>
+    alors que `dialogue.budget_verifier` refuse deja au pire cas, chiffre en
+    main (0,759 $). Ce nombre-la est le maximum : on le dit, et on avoue que le
+    cout HABITUEL reste inconnu. Vraie garde, compteur jetable.
+    """
+    import budget_modal
+    monkeypatch.setattr(budget_modal, "FICHIER", tmp_path / "modal-budget.json")
+    chaine = composite.chaine_depuis_briques(["dialogue"], apps)
+    pire = composite.mesure_du_noeud(chaine["etapes"][0])["cout_max_usd"]
+    assert pire > 0, pire
+    verdict = composite.verifier(chaine)
+    assert "cout_sans_nombre" not in verdict["motifs"], verdict["motifs"]
+    fait = [f for f in verdict["faits"] if f["quoi"] == "cout_maximum"]
+    assert len(fait) == 1, verdict["faits"]
+    assert fait[0]["montant"] == format_fr.en_dollars(pire), fait[0]
+    assert fait[0]["sans_mesure_par_travail"] == [chaine["etapes"][0]["fonction"]], fait[0]
+    assert format_fr.en_dollars(pire) in verdict["pourquoi"], verdict["pourquoi"]
+    assert "coût habituel" in verdict["pourquoi"], verdict["pourquoi"]
+    assert verdict["atteignable"] != composite.INCONNU, verdict["motifs"]
+
+
+def test_dialogue_plus_clip_additionne_la_garde_et_le_registre(apps):
+    """Le maximum d'une chaine mixte : garde pour le pas sans nombre, garde
+    aussi pour le clip (son pire cas passe le cout mesure du registre)."""
+    mesures = {"dialogue": 0.759, "video_rapide": 0.883}
+    chaine = composite.chaine_depuis_briques(["dialogue"], apps)
+    chaine["etapes"] += composite.chaine_depuis_briques(["video_rapide"], apps)["etapes"]
+    verdict = composite.verifier(
+        chaine, sonde_budget=lambda _e: None,
+        sonde_mesure=lambda e: {"refus": None, "cout_max_usd": mesures[e["brique"]],
+                                "reste_usd": 15.0})
+    fait = [f for f in verdict["faits"] if f["quoi"] == "cout_maximum"]
+    assert len(fait) == 1 and fait[0]["montant"] == format_fr.en_dollars(0.759 + 0.883), fait
 
 
 # Deux cartes POSEES. Elles rendent la forme de `gpu_local.utilisable` : le
