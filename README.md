@@ -86,26 +86,28 @@ déjà rencontrées et ce qui les a réglées : [docs/DEPANNAGE.md](docs/DEPANNA
 
 ## Installation avec un assistant de codage
 
+L'assistant récupère lui-même le Studio et l'installe. Vous installez trois choses, puis
+vous lui dites une phrase.
+
 ### 1. Installer
-- Git
-- Docker Desktop
-- VS Code
+- Docker Desktop, ouvert, baleine verte (geste 1 de la section précédente) ;
+- Git : <https://git-scm.com/download/win> sous Windows. L'assistant s'en sert pour
+  récupérer le Studio, et le bouton « Mettre à jour » aussi ;
 - un assistant de codage disposant, avec votre autorisation, d'un accès aux fichiers et au terminal.
 
 **Pas d'assistant ? opencode, gratuit et sans compte.** Sous Windows :
 
-1. Installer **Node.js**, version LTS : <https://nodejs.org/>. Suivant jusqu'au bout, puis
-   fermer et rouvrir VS Code, qui ne voit Node qu'à son démarrage.
-2. Dans VS Code, menu **Terminal** → **Nouveau terminal**, et taper :
+1. Installer **Node.js**, version LTS : <https://nodejs.org/>. Suivant jusqu'au bout.
+2. Ouvrir un terminal : touche Windows, taper `powershell`, Entrée. Puis taper :
    `npm.cmd install -g opencode-ai`
    Écrire `npm.cmd`, pas `npm` : sur un Windows neuf, PowerShell refuse `npm` (« l'exécution
    de scripts est désactivée sur ce système »), pas `npm.cmd`.
-3. Une fois le dossier du Studio ouvert (étape 3 ci-dessous), taper `opencode.cmd` dans le
-   même terminal.
+3. Dans le même terminal, aller dans vos Documents et lancer opencode :
+   `cd $HOME\Documents`, puis `opencode.cmd`.
 4. Taper `/models` et choisir un modèle gratuit : ceux dont le nom finit par `free`, ou
    `big-pickle`. Aucune clé ni aucun compte n'est demandé. La liste change avec le temps.
 
-Sous Linux ou macOS : `npm install -g opencode-ai`, puis `opencode`.
+Sous Linux ou macOS : `npm install -g opencode-ai`, puis `cd ~/Documents` et `opencode`.
 
 *Essayé le 23/09/2026 dans un Docker vide sous Linux (opencode 1.18.32, modèle
 `big-pickle`, aucun compte) : installation menée seule en 6 min 10 s, aucun fichier du dépôt
@@ -113,23 +115,20 @@ modifié, aucun secret lu, auto-test entièrement vert. Le refus de `npm` et l'a
 `npm.cmd` ont été vérifiés sous Windows ; un opencode installé sur un Windows neuf ne l'a
 pas été.*
 
-### 2. Cloner le dépôt
+### 2. Dire la phrase
 
-```bash
-git clone https://github.com/jpbrasile/free-ai-studio.git
-cd free-ai-studio
-```
+L'assistant ouvert dans vos Documents, lui écrire :
 
-### 3. Ouvrir le dossier dans VS Code
+> Clone https://github.com/jpbrasile/free-ai-studio.git dans ce dossier, puis lis docs/INSTALLER-AVEC-UN-ASSISTANT.md dans le dossier cloné et installe Free AI Studio sur cet ordinateur.
 
-Puis demander à l'assistant :
+Si le dossier `free-ai-studio` est déjà là, ouvrez l'assistant dedans et dites seulement :
 
-> Lis `docs/INSTALLER-AVEC-UN-ASSISTANT.md` et installe Free AI Studio sur cet ordinateur.
+> Lis docs/INSTALLER-AVEC-UN-ASSISTANT.md et installe Free AI Studio sur cet ordinateur.
 
 Le guide dit à l'assistant ce qu'il lance, ce qu'il ne touche jamais (le code, vos clés,
 les paiements) et ce qu'il vous rend à la fin.
 
-### 4. Installation manuelle alternative
+### 3. Installation manuelle alternative
 
 Linux/macOS :
 

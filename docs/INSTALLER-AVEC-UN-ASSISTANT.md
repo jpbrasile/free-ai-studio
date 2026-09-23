@@ -19,9 +19,18 @@ Ton rôle ici : installer, vérifier, et rendre la main. Tu n'es pas là pour am
    l'installe pas toi-même : il demande les droits d'administrateur et souvent un
    redémarrage. « Virtualization support not detected » : suis `docs/DEPANNAGE.md`, section
    du même nom, et dis à la personne ce qu'elle doit cliquer.
-3. **Le dossier.** Si tu n'es pas déjà dans le dépôt, clone-le dans `Documents` :
-   `git clone https://github.com/jpbrasile/free-ai-studio.git`. Git crée lui-même le
-   sous-dossier `free-ai-studio`.
+3. **Le dossier.** Trois cas.
+   - Tu es déjà dans le dépôt (il contient `demarrer.cmd` et `docker-compose.yml`) : reste-y.
+   - Un dossier `free-ai-studio` existe déjà là où tu es : entres-y, ne reclone pas.
+     Deux dossiers du Studio sur la même machine se gênent (`docs/DEPANNAGE.md`, « Le piège
+     du dossier imbriqué »).
+   - Sinon, clone depuis le dossier **parent** que la personne t'a donné (`Documents` par
+     défaut) : `git clone https://github.com/jpbrasile/free-ai-studio.git`, puis entre dans
+     `free-ai-studio`. Git crée lui-même ce sous-dossier : ne le crée pas avant.
+
+   Git absent : dis à la personne de l'installer (<https://git-scm.com/download/win> sous
+   Windows). Ne passe pas par le ZIP de GitHub : le bouton « Mettre à jour » ne marcherait pas.
+   Toutes les commandes qui suivent se lancent **dans** `free-ai-studio`.
 4. **Le démarrage.** Le lanceur fait tout : vérifications, `.env`, mots de passe internes,
    construction, attente des services.
    - Windows : `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\demarrer.ps1`,
