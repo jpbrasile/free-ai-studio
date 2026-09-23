@@ -7,6 +7,10 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
+# Un autre dossier du Studio en marche : arret AVANT la construction (meme
+# verification que demarrer.ps1, etape 5 bis, et qu'install.sh).
+./scripts/autre-dossier.sh --arreter "$(pwd)" || exit 1
+
 # Sous quel système le Studio est lancé. Le service qui décide tourne dans un
 # conteneur Linux quelle que soit la machine : il ne PEUT pas le deviner. Sans
 # cette ligne, le message « il manque les 34 Go » nommerait un script

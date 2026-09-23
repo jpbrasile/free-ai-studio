@@ -38,3 +38,37 @@ def test_le_message_nomme_l_autre_dossier_et_ne_dit_pas_de_relancer_ici():
 
 def test_le_conflit_de_noms_est_reconnu_s_il_passe_quand_meme():
     assert '"The container name .* is already in use"' in PS1
+
+
+# --- Linux et macOS : le meme garde-fou dans install.sh et start.sh ----------
+# Joue en reel le 23/09/2026 : sous Linux dans un docker:dind (aucun conteneur,
+# meme dossier, meme dossier par un lien symbolique, autre dossier ; un conteneur
+# d'un autre projet ignore), et sous Git Bash sur ce PC contre le Studio lance
+# par demarrer.cmd (C:\... contre /c/..., casse et barre finale).
+SH = (RACINE / "scripts" / "autre-dossier.sh").read_text(encoding="utf-8")
+INSTALL = (RACINE / "install.sh").read_text(encoding="utf-8")
+START = (RACINE / "start.sh").read_text(encoding="utf-8")
+APPEL = './scripts/autre-dossier.sh --arreter "$(pwd)" || exit 1'
+
+
+def test_install_et_start_verifient_avant_de_rien_ecrire_ni_construire():
+    assert INSTALL.index(APPEL) < INSTALL.index("cp .env.example .env")
+    assert INSTALL.index(APPEL) < INSTALL.index("docker compose pull")
+    assert START.index(APPEL) < START.index("up -d --build")
+
+
+def test_le_jumeau_lit_la_meme_etiquette_et_ne_touche_a_rien():
+    assert "com.docker.compose.project.working_dir" in SH
+    assert "name=^free-ai-studio-" in SH
+    # << docker compose down >> n'apparait que dans le message, pour la personne.
+    code = SH[:SH.index("cat <<MESSAGE")] + SH[SH.index("\nMESSAGE\n"):]
+    for geste in ("docker rm", "docker stop", "compose down", "docker kill", "rm -rf"):
+        assert geste not in code, geste
+
+
+def test_le_message_linux_donne_les_deux_choix_et_arrete():
+    message = SH[SH.index("cat <<MESSAGE"):SH.index("\nMESSAGE\n")]
+    assert message.splitlines()[1].startswith("ARRET : ")  # le guide s'arrete sur ARRET
+    assert "Il tourne depuis : $autre" in message
+    assert "A. Garder l'ancien" in message and "B. Passer a ce dossier-ci" in message
+    assert SH.rstrip().endswith("exit 1")

@@ -16,6 +16,10 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
+# Un autre dossier du Studio en marche : arret AVANT le .env et la construction
+# (meme verification que demarrer.ps1, etape 5 bis).
+./scripts/autre-dossier.sh --arreter "$(pwd)" || exit 1
+
 if [ ! -f .env ]; then
   cp .env.example .env
   echo ".env créé depuis .env.example"
