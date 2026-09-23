@@ -1820,3 +1820,106 @@ def test_une_sonde_SANS_releve_n_invente_pas_une_carte_absente(apps):
         sonde_carte=lambda mo: (False, "prise, et je ne dis rien de plus.", None))
     assert "carte_occupee" in verdict["motifs"], verdict["motifs"]
     assert "carte_absente" not in verdict["motifs"], verdict["motifs"]
+
+
+# --- SP-FLOW-BUDGET-CUMULE : chaque pas passe seul, mais tous ensemble ? ------
+# Point 15.5 (proprietaire, 23/09/2026 ; gel leve le meme jour). Sans ce
+# controle, trois pas qui passent chacun la garde partaient l'un apres l'autre,
+# et le troisieme etait refuse -- apres avoir paye les deux premiers.
+
+def _mesures(couts, reste, refus=None):
+    """Une sonde de mesure : le pire cas de chaque brique, le meme reste."""
+    def mesure(etape):
+        if etape["brique"] not in composite.BUDGET_PAR_BRIQUE:
+            return None
+        if refus and etape["brique"] in refus:
+            return {"refus": "Refusé seul.", "cout_max_usd": None, "reste_usd": None}
+        return {"refus": None, "cout_max_usd": couts[etape["brique"]], "reste_usd": reste}
+    return mesure
+
+
+def test_deux_pas_qui_passent_seuls_mais_pas_ensemble_sont_refuses_d_avance(apps):
+    chaine = composite.chaine_depuis_briques(["chanson", "dialogue"], apps)
+    verdict = composite.verifier(
+        chaine, sonde_mesure=_mesures({"chanson": 3.0, "dialogue": 2.0}, reste=4.0))
+    assert verdict["atteignable"] == composite.NON, verdict["pourquoi"]
+    assert "budget_cumule_depasse" in verdict["motifs"], verdict["motifs"]
+    assert "5,00 $" in verdict["pourquoi"] and "4,00 $" in verdict["pourquoi"]
+    fait = next(f for f in verdict["faits"] if f["quoi"] == "budget_cumule")
+    assert fait["reste_du_mois"] == "4,00 $"
+
+
+def test_deux_pas_qui_tiennent_ENSEMBLE_passent(apps):
+    """L'autre bras : le controle additionne, il ne refuse pas tout."""
+    chaine = composite.chaine_depuis_briques(["chanson", "dialogue"], apps)
+    verdict = composite.verifier(
+        chaine, sonde_mesure=_mesures({"chanson": 3.0, "dialogue": 2.0}, reste=5.5))
+    assert "budget_cumule_depasse" not in verdict["motifs"], verdict["motifs"]
+    assert "budget_cumule_serre" not in verdict["motifs"], verdict["motifs"]
+    fait = next(f for f in verdict["faits"] if f["quoi"] == "budget_cumule")
+    assert fait["pire_cas"] == "5,00 $"
+
+
+def test_un_clip_de_trop_ne_refuse_pas_il_reste_la_carte_d_ici(apps):
+    """Chanson seule tient ; avec le clip loue, plus. Le clip peut encore se
+    faire ici : PARTIEL, comme `loueur_ferme`, jamais NON."""
+    chaine = composite.chaine_depuis_briques(["chanson", "video_rapide"], apps)
+    verdict = composite.verifier(
+        chaine, sonde_carte=lambda mo: (True, "libre.", {"vue": True}),
+        sonde_mesure=_mesures({"chanson": 3.0, "video_rapide": 2.0}, reste=4.0))
+    assert "budget_cumule_serre" in verdict["motifs"], verdict["motifs"]
+    assert "budget_cumule_depasse" not in verdict["motifs"], verdict["motifs"]
+    # Cette chaine est refusee pour d'autres raisons (types, licence de la
+    # chanson) : on ne juge ici que ce que le cumul en dit.
+    fait = next(f for f in verdict["faits"] if f["quoi"] == "budget_cumule")
+    assert fait["consequence"] == "un clip ne part que sur la carte d'ici"
+    assert "carte de votre ordinateur" in verdict["pourquoi"]
+
+
+def test_un_seul_pas_loue_ou_un_refus_seul_ne_sont_pas_additionnes(apps):
+    # Un seul pas : la garde par noeud suffit, aucun total.
+    seul = composite.chaine_depuis_briques(["chanson"], apps)
+    verdict = composite.verifier(seul, sonde_mesure=_mesures({"chanson": 9.0}, reste=1.0))
+    assert not any(f["quoi"] == "budget_cumule" for f in verdict["faits"])
+    # Un pas deja refuse seul : le verdict le dit deja, pas deux fois.
+    assert composite.cumul_de_chaine(
+        composite.chaine_depuis_briques(["chanson", "dialogue"], apps)["etapes"],
+        _mesures({"chanson": 3.0, "dialogue": 2.0}, reste=4.0, refus={"dialogue"})) is None
+
+
+def test_executer_refuse_AVANT_le_premier_pas_rien_ne_part(apps, monkeypatch):
+    """Le budget a pu bouger depuis le verdict : la garde se repose au depart."""
+    monkeypatch.setattr(composite, "mesure_du_noeud",
+                        _mesures({"chanson": 3.0, "dialogue": 2.0}, reste=4.0))
+    partis = []
+    trace = composite.executer(
+        composite.chaine_depuis_briques(["chanson", "dialogue"], apps),
+        lambda e, _x: partis.append(e["brique"]) or "son")
+    assert trace["resultat"] == "refus", trace
+    assert trace["motif"] == "budget_cumule_depasse"
+    assert "ne pas payer le début" in trace["phrase"]
+    assert partis == []
+
+
+def test_le_cumul_additionne_les_VRAIS_pires_cas_des_modules(apps, monkeypatch, tmp_path):
+    """Avec les vraies gardes de chanson et dialogue et le vrai compteur : le
+    mois est rempli juste assez pour que chacun passe seul, pas les deux."""
+    import json as _json
+
+    import budget_modal
+
+    monkeypatch.setattr(budget_modal, "FICHIER", tmp_path / "modal-budget.json")
+    chaine = composite.chaine_depuis_briques(["chanson", "dialogue"], apps)
+    couts = {e["brique"]: composite.mesure_du_noeud(e)["cout_max_usd"]
+             for e in chaine["etapes"]}
+    assert min(couts.values()) > 0.02, couts
+    plafond = budget_modal.plafond_de("chanson")
+    depense = plafond - max(couts.values()) - 0.01
+    (tmp_path / "modal-budget.json").write_text(_json.dumps(
+        {"mois": budget_modal._mois_courant(), "secondes": 0, "usd": depense}),
+        encoding="utf-8")
+    for e in chaine["etapes"]:
+        assert composite.mesure_du_noeud(e)["refus"] is None, e["brique"]
+    verdict = composite.verifier(chaine)
+    assert "budget_cumule_depasse" in verdict["motifs"], verdict["pourquoi"]
+    assert verdict["atteignable"] == composite.NON

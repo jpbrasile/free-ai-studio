@@ -26,8 +26,9 @@ CE QUI N'EST PAS ICI, ET POURQUOI :
   - aucun plafond invente. La seule barriere reelle du depot est
     `budget_modal.verifier()`, qui refuse au PIRE CAS avant de lancer. Elle est
     taillee pour UN travail -- un usage, un gpu, une duree -- donc une chaine
-    l'appelle PAR NOEUD, juste avant chaque lancement, et ne lui fabrique pas un
-    total. `ALLOW_PAID_GPU` et `MAX_DAILY_COST` sont declares dans `.env.example`
+    l'appelle PAR NOEUD, juste avant chaque lancement. Le total de chaine
+    (`cumul_de_chaine`) n'additionne que les pires cas qu'elle rend, sans
+    chiffre a lui. `ALLOW_PAID_GPU` et `MAX_DAILY_COST` sont declares dans `.env.example`
     et greppes par la CI, mais lus par AUCUN code Python : ce sont des valeurs
     par defaut documentees, pas des barrieres, et rien ici ne s'appuie dessus ;
   - aucune sortie reseau dans un bac a sable : `docker-compose.yml` pose
@@ -350,7 +351,7 @@ def licence_indeterminee(licence: str) -> bool:
 
 
 def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
-             sonde_budget=None) -> dict:
+             sonde_budget=None, sonde_mesure=None) -> dict:
     """Le verdict, rendu dans la MEME forme que `ou_calculer.decider()` :
     un etat, plus un `pourquoi` en francais affichable tel quel.
 
@@ -478,6 +479,43 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                       "dit_par_le_module": prive_du_loueur[0][1],
                       "consequence": "ce pas ne part que sur la carte d'ici"})
 
+    # --- le budget ADDITIONNE : chaque pas passe seul, mais tous ensemble ? ---
+    # Une sonde de refus injectee (`sonde_budget`, les tests) remplace toute la
+    # garde du budget : on ne va pas alors lire le vrai compteur derriere elle.
+    if sonde_mesure is None and sonde_budget is None:
+        sonde_mesure = mesure_du_noeud
+    cumul = cumul_de_chaine(etapes, sonde_mesure) if sonde_mesure and not ferme else None
+    # Le vrai pire cas de la chaine, tel que les gardes le comptent : servi plus
+    # bas a la phrase du cout. None des qu'un pas n'a pas de mesure propre.
+    pire_des_gardes = None
+    if sonde_mesure and not ferme:
+        louables = [sonde_mesure(e) for e in etapes if BUDGET_PAR_BRIQUE.get(e["brique"])]
+        if louables and all(m and not m["refus"] for m in louables):
+            pire_des_gardes = sum(m["cout_max_usd"] for m in louables)
+    if cumul:
+        faits.append({"quoi": "budget_cumule",
+                      "applications": cumul["applications"],
+                      "pire_cas": format_fr.en_dollars(cumul["tous_usd"]),
+                      "reste_du_mois": format_fr.en_dollars(cumul["reste_usd"])})
+        if cumul["loueur_seul_usd"] > cumul["reste_usd"]:
+            motifs.append("budget_cumule_depasse")
+            pourquoi.append(phrase_cumul_depasse(cumul))
+            faits[-1]["consequence"] = ("cette chaîne ne peut pas être lancée "
+                                        "aujourd'hui sans dépasser le budget")
+            etat = NON
+        elif cumul["tous_usd"] > cumul["reste_usd"]:
+            if etat == OUI:
+                etat = PARTIEL
+            motifs.append("budget_cumule_serre")
+            pourquoi.append(
+                "Si tous ses pas partaient chez le loueur, cette chaîne pourrait "
+                "coûter jusqu'à %s, plus que les %s qui restent ce mois-ci : un "
+                "clip ne partira alors que sur la carte de votre ordinateur, si "
+                "elle est libre."
+                % (format_fr.en_dollars(cumul["tous_usd"]),
+                   format_fr.en_dollars(cumul["reste_usd"])))
+            faits[-1]["consequence"] = "un clip ne part que sur la carte d'ici"
+
     # --- la licence d'USAGE : non commercial est contagieux -------------------
     nc = [e for e in etapes if est_non_commercial(e["licence"])]
     if nc:
@@ -528,6 +566,18 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                       "consequence": "le plancher n'est pas un prix : on ne "
                                      "peut pas dire ce que cette cha\u00eene "
                                      "co\u00fbtera au pire"})
+    elif total > 0 and pire_des_gardes is not None and pire_des_gardes > total:
+        # Le registre porte le cout MESURE d'un travail (0,277 $ pour un clip de
+        # 5 s) ; la garde du budget, le pire cas qu'elle refuse d'entamer (0,883 $,
+        # le meme clip jusqu'a son delai). Mesure du 23/09/2026 : dire le premier
+        # << au pire >> sous-estimait le vrai pire d'un facteur trois.
+        pourquoi.append(
+            "D'après les travaux déjà mesurés, cette chaîne coûte environ %s ; "
+            "au pire, si chaque calcul loué allait jusqu'à son délai, %s."
+            % (format_fr.en_dollars(total), format_fr.en_dollars(pire_des_gardes)))
+        faits.append({"quoi": "cout_maximum",
+                      "montant": format_fr.en_dollars(pire_des_gardes),
+                      "mesure_par_travail": format_fr.en_dollars(total)})
     elif total > 0:
         pourquoi.append(
             "Cette chaîne peut coûter jusqu'à %s au pire."
@@ -768,8 +818,8 @@ def _verdict(etat, motifs, pourquoi, chaine, total, faits):
 # Les briques qui peuvent partir chez le loueur, et le module qui porte DEJA
 # leur controle de budget -- avec SA memoire, SON usage et SA phrase de secours.
 # La chaine n'en fabrique aucun : `budget_modal.verifier()` est taille pour UN
-# travail (un usage parmi quatre, un gpu, une duree), donc un total de chaine
-# n'y entre pas et n'a pas a y entrer.
+# travail (un usage parmi quatre, un gpu, une duree). Le total de chaine
+# (`cumul_de_chaine`) n'additionne que les pires cas que ces gardes rendent.
 BUDGET_PAR_BRIQUE = {
     "video_rapide": "video",
     "chanson": "chanson",
@@ -801,8 +851,20 @@ def budget_du_noeud(etape) -> str | None:
     Ce qui reste interdit, c'est de DEPASSER, et ce n'est pas cette fonction
     qui le dit : c'est `budget_verifier(gpu, duree_max_s)` du module qui porte
     la brique, avec SA memoire, SON usage, SA duree et SA phrase de secours. La
-    chaine n'invente aucun de ces quatre chiffres, et surtout pas un total : la
-    garde est taillee pour UN travail, et on l'appelle une fois par noeud.
+    chaine n'invente aucun de ces quatre chiffres : la garde est taillee pour UN
+    travail, et on l'appelle une fois par noeud.
+    """
+    mesure = mesure_du_noeud(etape)
+    return mesure["refus"] if mesure else None
+
+
+def mesure_du_noeud(etape) -> dict | None:
+    """Ce que la garde du module dit de CE noeud, chiffres compris.
+
+    None hors loueur. Sinon `refus` (la phrase du module, ou None), et quand il
+    passe : `cout_max_usd`, son pire cas, et `reste_usd`, ce que son usage peut
+    encore prendre ce mois-ci. Les deux sortent de `budget_verifier`, jamais
+    d'ici : c'est ce qui permet a `cumul_de_chaine` d'additionner sans inventer.
     """
     usage = BUDGET_PAR_BRIQUE.get(etape["brique"])
     if not usage:
@@ -814,10 +876,64 @@ def budget_du_noeud(etape) -> str | None:
     gpu = (module.MODELES[qualite]["gpu"] if qualite
            else getattr(module, "GPU_MODAL", None))
     try:
-        module.budget_verifier(gpu, module.DUREE_MAX_S)
+        etat = module.budget_verifier(gpu, module.DUREE_MAX_S)
     except module.BudgetDepasse as exc:
-        return str(exc)
-    return None
+        return {"refus": str(exc), "cout_max_usd": None, "reste_usd": None}
+    return {"refus": None, "cout_max_usd": float(etat["cout_max_usd"]),
+            "reste_usd": max(0.0, float(etat["plafond_usd"]) - float(etat["usd"]))}
+
+
+def cumul_de_chaine(etapes, mesure=None) -> dict | None:
+    """Le pire cas ADDITIONNE des pas qui peuvent partir chez le loueur.
+
+    SP-FLOW-BUDGET-CUMULE (PLAN.md, point 15.5) : trois pas qui passent chacun
+    la garde peuvent ensemble depasser le plafond. La garde par noeud ne le voit
+    qu'au troisieme -- apres avoir paye les deux premiers pour une chaine qui
+    s'arrete en route.
+
+    None s'il y a moins de deux tels pas (la garde par noeud suffit), ou si l'un
+    d'eux est deja refuse seul (le verdict le dit deja). Sinon :
+      - `loueur_seul_usd` : la somme des pas qui n'ont QUE le loueur (chanson,
+        dialogue) -- ceux-la partiront chez lui quoi qu'il arrive ;
+      - `tous_usd` : la meme somme, clips compris, si tous partaient chez lui ;
+      - `reste_usd` : ce que les demandes peuvent encore prendre ce mois-ci.
+    Tous les usages humains partagent le meme compteur et le meme plafond
+    (`budget_modal.plafond_de`) : le plus petit reste rendu est le bon.
+    """
+    mesure = mesure or mesure_du_noeud
+    candidats = [e for e in etapes if BUDGET_PAR_BRIQUE.get(e["brique"])]
+    if len(candidats) < 2:
+        return None
+    mesures = [(e, mesure(e)) for e in candidats]
+    if any(m is None or m["refus"] for _, m in mesures):
+        return None
+    return {
+        "reste_usd": min(m["reste_usd"] for _, m in mesures),
+        "loueur_seul_usd": sum(m["cout_max_usd"] for e, m in mesures
+                               if e["brique"] in LOUEUR_SEUL),
+        "tous_usd": sum(m["cout_max_usd"] for _, m in mesures),
+        "loueur_seul": [e["fonction"] for e, _ in mesures if e["brique"] in LOUEUR_SEUL],
+        "applications": [e["fonction"] for e, _ in mesures],
+    }
+
+
+def phrase_cumul_depasse(cumul: dict) -> str:
+    return ("Ensemble, %s peuvent coûter jusqu'à %s chez le loueur, et il ne "
+            "reste que %s ce mois-ci pour les demandes. Chaque pas passerait "
+            "seul, pas tous : la chaîne n'est pas lancée, pour ne pas payer le "
+            "début d'une chaîne qui s'arrêterait en route."
+            % (", ".join(cumul["loueur_seul"]),
+               format_fr.en_dollars(cumul["loueur_seul_usd"]),
+               format_fr.en_dollars(cumul["reste_usd"])))
+
+
+def _cumul_verifie(chaine) -> None:
+    """La garde de `executer` AVANT le premier noeud : le budget peut avoir
+    bouge depuis le verdict (un autre travail, une autre page)."""
+    cumul = cumul_de_chaine(chaine["etapes"])
+    if cumul and cumul["loueur_seul_usd"] > cumul["reste_usd"]:
+        raise CompositeRefuse("budget_cumule_depasse", phrase_cumul_depasse(cumul),
+                              ou=CONTROLE)
 
 
 def _budget_verifie(etape):
@@ -836,7 +952,7 @@ def _budget_verifie(etape):
 
 
 def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
-             garde_budget=None) -> dict:
+             garde_budget=None, garde_cumul=None) -> dict:
     """Lance la chaine noeud par noeud et rend une trace.
 
     `lancer(etape, entree) -> sortie` est injecte : chaque noeud part par la
@@ -862,7 +978,17 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
                      phrase=verdict["pourquoi"])
         return trace
 
+    # Une garde par noeud injectee remplace toute la garde du budget, cumul
+    # compris : meme regle que `sonde_budget` dans `verifier`.
+    if garde_cumul is None:
+        garde_cumul = _cumul_verifie if garde_budget is None else (lambda _c: None)
     garde_budget = garde_budget or _budget_verifie
+    try:
+        garde_cumul(chaine)
+    except CompositeRefuse as refus:
+        trace.update(resultat="refus", ou=refus.ou, motif=refus.motif,
+                     phrase=refus.phrase)
+        return trace
     courant = entree
     for etape in chaine["etapes"]:
         # La demande du client voyage AVEC le pas. Elle etait portee par le
