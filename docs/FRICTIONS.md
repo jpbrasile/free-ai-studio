@@ -28,12 +28,15 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
-| — | — | aucune pour l'instant | — | — |
+| 23/09/2026 | le chat | on ne peut pas demander une chaîne depuis le chat : il renvoie à Open WebUI, qui ne connaît pas `/composite`. La carte « Enchaîner » de l'accueil donne l'adresse, mais demander dans le chat reste impossible | non | le propriétaire |
 
 ## Levées
 
 | Date | Page | Ce qui gênait | Bloquait ? | Levée par | Vue par |
 |---|---|---|---|---|---|
+| 23/09/2026 | `/video`, `/chanson`, `/dialogue` | « ma demande a disparu » : un rechargement pendant un clip loué chez Modal le faisait disparaître de la page, alors qu'il tournait encore, facturé. Chaque page liste maintenant « Vos travaux » : elle reprend seule le suivi d'un travail en cours ; on peut revoir, télécharger, supprimer (un travail en cours est arrêté puis effacé) | oui | ce commit (tests seulement, à essayer après reconstruction) | le propriétaire |
+| 23/09/2026 | accueil | l'endroit où demander une chaîne n'était pas clair : aucune carte de l'accueil ne menait à `/composite` ni à `/dialogue` | non | ce commit (tests seulement, à essayer après reconstruction) | le propriétaire |
+| 23/09/2026 | `/chanson`, `/dialogue` | le bouton « Arrêt d'urgence » s'affichait pour Kaggle, qui n'a pas d'annulation : il devient « Ne plus attendre », et la page dit que le calcul et le quota continuent | non | ce commit (tests seulement, à essayer après reconstruction) | le propriétaire |
 | 23/09/2026 | `/composite`, `/video` | « vidéo sur votre carte » (`video_maison`) pouvait partir chez Modal sans demander : carte injoignable, image jointe, durée hors table. Avec « toujours à la maison » (le réglage des chaînes), le Studio demande maintenant « louer ou annuler ? » et rien ne part ; le réglage par défaut loue encore, pour le client sans carte | oui | `8323b00` (essayé en vrai par le propriétaire le 23/09 : question posée, clip loué chez Modal) | une lecture du code |
 | 23/09/2026 | `/sandbox` | « local first before modal if ressources available, local options not always proposed » : Modal passait avant l'ordinateur et la carte d'ici | oui | `c951868`, `49af741` | le propriétaire |
 | 23/09/2026 | `/composite` | le dialogue affichait « maximum inconnu » au lieu de son coût au pire | non | `c392f6b` | le propriétaire |

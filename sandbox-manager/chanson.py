@@ -1251,7 +1251,7 @@ function suivre(id){
           const t = Math.round((Date.now()/1000) - (j.created_at || Date.now()/1000));
           etat.innerHTML = "⏳ En cours depuis " + t + " s. La première chanson est la plus "
             + "longue : le modèle se télécharge.";
-          montrerArret(id);
+          montrerArret(id, j.fournisseur);
           return;
         }
         clearInterval(minuteur); minuteur = null;
@@ -1316,11 +1316,27 @@ document.getElementById("lancer").addEventListener("click", () => {
 // et recree a chaque tour, et l'etat << Arret demande... >> disparaitrait sous
 // les doigts. Ici il est cree une fois, on ne fait que le montrer ou le cacher.
 let travailEnCours = null;
+let fournisseurEnCours = "";
 
-function montrerArret(id){
+// Kaggle n'a AUCUNE annulation : le bouton ne promet donc pas un arrêt. Il
+// dit ce qu'il fait vraiment, cesser d'attendre, et que le quota court encore
+// (remarque du propriétaire, 23/09/2026).
+function libelleArret(fournisseur){
+  return fournisseur === "kaggle" ? "Ne plus attendre" : "⛔ Arrêt d’urgence";
+}
+
+function montrerArret(id, fournisseur){
   travailEnCours = id;
+  fournisseurEnCours = fournisseur || "";
   const b = document.getElementById("arreter");
-  if(b.hidden){ b.hidden = false; b.disabled = false; b.textContent = "⛔ Arrêt d’urgence"; }
+  if(b.hidden){
+    b.hidden = false; b.disabled = false; b.textContent = libelleArret(fournisseur);
+    b.className = fournisseur === "kaggle" ? "discret" : "danger";
+    document.getElementById("arreter-texte").textContent = fournisseur === "kaggle"
+      ? "Kaggle ne sait pas s’arrêter à distance : le Studio cesserait d’attendre, "
+        + "mais le calcul continue chez Kaggle jusqu’à son échéance, et votre quota gratuit avec."
+      : "";
+  }
 }
 
 function cacherArret(){
@@ -1344,7 +1360,7 @@ document.getElementById("arreter").addEventListener("click", () => {
     .then(d => { t.textContent = d.detail || ""; })
     .catch(e => {
       b.disabled = false;
-      b.textContent = "⛔ Arrêt d’urgence";
+      b.textContent = libelleArret(fournisseurEnCours);
       t.innerHTML = '<span class="ko">✖ ' + echapper(e.message) + "</span>";
     });
 });

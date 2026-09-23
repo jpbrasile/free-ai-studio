@@ -28,6 +28,9 @@ import chanson
 import coffre
 import composite
 import depenses
+# Les derniers travaux de /video, /chanson et /dialogue : une page rechargee
+# retrouve ce qu'elle suivait (friction du 23/09/2026).
+import derniers
 import dialogue
 # Les montants et les dates s'ecrivent en francais -- virgule decimale, date en
 # jour/mois/annee -- des deux cotes : ici en Python, et dans le JavaScript des
@@ -233,7 +236,16 @@ def read_job(jid: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+# Travaux effaces depuis la page alors qu'un fil les suivait encore. Sans
+# cette liste, le fil reecrirait sa fiche a la fin -- write_job recree le
+# dossier -- et le travail efface reviendrait dans << Vos travaux >>. En
+# memoire seulement : les fils meurent avec le processus.
+SUPPRIMES: set = set()
+
+
 def write_job(jid: str, data: dict):
+    if jid in SUPPRIMES:
+        return
     d = JOBS / jid
     created = not d.exists()
     d.mkdir(parents=True, exist_ok=True)
@@ -257,6 +269,9 @@ def truncate(value: str) -> str:
 
 
 def add_artifact(jid: str, path: Path, source: str) -> dict:
+    if jid in SUPPRIMES:
+        return {"name": path.name, "job_id": jid, "source": source,
+                "skipped": True, "reason": "job_deleted"}
     if path.is_symlink() or not path.is_file():
         raise ValueError("Artifact must be a regular file")
     size = path.stat().st_size
@@ -2039,6 +2054,61 @@ def list_jobs(authorization: Optional[str] = Header(default=None)):
     return out
 
 
+def lien_de_telechargement(usage: str, jid: str) -> str:
+    """L'adresse signee du fichier d'un travail fini, ou "" s'il n'en a pas."""
+    if usage == "video":
+        trouve, cle, jeton = video_fichiers, "video", jeton_video
+    elif usage == "chanson":
+        trouve, cle, jeton = chanson_fichiers, "son", jeton_chanson
+    else:
+        trouve, cle, jeton = dialogue_fichiers, "son", jeton_dialogue
+    try:
+        if not trouve(jid).get(cle):
+            return ""
+    except HTTPException:
+        return ""
+    signe = jeton(jid)
+    return "/%s/jobs/%s/fichier?cle=%s&telecharger=1" % (usage, jid, signe) if signe else ""
+
+
+def _route_derniers(usage: str):
+    def derniers_travaux(authorization: Optional[str] = Header(default=None)):
+        auth(authorization)
+        return derniers.lister(JOBS, usage, lien=lambda jid: lien_de_telechargement(usage, jid))
+    return derniers_travaux
+
+
+def _route_suppression(usage: str):
+    def supprimer_travail(jid: str, authorization: Optional[str] = Header(default=None)):
+        """Efface un travail de cette page. En cours, il est d'abord arrete par
+        la meme route que le bouton d'arret d'urgence, qui dit ce qu'elle a
+        vraiment fait selon le fournisseur."""
+        auth(authorization)
+        if not derniers.id_sur(jid):
+            raise HTTPException(404, "Travail inconnu.")
+        job = read_job(jid)
+        if usage not in job:
+            raise HTTPException(404, "Ce travail n'est pas de cette page.")
+        arret = ""
+        if str(job.get("status") or "") in derniers.EN_COURS:
+            arret = arreter_job(jid, authorization).get("detail", "")
+        SUPPRIMES.add(jid)
+        try:
+            effaces = derniers.supprimer(JOBS, ART, usage, jid)
+        except LookupError:
+            raise HTTPException(404, "Travail inconnu.") from None
+        except derniers.TravailEnCours:
+            SUPPRIMES.discard(jid)
+            raise HTTPException(409, "Ce travail tourne encore : il n'a pas pu être arrêté.") from None
+        return {"id": jid, "supprime": True, "arret": arret, "effaces": len(effaces)}
+    return supprimer_travail
+
+
+for _usage in derniers.USAGES:
+    app.get("/%s/derniers" % _usage, name="derniers_" + _usage)(_route_derniers(_usage))
+    app.delete("/%s/jobs/{jid}" % _usage, name="supprimer_" + _usage)(_route_suppression(_usage))
+
+
 @app.get("/jobs/{jid}")
 def get_job(jid: str, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
@@ -2886,11 +2956,11 @@ def video_page():
     # Le menu des durees est fabrique a chaque affichage : il suit la loi
     # memoire, qui suit les clips mesures. Un menu ecrit en dur se serait
     # perime des le premier clip plus long.
-    return HTMLResponse(format_fr.avec_formateurs(
+    return HTMLResponse(derniers.dans_la_page(format_fr.avec_formateurs(
         video.PAGE_HTML
         .replace("__OPTIONS_DUREE__", video.options_duree_html())
         .replace("__QUALITE_LOUEE__", video.QUALITE_LOUEE_PAR_DEFAUT)
-        .replace("__CLE__", KEY)))
+        .replace("__CLE__", KEY)), "video"))
 
 
 # --- Chanson ------------------------------------------------------------------
@@ -3061,6 +3131,9 @@ def chanson_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "message": job.get("error") or "",
         "arret_detail": job.get("arret_detail") or "",
         "chanson": job.get("chanson"),
+        # Le bouton d'arret change selon le fournisseur : Kaggle n'a pas
+        # d'annulation, la page ne doit pas promettre un arret (23/09/2026).
+        "fournisseur": job.get("provider_effective") or job.get("provider") or "",
     }
     if fichiers.get("son"):
         sortie["son_url"] = f"/chanson/jobs/{jid}/fichier?cle={jeton_chanson(jid)}"
@@ -3097,8 +3170,8 @@ def chanson_fichier(jid: str, cle: str = Query(default=""),
 
 @app.get("/chanson", response_class=HTMLResponse)
 def chanson_page():
-    return HTMLResponse(format_fr.avec_formateurs(
-        chanson.PAGE_HTML.replace("__CLE__", KEY)))
+    return HTMLResponse(derniers.dans_la_page(format_fr.avec_formateurs(
+        chanson.PAGE_HTML.replace("__CLE__", KEY)), "chanson"))
 
 
 # abcjs 6.7.0 (MIT) : la bibliotheque qui dessine les portees sur /chanson.
@@ -3435,6 +3508,9 @@ def dialogue_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "message": job.get("error") or "",
         "arret_detail": job.get("arret_detail") or "",
         "dialogue": job.get("dialogue"),
+        # Le bouton d'arret change selon le fournisseur : Kaggle n'a pas
+        # d'annulation, la page ne doit pas promettre un arret (23/09/2026).
+        "fournisseur": job.get("provider_effective") or job.get("provider") or "",
     }
     if fichiers.get("son"):
         jeton = jeton_dialogue(jid)
@@ -3531,8 +3607,8 @@ def dialogue_fichier(jid: str, cle: str = Query(default=""),
 
 @app.get("/dialogue", response_class=HTMLResponse)
 def dialogue_page():
-    return HTMLResponse(format_fr.avec_formateurs(
-        dialogue.PAGE_HTML.replace("__CLE__", KEY)))
+    return HTMLResponse(derniers.dans_la_page(format_fr.avec_formateurs(
+        dialogue.PAGE_HTML.replace("__CLE__", KEY)), "dialogue"))
 
 
 @app.get("/composite", response_class=HTMLResponse)
