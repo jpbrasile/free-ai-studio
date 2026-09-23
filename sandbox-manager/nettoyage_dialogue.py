@@ -352,6 +352,15 @@ def reperer(repliques, mots, x, taux, canaux) -> list:
             details.append({"texte": texte, "garde": "fragment d'une seule lettre"})
             continue
 
+        # GARDE DES CHIFFRES. Un nombre que Whisper ecrit en chiffres et que le
+        # texte disait en lettres est la MEME parole, autrement ecrite.
+        # convertir() ne ramene que le francais jusqu'a cent : << 10 >> face a
+        # << ten >> (voix anglaise d'une chaine, 23/09) ou << 1500 >> face a
+        # << mille cinq cents >> seraient sinon coupes alors qu'ils sont dits.
+        if all(normaliser(str(mots[i].get("mot", ""))).isdigit() for i in range(b1, b2)):
+            details.append({"texte": texte, "garde": "nombre écrit en chiffres"})
+            continue
+
         t0 = float(mots[b1].get("debut", 0.0))
         t1 = float(mots[b2 - 1].get("fin", 0.0))
 

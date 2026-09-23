@@ -3740,7 +3740,8 @@ async def composite_lancer(request: Request,
         mime, nom = composite.type_de_sortie(sortie, chaine["etapes"][-1]["sorties"])
         return JSONResponse({"fichier": base64.b64encode(bytes(sortie)).decode("ascii"),
                              "type": mime, "nom": nom, "textes": textes,
-                             "derniere": derniere, "etapes": trace["etapes"]})
+                             "derniere": derniere, "etapes": trace["etapes"],
+                             "ecoute": getattr(sortie, "ecoute", None)})
     return JSONResponse({"texte": str(sortie), "textes": textes, "derniere": derniere,
                          "etapes": trace["etapes"]})
 

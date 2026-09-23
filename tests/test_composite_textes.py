@@ -52,7 +52,7 @@ def test_une_chaine_de_texte_rend_son_texte(sandbox, monkeypatch):
 
 
 def afficher(page: str, reponse: dict) -> str:
-    debut = page.index("function echapper(s){")
+    debut = page.index("function phraseEcoute(e){")
     fin = page.index("\nfunction typeDuFichier", debut)
     rendu_debut = page.index("    const d = await r.corps.json();")
     rendu_fin = page.index("  } finally {", rendu_debut)
@@ -90,5 +90,5 @@ def test_la_page_montre_le_texte_lu_sous_la_voix(page):
 def test_la_page_montre_enfin_un_resultat_texte(page):
     html = afficher(page, {"texte": "Bonjour.", "derniere": "Chat, Free AI Auto",
                            "textes": [{"fonction": "Chat, Free AI Auto", "texte": "Bonjour."}]})
-    assert "<pre class=texte>Bonjour.</pre>" in html
+    assert "<div class=texte><p>Bonjour.</p></div>" in html
     assert "Télécharger" not in html
