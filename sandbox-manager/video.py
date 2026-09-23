@@ -111,11 +111,15 @@ MODELES = {
         "hauteur": 480,
         "flow_shift": 3.0,
         "etapes": 30,
-        # DECLAREE, NON MESUREE. C'est ce que le depot servait avant le 21/09,
-        # ou la table du loueur s'arretait a 5 s (81 images a 16 img/s). Le
-        # 21/09 au matin je l'ai etendue a 9 s en la faisant deriver des ancres
-        # de la carte D'ICI -- autre modele, autre machine, aucun rapport. Elle
-        # revient a ce qui est sourceable, et sa vraie valeur est un chantier.
+        # DOCUMENTEE PAR L'AUTEUR ET MESUREE (SP-VIDEO-PLAFOND-LOUEUR, 23/09).
+        # Les auteurs donnent pour ce modele la plage « ~81x480x832 » -- 81
+        # images, soit 5 s a 16 img/s -- et tous leurs exemples font
+        # num_frames=81 ; aucun maximum n'est ecrit au-dela (lu le 23/09/2026 :
+        # huggingface.co/Wan-AI/Wan2.1-VACE-1.3B-diffusers et
+        # github.com/Wan-Video/Wan2.1, tableau des resolutions). 81 images ont
+        # tourne ici : travail `54182907`, L4, 21/09/2026 (SECONDES_MESUREES).
+        # Au-dela de 5 s, on sort de la plage documentee : qualite et memoire
+        # non etablies, et chaque essai se paie -- decision du proprietaire.
         "secondes_max": int(os.getenv("VIDEO_SECONDES_MAX_RAPIDE", "5")),
         "note": "Tient sur une petite carte : marche aussi sur Kaggle et Colab gratuits.",
     },
@@ -134,13 +138,17 @@ MODELES = {
         "hauteur": 720,
         "flow_shift": 5.0,
         "etapes": 30,
-        # Meme provenance que ci-dessus : declaree, non mesuree.
+        # DOCUMENTEE PAR L'AUTEUR, TENUE NON MESUREE. Les auteurs donnent
+        # « ~81x720x1280 » pour ce modele -- 81 images, 5 s a 16 img/s ; aucun
+        # maximum au-dela (memes sources que ci-dessus, lues le 23/09/2026).
+        # Ici, seul un clip d'1 s (17 images) a tourne, sur A100 40 Go : que
+        # 81 images en 720p tiennent dans ces 40 Go n'est PAS etabli.
         "secondes_max": int(os.getenv("VIDEO_SECONDES_MAX_SOIGNE", "5")),
-        # << environ six fois le prix >> a ete retire le 21/09/2026 : ce
-        # nombre n'avait de source nulle part dans le depot, et ce modele
-        # n'a jamais ete lance une seule fois. `prix_estime("soigne", ...)`
-        # rend None, ce qui est la bonne reponse ; la note ne dit pas plus.
-        "note": "Meilleure image. Ce modele n'a jamais ete lance : sa carte coute 1,98 fois celle de Rapide a la seconde, mais son temps de calcul n'a jamais ete mesure, donc le prix d'un clip est inconnu.",
+        # Jusqu'au 23/09 cette note disait « ce modele n'a jamais ete lance »,
+        # alors que deux clips d'1 s avaient tourne le 21/09 (`dce69faa`,
+        # `9517593d`, SECONDES_MESUREES) et que `prix_estime("soigne", "1")`
+        # rendait deja un prix. Les autres durees rendent None.
+        "note": "Meilleure image. Seul un clip d'une seconde a été chronométré : le prix des durées plus longues n'est pas encore connu.",
     },
     # Le modele de la MAISON. Il ne se choisit pas dans la liste des qualites :
     # il est choisi par `ou_calculer.decider()` quand le clip peut etre fabrique
