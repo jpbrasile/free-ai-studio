@@ -819,6 +819,22 @@ else:
         pipe.scheduler.config, flow_shift=float(D["flow_shift"])
     )
 
+# MESURE DU 23/09, sur Kaggle : « encoder.embed_tokens.weight | MISSING ...
+# newly initialized ». Selon la version de `transformers`, la table des mots
+# du lecteur de texte n'est plus reliee a celle du fichier (`shared`) : il en
+# fabrique une seconde, ALEATOIRE, d'environ 2 Go. Double peine : la
+# description est lue avec des mots au hasard, et sur un T4 de 14,6 Go la
+# place manque ensuite a cuBLAS (CUBLAS_STATUS_ALLOC_FAILED, travail
+# ef554b3c). On rattache donc la table a la main, quelle que soit la version,
+# et on le DIT dans le journal quand c'etait necessaire.
+lecteur = getattr(pipe, "text_encoder", None)
+partagee = getattr(lecteur, "shared", None)
+pile = getattr(lecteur, "encoder", None)
+if partagee is not None and pile is not None and getattr(pile, "embed_tokens", None) is not partagee:
+    pile.embed_tokens = partagee
+    print("Table des mots du lecteur de texte rattachee a celle du modele "
+          "(elle avait ete recreee au hasard au chargement).", flush=True)
+
 # MESURE DU 09/09 : tout mettre sur la carte a sature 22 Go et le clip est mort
 # en pleine compression d'images. Le coupable n'est pas le modele d'images (1,3
 # milliard de parametres) mais le LECTEUR DE TEXTE qui l'accompagne, bien plus
@@ -845,6 +861,9 @@ for piece in ("vae",):
                 print("%s.%s indisponible : %s" % (piece, methode, exc), flush=True)
 
 print("Modele pret en %.0f s" % (time.time() - t0), flush=True)
+libre, totale = torch.cuda.mem_get_info()
+print("Memoire de la carte libre avant calcul : %.1f Go sur %.1f Go"
+      % (libre / 1024 ** 3, totale / 1024 ** 3), flush=True)
 
 kwargs = dict(
     prompt=D["description"],

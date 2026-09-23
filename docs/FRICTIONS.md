@@ -28,7 +28,7 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
-| 23/09/2026 | `/video` | la vidéo sur Kaggle échoue : clip « Rapide » de 1 s, Tesla T4 de 14,6 Go, mort au bout de 205 s pendant la lecture du texte (`CUBLAS_STATUS_ALLOC_FAILED`, travail `ef554b3c…`). La page propose Kaggle comme « gratuit, plus lent », mais aucune vidéo n'y a jamais réussi. Hypothèse non prouvée : le lecteur de texte (UMT5-XXL, environ 11 Go) remplit presque toute la carte | oui | le propriétaire |
+| 23/09/2026 | `/video` | la vidéo sur Kaggle échoue : clip « Rapide » de 1 s, Tesla T4 de 14,6 Go, mort au bout de 205 s pendant la lecture du texte (`CUBLAS_STATUS_ALLOC_FAILED`, travail `ef554b3c…`). La page propose Kaggle comme « gratuit, plus lent », mais aucune vidéo n'y a jamais réussi. Cause trouvée dans le journal : la table des mots du lecteur de texte (UMT5-XXL, 11,36 Go) est recréée au hasard au chargement (« embed_tokens MISSING »), soit environ 2 Go de trop et une description lue avec des mots quelconques. Corrigé en rattachant la table à la main : reste à le prouver par un vrai clip sur Kaggle ; sinon, retirer Kaggle de `/video` | oui | le propriétaire |
 | 23/09/2026 | le chat | on ne peut pas demander une chaîne depuis le chat : il renvoie à Open WebUI, qui ne connaît pas `/composite`. La carte « Enchaîner » de l'accueil donne l'adresse, mais demander dans le chat reste impossible | non | le propriétaire |
 
 ## Levées
