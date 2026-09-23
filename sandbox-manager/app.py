@@ -2874,6 +2874,11 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
                                  "ou Kaggle » et collez votre nom d'utilisateur et votre cle Kaggle.")
 
     code = video.construire_script(plan["demande"])
+    fiche = dict(plan["resume_public"])
+    if ou == "kaggle":
+        # La table des modeles porte la carte LOUEE chez Modal ; Kaggle donne
+        # un T4. La fiche disait « L4 » pour le clip Kaggle du 23/09.
+        fiche["carte"] = "T4 (Kaggle)"
     jid = uuid.uuid4().hex
     write_job(jid, {
         "id": jid,
@@ -2884,7 +2889,7 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
         "status": "queued",
         "created_at": time.time(),
         "artifacts": [],
-        "video": plan["resume_public"],
+        "video": fiche,
         "titre": derniers.titre(payload, "video"),
         # Pourquoi ce clip part la plutot qu'ailleurs, garde avec le travail :
         # la page le montre en deux mots, et un journal le relit six mois plus
@@ -2905,6 +2910,7 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "status": job.get("status"),
         "created_at": job.get("created_at"),
         "titre": job.get("titre") or "",
+        "fournisseur": job.get("provider_effective") or job.get("provider"),
         "stdout": job.get("stdout", ""),
         "stderr": job.get("stderr", ""),
         "message": job.get("error") or (

@@ -1435,6 +1435,29 @@ function nomDeFichier(titre){
   return jour + "-" + heure + "-" + (mots || "video") + ".mp4";
 }
 
+// Ce que la page SUIT, dit en clair. Signale le 23/09 : apres « Suivre », seul
+// « En cours depuis 1072 s » s'affichait, sous un formulaire reste sur ses
+// valeurs par defaut (5 secondes, Modal) -- on croyait suivre un clip de 5 s
+// chez Modal, c'etait 1 s chez Kaggle. Et « le modele se telecharge (une seule
+// fois) » est faux chez Kaggle, qui repart d'une machine vide a chaque clip.
+const NOMS_FOURNISSEURS = {modal: "Modal", kaggle: "Kaggle", maison: "la carte de cet ordinateur"};
+function enAttente(j){
+  const t = Math.max(0, Math.round((Date.now()/1000) - (j.created_at || Date.now()/1000)));
+  const duree = t < 120 ? (t + " s") : (Math.floor(t / 60) + " min " + (t % 60) + " s");
+  const v = j.video || {};
+  const quoi = [];
+  if(v.secondes_video) quoi.push("clip de " + v.secondes_video + " s");
+  if(NOMS_FOURNISSEURS[j.fournisseur]) quoi.push("sur " + NOMS_FOURNISSEURS[j.fournisseur]);
+  if(v.carte) quoi.push("carte " + v.carte);
+  const attente = j.fournisseur === "kaggle"
+    ? "Kaggle repart d’une machine vide à chaque clip : démarrage, installation et "
+      + "téléchargement du modèle se refont à chaque fois, c’est plus lent."
+    : "Le tout premier clip est le plus long : le modèle se télécharge (une seule fois).";
+  return "⏳ " + (j.titre ? ("« " + enTexte(j.titre) + " » — ") : "")
+    + (quoi.length ? (quoi.join(", ") + " — ") : "")
+    + "en cours depuis " + duree + ". " + attente;
+}
+
 function suivre(id){
   const etat = document.getElementById("etat");
   const tour = () => {
@@ -1442,9 +1465,7 @@ function suivre(id){
       .then(r => r.json())
       .then(j => {
         if(j.status === "running" || j.status === "queued"){
-          const t = Math.round((Date.now()/1000) - (j.created_at || Date.now()/1000));
-          etat.innerHTML = "⏳ En cours depuis " + t + " s. Le tout premier clip est le plus "
-            + "long : le modèle se télécharge (une seule fois).";
+          etat.innerHTML = enAttente(j);
           return;
         }
         clearInterval(minuteur); minuteur = null;
