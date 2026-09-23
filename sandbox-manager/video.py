@@ -779,7 +779,11 @@ print("Carte : %s, %.1f Go" % (nom_gpu, vram_go), flush=True)
 
 # Un T4 est de generation Turing : il sait faire du float16, pas du bfloat16.
 # Lui imposer bfloat16 le fait retomber sur une emulation lente, en silence.
-supporte_bf16 = torch.cuda.is_bf16_supported()
+# MESURE DU 23/09 (Kaggle, ebffade9) : torch.cuda.is_bf16_supported() repond
+# OUI sur un T4 -- l'emulation existe -- et le journal disait « Precision :
+# bfloat16 » : 47 s par etape, 23 min 48 s pour 1 s de video. On regarde donc
+# la GENERATION de la carte (Ampere = 8.0 et plus), comme chanson et dialogue.
+supporte_bf16 = torch.cuda.get_device_capability(0) >= (8, 0)
 dtype = torch.bfloat16 if supporte_bf16 else torch.float16
 print("Precision : %s" % ("bfloat16" if supporte_bf16 else "float16"), flush=True)
 

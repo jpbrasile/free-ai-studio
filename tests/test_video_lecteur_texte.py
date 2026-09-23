@@ -54,6 +54,15 @@ def test_un_modele_sans_lecteur_de_ce_type_passe(sandbox):
     assert executer(sandbox.video, types.SimpleNamespace(text_encoder=None)) == []
 
 
+def test_aucun_script_ne_croit_un_t4_capable_de_bfloat16(sandbox):
+    """Kaggle, 23/09 : is_bf16_supported() dit OUI sur un T4 (emulation), et le
+    clip de 1 s a pris 47 s par etape. Seule la generation de la carte compte."""
+    for module in (sandbox.video, sandbox.chanson, sandbox.dialogue):
+        code = [ligne for ligne in module._SCRIPT.splitlines() if not ligne.lstrip().startswith("#")]
+        assert not any("is_bf16_supported()" in ligne for ligne in code), module.__name__
+        assert any("get_device_capability(0) >= (8, 0)" in ligne for ligne in code), module.__name__
+
+
 def test_le_script_complet_reste_du_python_valide_et_dit_sa_memoire(sandbox):
     video = sandbox.video
     script = video.construire_script(video.preparer({"description": "un chat"})["demande"])
