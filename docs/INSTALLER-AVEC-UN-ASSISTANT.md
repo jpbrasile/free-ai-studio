@@ -41,7 +41,8 @@ Ton rôle ici : installer, vérifier, et rendre la main. Tu n'es pas là pour am
    (5 Go). Ne l'interromps pas. Si le lanceur écrit **`ARRET :`**, arrête-toi aussi, rends
    son message mot pour mot à la personne, et ne fais que ce qu'il demande quand c'est sans
    risque. S'il dit que le Studio tourne déjà depuis un autre dossier, **ne supprime rien** :
-   laisse la personne choisir.
+   laisse la personne choisir, et ne propose pas de faire la suppression toi-même, même
+   avec son accord. Le choix B se fait de sa main, dans Docker Desktop.
 5. **La vérification.**
    - Linux ou macOS : `./scripts/self-test.sh`.
    - Windows : `powershell -ExecutionPolicy Bypass -File .\scripts\self-test.ps1`. Il demande
