@@ -796,6 +796,11 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
        - **SP-FLOW-PLACEMENT-ANNONCE (fonction, après le premier chiffre).** Rendre au client, avant de lancer, où part chaque étape et le pire cas : « étapes 1 et 3 sur votre carte, étape 2 chez Modal, au pire 0,40 $ ».
        - **SP-FLOW-BUDGET-CUMULE (fonction, après le premier chiffre).** Trois étapes qui passent chacune le contrôle peuvent ensemble dépasser le plafond. Il faut vérifier le pire cas cumulé des étapes susceptibles de partir chez Modal avant la première étape.
        - **SP-FLOW-VRAM-ENTRE-ETAPES (fonction, après le premier chiffre).** Deux étapes à la suite sur la carte : la seconde n'a sa place que si la première a vraiment libéré sa mémoire. En grande partie couvert par SP-FLOW-CARTE-AU-DEPART, puisque la sonde d'avant l'étape voit la mémoire restante.
+    6. **SP-VOIX-APRES-PIPER (évaluation, après le premier chiffre). Question du propriétaire, 23/09/2026 : « Piper est-il l'état de l'art ? » Non.** Piper est un petit modèle de 2023, choisi pour tourner vite sur un processeur, sans carte ni clé. Classement des modèles à poids ouverts d'Artificial Analysis, lu le 23/09/2026 : Fish Audio S2 Pro (Elo 1123), Step Audio EditX (1111), Voxtral TTS de Mistral (1067), Kokoro 82M (1062), Magpie-Multilingual 357M (1056) ; Piper n'y figure pas en tête. Trois critères valent plus que le rang : processeur d'un débutant, français, licence permettant l'usage commercial.
+       - **Kokoro 82M** (Apache 2.0, processeur, français annoncé) : le candidat. Deux points *non vérifiés* passent avant toute écoute. Sa voix française viendrait de la même base SIWIS que la nôtre, donc le gain en français n'est pas acquis. Sa phonétisation passerait elle aussi par espeak-ng (GPL), donc le montage du point 15.1 resterait nécessaire.
+       - **Voxtral TTS** (Mistral, 4 milliards de paramètres) : demande une carte graphique ; licence non lue.
+       - **Fish Audio S2 Pro** : les versions précédentes étaient sous licence non commerciale ; licence de celle-ci non lue.
+       - **Méthode** : licence lue d'abord, puis écoute des mêmes phrases françaises contre Piper. Le changement ne touche que le conteneur `voix/` : le routeur appelle `/lire` et ne sait pas quel moteur répond.
 
 ## Détail par tâche
 
