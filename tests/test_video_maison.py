@@ -952,3 +952,14 @@ def test_une_cause_inconnue_garde_le_journal_et_n_invente_rien(sandbox):
 def test_un_message_deja_ecrit_n_est_pas_remplace(sandbox):
     corps = _echec(sandbox, TRACE_OOM, error="Arrêté à votre demande.")
     assert corps["message"] == "Arrêté à votre demande."
+
+
+def test_la_page_n_a_plus_de_menu_de_qualite_et_loue_en_rapide(sandbox):
+    """La qualite soignee retiree le 23/09/2026, le menu n'avait plus qu'un
+    choix : il est parti. La page envoie la qualite du serveur, posee a
+    l'affichage, et aucun marqueur ne reste en clair."""
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/video", headers=CLE).text
+    assert 'id="qualite"' not in page
+    assert 'const QUALITE_LOUEE = "%s";' % sandbox.video.QUALITE_LOUEE_PAR_DEFAUT in page
+    assert "__QUALITE_LOUEE__" not in page
+    assert "qualite: QUALITE_LOUEE" in page

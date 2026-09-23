@@ -2792,6 +2792,7 @@ def video_page():
     return HTMLResponse(format_fr.avec_formateurs(
         video.PAGE_HTML
         .replace("__OPTIONS_DUREE__", video.options_duree_html())
+        .replace("__QUALITE_LOUEE__", video.QUALITE_LOUEE_PAR_DEFAUT)
         .replace("__CLE__", KEY)))
 
 

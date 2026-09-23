@@ -1154,17 +1154,10 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
   <label>Durée
     <select id="duree">__OPTIONS_DUREE__</select>
   </label>
-  <!-- « si on loue » ici aussi, et pour la même raison que le menu voisin :
-       quand le clip est fabriqué sur la carte de cet ordinateur, ce menu ne
-       gouverne rien. Le modèle de la maison n'est pas dans cette liste -- il
-       ne se choisit pas, il se déduit du réglage du dessous -- et la page l'a
-       donc tu jusqu'au 19/09/2026 au soir, alors qu'il est celui qui fabrique
-       le clip sur le réglage PAR DÉFAUT. Le propriétaire l'a vu : « pas de
-       Wan 2.2 sur le lien /video ». La ligne de licence en dessous nomme
-       maintenant les deux, et dit lequel part vraiment. -->
-  <label>Qualité si on loue
-    <select id="qualite"><option value="rapide" selected>Rapide — Wan 2.1, 1,3 B</option></select>
-  </label>
+  <!-- Plus de menu « Qualité si on loue » depuis le 23/09/2026 : la qualité
+       soignée retirée, il ne restait qu'un choix. La machine louée fabrique
+       en rapide ; la ligne de licence en dessous nomme le modèle loué et
+       celui de la maison, et dit lequel part vraiment. -->
   <!-- Ce menu ne dit plus OÙ le clip se fabrique : depuis le 19/09/2026 c'est
        la ligne « Carte de cet ordinateur », juste en dessous, qui le décide.
        Celui-ci dit quelle machine on loue QUAND on loue. Garder le mot « Où »
@@ -1216,6 +1209,8 @@ const ENTETES = {"Authorization":"Bearer "+CLE, "Content-Type":"application/json
 const IMAGES = {};
 let minuteur = null;
 let MODELES = null;
+// Le modèle loué : `QUALITE_LOUEE_PAR_DEFAUT` côté serveur, posé à l'affichage.
+const QUALITE_LOUEE = "__QUALITE_LOUEE__";
 let CARTE_POSSIBLE = false;   // cet ordinateur a-t-il une carte branchée au Studio
 
 // Du texte libre qui repasse dans du HTML redevient du code si on le laisse
@@ -1239,7 +1234,7 @@ function enTexte(s){
 function majLicence(){
   const cible = document.getElementById("licence");
   if(!MODELES){ cible.textContent = ""; return; }
-  const m = MODELES[document.getElementById("qualite").value];
+  const m = MODELES[QUALITE_LOUEE];
   const lignes = [];
   if(m){
     lignes.push("Si on loue : <b>" + m.hf + "</b> — licence " + m.licence + ", "
@@ -1255,7 +1250,6 @@ function majLicence(){
   }
   cible.innerHTML = lignes.join("<br>");
 }
-document.getElementById("qualite").addEventListener("change", majLicence);
 
 // Les images sont réduites ICI, dans le navigateur : le modèle travaille de
 // toute façon en 480p, et une photo de téléphone de 4 Mo n'apporterait rien
@@ -1600,7 +1594,7 @@ function envoyer(extra){
   const corps = Object.assign({
     description: document.getElementById("description").value,
     duree: document.getElementById("duree").value,
-    qualite: document.getElementById("qualite").value,
+    qualite: QUALITE_LOUEE,
     ou: document.getElementById("ou").value,
     ou_calculer: reglageActuel(),
   }, IMAGES, extra || {});
