@@ -317,6 +317,10 @@ MULTIMODAL
 [ ] STT
 [ ] Vision
 
+VALIDATION LOCALE
+[ ] docs/FRICTIONS.md : chaque gêne notée le jour même, en une ligne
+[ ] aucune friction bloquante ouverte avant le portage sur un poste client
+
 SÉCURITÉ
 [ ] FREE_ONLY=true
 [ ] ALLOW_PAID_MODELS=false
