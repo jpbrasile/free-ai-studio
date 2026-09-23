@@ -27,17 +27,18 @@ PROFILS = RACINE / "modal" / "profiles.json"
 SOURCE = RACINE / "sandbox-manager" / "app.py"
 
 
-def _ordre_du_code() -> list[str]:
-    """L'ordre tel que `run_auto` l'ecrit dans le travail, lu dans la source.
+def _ordre_du_code(nom: str = "ORDRE_AUTO") -> list[str]:
+    """Un ordre de `run_auto`, lu dans la source.
 
-    Lu dans le texte et non importe : cet ordre est une liste litterale posee
-    au milieu d'un `job.update(...)`, il n'existe aucune constante a importer.
-    Le jour ou quelqu'un en fait une constante, ce test tombe -- et c'est la
-    bonne reaction : il faudra le rebrancher dessus.
+    Lu dans le texte et non importe : `app.py` ne s'importe pas sans son
+    environnement. Jusqu'au 23/09, l'ordre etait une liste litterale dans un
+    `job.update(...)` ; il y en a deux depuis (local d'abord pour un job sans
+    carte ni Internet), devenues des constantes -- et ce test, comme annonce,
+    est tombe et a ete rebranche dessus.
     """
-    trouve = re.search(r'"fallback_order":\s*(\[[^\]]*\])',
-                       SOURCE.read_text(encoding="utf-8"))
-    assert trouve, "fallback_order introuvable dans sandbox-manager/app.py"
+    trouve = re.search(r"^%s = (\[[^\]]*\])" % nom,
+                       SOURCE.read_text(encoding="utf-8"), re.M)
+    assert trouve, "%s introuvable dans sandbox-manager/app.py" % nom
     return json.loads(trouve.group(1))
 
 
@@ -47,7 +48,11 @@ def _profils() -> dict:
 
 def test_l_ordre_de_repli_du_catalogue_est_celui_du_code():
     """LE controle qui aurait attrape le defaut du 19/09."""
-    assert _profils()["policy"]["fallback_order"] == _ordre_du_code()
+    policy = _profils()["policy"]
+    assert policy["fallback_order"] == _ordre_du_code("ORDRE_AUTO")
+    assert policy["fallback_order_sans_carte_ni_internet"] == \
+        _ordre_du_code("ORDRE_AUTO_LOCAL_D_ABORD")
+    assert policy["automatic_backend"] == "local"
 
 
 def test_le_catalogue_ne_dit_plus_que_le_repli_est_manuel():

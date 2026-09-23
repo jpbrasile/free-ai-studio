@@ -217,7 +217,7 @@ Accès direct permanent : [ Ouvrir Colab ]  [ Ouvrir Kaggle ]
 ```
 
 ### Modal
-Modal est maintenant le **moteur distant automatique principal** du Sandbox Manager lorsqu’il est configuré. Le provider `auto` tente Modal en premier, puis les fallbacks.
+Modal est le **moteur distant automatique** du Sandbox Manager lorsqu’il est configuré. Le provider `auto` exécute d’abord ici, sur votre ordinateur, un code qui ne demande ni carte graphique ni Internet ; Modal passe en premier pour ce qui en demande, puis les fallbacks.
 
 Formulation débutant :
 > « Free AI Studio peut utiliser temporairement une machine puissante lorsque votre ordinateur ne suffit pas. »

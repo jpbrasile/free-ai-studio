@@ -109,16 +109,24 @@ Ne jamais inventer endpoints, modèles, prix ou quotas.
 
 ## GPU : stratégie officielle
 
-Pour Image / Vidéo / modèles lourds — **ordre réel, relu dans le code le 19/09/2026**
-(`sandbox-manager/app.py:939-975`, `video.py:392`) :
+Pour le code envoyé au bac à sable (`run_auto`) — **ordre réel depuis le 23/09/2026**,
+décision du propriétaire « votre ordinateur d'abord quand il suffit »
+(`sandbox-manager/app.py`, `ORDRE_AUTO_LOCAL_D_ABORD` et `ORDRE_AUTO`, épinglés par
+`tests/test_descriptions.py`) :
 
 ```text
-Modal configuré + mois en cours sous le plafond
-        ↓ sinon (non configuré, plafond atteint, panne)
-bac à sable local
-        ↓ sinon
-Kaggle, puis Colab — AUTOMATIQUEMENT, pas en secours cliquable
+Job SANS carte ni Internet          Job AVEC carte ou Internet
+bac à sable local (processeur)      Modal configuré + mois sous le plafond
+        ↓ indisponible                      ↓ sinon
+Modal                               bac à sable local
+        ↓ sinon                             ↓ sinon
+Colab                               Kaggle, puis Colab
+— AUTOMATIQUEMENT, pas en secours cliquable
 ```
+
+Le bac à sable GPU d'ici n'est pas dans cet ordre : il monte en écriture tout le cache
+des modèles de la personne, et n'accueille que la vidéo (qui choisit elle-même entre la
+carte d'ici et Modal, selon la mémoire libre).
 
 > ~~**Ce que ce bloc annonçait jusqu'au 19/09/2026** : « GPU local suffisant ↓ sinon Modal
 > configuré ↓ sinon Colab / Kaggle en **secours manuel cliquable** ».~~ Inversé, et le
@@ -167,7 +175,7 @@ Si le crédit gratuit utilisable n'est plus disponible, ne bascule pas silencieu
 Le Sandbox Manager est disponible sur `http://127.0.0.1:8020` et documenté dans `docs/SANDBOX.md`.
 
 Pour un travail de code nécessitant une exécution :
-1. choisir `auto` par défaut ; le manager tente **Modal en premier lorsqu’il est configuré**, puis Local, Kaggle et enfin un handoff Colab ;
+1. choisir `auto` par défaut ; un code **sans carte ni Internet** s’exécute d’abord **ici**, sur le bac à sable local, puis Modal s’il est configuré ; un code **avec carte ou Internet** tente Modal en premier, puis Local, Kaggle et enfin un handoff Colab ;
 2. forcer `modal`, `local`, `kaggle` ou `colab` seulement lorsqu’un besoin précis le justifie ;
 3. ne pas relancer automatiquement sur un autre backend lorsqu’un code a réellement été exécuté mais a échoué : corriger d’abord le code ;
 4. attendre l’état final du job ;

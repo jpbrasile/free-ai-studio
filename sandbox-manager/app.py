@@ -436,10 +436,31 @@ def kaggle_configured() -> bool:
     )
 
 
+# L'ordre du mode << auto >>. Ordre du proprietaire, 23/09/2026 : << local
+# first before modal if ressources available >>. Le bac a sable local tourne sur
+# processeur, sans Internet : il a la ressource d'un job qui ne demande ni carte
+# ni reseau, et celui-la part donc ici d'abord, gratuitement. Un job qui demande
+# une carte ou Internet garde Modal en tete : le bac a sable local n'a ni l'une
+# ni l'autre, et le bac a sable GPU d'ici monte en ecriture tout le cache des
+# modeles de la personne -- on n'y envoie pas du code quelconque sans qu'elle
+# l'ait decide.
+ORDRE_AUTO = ["modal", "local", "kaggle", "colab"]
+ORDRE_AUTO_LOCAL_D_ABORD = ["local", "modal", "kaggle", "colab"]
+
+
+def ordre_auto(gpu: bool, internet: bool) -> list[str]:
+    return list(ORDRE_AUTO if gpu or internet else ORDRE_AUTO_LOCAL_D_ABORD)
+
+
 def backend_automatique() -> str:
-    """Ou part un job << auto >> ordinaire. run_auto essaie le worker local
-    avant Kaggle, et ne propose Kaggle qu'aux jobs GPU : Kaggle n'est donc
-    jamais la destination ordinaire, meme configure."""
+    """Ou part un job << auto >> ordinaire (ni carte, ni Internet) : ici. Kaggle
+    n'est jamais la destination ordinaire, meme configure : il ne recoit que
+    des jobs GPU, et apres Modal et le worker local."""
+    return "local"
+
+
+def backend_carte_ou_internet() -> str:
+    """Ou part d'abord un job << auto >> qui demande une carte ou Internet."""
     return "modal" if modal_configured() else "local"
 
 
@@ -1153,32 +1174,30 @@ def prepare_colab_handoff(jid: str, code: str, attempts: list[dict] | None = Non
     write_job(jid, job)
 
 
-def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool = True):
-    attempts: list[dict] = []
-    job = read_job(jid)
-    job.update({"status": "routing", "started_at": time.time(), "fallback_order": ["modal", "local", "kaggle", "colab"]})
-    write_job(jid, job)
-
-    if modal_configured():
-        try:
-            job = read_job(jid)
-            job.update({"status": "running", "provider_effective": "modal"})
-            write_job(jid, job)
-            data = modal_execute(jid, code, gpu, internet)
-            attempts.append({"provider": "modal", "result": "executed", "exit_code": data.get("exit_code")})
-            finish_execution(jid, "modal", data, attempts)
-            return
-        except budget_modal.BudgetDepasse as exc:
-            # Le plafond du mois est atteint : ce n'est pas une panne, c'est un
-            # refus, et le mode auto a justement trois suites gratuites. Le
-            # laisser remonter tuerait le fil et laisserait le travail en
-            # << routing >> pour toujours.
-            attempts.append({"provider": "modal", "result": "budget_exhausted", "detail": str(exc)[:500]})
-        except BackendUnavailable as exc:
-            attempts.append({"provider": "modal", "result": "unavailable", "detail": str(exc)[:500]})
-    else:
+def _essayer_modal(jid: str, code: str, gpu: bool, internet: bool, attempts: list) -> bool:
+    if not modal_configured():
         attempts.append({"provider": "modal", "result": "not_configured"})
+        return False
+    try:
+        job = read_job(jid)
+        job.update({"status": "running", "provider_effective": "modal"})
+        write_job(jid, job)
+        data = modal_execute(jid, code, gpu, internet)
+        attempts.append({"provider": "modal", "result": "executed", "exit_code": data.get("exit_code")})
+        finish_execution(jid, "modal", data, attempts)
+        return True
+    except budget_modal.BudgetDepasse as exc:
+        # Le plafond du mois est atteint : ce n'est pas une panne, c'est un
+        # refus, et le mode auto a justement trois suites gratuites. Le
+        # laisser remonter tuerait le fil et laisserait le travail en
+        # << routing >> pour toujours.
+        attempts.append({"provider": "modal", "result": "budget_exhausted", "detail": str(exc)[:500]})
+    except BackendUnavailable as exc:
+        attempts.append({"provider": "modal", "result": "unavailable", "detail": str(exc)[:500]})
+    return False
 
+
+def _essayer_local(jid: str, code: str, attempts: list) -> bool:
     try:
         job = read_job(jid)
         job.update({"status": "running", "provider_effective": "local"})
@@ -1186,9 +1205,24 @@ def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool
         data = local_execute(jid, code)
         attempts.append({"provider": "local", "result": "executed", "exit_code": data.get("exit_code")})
         finish_execution(jid, "local", data, attempts)
-        return
+        return True
     except BackendUnavailable as exc:
         attempts.append({"provider": "local", "result": "unavailable", "detail": str(exc)[:500]})
+    return False
+
+
+def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool = True):
+    attempts: list[dict] = []
+    ordre = ordre_auto(gpu, internet)
+    job = read_job(jid)
+    job.update({"status": "routing", "started_at": time.time(), "fallback_order": ordre})
+    write_job(jid, job)
+
+    if ordre[0] == "local":
+        if _essayer_local(jid, code, attempts) or _essayer_modal(jid, code, gpu, internet, attempts):
+            return
+    elif _essayer_modal(jid, code, gpu, internet, attempts) or _essayer_local(jid, code, attempts):
+        return
 
     if not kaggle_permis:
         # Studio partage : les identifiants Kaggle presents sont ceux d'une seule
@@ -1299,7 +1333,8 @@ def cles_etat(request: Request):
             # identifiants qui serviraient a d'autres personnes.
             "coupe": raison if nom == "kaggle" else None,
         })
-    return {"backends": backends, "backend_automatique": backend_automatique()}
+    return {"backends": backends, "backend_automatique": backend_automatique(),
+            "backend_carte_ou_internet": backend_carte_ou_internet()}
 
 
 @app.post("/cles/tester")
@@ -1472,7 +1507,7 @@ function carte(b){
 async function charger(){
   const d = await (await fetch("/cles/etat")).json();
   const nom = {modal:"Modal, une machine distante", kaggle:"Kaggle", local:"votre ordinateur, isole dans Docker"}[d.backend_automatique];
-  document.getElementById("banniere").textContent = "Actuellement, le code envoye au Sandbox s'execute sur : " + nom + ".";
+  document.getElementById("banniere").textContent = "Actuellement, le code envoye au Sandbox s'execute sur : " + nom + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique ou Internet part chez Modal." : "");
   const zone = document.getElementById("cartes");
   zone.innerHTML = "";
   d.backends.forEach(b => zone.appendChild(carte(b)));
@@ -1595,7 +1630,7 @@ document.getElementById("code").value = DEMO;
 fetch("/etat").then(r => r.json()).then(d => {
   const b = document.getElementById("banniere");
   b.textContent = "En mode automatique, le code s'execute sur : "
-    + (OU[d.backend_automatique] || d.backend_automatique) + ".";
+    + (OU[d.backend_automatique] || d.backend_automatique) + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique ou Internet part chez Modal." : "");
   if(!d.modal.configure){ b.textContent += " Modal n'est pas branche : rien ne part sur une machine distante."; }
 }).catch(() => {
   document.getElementById("banniere").textContent = "Etat non verifiable : le service Sandbox ne repond pas.";
@@ -1836,6 +1871,7 @@ def etat(request: Request):
         },
         "colab": {"handoff": True},
         "backend_automatique": backend_automatique(),
+        "backend_carte_ou_internet": backend_carte_ou_internet(),
     }
 
 
@@ -1886,12 +1922,13 @@ def providers(request: Request, authorization: Optional[str] = Header(default=No
     raison = contexte_partage(request)
     return {
         "default": "auto",
-        "automatic_order": ["modal", "local", "kaggle", "colab"],
+        "automatic_order": ORDRE_AUTO_LOCAL_D_ABORD,
+        "automatic_order_gpu_or_internet": ORDRE_AUTO,
         "modal": {
             "configured": modal_configured(),
             "enabled": modal_enabled(),
             "automatic": True,
-            "primary_when_configured": True,
+            "primary_when_configured": "gpu_or_internet_jobs",
             "gpu_default": os.getenv("MODAL_GPU_DEFAULT", "T4"),
             "job_timeout_seconds": int(os.getenv("MODAL_JOB_TIMEOUT_SECONDS", "300")),
             "idle_timeout_seconds": int(os.getenv("MODAL_IDLE_TIMEOUT_SECONDS", "60")),
@@ -3557,11 +3594,11 @@ def home():
         """<!doctype html><html lang=fr><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>
 <title>Sandbox — Free AI Studio</title><style>body{font-family:system-ui;max-width:980px;margin:35px auto;padding:0 18px;line-height:1.5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px}.card{border:1px solid #aaa;border-radius:14px;padding:18px}.primary{border-width:2px}a.button{display:inline-block;border:1px solid #777;border-radius:9px;padding:9px 12px;text-decoration:none;margin:4px 4px 4px 0}.flow{padding:12px;border-radius:10px;background:#eee;font-family:ui-monospace,monospace}</style>
 <h1>🧪 Sandbox</h1><p id=etat style='padding:12px;border-radius:10px;border:1px solid #bbb'>Vérification de l’état…</p>
-<p>L’agent utilise <strong>Modal en priorité lorsqu’il est configuré</strong>. En cas d’indisponibilité d’infrastructure, il peut basculer vers Local, Kaggle puis un handoff Colab. Une erreur dans votre code n’est jamais dupliquée automatiquement sur un autre fournisseur.</p>
-<div class=flow>Agent → Modal → artefacts → Agent &nbsp; | &nbsp; fallback: Local → Kaggle → Colab</div>
+<p>L’agent utilise <strong>votre ordinateur d’abord</strong> quand il suffit : un code qui ne demande ni carte graphique ni Internet s’exécute ici, gratuitement. Un code qui demande une carte graphique ou Internet part chez Modal s’il est configuré. En cas d’indisponibilité d’infrastructure, il bascule vers le suivant, puis Kaggle, puis un handoff Colab. Une erreur dans votre code n’est jamais dupliquée automatiquement sur un autre fournisseur.</p>
+<div class=flow>Sans carte ni Internet : Local → Modal → Colab &nbsp; | &nbsp; Avec carte ou Internet : Modal → Local → Kaggle → Colab</div>
 <div class=grid>
-<div class='card primary'><h2>⚡ Modal <span id=b-modal></span></h2><p>Backend automatique distant. CPU/GPU selon le job; résultats récupérés comme ressources de l’agent.</p><a class=button href='https://modal.com/' target=_blank rel='noopener'>Ouvrir Modal ↗</a></div>
-<div class=card><h2>Local <span id=b-local></span></h2><p>Fallback Python isolé dans Docker, sans Internet ni secrets du Studio.</p></div>
+<div class='card primary'><h2>Local <span id=b-local></span></h2><p>Premier choix. Python isolé dans Docker, sur le processeur de votre ordinateur, sans Internet ni secrets du Studio.</p></div>
+<div class=card><h2>⚡ Modal <span id=b-modal></span></h2><p>Machine distante, pour ce qui demande une carte graphique ou Internet ; secours si votre ordinateur ne répond pas. Résultats récupérés comme ressources de l’agent.</p><a class=button href='https://modal.com/' target=_blank rel='noopener'>Ouvrir Modal ↗</a></div>
 <div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré — sur votre machine seulement, avec vos identifiants. L’accès direct reste toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
 </div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/chanson'>🎵 Faire chanter des paroles</a> &nbsp; <a class=button href='/dialogue'>🎙️ Faire parler deux voix</a> &nbsp;<a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
@@ -3580,7 +3617,7 @@ def home():
    var e = document.getElementById('etat');
    var nom = {modal:'Modal (machine distante)', kaggle:'Kaggle', local:'votre ordinateur, isole dans Docker'}[d.backend_automatique];
    e.style.background = '#e8f6ec'; e.style.borderColor = '#7fb98f';
-   e.textContent = "Le code envoye ici s'execute sur : " + nom + "."
+   e.textContent = "Le code envoye ici s'execute sur : " + nom + "." + (d.backend_carte_ou_internet === "modal" ? " Un code qui demande une carte graphique ou Internet part chez Modal." : "")
      + (d.modal.configure ? "" : " Modal n'est pas configure : rien ne part sur une machine distante, et rien ne peut etre facture.");
  }).catch(function(){
    var e = document.getElementById('etat');

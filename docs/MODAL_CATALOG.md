@@ -6,12 +6,15 @@
 
 Modal est le backend GPU distant automatique de Free AI Studio.
 
-Parcours **réel**, relu dans le code le 19/09/2026 (`sandbox-manager/app.py:939-975`) :
+Parcours **réel**, relu dans le code le 23/09/2026 (`run_auto` et ses deux ordres, `sandbox-manager/app.py`) :
 
 ```text
+Job sans carte ni Internet (depuis le 23/09/2026)
+→ le bac à sable local d'abord ; Modal seulement s'il ne répond pas
+
+Job avec carte ou Internet :
 Modal configuré, et le mois en cours sous le plafond
 → Modal
-
 sinon — non configuré, plafond atteint, ou panne
 → le bac à sable local, puis Kaggle, puis Colab, AUTOMATIQUEMENT, dans cet ordre
 ```
