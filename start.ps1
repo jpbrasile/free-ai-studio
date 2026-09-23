@@ -22,6 +22,17 @@ if (Test-Path $veilleuse) {
     Write-Host "Veilleur de mise a jour lance (sans fenetre)."
 }
 
+# Sonde de la carte : dit au Studio qui d'autre se sert de la carte graphique
+# (config\etat-carte-hote.json). Sans elle, la carte est comptee prise et les
+# clips partent sur une machine louee. Elle ne se lance jamais en double.
+$sonde = Join-Path $PSScriptRoot "scripts\sonde-carte.ps1"
+if (Test-Path $sonde) {
+    Start-Process -FilePath "powershell" `
+        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ('"' + $sonde + '"')) `
+        -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+    Write-Host "Sonde de la carte lancee (sans fenetre)."
+}
+
 Write-Host ""
 Write-Host "Free AI Studio / Open WebUI : http://localhost:3000"
 

@@ -19,8 +19,10 @@ Aucun appel reel a nvidia-smi : tout passe par une fausse commande.
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -52,9 +54,27 @@ class _Sortie:
         self.stderr = stderr
 
 
+def _poser_hote(chemin, locataires=(), age_s=0.0):
+    """Le fichier que la sonde de l'hote ecrit, tel qu'elle l'ecrit."""
+    chemin.write_text(json.dumps({
+        "ecrit_le_epoch": time.time() - age_s,
+        "locataires": list(locataires),
+    }), encoding="utf-8")
+
+
 @pytest.fixture
-def carte(monkeypatch):
-    """Une carte presente, dont on choisit la sortie."""
+def hote(monkeypatch, tmp_path):
+    """Le relevé de l'hote : frais et vide par defaut. Rend son chemin."""
+    chemin = tmp_path / "etat-carte-hote.json"
+    _poser_hote(chemin)
+    monkeypatch.setattr(gpu_local, "FICHIER_HOTE", str(chemin))
+    return chemin
+
+
+@pytest.fixture
+def carte(monkeypatch, hote):
+    """Une carte presente, dont on choisit la sortie. L'hote dit que personne
+    d'autre ne la tient : les tests de l'hote le contredisent eux-memes."""
     monkeypatch.setattr(gpu_local, "ACTIF", True)
     monkeypatch.setattr(gpu_local, "MARGE_MO", 1024)
     monkeypatch.setattr(gpu_local.shutil, "which", lambda _: "/usr/bin/nvidia-smi")
@@ -365,3 +385,63 @@ def test_le_seuil_separe_le_bureau_d_un_vrai_calcul(carte):
     assert gpu_local.libre_pour_un_code_inconnu()[0] is True
     carte(_Sortie(stdout="NVIDIA GeForce RTX 4090, 24564, %d\n" % (24564 - bureau - 1)))
     assert gpu_local.libre_pour_un_code_inconnu()[0] is False
+
+
+# SP-CARTE-LIBRE-SONDE-AVEUGLE, 23/09/2026. Mesure du 22/09 : `julia.exe`
+# PID 64216 vivant, et `memory.free` a 24 138 Mo sur 24 564 a la meme seconde.
+# Ces tests rejouent ce releve : la memoire dit libre, l'hote dit pris.
+
+JULIA = {"nom": "julia.exe", "pid": 64216}
+
+
+def test_un_julia_a_zero_mo_rend_la_carte_PRISE_pour_les_deux_questions(carte, hote):
+    """Le test que le sous-plan exigeait rouge avant la reparation."""
+    carte(_Sortie(stdout=RELEVE_REEL))
+    _poser_hote(hote, [JULIA])
+    libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
+    assert libre is False
+    assert "julia.exe (PID 64216)" in phrase
+    assert "on ne l'arrête jamais" in phrase
+    # Et pour un besoin mesure qui tiendrait largement dans la memoire libre.
+    assert gpu_local.utilisable(4000)[0] is False
+    # Vu sur la vraie sonde le 23/09 : six processus << tient >> la carte.
+    _poser_hote(hote, [JULIA, {"nom": "julia.exe", "pid": 7}])
+    assert "tiennent la carte" in gpu_local.libre_pour_un_code_inconnu()[1]
+
+
+@pytest.mark.parametrize("cas", ["absent", "perime", "illisible"])
+def test_un_releve_de_l_hote_douteux_rend_la_carte_PRISE(carte, hote, cas):
+    """Le doute tombe du cote prudent : decision du proprietaire, 23/09/2026."""
+    carte(_Sortie(stdout=RELEVE_REEL))
+    if cas == "absent":
+        hote.unlink()
+    elif cas == "perime":
+        _poser_hote(hote, age_s=gpu_local.PEREMPTION_S + 1)
+    else:
+        hote.write_text("{pas du json", encoding="utf-8")
+    libre, phrase, _ = gpu_local.libre_pour_un_code_inconnu()
+    assert libre is False
+    assert "on la considère prise" in phrase
+    assert gpu_local.utilisable(4000)[0] is False
+
+
+def test_un_releve_frais_a_la_limite_compte_encore(carte, hote):
+    """La peremption est une borne, pas une approximation : juste dessous, le
+    releve vaut ; juste dessus (test du dessus), il ne vaut plus."""
+    carte(_Sortie(stdout=RELEVE_REEL))
+    _poser_hote(hote, age_s=gpu_local.PEREMPTION_S - 2)
+    assert gpu_local.libre_pour_un_code_inconnu()[0] is True
+
+
+def test_les_deux_sondes_de_l_hote_ecrivent_le_meme_fichier():
+    """Le jumeau Windows et le jumeau Linux ecrivent au meme endroit, avec les
+    memes champs, sur le meme rythme : sinon un des deux hotes aurait une
+    carte toujours prise, ou jamais."""
+    ps1 = (RACINE / "scripts" / "sonde-carte.ps1").read_text(encoding="utf-8")
+    sh = (RACINE / "scripts" / "sonde-carte.sh").read_text(encoding="utf-8")
+    for texte in (ps1, sh):
+        assert "etat-carte-hote.json" in texte
+        assert "ecrit_le_epoch" in texte
+        assert "locataires" in texte
+        assert "julia" in texte
+    assert "etat-carte-hote.json" in gpu_local.FICHIER_HOTE

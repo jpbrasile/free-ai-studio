@@ -89,6 +89,11 @@ fi
 # vient d'être ajoutée ici. Une reconstruction sans changement est servie par
 # le cache de Docker et ne coûte que quelques secondes.
 docker compose "${compose_args[@]}" up -d --build
+
+# Sonde de la carte : dit au Studio qui d'autre se sert de la carte
+# (config/etat-carte-hote.json). Sans elle, la carte est comptée prise et les
+# clips partent chez le loueur. Elle refuse de tourner en double.
+nohup ./scripts/sonde-carte.sh >/dev/null 2>&1 &
 echo
 docker compose "${compose_args[@]}" ps
 echo

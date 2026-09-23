@@ -33,9 +33,11 @@ vue >> -- et le routage part sur Modal comme avant.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
+import time
 
 import format_fr
 
@@ -54,6 +56,50 @@ MARGE_MO = int(os.getenv("GPU_LOCAL_MARGE_MO", "1024"))
 ACTIF = os.getenv("GPU_LOCAL_ACTIF", "true").strip().lower() != "false"
 
 _REQUETE = ("--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits")
+
+# SP-CARTE-LIBRE-SONDE-AVEUGLE, 23/09/2026. `memory.free` est aveugle a un
+# processus qui a pris la carte sans encore y ecrire : mesure du 22/09, un
+# `julia.exe` vivant et 24 138 Mo libres a la meme seconde. Le conteneur ne voit
+# pas les processus de l'hote ; c'est l'hote qui les ecrit ici
+# (`scripts/sonde-carte.ps1` ou `.sh`), toutes les ~10 s. Canal choisi par le
+# proprietaire le 23/09 : un fichier pose par l'hote, et le doute tombe du cote
+# prudent -- absent, illisible ou perime, la carte est PRISE.
+FICHIER_HOTE = os.getenv("GPU_ETAT_HOTE", "/config/etat-carte-hote.json")
+PEREMPTION_S = int(os.getenv("GPU_ETAT_HOTE_PEREMPTION_S", "30"))
+
+
+def hote(maintenant: float | None = None) -> tuple[bool, str]:
+    """L'hote dit-il que personne ne tient la carte ? (oui/non, phrase lisible).
+
+    Ne dit rien de la memoire : c'est `releve()`. Dit seulement ce que la
+    memoire ne peut pas voir -- un locataire qui n'a pas encore alloue."""
+    try:
+        with open(FICHIER_HOTE, encoding="utf-8") as f:
+            etat = json.load(f)
+        ecrit = float(etat["ecrit_le_epoch"])
+        locataires = list(etat.get("locataires") or [])
+    except FileNotFoundError:
+        return False, (
+            "Le Studio ne sait pas qui d'autre se sert de la carte : la sonde de "
+            "l'ordinateur ne tourne pas (scripts/sonde-carte.ps1 ou .sh). Dans le "
+            "doute, on la considère prise.")
+    except (OSError, ValueError, KeyError, TypeError):
+        return False, (
+            "Le relevé de la carte posé par l'ordinateur est illisible. Dans le "
+            "doute, on la considère prise.")
+
+    age = (maintenant if maintenant is not None else time.time()) - ecrit
+    if age > PEREMPTION_S:
+        return False, (
+            "Le relevé de la carte posé par l'ordinateur date de %d s (au-delà de "
+            "%d s, il ne dit plus rien) : la sonde s'est arrêtée. Dans le doute, "
+            "on la considère prise." % (int(age), PEREMPTION_S))
+    if locataires:
+        noms = ", ".join("%s (PID %s)" % (l.get("nom"), l.get("pid")) for l in locataires)
+        return False, (
+            "%s %s la carte, même sans y avoir encore écrit, et on ne "
+            "l'arrête jamais." % (noms, "tiennent" if len(locataires) > 1 else "tient"))
+    return True, "personne d'autre ne la tient."
 
 
 def releve(delai_s: int | None = None) -> dict:
@@ -129,6 +175,10 @@ def libre_pour_un_code_inconnu(delai_s: int | None = None) -> tuple[bool, str, d
     if not etat["vue"]:
         return False, etat["motif"], etat
 
+    personne, dit = hote()
+    if not personne:
+        return False, "%s : %s" % (etat["nom"], dit), etat
+
     pris = max(0, etat["totale_mo"] - etat["libre_mo"])
     if pris > OCCUPATION_TOLEREE_MO:
         return False, (
@@ -155,6 +205,10 @@ def utilisable(besoin_mo: int, delai_s: int | None = None) -> tuple[bool, str, d
     etat = releve(delai_s)
     if not etat["vue"]:
         return False, etat["motif"], etat
+
+    personne, dit = hote()
+    if not personne:
+        return False, "%s : %s" % (etat["nom"], dit), etat
 
     besoin_total = max(0, int(besoin_mo)) + MARGE_MO
     if etat["libre_mo"] < besoin_total:

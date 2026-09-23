@@ -523,6 +523,36 @@ if ($vivante) {
     }
 }
 
+# --- 8 bis. La sonde de la carte -------------------------------------------------
+# Le conteneur ne voit pas qui d'autre se sert de la carte ; cette sonde le lui
+# ecrit toutes les ~10 s (config\etat-carte-hote.json). Sans elle, le Studio
+# compte la carte prise et loue une machine : jamais de carte prise a quelqu'un.
+# Meme mecanisme que le veilleur : sans fenetre, raccourci au Demarrage, jamais
+# en double.
+$releveCarte = Join-Path $Racine "config\etat-carte-hote.json"
+if ((Test-Path $releveCarte) -and (((Get-Date) - (Get-Item $releveCarte).LastWriteTime).TotalSeconds -lt 30)) {
+    Bon "Sonde de la carte deja en marche"
+} else {
+    $script = Join-Path $PSScriptRoot "sonde-carte.ps1"
+    if (Test-Path $script) {
+        $depart = (Get-Date).AddSeconds(-1)
+        Start-Process -FilePath "powershell" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ('"' + $script + '"')) `
+            -WorkingDirectory $Racine -WindowStyle Hidden | Out-Null
+        $parti = $false
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Seconds 1
+            if ((Test-Path $releveCarte) -and ((Get-Item $releveCarte).LastWriteTime -ge $depart)) { $parti = $true; break }
+        }
+        if ($parti) {
+            Bon "Sonde de la carte lancee, sans fenetre ; elle repartira seule avec Windows"
+        } else {
+            Souci "La sonde de la carte n'a pas demarre."
+            Note  "Le Studio marche ; les clips partiront sur une machine louee plutot que sur votre carte."
+        }
+    }
+}
+
 # --- 9. Attendre que la page reponde vraiment ----------------------------------
 Titre "Verification"
 $pret = $false
