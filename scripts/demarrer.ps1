@@ -28,7 +28,8 @@ function Bon($texte)   { Write-Host ("   OK   " + $texte) -ForegroundColor Green
 function Note($texte)  { Write-Host ("   ..   " + $texte) -ForegroundColor Gray }
 function Souci($texte) { Write-Host ("   !    " + $texte) -ForegroundColor Yellow }
 
-function Abandonner($titre, $quoiFaire, $lien) {
+# $sansRelance : quand relancer ICI ne serait pas le bon geste (autre dossier).
+function Abandonner($titre, $quoiFaire, $lien, $sansRelance = $false) {
     Write-Host ""
     Write-Host ("ARRET : " + $titre) -ForegroundColor Red
     Write-Host ""
@@ -39,8 +40,10 @@ function Abandonner($titre, $quoiFaire, $lien) {
         Write-Host ("J'ouvre la page : " + $lien)
         try { Start-Process $lien } catch { Write-Host "  (ouvrez-la a la main)" }
     }
-    Write-Host ""
-    Write-Host "Puis double-cliquez de nouveau sur demarrer.cmd."
+    if (-not $sansRelance) {
+        Write-Host ""
+        Write-Host "Puis double-cliquez de nouveau sur demarrer.cmd."
+    }
     exit 1
 }
 
@@ -311,6 +314,37 @@ if ($aGit) {
     Note  "VS Code : Ctrl+Shift+P, puis << Git: Clone >>."
 }
 
+# --- 5 bis. Un autre dossier du Studio tourne-t-il deja ? ----------------------
+# Le ZIP puis le clone, que le message ci-dessus conseille, donne deux dossiers :
+# le second echouait a la construction sur un conflit de noms de conteneurs,
+# avec << cause non reconnue >> (essai a blanc du 23/09/2026). On le voit ici,
+# avant de rien construire, et on ne supprime RIEN a la place de la personne :
+# la cle Gemini est dans le dossier (config\), l'historique du chat dans un
+# volume au nom de l'ancien dossier -- ni l'un ni l'autre ne suit.
+$verif = Join-Path $PSScriptRoot "autre-dossier.ps1"
+if (Test-Path $verif) {
+    $autre = Executer "powershell" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        ('"' + $verif + '"'), "-Racine", ('"' + $Racine + '"')) "autre-dossier"
+    $autreDossier = $autre.Sortie.Trim()
+    if ($autreDossier) {
+        $groupe = (Split-Path -Leaf $autreDossier).ToLower()
+        Abandonner "Le Studio est deja installe depuis un autre dossier." `
+            @(("Il tourne depuis : " + $autreDossier),
+              ("Ce dossier-ci     : " + $Racine),
+              "Deux dossiers ne peuvent pas tourner en meme temps. Deux choix :",
+              "",
+              "  A. Garder l'ancien : fermez cette fenetre et double-cliquez",
+              "     demarrer.cmd dans le dossier ci-dessus.",
+              "",
+              "  B. Passer a ce dossier-ci (par exemple pour le bouton << Mettre a jour >>) :",
+              "     1. Ouvrez Docker Desktop, onglet Containers.",
+              ("     2. Sur la ligne << " + $groupe + " >>, cliquez la poubelle (Delete)."),
+              "     3. Double-cliquez de nouveau demarrer.cmd, ici.",
+              "     La cle Gemini sera a recoller sur la page Cles, et les conversations",
+              "     du chat de l'ancien dossier ne suivront pas.") $null $true
+    }
+}
+
 # --- 6. Le fichier de reglages -------------------------------------------------
 Titre "Reglages"
 $cheminEnv = Join-Path $Racine ".env"
@@ -456,6 +490,13 @@ if ($up.Code -ne 0) {
                        "  Liberez de la place (compter 25 Go pour le Studio), puis relancez demarrer.cmd.",
                        "  Docker range ses donnees sur C: ; pour les mettre ailleurs :",
                        "  Docker Desktop > Settings > Resources > Advanced > Disk image location.")
+    } elseif ($t -match "The container name .* is already in use") {
+        # Filet sous la verification 5 bis, si elle n'a rien pu lire.
+        $quoiFaire = @("Le Studio est deja installe depuis un autre dossier de cet ordinateur.",
+                       "",
+                       "  Ouvrez Docker Desktop, onglet Containers : le groupe qui n'a pas le",
+                       "  nom de ce dossier-ci est l'autre. Double-cliquez demarrer.cmd dans",
+                       "  celui-la, ou supprimez ce groupe (poubelle) puis relancez ici.")
     } elseif ($t -match "port is already allocated|ports are not available|address already in use") {
         $quoiFaire = @("Une porte (3000, 8010 ou 8020) a ete prise par un autre programme",
                        "pendant le demarrage. Fermez-le, puis relancez demarrer.cmd.")

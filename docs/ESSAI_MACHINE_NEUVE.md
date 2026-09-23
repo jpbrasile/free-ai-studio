@@ -120,9 +120,11 @@ dans le BIOS ou l'UEFI. C'est un blocage : il se note comme tel.
   dossier avec VS Code (`Git: Clone`). Le ZIP s'extrait en `free-ai-studio-main`, le clone en
   `free-ai-studio` : deux projets Docker, mais les mêmes noms de conteneurs. Essai à blanc du
   23/09/2026 dans un Docker vide : le second démarrage échoue (`Conflict. The container name
-  "/free-ai-studio-voix" is already in use`), le premier Studio reste intact. `demarrer.ps1`
-  ne reconnaît pas ce message et dit « la cause n'est pas de celles que ce script
-  reconnaît ». Si la personne passe par là, noter ce qu'elle fait ensuite.
+  "/free-ai-studio-voix" is already in use`), le premier Studio reste intact. **Corrigé le
+  même jour** : `demarrer.ps1` s'arrête avant de rien construire, nomme l'autre dossier et
+  propose deux choix (garder l'ancien, ou supprimer son groupe dans Docker Desktop puis
+  relancer ici). Si la personne passe par là, noter si elle comprend le message et ce
+  qu'elle fait ensuite.
 
 - **Avertissement au double-clic.** Un `demarrer.cmd` venu d'un ZIP fait-il paraître
   « Fichier ouvert — Avertissement de sécurité » ou SmartScreen ? La personne sait-elle quoi
