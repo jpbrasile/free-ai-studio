@@ -176,7 +176,17 @@ Regles :
   "langue_ecrite" : la langue du texte affiche quand elle differe de celle de
   la voix (ex. « voix en anglais, texte en francais » -> "langue_ecrite": "fr").
   Exemple : {"noeuds": [...], "proprietes": {"langue_ecrite": "fr"}}.
-  Sans langue precisee, n'ajoute pas "proprietes".
+  Sans langue precisee, n'ajoute pas "proprietes" ;
+- ajoute "consignes" : une consigne par fonction, dans le meme ordre, qui dit
+  ce que CETTE fonction doit faire -- sa part de la demande seulement, avec
+  les exigences de contenu qui la concernent (niveau de detail, longueur,
+  ton, sujet). Les langues de la voix et du texte affiche n'y vont pas : ce
+  sont des "proprietes". Mets "" pour une fonction qui n'a rien a decider
+  (voix, dictee, ouverture de document).
+  Exemple : {"noeuds": ["lecture_image", "synthese_vocale_fr"],
+             "consignes": ["Decris cette image de facon tres detaillee.", ""]} ;
+- choisis la suite la plus courte qui repond a la demande : pas de fonction
+  qui ne ferait que recopier ou reformuler le texte d'une autre.
 
 La demande : %s
 """
@@ -239,8 +249,80 @@ def compiler(phrase: str, appeler_modele, apps: list[dict] | None = None,
             % ", ".join(inventees), ou=COMPILATION)
 
     proprietes, sans_effet = _lire_proprietes(brut)
-    return {"phrase": phrase.strip(), "noeuds": [{"capacite": n} for n in noeuds],
+    consignes = _lire_consignes(brut, len(noeuds))
+    return {"phrase": phrase.strip(),
+            "noeuds": [dict({"capacite": n}, **({"consigne": consignes[i]} if consignes else {}))
+                       for i, n in enumerate(noeuds)],
             "proprietes": proprietes, "proprietes_sans_effet": sans_effet}
+
+
+# Une consigne d'etape tient en quelques phrases. Au-dela, c'est un document
+# colle dans la case, pas une consigne.
+CONSIGNE_MAX = 2000
+# Les routes dont l'etape SUIT une consigne. Une voix, une dictee, l'ouverture
+# d'un document n'en lisent aucune : leur en montrer une ferait croire qu'elle
+# compte.
+GENRES_QUI_LISENT_UNE_CONSIGNE = ("chat", "vision", "image", "travail")
+
+
+def lit_une_consigne(brique: str) -> bool:
+    route = ROUTES.get(brique)
+    return bool(route) and route[0] in GENRES_QUI_LISENT_UNE_CONSIGNE
+
+
+def _lire_consignes(brut, combien: int) -> list | None:
+    """Une consigne par etape, ou None si la reponse n'en donne pas de lisible.
+
+    POURQUOI. Jusqu'au 23/09 chaque etape recevait la phrase ENTIERE. Essai du
+    proprietaire : << very detailed description ... voice spoken in french, and
+    text written in english >> -- la lecture d'image recevait << text written
+    in english >> ET << Repondez en francais >>, et la description tenait en
+    deux phrases. Chaque etape recoit maintenant SA part. Sans consignes
+    lisibles, on retombe sur la phrase entiere, comme avant : rien ne casse.
+    """
+    m = re.search(r"\{.*\}", brut, re.S) if isinstance(brut, str) else None
+    try:
+        objet = json.loads(m.group(0)) if m else {}
+    except (ValueError, TypeError):
+        return None
+    consignes = objet.get("consignes") if isinstance(objet, dict) else None
+    if (not isinstance(consignes, list) or len(consignes) != combien
+            or any(not isinstance(c, str) for c in consignes)):
+        return None
+    return [c.strip()[:CONSIGNE_MAX] for c in consignes]
+
+
+def consignes_lues(valeur, chaine: dict) -> None:
+    """Les consignes renvoyees par la page, posees sur les etapes. Refus si illisibles.
+
+    Une par etape, dans l'ordre ; `null` ou vide = la demande entiere. Une
+    consigne pour une etape qui n'en lit pas est REFUSEE : elle ne compterait
+    pas, et le client croirait le contraire.
+    """
+    if valeur in (None, ""):
+        return
+    try:
+        recues = json.loads(str(valeur))
+    except ValueError:
+        recues = None
+    etapes = chaine["etapes"]
+    if (not isinstance(recues, list) or len(recues) != len(etapes)
+            or any(c is not None and not isinstance(c, str) for c in recues)):
+        raise CompositeRefuse("consignes_illisibles",
+                              "Les consignes envoyées par la page sont illisibles. "
+                              "Rechargez la page.", ou=CONTROLE)
+    for etape, consigne in zip(etapes, recues):
+        consigne = (consigne or "").strip()
+        if len(consigne) > CONSIGNE_MAX:
+            raise CompositeRefuse("consigne_trop_longue",
+                                  "La consigne de « %s » dépasse %d signes. Raccourcissez-la."
+                                  % (etape["fonction"], CONSIGNE_MAX), ou=CONTROLE)
+        if consigne and not lit_une_consigne(etape["brique"]):
+            raise CompositeRefuse("consigne_sans_effet",
+                                  "« %s » ne suit aucune consigne. Rien n'est lancé."
+                                  % etape["fonction"], ou=CONTROLE)
+        if lit_une_consigne(etape["brique"]):
+            etape["consigne"] = consigne or None
 
 
 def _lire_json(brut: str):
@@ -302,7 +384,10 @@ def lier(graphe: dict, apps: list[dict] | None = None) -> dict:
                 "dites laquelle."
                 % (capacite, ", ".join(sorted(c["id"] for c in candidates))),
                 ou=LIAISON)
-        chaine.append(_etape(candidates[0]))
+        etape = _etape(candidates[0])
+        if noeud.get("consigne") is not None and lit_une_consigne(etape["brique"]):
+            etape["consigne"] = noeud["consigne"] or None
+        chaine.append(etape)
     return {"phrase": graphe.get("phrase", ""), "etapes": chaine}
 
 
@@ -906,7 +991,8 @@ def _verdict(etat, motifs, pourquoi, chaine, total, faits):
             {"brique": e["brique"], "fonction": e["fonction"],
              "entrees": e["entrees"], "sorties": e["sorties"],
              "cout_max_usd": e["cout_max_usd"],
-             "donnees": donnees_de(e["brique"])}
+             "donnees": donnees_de(e["brique"]),
+             **({"consigne": e.get("consigne")} if lit_une_consigne(e["brique"]) else {})}
             for e in chaine["etapes"]],
     }
 
@@ -1178,7 +1264,9 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
         # sa reponse a une voix anglaise etait un expose en Markdown, titre
         # << English Text to Read Aloud >> compris, et Piper l'a lu en entier.
         suivantes = chaine["etapes"][rang + 1:rang + 2]
-        etape = dict(etape, demande=chaine.get("phrase", ""),
+        # SA consigne quand le lecteur de phrase (ou le client) en a donne une ;
+        # sinon la phrase entiere, comme avant le 23/09.
+        etape = dict(etape, demande=etape.get("consigne") or chaine.get("phrase", ""),
                      suivante=suivantes[0]["brique"] if suivantes else None,
                      reglages=reglages_de_l_etape(chaine, rang))
         try:
@@ -2153,6 +2241,7 @@ div.texte code{background:#e8e8e8;border-radius:4px;padding:0 3px}
 img.vignette,video.vignette{max-width:220px;max-height:160px;border-radius:8px;display:block;margin-top:8px}
 span.document{font-size:40px}p.ecoute{font-size:.9em;color:#555}
 div.reglages{border-top:1px solid #ddd;margin-top:8px;padding-top:4px}p.reglage select{font:inherit}
+label.consigne{display:block;font-size:.9em;color:#444}label.consigne input{width:100%;box-sizing:border-box;font:inherit}
 .oui{border-color:#2d7a33}.non{border-color:#a33}.inconnu,.partiel{border-color:#b7791f}
 .etat{font-weight:600}
 ol{margin:10px 0 0 0;padding-left:22px}
@@ -2201,9 +2290,13 @@ try {
 function bloc(v){
   const noms = {oui:"C\u2019est possible", partiel:"Possible, avec une r\u00e9serve",
                 inconnu:"Je ne peux pas trancher", non:"Ce n\u2019est pas possible"};
-  const etapes = (v.etapes||[]).map(e =>
+  // La consigne de chaque etape qui en suit une (23/09) : ce que CETTE etape
+  // va faire, modifiable avant de lancer. Vide = votre demande entiere.
+  const etapes = (v.etapes||[]).map((e, i) =>
     "<li>" + e.fonction + " <span class=motif>(" + e.entrees.join(", ") +
     " \u2192 " + e.sorties.join(", ") + ")</span>" +
+    (e.consigne !== undefined ? "<br><label class=consigne>Consigne : <input data-c='" + i
+      + "' value='" + echapper(e.consigne || "") + "' placeholder='votre demande enti\u00e8re'></label>" : "") +
     (e.donnees ? "<br><span class='donnees " + (e.donnees.sort === "non" ? "reste" : "sort") +
       "'>" + e.donnees.phrase + "</span>" : "") + "</li>").join("");
   return "<div class='bloc " + v.atteignable + "'>" +
@@ -2239,6 +2332,11 @@ function changerReglage(v, i, valeur){
     return "chaine";
   }
   return "valeur";
+}
+
+// Une par etape, dans l'ordre : null pour celles qui n'en suivent pas.
+function consignesChoisies(v){
+  return (v.etapes || []).map(e => e.consigne === undefined ? null : (e.consigne || null));
 }
 
 function reglagesChoisis(v){
@@ -2345,6 +2443,7 @@ async function envoyer(chemin, avecFichier, avecChaine){
   if ((avecFichier || avecChaine) && derniere) {
     corps.append("briques", (derniere.etapes||[]).map(e => e.brique).join(","));
     corps.append("proprietes", JSON.stringify(reglagesChoisis(derniere)));
+    corps.append("consignes", JSON.stringify(consignesChoisies(derniere)));
   }
   const f = document.getElementById("fichier").files[0];
   if (avecFichier && f) corps.append("fichier", f);
@@ -2355,6 +2454,14 @@ async function envoyer(chemin, avecFichier, avecChaine){
     headers:{"Authorization":"Bearer " + CLE}, body:corps});
   return {ok:r.ok, statut:r.status, corps:r};
 }
+
+// Une consigne tapee : gardee telle quelle, sans refaire le verdict (le cout,
+// les cles et ce qui sort ne changent pas avec elle).
+document.getElementById("verdict").addEventListener("input", e => {
+  const c = e.target && e.target.dataset ? e.target.dataset.c : undefined;
+  if (derniere && c !== undefined && derniere.etapes && derniere.etapes[Number(c)])
+    derniere.etapes[Number(c)].consigne = e.target.value;
+});
 
 document.getElementById("verdict").addEventListener("change", async e => {
   const i = e.target && e.target.dataset ? e.target.dataset.i : undefined;

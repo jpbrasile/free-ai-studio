@@ -3659,6 +3659,7 @@ async def _chaine_depuis(request: Request):
     if briques:
         chaine = composite.chaine_depuis_briques(briques, phrase=phrase)
         chaine["proprietes"] = composite.proprietes_lues(formulaire.get("proprietes"), chaine)
+        composite.consignes_lues(formulaire.get("consignes"), chaine)
         return formulaire, chaine
     graphe = composite.compiler(phrase, composite.appeler_le_modele,
                                 entree=composite.entree_lue(formulaire.get("entree")))
@@ -3716,6 +3717,8 @@ async def composite_lancer(request: Request,
             briques, phrase=str(formulaire.get("phrase") or ""))
         # Les reglages tels que la page les montre au moment du clic, VERIFIES.
         chaine["proprietes"] = composite.proprietes_lues(formulaire.get("proprietes"), chaine)
+        # Et la consigne de chaque etape, telle qu'elle est montree (23/09).
+        composite.consignes_lues(formulaire.get("consignes"), chaine)
         fichier = formulaire.get("fichier")
         # Le VRAI fichier decide ici, pas ce que la page a annonce : une
         # image ne part plus jamais comme du texte (23/09, 540 498 jetons).

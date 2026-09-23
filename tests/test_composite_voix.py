@@ -460,3 +460,108 @@ def test_la_page_montre_et_change_les_reglages(page):
     assert "chaine valeur null" in apres
     assert 'voix_fr {"langue_ecrite":"fr"}' in apres, "une variante ne part pas comme valeur"
     assert "part chez &lt;Google&gt;" in apres
+
+
+# --- Chaque étape reçoit SA consigne (23/09) -------------------------------------
+# « very detailed description … voice spoken in french, and text written in
+# english » : la lecture d'image recevait « text written in english » ET
+# « Répondez en français », et la description tenait en deux phrases.
+
+REPONSE_AVEC_CONSIGNES = json.dumps(
+    {"noeuds": ["lecture_image", "synthese_vocale_fr"],
+     "consignes": ["Décris cette image de façon très détaillée.", "Lis en français."],
+     "proprietes": {"langue_ecrite": "en"}})
+
+
+def test_le_lecteur_rend_une_consigne_par_etape(composite):
+    graphe = composite.compiler("very detailed … voice in french, text in english",
+                                lambda _c: REPONSE_AVEC_CONSIGNES, entree="image")
+    chaine = composite.lier(graphe)
+    assert chaine["etapes"][0]["consigne"] == "Décris cette image de façon très détaillée."
+    assert "consigne" not in chaine["etapes"][1], "une voix ne suit aucune consigne"
+
+
+def test_sans_consignes_lisibles_on_garde_la_phrase(composite):
+    for brut in ('{"noeuds": ["lecture_image"]}',
+                 '{"noeuds": ["lecture_image"], "consignes": ["a", "b"]}',
+                 '{"noeuds": ["lecture_image"], "consignes": [3]}'):
+        chaine = composite.lier(composite.compiler("p", lambda _c, b=brut: b, entree="image"))
+        assert "consigne" not in chaine["etapes"][0]
+
+
+def test_chaque_etape_part_avec_sa_consigne(composite):
+    vues = []
+
+    def lancer(etape, entree):
+        vues.append((etape["brique"], etape["demande"]))
+        return "texte"
+
+    chaine = composite.lier(composite.compiler("la phrase entière", lambda _c: json.dumps(
+        {"noeuds": ["conversation", "conversation"], "consignes": ["Traduis.", ""]})))
+    composite.executer(chaine, lancer, garde_budget=lambda e: None)
+    assert vues == [("chat_auto", "Traduis."), ("chat_auto", "la phrase entière")]
+
+
+def test_la_consigne_de_la_lecture_d_image_ne_porte_plus_la_phrase(composite):
+    etape = dict(etape_de(composite, "image_lecture"),
+                 demande="Décris cette image de façon très détaillée.",
+                 suivante="voix_fr", reglages={})
+    consigne = composite._consigne_de_l_image(etape)
+    assert "english" not in consigne and consigne.startswith("Décris cette image")
+
+
+def test_les_consignes_renvoyees_sont_verifiees(composite):
+    chaine = chaine_de(composite, ["image_lecture", "voix_fr"])
+    composite.consignes_lues('["Décris en détail.", null]', chaine)
+    assert chaine["etapes"][0]["consigne"] == "Décris en détail."
+    composite.consignes_lues('["", null]', chaine)
+    assert chaine["etapes"][0]["consigne"] is None
+    for mauvais in ('["a"]', '{"a": 1}', '["a", "lis-le fort"]', '[1, null]',
+                    '["' + "x" * 2001 + '", null]', "["):
+        with pytest.raises(composite.CompositeRefuse):
+            composite.consignes_lues(mauvais, chaine_de(composite, ["image_lecture", "voix_fr"]))
+
+
+def test_le_verdict_montre_et_garde_les_consignes(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox.composite, "appeler_le_modele", lambda _c: REPONSE_AVEC_CONSIGNES)
+    monkeypatch.setattr(sandbox.composite, "rediger", lambda v: "ok")
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    v = client.post("/composite/verdict", headers=CLE_TEST,
+                    data={"phrase": "p", "entree": "image"}).json()
+    assert v["etapes"][0]["consigne"] == "Décris cette image de façon très détaillée."
+    assert "consigne" not in v["etapes"][1]
+    # un reglage change : le verdict se refait, la consigne tapee reste
+    v = client.post("/composite/verdict", headers=CLE_TEST,
+                    data={"phrase": "p", "entree": "image", "briques": "image_lecture,voix_en",
+                          "consignes": '["Compte les chats.", null]'}).json()
+    assert v["etapes"][0]["consigne"] == "Compte les chats."
+
+
+def test_la_route_lance_avec_la_consigne_montree(sandbox, monkeypatch):
+    vues = []
+
+    def lancer(etape, entree):
+        vues.append(etape["demande"])
+        return "Bonjour."
+
+    monkeypatch.setattr(sandbox.composite, "lancer_par_le_routeur", lancer)
+    r = TestClient(sandbox.app, base_url=LOCAL).post(
+        "/composite/lancer", headers=CLE_TEST,
+        data={"phrase": "la phrase", "briques": "chat_auto", "consignes": '["Dis bonjour."]'})
+    assert r.status_code == 200, r.text
+    assert vues == ["Dis bonjour."]
+
+
+def test_la_page_montre_la_consigne_modifiable(page):
+    debut = page.index("function bloc(v){")
+    fin = page.index("\nfunction typeDuFichier", debut)
+    verdict = {"atteignable": "oui", "phrase": "ok",
+               "etapes": [{"fonction": "Lecture", "brique": "image_lecture", "entrees": ["image"],
+                           "sorties": ["texte"], "consigne": "Décris <tout>"},
+                          {"fonction": "Voix", "brique": "voix_fr", "entrees": ["texte"], "sorties": ["audio"]}]}
+    code = (page[debut:fin] + "\nconst v = " + json.dumps(verdict) + ";"
+            + "\nconsole.log(bloc(v));\nconsole.log(JSON.stringify(consignesChoisies(v)));")
+    html = node(code)
+    assert "<input data-c='0' value='Décris &lt;tout&gt;'" in html
+    assert html.count("data-c=") == 1, "pas de consigne pour la voix"
+    assert '["Décris <tout>",null]' in html
