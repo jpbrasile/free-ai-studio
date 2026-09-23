@@ -543,6 +543,28 @@ def test_le_noeud_qui_FABRIQUE_une_image_rend_des_octets(apps, monkeypatch):
     assert composite.lancer_par_le_routeur(etape, None) == png
     envoi = json.loads(vues[0].content)
     assert "Dessine un chat roux" in envoi["prompt"], envoi
+    assert "size" not in envoi, "sans format choisi, le modele choisit, comme avant"
+
+
+@pytest.mark.parametrize("format_, taille", [("1:1", "1024x1024"), ("16:9", "1344x768"),
+                                              ("9:16", "768x1344")])
+def test_le_format_choisi_part_avec_la_demande_d_image(apps, monkeypatch, format_, taille):
+    """23/09 : << les tailles x, y de l'image de sortie [sont] figes >>. Le
+    format choisi part en << LxH >>, que le routeur ramene a la proportion
+    comprise par Google."""
+    import base64
+    import httpx
+
+    vues = _routeur_simule(monkeypatch, httpx.Response(
+        200, json={"data": [{"b64_json": base64.b64encode(b"\x89PNG\r\n\x1a\n").decode("ascii")}]}))
+    etape = dict(composite.chaine_depuis_briques(["image_fabrication"], apps)["etapes"][0],
+                 demande="Dessine un phare", reglages={"format": format_})
+    composite.lancer_par_le_routeur(etape, None)
+    envoi = json.loads(vues[0].content)
+    assert envoi["size"] == taille
+    largeur, hauteur = (int(x) for x in taille.split("x"))
+    # la meme regle que aspect_ratio() du routeur : la proportion arrive intacte
+    assert format_ == ("1:1" if largeur == hauteur else "16:9" if largeur > hauteur else "9:16")
 
 
 def test_le_noeud_de_chat_ENVOIE_son_modele_ET_la_demande(apps, monkeypatch):

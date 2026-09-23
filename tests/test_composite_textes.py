@@ -58,7 +58,7 @@ def afficher(page: str, reponse: dict) -> str:
     rendu_fin = page.index("  } finally {", rendu_debut)
     code = (page[debut:fin]
             + "\nconst champs = {resultat: {innerHTML: ''}};\n"
-            + "const document = {getElementById: id => champs[id]};\n"
+            + "const document = {getElementById: id => champs[id], querySelector: () => null};\n"
             + "(async () => {\n"
             + "const r = {corps: {json: async () => (" + json.dumps(reponse) + ")}};\n"
             + page[rendu_debut:rendu_fin]

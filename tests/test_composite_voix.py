@@ -244,6 +244,48 @@ def test_une_brique_sans_famille_n_a_pas_de_variante(composite):
     assert list(ids) == ["langue_reponse@0"]
 
 
+def test_une_image_fabriquee_offre_son_format(composite):
+    ids = par_id(composite.proprietes_montrees(chaine_de(composite, ["image_fabrication"])))
+    assert list(ids) == ["format@0"]
+    assert [c["valeur"] for c in ids["format@0"]["choix"]] == ["libre", "1:1", "16:9", "9:16"]
+    assert ids["format@0"]["valeur"] == "libre"
+    assert composite.reglages_de_l_etape(
+        chaine_de(composite, ["image_fabrication"], {"format@0": "16:9"}), 0) == {"format": "16:9"}
+
+
+def test_le_format_propose_par_le_lecteur_de_phrase(composite):
+    graphe = composite.compiler("p", lambda _c: json.dumps(
+        {"noeuds": ["fabrication_image"], "proprietes": {"format": "9:16"}}))
+    valeurs, sans_effet = composite.appliquer_proposees(composite.lier(graphe), graphe)
+    assert valeurs == {"format@0": "9:16"} and sans_effet == []
+    # une proportion que l'execution ne tient pas est dite, jamais retenue
+    graphe = composite.compiler("p", lambda _c: json.dumps(
+        {"noeuds": ["fabrication_image"], "proprietes": {"format": "4:3"}}))
+    assert graphe["proprietes"] == {}
+    assert graphe["proprietes_sans_effet"] == [
+        "« format = 4:3 » : aucune étape de ce Studio ne sait respecter ce réglage."]
+    # un format sans image a fabriquer : dit aussi
+    graphe = composite.compiler("p", lambda _c: json.dumps(
+        {"noeuds": ["lecture_image"], "proprietes": {"format": "16:9"}}), entree="image")
+    _, sans_effet = composite.appliquer_proposees(composite.lier(graphe), graphe)
+    assert sans_effet == ["« Format 16:9 » : aucune étape de cette chaîne ne fabrique d'image."]
+
+
+def test_un_format_hors_des_choix_est_refuse(composite):
+    chaine = chaine_de(composite, ["image_fabrication"])
+    assert composite.proprietes_lues('{"format@0": "16:9"}', chaine) == {"format@0": "16:9"}
+    assert composite.proprietes_lues('{"format@0": "libre"}', chaine) == {}
+    with pytest.raises(composite.CompositeRefuse):
+        composite.proprietes_lues('{"format@0": "1920x1080"}', chaine)
+
+
+def test_la_page_montre_les_dimensions_vraies(page):
+    debut = page.index("function dimensions(")
+    fin = page.index("}", debut) + 1
+    assert node(page[debut:fin] + "\nconsole.log(dimensions(1344, 768));").strip() == "Image de 1344 × 768 pixels"
+    assert "naturalWidth" in page and "img class=sortie" in page
+
+
 def test_la_langue_de_reponse_seulement_pour_un_texte_lu(composite):
     ids = par_id(composite.proprietes_montrees(
         chaine_de(composite, ["image_lecture", "chat_auto", "voix_en"])))
@@ -421,7 +463,7 @@ def test_la_page_montre_la_traduction(page):
                "traduction": {"langue": "français", "texte": "Un **phare**.", "motif": None}}
     code = (extrait(page)
             + "\nconst champs = {resultat: {innerHTML: ''}};"
-            + "\nconst document = {getElementById: id => champs[id]};"
+            + "\nconst document = {getElementById: id => champs[id], querySelector: () => null};"
             + "\nconst URL = {createObjectURL: () => 'blob:x'};"
             + "\n(async () => {\nconst r = {corps: {json: async () => (" + json.dumps(reponse) + ")}};\n"
             + page[rendu_debut:rendu_fin]

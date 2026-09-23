@@ -177,6 +177,10 @@ Regles :
   la voix (ex. « voix en anglais, texte en francais » -> "langue_ecrite": "fr").
   Exemple : {"noeuds": [...], "proprietes": {"langue_ecrite": "fr"}}.
   Sans langue precisee, n'ajoute pas "proprietes" ;
+- si la demande precise la forme ou la taille d'une image a FABRIQUER, ajoute
+  a "proprietes" un "format" : "1:1" (carre), "16:9" (plus large que haute)
+  ou "9:16" (plus haute que large) -- le plus proche des dimensions demandees
+  (ex. « 1920x1080 » -> "16:9", « portrait » -> "9:16") ;
 - ajoute "consignes" : une consigne par fonction, dans le meme ordre, qui dit
   ce que CETTE fonction doit faire -- sa part de la demande seulement, avec
   les exigences de contenu qui la concernent (niveau de detail, longueur,
@@ -1571,9 +1575,13 @@ def lancer_par_le_routeur(etape: dict, entree):
             return ((choix.get("message") or {}).get("content") or "").strip() or None
 
         if genre == "image":
-            reponse = client.post(
-                ROUTEUR + chemin, headers=entetes,
-                json={"prompt": _consigne_de_l_image_fabriquee(etape, entree), "n": 1})
+            demande = {"prompt": _consigne_de_l_image_fabriquee(etape, entree), "n": 1}
+            # Le format choisi, en << LxH >> : le routeur n'en garde que la
+            # proportion (aspect_ratio), seule chose que Google accepte.
+            format_choisi = FORMATS.get((etape.get("reglages") or {}).get(FORMAT))
+            if format_choisi:
+                demande["size"] = format_choisi[1]
+            reponse = client.post(ROUTEUR + chemin, headers=entetes, json=demande)
             _ou_refus(reponse, etape, "La fabrication d'image n'a pas abouti.")
             images = reponse.json().get("data") or []
             nu = (images[0] or {}).get("b64_json") if images else None
@@ -1687,8 +1695,21 @@ LANGUE_REPONSE = "langue_reponse"
 MEME_LANGUE = "meme"
 NOMS_DES_LANGUES = {"fr": "français", "en": "anglais", "es": "espagnol",
                     "de": "allemand", "it": "italien", "pt": "portugais"}
-PROPOSABLES = (LANGUE_ECRITE, LANGUE_REPONSE)
+# Le FORMAT d'une image fabriquee (23/09 : << les tailles x, y de l'image de
+# sortie [sont] figes >>). Google ne prend pas des pixels mais une proportion,
+# et le routeur n'en transmet que trois (aspect_ratio) : les choix sont ces
+# trois-la, rien de plus -- une taille que l'execution ne tiendrait pas n'est
+# pas offerte. << libre >> n'envoie rien : le modele choisit, comme avant.
+FORMAT = "format"
+FORMAT_LIBRE = "libre"
+FORMATS = {"1:1": ("carré", "1024x1024"),
+           "16:9": ("paysage, plus large que haute (16:9)", "1344x768"),
+           "9:16": ("portrait, plus haute que large (9:16)", "768x1344")}
+# Les valeurs qu'un lecteur de phrase peut proposer, par reglage.
+PROPOSABLES = {LANGUE_ECRITE: NOMS_DES_LANGUES, LANGUE_REPONSE: NOMS_DES_LANGUES,
+               FORMAT: FORMATS}
 SANS_EFFET = {
+    FORMAT: "« Format %s » : aucune étape de cette chaîne ne fabrique d'image.",
     LANGUE_ECRITE: "« Texte affiché en %s » : cette chaîne ne finit pas par une voix, "
                    "son texte reste celui de la dernière étape.",
     LANGUE_REPONSE: "« Réponse en %s » : aucune étape de cette chaîne n'écrit un texte "
@@ -1728,9 +1749,9 @@ def _lire_proprietes(brut) -> tuple[dict, list]:
         return {}, []
     retenues, sans_effet = {}, []
     for cle, valeur in demandees.items():
-        if cle in PROPOSABLES and valeur in NOMS_DES_LANGUES:
+        if cle in PROPOSABLES and valeur in PROPOSABLES[cle]:
             retenues[cle] = valeur
-        elif not (cle in PROPOSABLES and valeur in (None, "", MEME_LANGUE)):
+        elif not (cle in PROPOSABLES and valeur in (None, "", MEME_LANGUE, FORMAT_LIBRE)):
             sans_effet.append("« %s = %s » : aucune étape de ce Studio ne sait "
                               "respecter ce réglage." % (cle, valeur))
     return retenues, sans_effet
@@ -1776,6 +1797,13 @@ def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[di
                 montrees.append({"id": "%s@%d" % (famille, rang), "nom": nom, "etape": rang,
                                  "variante": True, "valeur": etape["brique"],
                                  "defaut": etape["brique"], "choix": choix})
+        if (ROUTES.get(etape["brique"]) or ("",))[0] == "image":
+            ident = "%s@%d" % (FORMAT, rang)
+            montrees.append({"id": ident, "nom": "Format de « %s »" % etape["fonction"],
+                             "etape": rang, "valeur": valeurs.get(ident, FORMAT_LIBRE),
+                             "defaut": FORMAT_LIBRE,
+                             "choix": [{"valeur": FORMAT_LIBRE, "nom": "au choix du modèle"}]
+                             + [{"valeur": v, "nom": n} for v, (n, _) in FORMATS.items()]})
         if _ecrit_pour_etre_lu(chaine, rang):
             ident = "%s@%d" % (LANGUE_REPONSE, rang)
             montrees.append({"id": ident, "nom": "Réponse de « %s » en" % etape["fonction"],
@@ -2334,6 +2362,10 @@ function changerReglage(v, i, valeur){
   return "valeur";
 }
 
+function dimensions(largeur, hauteur){
+  return "Image de " + largeur + " \u00d7 " + hauteur + " pixels";
+}
+
 // Une par etape, dans l'ordre : null pour celles qui n'en suivent pas.
 function consignesChoisies(v){
   return (v.etapes || []).map(e => e.consigne === undefined ? null : (e.consigne || null));
@@ -2523,7 +2555,10 @@ document.getElementById("lancer").onclick = async () => {
     // lecteur audio muet, avec les bons octets derriere.
       const type = d.type || "";
       const nom = echapper(d.nom || "sortie.bin");
-      if (type.startsWith("image/"))      apercu = "<img src='" + url + "' alt='' style='max-width:100%'>";
+      // Les dimensions VRAIES de l'image rendue, lues sur l'image une fois
+      // chargee (23/09) : rien ne les montrait.
+      if (type.startsWith("image/"))      apercu = "<img class=sortie src='" + url + "' alt='' style='max-width:100%'>"
+                                                 + "<p class=dimensions></p>";
       else if (type.startsWith("video/")) apercu = "<video controls src='" + url + "' style='max-width:100%'></video>";
       else if (type.startsWith("audio/")) apercu = "<audio controls src='" + url + "'></audio>";
       lien = "<a href='" + url + "' download='" + nom + "'>T\u00e9l\u00e9charger le fichier</a>";
@@ -2561,6 +2596,11 @@ document.getElementById("lancer").onclick = async () => {
     document.getElementById("resultat").innerHTML =
       "<div class='bloc oui'><p class=etat>C\u2019est fait</p>"
       + apercu + (apercu ? "<br>" : "") + blocTextes + lien + "</div>";
+    const image = document.querySelector("#resultat img.sortie");
+    if (image) image.addEventListener("load", () => {
+      const p = document.querySelector("#resultat p.dimensions");
+      if (p) p.textContent = dimensions(image.naturalWidth, image.naturalHeight);
+    });
   } finally {
     b.disabled = false; b.textContent = "Lancer";
   }
