@@ -1765,11 +1765,14 @@ def _consigne_de_l_image(etape: dict) -> str:
     """Ce que la chaine demande a propos de l'image.
 
     Meme regle que pour le chat : c'est la demande du CLIENT qui gouverne,
-    et la phrase figee ne sert que lorsqu'il n'a rien precise.
+    et la phrase figee ne sert que lorsqu'il n'a rien precise. Et meme
+    consigne orale quand une voix suit : la chaine image -> voix (23/09) n'a
+    pas de chat au milieu, c'est donc la lecture d'image qui ecrit pour Piper.
     """
     demande = (etape.get("demande") or "").strip()
     return (demande or "Décris cette image en français.") + (
-        "\n\nRépondez seulement par le résultat de cette étape.")
+        "\n\nRépondez seulement par le résultat de cette étape."
+        + _consigne_orale(etape.get("suivante")))
 
 
 def _consigne_du_chat(etape: dict, entree) -> str:

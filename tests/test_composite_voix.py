@@ -56,6 +56,14 @@ def test_le_chat_sait_qu_il_ecrit_pour_une_voix(composite):
     assert "en français" in composite._consigne_du_chat(dict(etape, suivante="voix_fr"), None)
 
 
+def test_la_lecture_d_image_sait_aussi_qu_elle_ecrit_pour_une_voix(composite):
+    etape = {"brique": "image_lecture", "fonction": "Lecture", "demande": "décris en anglais"}
+    assert "lue à haute voix" not in composite._consigne_de_l_image(etape)
+    oral = composite._consigne_de_l_image(dict(etape, suivante="voix_en"))
+    assert oral.startswith("décris en anglais")
+    assert "lue à haute voix" in oral and "en anglais" in oral and "pas de titre" in oral
+
+
 def test_executer_dit_a_chaque_etape_ce_qui_suit(composite):
     vus = []
 
