@@ -1,0 +1,7 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+httpx==0.28.1
+# La voix du bouton << lire a haute voix >>, sur le processeur (15/09/2026).
+# GPL-3.0-or-later (metadonnees du paquet, lues le 23/09/2026) ; embarque
+# espeak-ng. C'est pour lui que ce service existe : voir app.py.
+piper-tts==1.8.0

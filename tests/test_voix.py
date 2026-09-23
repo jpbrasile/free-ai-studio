@@ -1,13 +1,16 @@
 """Lire a haute voix (15/09/2026, deux langues le 16/09) : le routeur lit avec
 Piper, une voix par langue, choisie phrase par phrase ; Open WebUI lui confie
-son 🔊 une fois. Ni Piper ni reseau ici."""
+son 🔊 une fois. Depuis le 23/09, Piper tourne dans le service `voix` et le
+routeur l'appelle par HTTP. Ni Piper ni reseau ici."""
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import io
 import json
+import re
 import wave
+from pathlib import Path
 
 import httpx
 
@@ -199,9 +202,99 @@ def test_mauvais_mot_de_passe_refuse(routeur, monkeypatch):
     assert piper.appels == []
 
 
-# --- Le telechargement de la voix ---
+# --- Piper hors du routeur (23/09/2026, PLAN.md point 15) ---
+# Piper est GPL-3.0-or-later ; le routeur est MIT. Il l'appelle par HTTP dans
+# le service `voix` et n'en importe plus rien.
 
-def brancher_hugging_face(routeur, monkeypatch, contenu: bytes):
+def test_le_routeur_n_importe_plus_piper():
+    racine = Path(__file__).resolve().parents[1]
+    source = (racine / "free-tier-manager" / "app.py").read_text(encoding="utf-8")
+    assert not re.search(r"^\s*(from|import)\s+piper\b", source, re.M)
+    exigences = (racine / "free-tier-manager" / "requirements.txt").read_text(encoding="utf-8")
+    assert not re.search(r"^piper", exigences, re.M)
+
+
+def test_les_noms_des_voix_sont_les_memes_des_deux_cotes(routeur, service_voix):
+    assert {langue: v["nom"] for langue, v in routeur.VOIX.items()} == \
+           {langue: v["nom"] for langue, v in service_voix.VOIX.items()}
+
+
+def test_le_routeur_demande_chaque_morceau_au_service(routeur, monkeypatch):
+    demandes = []
+
+    def service(requete):
+        demandes.append((str(requete.url), json.loads(requete.content)))
+        return httpx.Response(200, content=petit_wav())
+
+    vrai = httpx.Client
+    monkeypatch.setattr(routeur.httpx, "Client",
+                        lambda **kw: vrai(transport=httpx.MockTransport(service), **kw))
+    son = routeur.lire_local("Voici la reponse. This is the English part.", 1.25)
+    assert [d[0] for d in demandes] == ["http://voix:8000/lire"] * 2
+    assert [(d[1]["langue"], d[1]["vitesse"]) for d in demandes] == [("fr", 1.25), ("en", 1.25)]
+    with wave.open(io.BytesIO(son), "rb") as lu:
+        assert lu.getnframes() == 440
+
+
+def test_service_absent_message_clair(routeur, monkeypatch):
+    """Le conteneur de la voix arrete : le 🔊 dit un message, le routeur tient."""
+    def eteint(requete):
+        raise httpx.ConnectError("voix injoignable", request=requete)
+
+    vrai = httpx.Client
+    monkeypatch.setattr(routeur.httpx, "Client",
+                        lambda **kw: vrai(transport=httpx.MockTransport(eteint), **kw))
+
+    async def une_fois():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=routeur.app),
+                                     base_url="http://routeur") as client:
+            return await client.post("/v1/audio/speech", json={"input": "Une phrase."},
+                                     headers={"Authorization": "Bearer cle-interne-de-test"})
+    r = asyncio.run(une_fois())
+    assert r.status_code == 500
+    assert r.json()["error"]["message"]
+
+
+# --- Le service de la voix ---
+
+def lire_au_service(service_voix, corps):
+    async def une_fois():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=service_voix.app),
+                                     base_url="http://voix") as client:
+            return await client.post("/lire", json=corps)
+    return asyncio.run(une_fois())
+
+
+def test_le_service_lit_un_morceau(service_voix, monkeypatch):
+    appels = []
+    monkeypatch.setattr(service_voix, "synthetiser",
+                        lambda langue, texte, vitesse: appels.append((langue, texte, vitesse))
+                        or petit_wav())
+    r = lire_au_service(service_voix, {"langue": "en", "texte": "Hello.", "vitesse": 9})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/wav"
+    assert appels == [("en", "Hello.", 2.0)]
+
+
+def test_le_service_refuse_ce_qu_il_ne_sait_pas_lire(service_voix, monkeypatch):
+    appels = []
+    monkeypatch.setattr(service_voix, "synthetiser", lambda *a: appels.append(a) or petit_wav())
+    for corps in ({"langue": "de", "texte": "Hallo."}, {"langue": "fr", "texte": "  "},
+                  {"langue": "fr", "texte": "a" * (service_voix.VOIX_MAX_CARACTERES + 1)}):
+        assert lire_au_service(service_voix, corps).status_code == 400
+    assert appels == []
+
+
+def test_le_service_en_panne_rend_503(service_voix, monkeypatch):
+    def panne(*_):
+        raise RuntimeError("voix absente")
+    monkeypatch.setattr(service_voix, "synthetiser", panne)
+    assert lire_au_service(service_voix, {"langue": "fr", "texte": "Une phrase."}).status_code == 503
+
+
+# --- Le telechargement de la voix (dans le service) ---
+
+def brancher_hugging_face(service_voix, monkeypatch, contenu: bytes):
     demandes = []
 
     def repondre(requete):
@@ -209,16 +302,16 @@ def brancher_hugging_face(routeur, monkeypatch, contenu: bytes):
         return httpx.Response(200, content=contenu)
 
     vrai = httpx.Client
-    monkeypatch.setattr(routeur.httpx, "Client",
+    monkeypatch.setattr(service_voix.httpx, "Client",
                         lambda **kw: vrai(transport=httpx.MockTransport(repondre), **kw))
     return demandes
 
 
-def test_voix_abimee_refusee(routeur, monkeypatch, tmp_path):
-    monkeypatch.setattr(routeur, "VOIX_DOSSIER", tmp_path)
-    brancher_hugging_face(routeur, monkeypatch, b"pas la voix")
+def test_voix_abimee_refusee(service_voix, monkeypatch, tmp_path):
+    monkeypatch.setattr(service_voix, "VOIX_DOSSIER", tmp_path)
+    brancher_hugging_face(service_voix, monkeypatch, b"pas la voix")
     try:
-        routeur.telecharger_voix()
+        service_voix.telecharger_voix()
     except RuntimeError as exc:
         assert "empreinte" in str(exc)
     else:
@@ -227,26 +320,26 @@ def test_voix_abimee_refusee(routeur, monkeypatch, tmp_path):
     assert not list(tmp_path.glob("*.partiel"))
 
 
-def test_voix_telechargee_une_fois_a_la_revision_fixe(routeur, monkeypatch, tmp_path):
+def test_voix_telechargee_une_fois_a_la_revision_fixe(service_voix, monkeypatch, tmp_path):
     contenu = b"voix factice"
-    monkeypatch.setattr(routeur, "VOIX_DOSSIER", tmp_path)
-    monkeypatch.setitem(routeur.VOIX["fr"], "sha256", hashlib.sha256(contenu).hexdigest())
-    demandes = brancher_hugging_face(routeur, monkeypatch, contenu)
-    assert routeur.telecharger_voix() == tmp_path / "fr_FR-siwis-medium.onnx"
+    monkeypatch.setattr(service_voix, "VOIX_DOSSIER", tmp_path)
+    monkeypatch.setitem(service_voix.VOIX["fr"], "sha256", hashlib.sha256(contenu).hexdigest())
+    demandes = brancher_hugging_face(service_voix, monkeypatch, contenu)
+    assert service_voix.telecharger_voix() == tmp_path / "fr_FR-siwis-medium.onnx"
     assert len(demandes) == 2
-    assert all(routeur.VOIX_REVISION in d for d in demandes)
-    routeur.telecharger_voix()
+    assert all(service_voix.VOIX_REVISION in d for d in demandes)
+    service_voix.telecharger_voix()
     assert len(demandes) == 2
 
 
-def test_voix_anglaise_telechargee_a_part(routeur, monkeypatch, tmp_path):
+def test_voix_anglaise_telechargee_a_part(service_voix, monkeypatch, tmp_path):
     contenu = b"voix factice"
-    monkeypatch.setattr(routeur, "VOIX_DOSSIER", tmp_path)
-    monkeypatch.setitem(routeur.VOIX["en"], "sha256", hashlib.sha256(contenu).hexdigest())
-    demandes = brancher_hugging_face(routeur, monkeypatch, contenu)
-    assert routeur.telecharger_voix("en") == tmp_path / "en_US-norman-medium.onnx"
+    monkeypatch.setattr(service_voix, "VOIX_DOSSIER", tmp_path)
+    monkeypatch.setitem(service_voix.VOIX["en"], "sha256", hashlib.sha256(contenu).hexdigest())
+    demandes = brancher_hugging_face(service_voix, monkeypatch, contenu)
+    assert service_voix.telecharger_voix("en") == tmp_path / "en_US-norman-medium.onnx"
     assert all("en/en_US/norman/medium" in d for d in demandes)
-    assert all(routeur.VOIX_REVISION in d for d in demandes)
+    assert all(service_voix.VOIX_REVISION in d for d in demandes)
 
 
 # --- Une voix par langue (16/09/2026) ---

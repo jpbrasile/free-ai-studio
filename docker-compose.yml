@@ -194,6 +194,35 @@ services:
       timeout: 5s
       retries: 5
 
+  # Le 🔊 du chat : Piper (GPL-3.0-or-later), sorti du processus du routeur le
+  # 23/09/2026 (PLAN.md point 15). Le routeur l'appelle par http://voix:8000 ;
+  # aucun port publie. Pas de depends_on cote routeur : le chat ne doit pas
+  # attendre la voix, et une voix absente se dit au clic, en francais.
+  voix:
+    build:
+      context: ./voix
+    container_name: free-ai-studio-voix
+    restart: unless-stopped
+    volumes:
+      # Le MEME volume que le routeur : les voix qu'il avait telechargees sous
+      # /modeles/piper servent telles quelles, et scripts/ressources.* les
+      # comptent deja avec Whisper.
+      - whisper-modeles:/modeles
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # 313 Mo mesures le 15/09/2026 pour une voix chargee ; deux voix, de la marge.
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:v0.11.3
     container_name: free-ai-studio-open-webui

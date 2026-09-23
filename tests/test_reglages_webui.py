@@ -291,14 +291,15 @@ def test_pas_de_temoin_si_un_reglage_echoue(routeur, monkeypatch):
 # premier usage. Ce test regarde donc ce qui PART, pas ce qui est ecrit.
 
 
-def test_le_demarrage_lance_bien_ses_trois_taches(routeur, monkeypatch):
-    """Les trois taches du demarrage partent, et le service n'attend aucune.
+def test_le_demarrage_lance_bien_ses_deux_taches(routeur, service_voix, monkeypatch):
+    """Les taches du demarrage partent, et aucun service ne les attend.
 
     Elles sont detachees expres : le prechauffage de la dictee peut telecharger
     464 Mo, et un routeur qui attendrait cela ne repondrait pas avant plusieurs
-    minutes. Le test remplace les trois par des temoins, ouvre le service comme
+    minutes. Le test les remplace par des temoins, ouvre chaque service comme
     un vrai serveur le fait (le `with` declenche le cycle de vie), et verifie
-    que les trois ont ete appelees.
+    qu'elles ont ete appelees. Le prechauffage des voix est parti avec Piper
+    dans le service `voix` le 23/09/2026 : il est verifie la-bas.
     """
     partis = []
 
@@ -307,15 +308,16 @@ def test_le_demarrage_lance_bien_ses_trois_taches(routeur, monkeypatch):
 
     monkeypatch.setattr(routeur, "poser_reglages_webui", faux_reglages)
     monkeypatch.setattr(routeur, "prechauffer_whisper", lambda: partis.append("whisper"))
-    monkeypatch.setattr(routeur, "prechauffer_voix", lambda: partis.append("voix"))
+    monkeypatch.setattr(service_voix, "prechauffer_voix", lambda: partis.append("voix"))
 
-    with TestClient(routeur.app) as client:
-        assert client.get("/health").json()["ok"] is True
-        # Les taches sont detachees : on laisse la boucle leur donner un tour.
-        for _ in range(50):
-            if len(partis) == 3:
-                break
-            time.sleep(0.02)
+    for app in (routeur.app, service_voix.app):
+        with TestClient(app) as client:
+            assert client.get("/health").json()["ok"] is True
+            # Les taches sont detachees : on laisse la boucle leur donner un tour.
+            for _ in range(50):
+                if len(partis) == (2 if app is routeur.app else 3):
+                    break
+                time.sleep(0.02)
 
     assert sorted(partis) == ["reglages", "voix", "whisper"], partis
 

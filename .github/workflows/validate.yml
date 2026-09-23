@@ -35,6 +35,7 @@ jobs:
             -r free-tier-manager/requirements.txt \
             -r sandbox-manager/requirements.txt \
             -r sandbox-worker/requirements.txt \
+            -r voix/requirements.txt \
             pytest==9.1.1
 
       # Charge chaque service comme son conteneur le fait au demarrage : une

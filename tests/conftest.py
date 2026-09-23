@@ -64,6 +64,13 @@ def routeur(monkeypatch):
 
 
 @pytest.fixture
+def service_voix():
+    """Le service de la voix (Piper, GPL), charge sans Piper : ses tests ne
+    touchent ni au modele ni au calcul."""
+    return charger("voix")
+
+
+@pytest.fixture
 def sandbox(monkeypatch):
     """Le gestionnaire de bacs a sable, sans Modal ni Kaggle configures."""
     monkeypatch.setenv("SANDBOX_MANAGER_KEY", "cle-sandbox-de-test")

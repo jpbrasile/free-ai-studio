@@ -34,12 +34,13 @@ async def demarrage_et_arret(_app: FastAPI):
     changement a eu lieu le 20/09/2026 dans l'autre service, et la dette se
     paie ici le meme jour plutot que de rester un avertissement de plus.
 
-    Les trois taches partent DETACHEES, comme avant : le routeur doit repondre
+    Les deux taches partent DETACHEES, comme avant : le routeur doit repondre
     tout de suite, et le prechauffage de la dictee peut telecharger 464 Mo. Ce
     qui est apres le `yield` s'executerait a l'arret -- rien pour l'instant, et
     c'est voulu : ces taches meurent avec la boucle.
+    Le prechauffage des voix vit dans le service `voix` depuis le 23/09/2026.
 
-    Les trois fonctions appelees sont definies PLUS BAS dans ce fichier. C'est
+    Les deux fonctions appelees sont definies PLUS BAS dans ce fichier. C'est
     licite et ce n'est pas un hasard : le corps ne s'execute qu'au demarrage du
     service, alors que `lifespan=` doit etre passe a la construction de `app`,
     donc avant tout le reste.
@@ -47,7 +48,6 @@ async def demarrage_et_arret(_app: FastAPI):
     asyncio.create_task(poser_reglages_webui())
     # Dans un fil a part : le telechargement ne bloque pas le routeur.
     asyncio.create_task(asyncio.to_thread(prechauffer_whisper))
-    asyncio.create_task(asyncio.to_thread(prechauffer_voix))
     yield
 
 
@@ -1399,34 +1399,19 @@ async def aligner_dictee(client: httpx.AsyncClient, entetes: Dict[str, str]) -> 
 # navigateur prenait sa voix par defaut, anglaise, et lisait le francais avec
 # l'accent anglais. Le routeur lit desormais lui-meme, avec Piper et une voix
 # francaise, sur le processeur : sans cle, et le texte ne quitte pas l'ordinateur.
-# Essai du 15/09/2026 dans un conteneur python:3.12-slim jetable, 4 coeurs :
-# chargement 1,7 s ; 7,2 s de parole calculees en 0,6 s ; 313 Mo de memoire.
+# Depuis le 23/09/2026, Piper (GPL-3.0-or-later) tourne dans son propre
+# conteneur, `voix/`, et le routeur (MIT) l'appelle par HTTP sans rien en
+# importer (PLAN.md point 15). Ici restent le nettoyage du texte, le decoupage
+# par langue et le collage des morceaux ; les fichiers de voix sont la-bas.
 VOIX_MODELE = "free-ai-voix"
-# Depot rhasspy/piper-voices a une revision fixe, et empreintes SHA-256 relevees
-# sur Hugging Face : les fichiers ne changent pas sous nos pieds.
-VOIX_REVISION = "1162a9173d0ce503555aed757976b7a9912eae4c"
-DEPOT_VOIX = "https://huggingface.co/rhasspy/piper-voices/resolve/%s/" % VOIX_REVISION
-# Une voix par langue. Les deux sonnent a 22 050 Hz, en mono 16 bits : deux
-# morceaux se collent donc bout a bout dans un seul son (voir coller_wav).
-VOIX = {
-    # Base SIWIS (Universite d'Edimbourg), CC BY 4.0. Relevee le 15/09/2026.
-    "fr": {"nom": "fr_FR-siwis-medium", "dossier": "fr/fr_FR/siwis/medium/",
-           "sha256": "641d1ab097da2b81128c076810edb052b385decc8be3381814802a64a73baf99",
-           "octets": 63_201_294},
-    # Enregistrements LibriVox, domaine public, entrainee de zero. Relevee le
-    # 16/09/2026. Les autres voix anglaises de Piper sont soit dans le domaine
-    # de la licence Blizzard (lessac), soit non commerciales (hfc_female).
-    "en": {"nom": "en_US-norman-medium", "dossier": "en/en_US/norman/medium/",
-           "sha256": "b9739443232a80a59c7d18810dd856899bf16a7964725f5ab81ea49b1351cb71",
-           "octets": 63_531_379},
-}
+# Le nom de la voix de chaque langue. La liste complete (revision, empreintes)
+# est dans voix/app.py ; tests/test_voix.py echoue si les deux divergent.
+VOIX = {"fr": {"nom": "fr_FR-siwis-medium"}, "en": {"nom": "en_US-norman-medium"}}
 VOIX_DEFAUT = "fr"
 VOIX_NOM = VOIX[VOIX_DEFAUT]["nom"]  # la voix annoncee a Open WebUI
-VOIX_DOSSIER = Path(os.getenv("VOIX_DIR", "/modeles/piper"))
+VOIX_URL = os.getenv("VOIX_URL", "http://voix:8000").rstrip("/")
 VOIX_MAX_CARACTERES = 10_000
 VOIX_FAIT = CONFIG_DIR / "open-webui-voix.json"
-_voix: Dict[str, Any] = {}
-_voix_verrou = threading.Lock()
 
 # Mots les plus courants de chaque langue : ils suffisent a trancher une phrase
 # entiere, sans rien installer de plus. Une phrase sans aucun de ces mots garde
@@ -1443,52 +1428,6 @@ MOTS_EN = {"the", "an", "of", "and", "is", "are", "was", "were", "that", "which"
            "how", "there", "here", "about", "from", "have", "has", "will", "would"}
 ACCENTS = re.compile(r"[àâäçéèêëîïôöùûüœ]")
 PHRASE = re.compile(r"[^.!?…]+[.!?…]*\s*")
-
-
-def _telecharger(url: str, cible: Path, sha256: Optional[str] = None) -> None:
-    """A cote puis renomme : un telechargement coupe ne laisse jamais un fichier
-    a moitie ecrit a la place de la voix."""
-    partiel = cible.with_name(cible.name + ".partiel")
-    empreinte = hashlib.sha256()
-    try:
-        with httpx.Client(follow_redirects=True,
-                          timeout=httpx.Timeout(60.0, connect=15.0)) as client:
-            with client.stream("GET", url) as r:
-                r.raise_for_status()
-                with open(partiel, "wb") as f:
-                    for bout in r.iter_bytes(1 << 20):
-                        empreinte.update(bout)
-                        f.write(bout)
-        if sha256 and empreinte.hexdigest() != sha256:
-            raise RuntimeError("voix telechargee abimee : empreinte differente de celle relevee")
-        partiel.replace(cible)
-    finally:
-        partiel.unlink(missing_ok=True)
-
-
-def telecharger_voix(langue: str = VOIX_DEFAUT) -> Path:
-    """La voix d'une langue, telechargee une fois (63 Mo) ; rend son chemin."""
-    voix = VOIX[langue]
-    url = DEPOT_VOIX + voix["dossier"]
-    VOIX_DOSSIER.mkdir(parents=True, exist_ok=True)
-    modele = VOIX_DOSSIER / ("%s.onnx" % voix["nom"])
-    reglages = VOIX_DOSSIER / ("%s.onnx.json" % voix["nom"])
-    if not reglages.exists():
-        _telecharger(url + reglages.name, reglages)
-    if not modele.exists():
-        _telecharger(url + modele.name, modele, voix["sha256"])
-    return modele
-
-
-def prechauffer_voix() -> None:
-    """Telecharge les voix au demarrage : le premier 🔊 n'attend pas les 63 Mo."""
-    for langue, voix in VOIX.items():
-        try:
-            telecharger_voix(langue)
-        except Exception as exc:  # reseau coupe, disque plein
-            log.warning("Voix non telechargee d'avance (%s) : %s", voix["nom"], exc)
-            continue
-        log.info("Voix prete (%s)", voix["nom"])
 
 
 def texte_a_lire(texte: str) -> str:
@@ -1550,20 +1489,15 @@ def coller_wav(sons: List[bytes]) -> bytes:
 
 def lire_local(texte: str, vitesse: float) -> bytes:
     """Rend un WAV 16 bits mono, chaque phrase lue par la voix de sa langue.
-    Un calcul a la fois : deux lectures simultanees se partageraient les memes
-    coeurs."""
-    from piper import PiperVoice, SynthesisConfig  # lourd : importe seulement ici
-
-    reglages = SynthesisConfig(length_scale=1.0 / vitesse)
+    Le service `voix` lit un morceau a la fois, sur cet ordinateur. Le premier
+    appel peut attendre le telechargement d'une voix (63 Mo)."""
     sons = []
-    with _voix_verrou:
+    with httpx.Client(timeout=httpx.Timeout(300.0, connect=5.0)) as client:
         for langue, morceau in decouper_par_langue(texte):
-            if _voix.get(langue) is None:
-                _voix[langue] = PiperVoice.load(str(telecharger_voix(langue)))
-            tampon = io.BytesIO()
-            with wave.open(tampon, "wb") as w:
-                _voix[langue].synthesize_wav(morceau, w, syn_config=reglages)
-            sons.append(tampon.getvalue())
+            r = client.post(VOIX_URL + "/lire",
+                            json={"langue": langue, "texte": morceau, "vitesse": vitesse})
+            r.raise_for_status()
+            sons.append(r.content)
     return coller_wav(sons)
 
 
