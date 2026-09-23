@@ -103,7 +103,10 @@ cd free-ai-studio
 
 Puis demander à l'assistant :
 
-> Lis `AGENTS.md` et installe Free AI Studio sur cet ordinateur. Configure au maximum ce que tu peux sans aucune dépense et sans exposer mes clés.
+> Lis `docs/INSTALLER-AVEC-UN-ASSISTANT.md` et installe Free AI Studio sur cet ordinateur.
+
+Le guide dit à l'assistant ce qu'il lance, ce qu'il ne touche jamais (le code, vos clés,
+les paiements) et ce qu'il vous rend à la fin.
 
 ### 4. Installation manuelle alternative
 

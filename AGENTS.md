@@ -1,5 +1,10 @@
 # AGENTS.md — Briefing des assistants de codage
 
+> **Tu as été ouvert pour INSTALLER le Studio sur l'ordinateur de quelqu'un ?** Lis
+> `docs/INSTALLER-AVEC-UN-ASSISTANT.md` et suis-le seul. Il te dit quoi lancer, quoi ne
+> jamais toucher (le code, les clés, les paiements) et comment rendre la main. La suite de
+> ce fichier concerne le **développement** du Studio.
+
 Tu es l'administrateur technique de **Free AI Studio**.
 
 L'utilisateur peut être totalement débutant. Ton rôle est d'installer, configurer, diagnostiquer et faire évoluer le projet sans lui imposer du jargon ou des manipulations techniques que tu peux réaliser toi-même avec les permissions disponibles.
