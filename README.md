@@ -92,10 +92,31 @@ déjà rencontrées et ce qui les a réglées : [docs/DEPANNAGE.md](docs/DEPANNA
 - VS Code
 - un assistant de codage disposant, avec votre autorisation, d'un accès aux fichiers et au terminal.
 
+**Pas d'assistant ? opencode, gratuit et sans compte.** Sous Windows :
+
+1. Installer **Node.js**, version LTS : <https://nodejs.org/>. Suivant jusqu'au bout, puis
+   fermer et rouvrir VS Code, qui ne voit Node qu'à son démarrage.
+2. Dans VS Code, menu **Terminal** → **Nouveau terminal**, et taper :
+   `npm.cmd install -g opencode-ai`
+   Écrire `npm.cmd`, pas `npm` : sur un Windows neuf, PowerShell refuse `npm` (« l'exécution
+   de scripts est désactivée sur ce système »), pas `npm.cmd`.
+3. Une fois le dossier du Studio ouvert (étape 3 ci-dessous), taper `opencode.cmd` dans le
+   même terminal.
+4. Taper `/models` et choisir un modèle gratuit : ceux dont le nom finit par `free`, ou
+   `big-pickle`. Aucune clé ni aucun compte n'est demandé. La liste change avec le temps.
+
+Sous Linux ou macOS : `npm install -g opencode-ai`, puis `opencode`.
+
+*Essayé le 23/09/2026 dans un Docker vide sous Linux (opencode 1.18.32, modèle
+`big-pickle`, aucun compte) : installation menée seule en 6 min 10 s, aucun fichier du dépôt
+modifié, aucun secret lu, auto-test entièrement vert. Le refus de `npm` et l'acceptation de
+`npm.cmd` ont été vérifiés sous Windows ; un opencode installé sur un Windows neuf ne l'a
+pas été.*
+
 ### 2. Cloner le dépôt
 
 ```bash
-git clone <URL_DU_DEPOT>
+git clone https://github.com/jpbrasile/free-ai-studio.git
 cd free-ai-studio
 ```
 
