@@ -221,7 +221,6 @@ BLOC = """
   function revoir(id, defiler){
     if(minuteur){ clearInterval(minuteur); minuteur = null; }
     vu = id;
-    document.getElementById("lancer").disabled = true;
     document.getElementById("resultat").innerHTML = "";
     const etat = document.getElementById("etat");
     etat.textContent = "Lecture du travail…";

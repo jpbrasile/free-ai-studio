@@ -146,7 +146,9 @@ setTimeout(() => {
 def test_la_page_rechargee_REPREND_le_travail_en_cours_sans_clic(tmp_path, jobs):
     vus = _jouer("video", derniers.lister(jobs, "video"), tmp_path)
     assert vus["suivis"] == ["v2"]
-    assert vus["lancer"] is True                   # pas de second clip par megarde
+    # Inverse le 23/09 : « on ne peut pas lancer sur kaggle quand une video est
+    # lancee sur la carte locale ». Reprendre un suivi n'eteint plus le bouton.
+    assert vus["lancer"] is False
     assert "Suivi repris" in vus["etat"]
     assert vus["visible"] is True
     assert "the cat wakes up" in vus["html"] and "(loué)" in vus["html"]

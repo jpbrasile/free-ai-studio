@@ -1463,6 +1463,12 @@ function enAttente(j){
 }
 
 function suivre(id){
+  // Un seul suivi a la fois : lancer pendant qu'un autre travail tourne
+  // (« on ne peut pas lancer sur kaggle quand une video est lancee sur la
+  // carte locale », 23/09) doit remplacer l'ancien minuteur, sinon il
+  // ecrirait son etat par-dessus. L'ancien travail continue ; il reste
+  // dans « Vos travaux ».
+  if(minuteur){ clearInterval(minuteur); minuteur = null; }
   const etat = document.getElementById("etat");
   const tour = () => {
     fetch("/video/jobs/" + id, {headers:{"Authorization":"Bearer "+CLE}})
@@ -1687,6 +1693,9 @@ function envoyer(extra){
         : "⏳ Lancé sur une machine louée.";
       etat.textContent = ouFait;
       suivre(d.id);
+      // Le bouton ne reste pris que le temps de l'envoi : un second clip
+      // peut partir pendant que le premier tourne.
+      bouton.disabled = false;
     })
     .catch(e => {
       fermerAttente();

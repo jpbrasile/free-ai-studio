@@ -1103,6 +1103,12 @@ function demanderFiltrage(id, bouton){
 }
 
 function suivre(id){
+  // Un seul suivi a la fois : lancer pendant qu'un autre travail tourne
+  // (« on ne peut pas lancer sur kaggle quand une video est lancee sur la
+  // carte locale », 23/09) doit remplacer l'ancien minuteur, sinon il
+  // ecrirait son etat par-dessus. L'ancien travail continue ; il reste
+  // dans « Vos travaux ».
+  if(minuteur){ clearInterval(minuteur); minuteur = null; }
   const etat = document.getElementById("etat");
   // Borne de l’attente du nettoyage. Sans elle, un témoin resté levé par une
   // fiche illisible ferait tourner la page sans fin, et mieux vaut montrer ce
@@ -1196,7 +1202,7 @@ document.getElementById("lancer").addEventListener("click", () => {
       if(!r.ok){ throw new Error(d.detail || ("HTTP " + r.status)); }
       return d;
     })
-    .then(d => { etat.textContent = "⏳ Lancé."; suivre(d.id); })
+    .then(d => { etat.textContent = "⏳ Lancé."; suivre(d.id); bouton.disabled = false; })
     .catch(e => {
       bouton.disabled = false;
       etat.innerHTML = '<span class="ko">✖ ' + echapper(e.message) + "</span>";
