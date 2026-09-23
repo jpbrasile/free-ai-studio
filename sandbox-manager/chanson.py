@@ -871,6 +871,9 @@ function majBouton(){
 // La licence se dit A L'ENDROIT DU CHOIX, pas en note de bas de page : c'est ici
 // qu'on decide, donc ici qu'on doit savoir ce qu'on prend. Et les deux reserves
 // (revision non epinglee, verifiee sur Modal seulement) se disent avec.
+const KAGGLE_LIBELLE = "Kaggle — gratuit, plus lent";
+const KAGGLE_LORA = "Kaggle — pas pour cette version (vérifiée sur Modal seulement)";
+
 function majModele(){
   const zone = document.getElementById("modele-texte");
   const paroles = document.getElementById("paroles");
@@ -884,7 +887,10 @@ function majModele(){
     document.getElementById("note-paroles").textContent = "";
     document.getElementById("style").placeholder = STYLE_ORIGINE;
     // Ne jamais rouvrir Kaggle si c'est le Studio partage qui l'a ferme.
-    if(kaggle && !(ETAT && ETAT.kaggle_permis === false)){ kaggle.disabled = false; }
+    if(kaggle && !(ETAT && ETAT.kaggle_permis === false)){
+      kaggle.disabled = false;
+      kaggle.textContent = KAGGLE_LIBELLE;
+    }
     majBouton();
     return;
   }
@@ -911,6 +917,9 @@ function majModele(){
   document.getElementById("style").placeholder = STYLE_LORA;
   if(kaggle){
     kaggle.disabled = true;
+    // La raison dans l'option elle-meme : grisee sans un mot, elle avait l'air
+    // d'une panne (capture du proprietaire, 23/09/2026).
+    if(!(ETAT && ETAT.kaggle_permis === false)){ kaggle.textContent = KAGGLE_LORA; }
     if(document.getElementById("ou").value === "kaggle"){
       document.getElementById("ou").value = "modal";
       majOu();
