@@ -918,12 +918,14 @@ TRACE_OOM = ("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate "
              "1.44 GiB. GPU 0 has a total capacity of 39.49 GiB")
 
 
-def _echec(sandbox, stderr, maison=False, error=None):
+def _echec(sandbox, stderr, maison=False, error=None, voisins=None):
     jid = "e" * 32
     job = {"id": jid, "status": "failed", "artifacts": [], "stderr": stderr,
            "video": {"maison": maison}}
     if error:
         job["error"] = error
+    if voisins is not None:
+        job["voisins_a_l_echec"] = voisins
     sandbox.write_job(jid, job)
     r = TestClient(sandbox.app, base_url=LOCAL).get("/video/jobs/" + jid, headers=CLE)
     assert r.status_code == 200
@@ -943,6 +945,59 @@ def test_un_manque_de_memoire_A_LA_MAISON_ne_parle_pas_de_depense(sandbox):
     corps = _echec(sandbox, TRACE_OOM, maison=True)
     assert "manqué de mémoire" in corps["message"]
     assert "dépense" not in corps["message"]
+
+
+# --- ... et ne dit pas « trop lourd » quand un voisin a pris la place (point 15.5) ---
+# La sonde du depart ne voit pas un julia lance PENDANT le calcul ; rien ne
+# l'empeche et on ne l'arrete jamais. Le clip meurt alors en manque de memoire
+# sans etre trop lourd : dire « durée plus courte » enverrait le client refaire
+# plus court un clip qui passait.
+
+def test_un_voisin_sur_la_carte_a_l_echec_est_nomme_au_lieu_de_trop_lourd(sandbox):
+    corps = _echec(sandbox, TRACE_OOM, maison=True, voisins=["julia.exe (PID 64216)"])
+    assert "julia.exe (PID 64216)" in corps["message"]
+    assert "Relancez le clip quand il aura fini" in corps["message"]
+    assert "trop lourd" not in corps["message"]
+    assert "dépense" not in corps["message"]
+
+
+def test_sans_voisin_ou_sans_releve_le_message_reste_trop_lourd(sandbox):
+    for voisins in ([], None):
+        corps = _echec(sandbox, TRACE_OOM, maison=True, voisins=voisins)
+        assert "trop lourd" in corps["message"], voisins
+
+
+def test_un_voisin_ne_change_rien_a_un_clip_loue(sandbox):
+    # Chez le loueur, la carte n'est pas celle de julia.
+    corps = _echec(sandbox, TRACE_OOM, maison=False, voisins=["julia.exe (PID 1)"])
+    assert "julia" not in corps["message"]
+    assert "dépense du mois" in corps["message"]
+
+
+def test_le_voisin_est_releve_a_la_seconde_de_l_echec(sandbox, monkeypatch):
+    """Releve a l'affichage, il serait peut-etre deja parti : on le garde avec
+    le travail, au moment ou le calcul echoue."""
+    jid = "f" * 32
+    sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": [],
+                            "video": {"maison": True}})
+    monkeypatch.setattr(sandbox, "maison_execute",
+                        lambda *_a, **_k: {"exit_code": 1, "stderr": TRACE_OOM})
+    monkeypatch.setattr(sandbox.gpu_local, "voisins", lambda: ["julia.exe (PID 64216)"])
+    sandbox.run_video(jid, "print()", "L4", "maison")
+    job = sandbox.read_job(jid)
+    assert job["status"] == "failed"
+    assert job["voisins_a_l_echec"] == ["julia.exe (PID 64216)"]
+
+
+def test_un_clip_reussi_ne_releve_personne(sandbox, monkeypatch):
+    jid = "a" * 32
+    sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": [],
+                            "video": {"maison": True}})
+    monkeypatch.setattr(sandbox, "maison_execute", lambda *_a, **_k: {"exit_code": 0})
+    monkeypatch.setattr(sandbox.gpu_local, "voisins",
+                        lambda: pytest.fail("releve inutile sur un succes"))
+    sandbox.run_video(jid, "print()", "L4", "maison")
+    assert "voisins_a_l_echec" not in sandbox.read_job(jid)
 
 
 def test_une_cause_inconnue_garde_le_journal_et_n_invente_rien(sandbox):

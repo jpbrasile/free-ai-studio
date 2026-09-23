@@ -564,12 +564,22 @@ QUALITE_LOUEE_PAR_DEFAUT = "rapide"
 MANQUE_DE_MEMOIRE = ("OutOfMemoryError", "CUDA out of memory")
 
 
-def phrase_d_echec(stderr: str, maison: bool = False) -> str:
+def phrase_d_echec(stderr: str, maison: bool = False,
+                   voisins: list[str] | None = None) -> str:
     """Une phrase pour le client, ou "" quand la cause n'est pas reconnue.
 
-    `maison` : le clip tournait sur la carte d'ici, donc rien n'a ete paye."""
+    `maison` : le clip tournait sur la carte d'ici, donc rien n'a ete paye.
+    `voisins` : qui d'autre tenait cette carte a la seconde de l'echec, releve
+    par l'hote. Un programme parti sur la carte PENDANT le calcul (un julia lance
+    apres la sonde du depart) n'est empeche par rien, et on ne l'arrete jamais :
+    le clip n'etait alors pas trop lourd, la place a ete prise."""
     texte = stderr or ""
     if any(signe in texte for signe in MANQUE_DE_MEMOIRE):
+        if maison and voisins:
+            return ("La carte graphique a manqué de mémoire pendant le calcul : un "
+                    "autre programme s'en servait en même temps (%s). Le Studio ne "
+                    "l'arrête jamais. Relancez le clip quand il aura fini, ou "
+                    "choisissez la machine louée." % ", ".join(voisins))
         return ("La carte graphique a manqué de mémoire pendant le calcul : ce "
                 "clip est trop lourd pour elle. Essayez une durée plus courte."
                 + ("" if maison else " Le temps déjà passé sur la machine louée "

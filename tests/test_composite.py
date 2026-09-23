@@ -1463,6 +1463,59 @@ def test_un_409_de_creer_devient_une_QUESTION_au_client(apps, monkeypatch):
     assert "Attendre ne coûte rien" in pris.value.phrase, pris.value.phrase
 
 
+def test_carte_libre_au_controle_PRISE_au_depart_d_un_seul_tenant(apps, sandbox, monkeypatch):
+    """Le cas du point 15.5, joue d'un bout a l'autre et non en deux moities.
+
+    La carte est libre quand le flow est verifie ; un julia la prend avant que
+    l'etape parte. Le composite ne sonde pas lui-meme au depart : il rappelle
+    `/video/creer`, qui redecide a la seconde du depart. Ici, le VRAI
+    gestionnaire repond (TestClient derriere le transport de httpx) : la
+    decision, le 409 et la question sont les siens, pas une reponse ecrite
+    d'avance. Et rien n'est parti."""
+    import httpx
+    from fastapi.testclient import TestClient
+
+    releve = {"vue": True, "nom": "NVIDIA GeForce RTX 4090", "totale_mo": 24564,
+              "libre_mo": 24138, "marge_mo": 1024, "motif": ""}
+    etat = {"libre": True}
+
+    def sonde(besoin_mo, delai_s=None):
+        if etat["libre"]:
+            return True, "24138 Mo libres.", releve
+        return False, "3200 Mo libres, il en faut %d." % (besoin_mo + 1024), dict(releve, libre_mo=3200)
+
+    # Le gestionnaire avec une carte declaree, et rien qui parte vraiment.
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://sandbox-worker-gpu:8000")
+    monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    monkeypatch.setattr(sandbox, "maison_prete", lambda: (True, "", False))
+    partis = []
+    monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: partis.append(a))
+    monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "utilisable", sonde)
+
+    client = TestClient(sandbox.app, base_url="http://127.0.0.1:8020")
+
+    def vers_le_vrai_gestionnaire(requete):
+        r = client.request(requete.method, requete.url.path, content=requete.content,
+                           headers={k: v for k, v in requete.headers.items()
+                                    if k.lower() in ("authorization", "content-type")})
+        return httpx.Response(r.status_code, content=r.content, headers=r.headers)
+
+    _studio_simule(monkeypatch, vers_le_vrai_gestionnaire)
+    monkeypatch.setenv("SANDBOX_MANAGER_KEY", "cle-sandbox-de-test")
+
+    chaine = composite.chaine_depuis_briques(["video_rapide"], apps)
+    verdict = composite.verifier(chaine, sonde_carte=sonde, sonde_budget=lambda _e: None)
+    assert "carte_occupee" not in verdict["motifs"], verdict["motifs"]
+
+    etat["libre"] = False  # le julia arrive entre le controle et le depart
+    with pytest.raises(composite.CompositeRefuse) as pris:
+        composite.lancer_par_le_routeur(dict(chaine["etapes"][0], demande="un phare"),
+                                        "un phare")
+    assert pris.value.motif == "arbitrage_du_client", pris.value.motif
+    assert "3200" in pris.value.phrase, pris.value.phrase
+    assert partis == []
+
+
 def test_un_404_pendant_l_attente_ne_devient_PAS_pas_encore_pret(apps, monkeypatch):
     """Un sondeur separe << pas ENCORE >> de << JAMAIS >>.
 

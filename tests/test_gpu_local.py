@@ -433,6 +433,19 @@ def test_un_releve_frais_a_la_limite_compte_encore(carte, hote):
     assert gpu_local.libre_pour_un_code_inconnu()[0] is True
 
 
+def test_voisins_nomme_les_locataires_ou_avoue_ne_pas_savoir(hote):
+    """[] : personne ; None : on ne sait pas. Un releve absent ou perime ne doit
+    jamais faire accuser un voisin (point 15.5)."""
+    assert gpu_local.voisins() == []
+    _poser_hote(hote, locataires=[{"nom": "julia.exe", "pid": 64216}])
+    assert gpu_local.voisins() == ["julia.exe (PID 64216)"]
+    _poser_hote(hote, locataires=[{"nom": "julia.exe", "pid": 1}],
+                age_s=gpu_local.PEREMPTION_S + 1)
+    assert gpu_local.voisins() is None
+    hote.unlink()
+    assert gpu_local.voisins() is None
+
+
 def test_les_deux_sondes_de_l_hote_ecrivent_le_meme_fichier():
     """Le jumeau Windows et le jumeau Linux ecrivent au meme endroit, avec les
     memes champs, sur le meme rythme : sinon un des deux hotes aurait une

@@ -102,6 +102,24 @@ def hote(maintenant: float | None = None) -> tuple[bool, str]:
     return True, "personne d'autre ne la tient."
 
 
+def voisins(maintenant: float | None = None) -> list[str] | None:
+    """Qui d'autre tient la carte selon l'hote, en << nom (PID n) >>.
+
+    [] : personne. None : on ne sait pas (releve absent, illisible ou perime).
+    Sert apres coup, quand un clip fait ici a manque de memoire : un nom ici
+    change la cause a dire au client (PLAN.md, point 15.5)."""
+    try:
+        with open(FICHIER_HOTE, encoding="utf-8") as f:
+            etat = json.load(f)
+        ecrit = float(etat["ecrit_le_epoch"])
+        locataires = list(etat.get("locataires") or [])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if (maintenant if maintenant is not None else time.time()) - ecrit > PEREMPTION_S:
+        return None
+    return ["%s (PID %s)" % (l.get("nom"), l.get("pid")) for l in locataires]
+
+
 def releve(delai_s: int | None = None) -> dict:
     """L'etat de la carte, tel qu'il est a cette seconde.
 

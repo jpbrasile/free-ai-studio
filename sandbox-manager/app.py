@@ -2465,6 +2465,12 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
             # rien. Le `finally` plus bas ne compte que la location, et c'est
             # pourquoi il teste `ou == "modal"` et non l'inverse.
             finish_execution(jid, "maison", maison_execute(jid, code))
+            job = read_job(jid)
+            if job.get("status") == "failed":
+                # Qui tenait la carte A LA SECONDE de l'echec : relu plus tard,
+                # a l'affichage, le voisin serait peut-etre deja parti.
+                job["voisins_a_l_echec"] = gpu_local.voisins()
+                write_job(jid, job)
             return
         if ou == "kaggle":
             # Kaggle ne facture rien : pas de compteur, mais un GPU plus petit et
@@ -2737,7 +2743,8 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "stderr": job.get("stderr", ""),
         "message": job.get("error") or (
             video.phrase_d_echec(job.get("stderr", ""),
-                                 maison=bool((job.get("video") or {}).get("maison")))
+                                 maison=bool((job.get("video") or {}).get("maison")),
+                                 voisins=job.get("voisins_a_l_echec"))
             if job.get("status") == "failed" else ""),
         "video": job.get("video"),
         # Ou ce clip a ete fabrique, et pourquoi la. Deux mots sur la page,
