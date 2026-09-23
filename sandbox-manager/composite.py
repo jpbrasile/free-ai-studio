@@ -833,9 +833,87 @@ def _verdict(etat, motifs, pourquoi, chaine, total, faits):
         "etapes": [
             {"brique": e["brique"], "fonction": e["fonction"],
              "entrees": e["entrees"], "sorties": e["sorties"],
-             "cout_max_usd": e["cout_max_usd"]}
+             "cout_max_usd": e["cout_max_usd"],
+             "donnees": donnees_de(e["brique"])}
             for e in chaine["etapes"]],
     }
+
+
+# ---------------------------------------------------------------------------
+# Ou vont les donnees de chaque etape (PLAN.md, points 15.5 et 16.2)
+# ---------------------------------------------------------------------------
+
+# Dit au client, AVANT de lancer, ce qui quitte sa machine et chez qui. Releve
+# dans le code le 23/09/2026, route par route, et non recopie du registre :
+#   - chat et lecture d'image : `free-tier-manager/app.py`, chaine Auto =
+#     gemini, openrouter, groq ; un fournisseur qui echoue passe la main au
+#     suivant, et AUCUN repli local n'existe ;
+#   - fabrication d'image : Google seul ;
+#   - voix : le conteneur `voix` (Piper), sans repli dans le nuage ;
+#   - dictee : `moteur` nomme est strict, sans repli dans un sens ni l'autre ;
+#   - chanson et dialogue : une chaine n'envoie pas `ou`, donc Modal ;
+#   - video : `ou_calculer.decider`, carte d'ici si libre.
+# `sort` vaut << non >>, << oui >> ou << selon la carte >> : c'est ce que le
+# futur mode confidentiel (16.1) lira pour refuser une etape.
+DONNEES = {
+    "document_lecture": {
+        "sort": "non", "vers": [],
+        "phrase": "Sur votre ordinateur : le document ne sort pas."},
+    "dictee_locale": {
+        "sort": "non", "vers": [],
+        "phrase": "Sur votre ordinateur (Whisper) : votre voix ne sort pas."},
+    "dictee_groq": {
+        "sort": "oui", "vers": ["Groq"],
+        "phrase": "Votre enregistrement part chez Groq."},
+    "chat_auto": {
+        "sort": "oui", "vers": ["Google", "OpenRouter", "Groq"],
+        "phrase": "Votre texte part chez Google (Gemini) ; s’il ne répond pas, "
+                  "chez OpenRouter ou Groq."},
+    "chat_max": {
+        "sort": "oui", "vers": ["Google", "OpenRouter", "Groq"],
+        "phrase": "Votre texte part chez Google (Gemini) ; s’il ne répond pas, "
+                  "chez OpenRouter ou Groq."},
+    "image_lecture": {
+        "sort": "oui", "vers": ["Google", "OpenRouter", "Groq"],
+        "phrase": "Votre image part chez Google (Gemini) ; s’il ne répond pas, "
+                  "chez OpenRouter ou Groq."},
+    "image_fabrication": {
+        "sort": "oui", "vers": ["Google"],
+        "phrase": "Votre description part chez Google (Gemini)."},
+    "voix_fr": {
+        "sort": "non", "vers": [],
+        "phrase": "Sur votre ordinateur (Piper) : le texte lu ne sort pas."},
+    "voix_en": {
+        "sort": "non", "vers": [],
+        "phrase": "Sur votre ordinateur (Piper) : le texte lu ne sort pas."},
+    "video_rapide": {
+        "sort": "selon la carte", "vers": ["Modal"],
+        "phrase": "Sur votre carte si elle est libre, et rien ne sort ; sinon "
+                  "votre description part chez Modal."},
+    # Promesse PAS encore tenue en entier, et dite telle quelle : si le Studio
+    # ne joint pas la carte d'ici, `decider_ou_fabriquer` rend Modal avant meme
+    # de lire << toujours-maison >> (docs/FRICTIONS.md, ouverte le 23/09).
+    "video_maison": {
+        "sort": "selon la carte", "vers": ["Modal"],
+        "phrase": "Sur votre carte, et rien ne sort ; mais si le Studio ne la "
+                  "joint pas, votre description part chez Modal."},
+    "chanson": {
+        "sort": "oui", "vers": ["Modal"],
+        "phrase": "Vos paroles et le style partent chez Modal."},
+    "dialogue": {
+        "sort": "oui", "vers": ["Modal"],
+        "phrase": "Votre texte part chez Modal."},
+}
+
+DONNEES_INCONNUES = {
+    "sort": "inconnu", "vers": [],
+    "phrase": "Où vont les données de cette étape n’est pas encore écrit."}
+
+
+def donnees_de(brique: str) -> dict:
+    """Ce qui sort de la machine pour cette brique -- une copie, jamais la table."""
+    fiche = DONNEES.get(brique, DONNEES_INCONNUES)
+    return dict(fiche, vers=list(fiche["vers"]))
 
 
 # ---------------------------------------------------------------------------
@@ -1626,12 +1704,16 @@ button[disabled]{opacity:.55;cursor:progress}
 ol{margin:10px 0 0 0;padding-left:22px}
 li{margin:3px 0}
 .motif{color:#555;font-size:.94em}
+.donnees{font-size:.94em}.donnees.reste{color:#1b6b2f}.donnees.sort{color:#8a4b00}
 .gris{color:#666;font-size:.94em}
 </style>
 <h1>\U0001f517 Encha\u00eener</h1>
 <p class=sous>Dites ce que vous voulez obtenir. Le Studio compose les applications
 qu\u2019il a d\u00e9j\u00e0, vous dit <strong>avant de lancer</strong> si c\u2019est possible et
 combien \u00e7a co\u00fbte, puis le fait.</p>
+<p class=gris id=phrase-sort>Pour comprendre votre phrase, le Studio l\u2019envoie d\u2019abord
+au service de chat gratuit : Google (Gemini) ; s\u2019il ne r\u00e9pond pas, OpenRouter
+ou Groq. Chaque \u00e9tape dit ensuite ce qui quitte votre ordinateur, et chez qui.</p>
 
 <label for=phrase><strong>Ce que vous voulez</strong></label>
 <textarea id=phrase placeholder="R\u00e9sume cet enregistrement et lis-le-moi \u00e0 voix haute"></textarea>
@@ -1654,7 +1736,9 @@ function bloc(v){
                 inconnu:"Je ne peux pas trancher", non:"Ce n\u2019est pas possible"};
   const etapes = (v.etapes||[]).map(e =>
     "<li>" + e.fonction + " <span class=motif>(" + e.entrees.join(", ") +
-    " \u2192 " + e.sorties.join(", ") + ")</span></li>").join("");
+    " \u2192 " + e.sorties.join(", ") + ")</span>" +
+    (e.donnees ? "<br><span class='donnees " + (e.donnees.sort === "non" ? "reste" : "sort") +
+      "'>" + e.donnees.phrase + "</span>" : "") + "</li>").join("");
   return "<div class='bloc " + v.atteignable + "'>" +
     "<p class=etat>" + (noms[v.atteignable]||v.atteignable) + "</p>" +
     "<p>" + (v.phrase || v.pourquoi) + "</p>" +

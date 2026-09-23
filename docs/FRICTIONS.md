@@ -28,7 +28,7 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
-| — | — | aucune pour l'instant | — | — |
+| 23/09/2026 | `/composite`, `/video` | « vidéo sur votre carte » (`video_maison`) peut partir chez Modal : si le Studio ne joint pas la carte d'ici, ou si une image de départ est jointe, la décision rend Modal avant de lire « toujours-maison ». L'annonce de chaque étape le dit ; la promesse n'est pas encore tenue | oui | une lecture du code |
 
 ## Levées
 
