@@ -2042,12 +2042,20 @@ def _consigne_du_chat(etape: dict, entree) -> str:
 
 
 def _consigne_orale(suivante) -> str:
-    """Rien, sauf si la reponse part a une voix : elle sera LUE telle quelle."""
+    """Rien, sauf si la reponse part a une voix : elle sera LUE telle quelle.
+
+    Elle regle la FORME, jamais la longueur. Essai du 23/09 : << decris DANS LE
+    DETAIL ... a voix haute >> a rendu une seule phrase -- la consigne ne
+    parlait que de ce qu'il fallait retirer, et le modele a tout retire. Elle
+    dit donc aussi que le contenu demande reste entier.
+    """
     if suivante not in VOIX:
         return ""
     langue = "en anglais" if suivante == "voix_en" else "en français"
     return ("\nVotre réponse sera lue à haute voix, telle quelle, par une voix de "
-            "synthèse. Écrivez seulement les phrases à prononcer, " + langue
+            "synthèse. Donnez tout le contenu demandé, avec la longueur et le niveau "
+            "de détail demandés : seule la forme change. Écrivez seulement les phrases "
+            "à prononcer, " + langue
             + ", en prose continue : pas de titre, pas de liste, pas de gras, "
               "pas de symbole, et aucun commentaire sur votre réponse.")
 
