@@ -1163,6 +1163,21 @@ function dessinerPortee(abc, secondesAudio, sonCoupe){
 // toujours synchrone », 23/09). Mesure le 23/09 sur les 20 chansons reussies :
 // partition / son = 1,01 a 1,07 sur les 9 entieres, 1,19 a 18,3 sur les 11
 // coupees. Coupee, on suit donc le tempo ecrit tel quel (rapport 1).
+// Demande du 23/09 : « elle coupe avant la fin (vue sur la partition) ». Le
+// Studio ne sait pas faire rechanter LA MEME partition plus longtemps : une
+// relance en ecrit une autre. On dit donc quelle duree choisir, sans promettre
+// la meme chanson. Au-dela de 3 minutes, la page n'a pas de choix plus long.
+function conseilDuree(secondesPartition){
+  const minutes = Math.ceil(secondesPartition / 60);
+  if(minutes <= 3){
+    return "Pour qu’une chanson de cette longueur aille jusqu’au bout, choisissez « jusqu’à "
+      + minutes + (minutes > 1 ? " minutes" : " minute") + " » ou plus : le modèle écrira "
+      + "alors une autre partition, pas celle-ci.";
+  }
+  return "Cette partition est plus longue que la plus longue durée proposée (3 minutes) : "
+    + "le modèle a sans doute tourné en rond en l’écrivant.";
+}
+
 function suivreAuSon(visuel, secondesAudio, sonCoupe){
   const note = document.getElementById("note-surlignage");
   const audio = document.getElementById("lecteur");
@@ -1248,8 +1263,8 @@ function suivreAuSon(visuel, secondesAudio, sonCoupe){
       note.textContent = "La chanson s’arrête à la durée choisie (" + fr(son, 1)
         + " s) : elle ne chante que le début de la partition écrite (" + fr(totalPartition, 1)
         + " s au tempo noté). Le surlignage suit ce tempo noté, sans recalage ; "
-        + "la suite de la partition n’est jamais chantée. Personne n’a vérifié à l’oreille "
-        + "que la note surlignée est bien celle qu’on entend.";
+        + "la suite de la partition n’est jamais chantée. " + conseilDuree(totalPartition)
+        + " Personne n’a vérifié à l’oreille que la note surlignée est bien celle qu’on entend.";
       return;
     }
     const ecart = Math.round(Math.abs(totalPartition / son - 1) * 100);

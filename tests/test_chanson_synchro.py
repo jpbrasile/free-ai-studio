@@ -39,7 +39,7 @@ const visuel = {setTiming: () => {}, getTotalTime: () => 150,
 
 
 def executer(page: str, coupe: bool) -> dict:
-    debut = page.index("function suivreAuSon(")
+    debut = page.index("function conseilDuree(")
     fin = page.index("\nfunction suivre(id)", debut)
     code = (FAUX + page[debut:fin]
             + "\nsuivreAuSon(visuel, 60, " + ("true" if coupe else "false") + ");\n"
@@ -75,6 +75,32 @@ def test_une_chanson_entiere_reste_recalee(page):
     r = executer(page, coupe=False)
     assert r["allumee"] == 2, "le recalage des chansons entieres a disparu"
     assert "recalée sur les" in r["note"]
+
+
+def conseil(page: str, secondes: float) -> str:
+    debut = page.index("function conseilDuree(")
+    fin = page.index("function suivreAuSon(", debut)
+    code = page[debut:fin] + "\nconsole.log(conseilDuree(" + repr(secondes) + "));\n"
+    sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
+                            encoding="utf-8", timeout=20)
+    assert sortie.returncode == 0, sortie.stderr
+    return sortie.stdout.strip()
+
+
+def test_une_chanson_coupee_dit_quelle_duree_choisir(page):
+    """Chanson Kaggle e1b68125 du 23/09 : 60 s chantees, partition de 72,3 s."""
+    texte = conseil(page, 72.3)
+    assert "« jusqu’à 2 minutes »" in texte
+    assert "une autre partition" in texte, (
+        "la page laisse croire qu'une relance rechantera la meme partition."
+    )
+
+
+def test_une_partition_trop_longue_ne_promet_rien(page):
+    """Cas reel du 23/09 : une partition de 1 098,7 s, pour 60 s de son."""
+    texte = conseil(page, 1098.7)
+    assert "jusqu’à" not in texte
+    assert "3 minutes" in texte
 
 
 def test_la_page_transmet_la_coupure_au_surlignage(page):
