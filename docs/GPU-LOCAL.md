@@ -45,7 +45,7 @@ répond seulement à « peut-on, là, tout de suite ». Sans elle, la phase 2 d�
 > <https://blog.fal.ai/wan-2-2-vs-wan-2-1-whats-new-and-how-to-upgrade-your-video-pipeline/>.
 > **La phase 2 ne se construit donc pas sur Wan 2.1.** Ce que le Studio fait tourner
 > aujourd'hui, chez Modal : `Wan-AI/Wan2.1-VACE-1.3B-diffusers` (rapide) et
-> `Wan-AI/Wan2.1-VACE-14B-diffusers` (soigné, 75 Go, A100) — `sandbox-manager/video.py:62`.
+> `Wan-AI/Wan2.1-VACE-14B-diffusers` (soigné, 75 Go, A100 ; **retiré le 23/09/2026**, 5 s n'y tenaient pas en mémoire) — `sandbox-manager/video.py:62`.
 > Et `notebooks/SOTA_LINKS.md` recommandait **déjà** la 2.2 pendant que le code tournait en
 > 2.1, sans qu'aucun fichier ne porte la décision : c'est la contradiction relevée au §9.
 >

@@ -2735,7 +2735,10 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "created_at": job.get("created_at"),
         "stdout": job.get("stdout", ""),
         "stderr": job.get("stderr", ""),
-        "message": job.get("error") or "",
+        "message": job.get("error") or (
+            video.phrase_d_echec(job.get("stderr", ""),
+                                 maison=bool((job.get("video") or {}).get("maison")))
+            if job.get("status") == "failed" else ""),
         "video": job.get("video"),
         # Ou ce clip a ete fabrique, et pourquoi la. Deux mots sur la page,
         # et de quoi ne pas refaire le raisonnement six mois plus tard.

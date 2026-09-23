@@ -374,7 +374,8 @@ dans `sandbox-manager/video.py`, et les nombres de ce paragraphe en sortent.
 
 **Le tout premier clip d'un modèle coûte plus cher que les suivants**, le temps de
 descendre ses poids sur le disque du loueur. Les deux ont été mesurés le 21/09/2026 sur
-le modèle « Soigné » et ses 75 Go, même carte et même phrase : **765 s** la première fois,
+le modèle « Soigné » et ses 75 Go (retiré depuis le 23/09/2026 : un clip de 5 s n'y tenait
+pas en mémoire sur A100 40 Go), même carte et même phrase : **765 s** la première fois,
 **479 s** la seconde, soit **0,558 $** puis **0,349 $**. Ce qui disparaît est la descente des
 poids — la charge du modèle tombe de 382 s à 120 s — tandis que le calcul ne bouge pas
 (353 s puis 345 s). Ce qui ne se reproduit **pas** vaut donc **262 s**, et non les 382 s de la
@@ -436,7 +437,6 @@ Licences relevées le 11/09/2026 sur les fiches officielles des modèles.
 | Dictée « Groq si possible » | Groq, `whisper-large-v3` | modèle ouvert exécuté à distance, par un service propriétaire ; votre voix part chez Groq | Apache 2.0 ([fiche](https://huggingface.co/openai/whisper-large-v3)) ; territoire : aucune restriction de pays |
 | Ouvrir un document (PDF ou texte) pour que le Studio le lise | pypdf, dans le Studio lui-même | aucun modèle : le texte est extrait du fichier par une bibliothèque, sur cette machine ; le document ne sort pas du Studio et n'est envoyé à personne | BSD-3-Clause ([fiche](https://pypi.org/project/pypdf/)) ; territoire : aucune restriction de pays |
 | Vidéo, qualité « Rapide » (si on loue) | Wan-AI, `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | Apache 2.0 ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B)) ; territoire : aucune restriction de pays |
-| Vidéo, qualité « Soignée » (si on loue) | Wan-AI, `Wan-AI/Wan2.1-VACE-14B-diffusers` | modèle ouvert exécuté à distance, sur une machine louée | Apache 2.0 ([fiche](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B)) ; territoire : aucune restriction de pays |
 | Vidéo fabriquée À LA MAISON, sur la carte de ce PC <sup>1</sup> | Wan-AI, `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | modèle ouvert exécuté sur la carte graphique de ce PC ; rien ne part chez personne | Apache 2.0 ([fiche](https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers)) ; territoire : aucune restriction de pays |
 | Chanson <sup>2</sup> | m-a-p, `m-a-p/YuE2-3B` | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | poids : CC BY-NC 4.0, USAGE NON COMMERCIAL ; code `yue2_infer` : Apache 2.0 ([fiche](https://huggingface.co/m-a-p/YuE2-3B)) ; territoire : aucune restriction de pays |
 | Dialogue à plusieurs voix <sup>3</sup> | FireRedTeam, `FireRedTeam/FireRedTTS2` | modèle ouvert exécuté à distance, sur une machine louée ou prêtée | Apache 2.0 — la licence elle-même n'interdit rien, usage commercial compris ([fiche](https://huggingface.co/FireRedTeam/FireRedTTS2)) ; territoire : aucune restriction de pays trouvée |

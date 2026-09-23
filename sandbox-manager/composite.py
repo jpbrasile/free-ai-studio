@@ -772,7 +772,6 @@ def _verdict(etat, motifs, pourquoi, chaine, total, faits):
 # n'y entre pas et n'a pas a y entrer.
 BUDGET_PAR_BRIQUE = {
     "video_rapide": "video",
-    "video_soignee": "video",
     "chanson": "chanson",
     "dialogue": "dialogue",
 }
@@ -784,8 +783,8 @@ BUDGET_PAR_BRIQUE = {
 # << modal >> (l. 2333) -- un clip part alors sur la carte d'ici, gratuitement.
 #
 # Ce que le registre en dit DIVERGE, et c'est note plutot que corrige ici :
-# `video_rapide` et `video_soignee` portent `modes: [modal, kaggle, colab]` sans
-# `local`, alors que `app.py:2321` les prepare bel et bien en mode maison. Le
+# `video_rapide` porte `modes: [modal, kaggle, colab]` sans
+# `local`, alors que `app.py:2321` la prepare bel et bien en mode maison. Le
 # code fait foi ; la fiche du registre est en retard. Sous-plan, pas raccroc.
 LOUEUR_SEUL = ("chanson", "dialogue")
 
@@ -940,7 +939,6 @@ ROUTES = {
     # Les cinq qui creent un TRAVAIL. Leur << chemin >> est un usage, pas une
     # adresse : il donne les trois adresses d'un coup (voir TRAVAUX).
     "video_rapide": ("travail", "video"),
-    "video_soignee": ("travail", "video"),
     "video_maison": ("travail", "video"),
     "chanson": ("travail", "chanson"),
     "dialogue": ("travail", "dialogue"),
@@ -959,7 +957,6 @@ SANDBOX = os.getenv("COMPOSITE_SANDBOX_URL", "http://127.0.0.1:8000")
 # client trancher, et son defaut est << maison si libre >>.
 TRAVAUX = {
     "video_rapide": ("video", {"qualite": "rapide"}),
-    "video_soignee": ("video", {"qualite": "soigne"}),
     "video_maison": ("video", {"ou_calculer": "toujours-maison"}),
     "chanson": ("chanson", {}),
     "dialogue": ("dialogue", {}),
@@ -967,7 +964,7 @@ TRAVAUX = {
 
 # La qualite video de chaque brique, pour aller chercher SA carte dans
 # `video.MODELES` au lieu d'ecrire << L4 >> et << A100 >> une deuxieme fois.
-QUALITE_DU_NOEUD = {"video_rapide": "rapide", "video_soignee": "soigne"}
+QUALITE_DU_NOEUD = {"video_rapide": "rapide"}
 
 # Un travail se regarde toutes les N secondes. Les etats terminaux sont ceux
 # que `write_job` ecrit vraiment -- releves dans `app.py`, pas supposes.

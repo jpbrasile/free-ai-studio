@@ -10,8 +10,8 @@ Un seul modele couvre les trois demandes du debutant, et c'est ce qui rend la
 chose possible sans budget : Wan 2.1 VACE en 1,3 milliard de parametres (licence
 Apache 2.0, environ 6 Go) sait a la fois partir d'une simple phrase, partir d'une
 image, finir sur une autre image, et garder un personnage ressemblant a une image
-de reference. Le meme code marche sur le grand modele 14B quand on a de quoi
-payer : seul le nom du modele change.
+de reference. Le grand modele 14B a ete propose jusqu'au 23/09/2026 et retire :
+5 s n'y tenaient pas sur A100 40 Go (voir MODELES).
 """
 
 from __future__ import annotations
@@ -123,33 +123,14 @@ MODELES = {
         "secondes_max": int(os.getenv("VIDEO_SECONDES_MAX_RAPIDE", "5")),
         "note": "Tient sur une petite carte : marche aussi sur Kaggle et Colab gratuits.",
     },
-    "soigne": {
-        "titre": "Soigne (plus lent, plus cher)",
-        # La cadence du modele, ecrite dans SA fiche et non dans un `.get(..., 16)`
-        # enfoui : c'est une propriete du modele, elle se lit la ou on le decrit.
-        "images_par_seconde": 16,
-        "hf": "Wan-AI/Wan2.1-VACE-14B-diffusers",
-        "parametres": "14 milliards",
-        "poids_go": 75,
-        "licence": "Apache 2.0",
-        "territoire": "aucune restriction de pays",
-        "gpu": os.getenv("VIDEO_GPU_SOIGNE", "A100"),
-        "largeur": 1280,
-        "hauteur": 720,
-        "flow_shift": 5.0,
-        "etapes": 30,
-        # DOCUMENTEE PAR L'AUTEUR, TENUE NON MESUREE. Les auteurs donnent
-        # « ~81x720x1280 » pour ce modele -- 81 images, 5 s a 16 img/s ; aucun
-        # maximum au-dela (memes sources que ci-dessus, lues le 23/09/2026).
-        # Ici, seul un clip d'1 s (17 images) a tourne, sur A100 40 Go : que
-        # 81 images en 720p tiennent dans ces 40 Go n'est PAS etabli.
-        "secondes_max": int(os.getenv("VIDEO_SECONDES_MAX_SOIGNE", "5")),
-        # Jusqu'au 23/09 cette note disait « ce modele n'a jamais ete lance »,
-        # alors que deux clips d'1 s avaient tourne le 21/09 (`dce69faa`,
-        # `9517593d`, SECONDES_MESUREES) et que `prix_estime("soigne", "1")`
-        # rendait deja un prix. Les autres durees rendent None.
-        "note": "Meilleure image. Seul un clip d'une seconde a été chronométré : le prix des durées plus longues n'est pas encore connu.",
-    },
+    # La qualite << soignee >> (Wan2.1-VACE-14B, A100, 1280x720) est RETIREE le
+    # 23/09/2026, decision du proprietaire. Mesure du jour, travail
+    # `4e92505679ad4ecc8fd8119c65374063` : 5 s (81 images) meurent en manque de
+    # memoire sur A100 40 Go, et une extrapolation depuis le 1 s (345 s de
+    # calcul) donne ~37 min et ~1,6 a 1,9 $ le clip sur une carte plus grande.
+    # Le 720p reste offert gratuitement par le modele de la maison ci-dessous.
+    # Detail et mesures : PLAN.md, SP-VIDEO-PLAFOND-LOUEUR.
+    #
     # Le modele de la MAISON. Il ne se choisit pas dans la liste des qualites :
     # il est choisi par `ou_calculer.decider()` quand le clip peut etre fabrique
     # sur la carte d'ici. Premier clip mesure le 19/09/2026 a 18:43 : 412 s de
@@ -552,12 +533,6 @@ def prix_seconde(gpu: str) -> float:
 # LE PRIX N'EST PAS ECRIT ICI. `prix_estime()` le calcule au tarif du jour, et
 # c'est ce qui a evite que la correction des tarifs du 20/09 le laisse en
 # arriere -- le registre, lui, en avait recopie un, 25 % trop bas.
-#
-# CE QUE LA TABLE NE DIT PAS ENCORE : le modele soigne n'a qu'UNE duree, donc
-# aucune pente -- `secondes_loueur` rend None pour toutes les autres. Et sa
-# seule mesure comprend le PREMIER telechargement de ses 75 Go, qui ne se
-# reproduira pas : elle majore donc largement un clip suivant. Les deux
-# manques sont chiffres dans SP-VIDEO-TEMPS-LOUEUR.
 SECONDES_MESUREES = {
     # 21/09/2026 `0d1afe0e` NVIDIA L4 832x480 bfloat16 17 images
     #   modele 17 s + calcul 117 s = 150.8 s dans le bac ; 162.8 s vus du gestionnaire.
@@ -570,63 +545,36 @@ SECONDES_MESUREES = {
     # 21/09/2026 `54182907` NVIDIA L4 832x480 bfloat16 81 images
     #   modele 18 s + calcul 712 s = 750.7 s dans le bac ; 761.8 s vus du gestionnaire.
     ("rapide", "5"): 751,
-    # 21/09/2026 `dce69faa` NVIDIA A100-SXM4-40GB 1280x720 bfloat16 17 images
-    #   modele 382 s + calcul 353 s = 765.4 s dans le bac ; 785.1 s vus du gestionnaire.
-    #   PREMIER lancement de ce modele : les 75 Go de poids sont descendus ici.
-    #   Ce que cela coute vraiment est desormais mesure, voir la table suivante.
-    ("soigne", "1"): 765,
+    # Les deux clips d'1 s du modele soigne (`dce69faa` 765 s, `9517593d`
+    # 479 s en reprise, A100, 21/09/2026) et leur table de reprise sont partis
+    # avec lui le 23/09/2026 ; ils restent consignes dans PLAN.md.
 }
-
-# LE MEME CLIP, RELANCE. Un modele qui tourne pour la premiere fois descend ses
-# poids chez le loueur ; les fois suivantes, il les retrouve sur le disque. Les
-# deux temps n'ont rien a voir, et le client merite les deux plutot qu'une
-# moyenne qui ne decrit aucun de ses clips.
-#
-# Cette table ne sert PAS a chiffrer un budget : c'est `SECONDES_MESUREES` qui
-# le fait, et elle garde le premier lancement, parce qu'un client qui decouvre
-# ce modele le paiera. Celle-ci sert a DIRE, dans le registre et le README, ce
-# que coute un clip ordinaire une fois la decouverte passee.
-SECONDES_MESUREES_REPRISE = {
-    # 21/09/2026 `9517593d` NVIDIA A100-SXM4-40GB 17 images, meme phrase que
-    # `dce69faa`, meme carte, quelques heures plus tard.
-    #   modele 120 s + calcul 345 s = 479.4 s dans le bac.
-    #   Le temps vu du gestionnaire n'a PAS ete releve pour ce clip : le
-    #   suiveur sondait une adresse abregee, donc inexistante, pendant que le
-    #   clip finissait. La mesure qui compte ici est celle du bac, qui est
-    #   aussi ce que `SECONDES_MESUREES` porte pour tous les autres.
-    #
-    # CE QUE LA PAIRE ETABLIT : 382 s de charge deviennent 120 s, donc
-    # 262 s ne se reproduisent pas -- et non 382, qui etait la lecture facile.
-    # Le calcul seul, lui, ne bouge pas : 353 s puis 345 s, 2,3 % d'ecart.
-    ("soigne", "1"): 479,
-}
-
-
-def secondes_reprise(qualite: str, duree: str):
-    """Le temps du MEME clip relance, poids deja sur le disque du loueur.
-
-    `None` tant qu'aucune relance n'a ete chronometree : on ne devine pas une
-    reprise a partir d'un premier lancement, la part qui disparait n'etant
-    connue que si on l'a mesuree deux fois.
-    """
-    valeur = SECONDES_MESUREES_REPRISE.get((str(qualite), str(duree)))
-    return None if valeur is None else float(valeur)
-
-
-def prix_reprise(qualite: str, duree: str):
-    """Ce que coute le meme clip relance, ou None si ce n'est pas mesure."""
-    if qualite not in MODELES:
-        return None
-    secondes = secondes_reprise(qualite, duree)
-    if secondes is None:
-        return None
-    return round(prix_seconde(MODELES[qualite]["gpu"]) * secondes, 4)
 
 
 # Quel modele le clip rencontrerait s'il partait chez le loueur. C'est le defaut
 # de `preparer()`, et il est nomme ici plutot que recopie : le menu des durees
 # montre le temps de CE modele-la.
 QUALITE_LOUEE_PAR_DEFAUT = "rapide"
+
+
+# Un clip qui meurt dans le bac a sable sort avec un code non nul et AUCUN
+# message : le 23/09/2026 (travail `4e92505679ad4ecc8fd8119c65374063`), la page
+# a montre « Échec — voir le journal » au-dessus d'une trace Python. Les causes
+# qu'on sait reconnaitre recoivent une phrase ; les autres gardent le journal.
+MANQUE_DE_MEMOIRE = ("OutOfMemoryError", "CUDA out of memory")
+
+
+def phrase_d_echec(stderr: str, maison: bool = False) -> str:
+    """Une phrase pour le client, ou "" quand la cause n'est pas reconnue.
+
+    `maison` : le clip tournait sur la carte d'ici, donc rien n'a ete paye."""
+    texte = stderr or ""
+    if any(signe in texte for signe in MANQUE_DE_MEMOIRE):
+        return ("La carte graphique a manqué de mémoire pendant le calcul : ce "
+                "clip est trop lourd pour elle. Essayez une durée plus courte."
+                + ("" if maison else " Le temps déjà passé sur la machine louée "
+                                     "est compté dans la dépense du mois."))
+    return ""
 
 
 def _points_loueur(qualite: str) -> list[tuple[int, float]]:
@@ -1215,7 +1163,7 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
        Wan 2.2 sur le lien /video ». La ligne de licence en dessous nomme
        maintenant les deux, et dit lequel part vraiment. -->
   <label>Qualité si on loue
-    <select id="qualite"><option value="rapide" selected>Rapide — Wan 2.1, 1,3 B</option><option value="soigne">Soignée — Wan 2.1, 14 B (plus chère)</option></select>
+    <select id="qualite"><option value="rapide" selected>Rapide — Wan 2.1, 1,3 B</option></select>
   </label>
   <!-- Ce menu ne dit plus OÙ le clip se fabrique : depuis le 19/09/2026 c'est
        la ligne « Carte de cet ordinateur », juste en dessous, qui le décide.

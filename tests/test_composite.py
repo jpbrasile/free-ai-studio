@@ -213,7 +213,7 @@ def test_un_clip_ne_meurt_PAS_d_un_loueur_ferme_il_reste_la_carte_d_ici(apps):
     << non >> au clip serait un faux-rouge, aussi faux que le faux-vert.
     """
     verdict = composite.verifier(
-        composite.chaine_depuis_briques(["video_soignee"], apps),
+        composite.chaine_depuis_briques(["video_rapide"], apps),
         sonde_budget=lambda _e: "Le budget du mois est épuisé.")
     assert verdict["atteignable"] == composite.PARTIEL, verdict["pourquoi"]
     assert "loueur_ferme" in verdict["motifs"], verdict["motifs"]
@@ -228,7 +228,7 @@ def test_un_budget_qui_TIENT_ne_refuse_RIEN(apps):
     marcher -- c'est exactement ce qui s'etait installe.
     """
     verdict = composite.verifier(
-        composite.chaine_depuis_briques(["video_soignee"], apps),
+        composite.chaine_depuis_briques(["video_rapide"], apps),
         sonde_budget=lambda _e: None)
     assert verdict["atteignable"] != composite.NON, verdict["pourquoi"]
     assert "budget_depasse" not in verdict["motifs"], verdict["motifs"]
@@ -246,7 +246,7 @@ def test_un_budget_qu_on_ne_peut_pas_RELEVER_n_autorise_pas(apps):
         raise RuntimeError("pas de module ici")
 
     verdict = composite.verifier(
-        composite.chaine_depuis_briques(["video_soignee"], apps),
+        composite.chaine_depuis_briques(["video_rapide"], apps),
         sonde_budget=casse)
     assert verdict["atteignable"] == composite.INCONNU, verdict["pourquoi"]
     assert "budget_non_mesure" in verdict["motifs"], verdict["motifs"]
@@ -272,10 +272,10 @@ def test_la_chaine_temoin_reste_PROMISE(apps):
 @pytest.mark.parametrize("brique", [
     "chat_auto", "chat_max", "chat_secours_openrouter", "chat_secours_groq",
     "image_lecture", "image_fabrication", "recherche_web", "voix_fr", "voix_en",
-    "dictee_locale", "dictee_groq", "video_rapide", "video_soignee",
+    "dictee_locale", "dictee_groq", "video_rapide",
     "video_maison", "chanson", "dialogue"])
 def test_un_verdict_qui_ne_dit_pas_NON_tient_sa_promesse(apps, brique):
-    """L'invariant, sur les SEIZE : promis ⇒ lancable.
+    """L'invariant, sur les QUINZE (le clip soigne retire le 23/09) : promis ⇒ lancable.
 
     C'est la propriete que D2 violait, et elle se verifie sans reseau : une
     brique promise doit avoir une route, et la garde de budget ne doit pas la
@@ -1148,7 +1148,7 @@ def test_le_masquage_des_etats_est_REMESURE_a_chaque_route_ouverte(apps):
         sonde_carte=CARTE_LIBRE)["atteignable"]
         for a in apps}
     assert etats == {composite.OUI, composite.NON, composite.INCONNU}, etats
-    assert len(composite.ROUTES) == 14, sorted(composite.ROUTES)
+    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)  # 14 avant le retrait du clip soigne, 23/09
 
 
 def test_une_licence_qu_on_ne_peut_pas_nommer_rend_inconnu(apps):
@@ -1163,10 +1163,10 @@ def test_une_licence_qu_on_ne_peut_pas_nommer_rend_inconnu(apps):
 
 def test_le_cout_dune_chaine_payante_est_la_somme_des_pires_cas(apps):
     """Chaque nombre vient de la prose mesuree, aucun n'est estime."""
-    graphe = {"phrase": "", "noeuds": [{"capacite": "video_soignee"}]}
+    graphe = {"phrase": "", "noeuds": [{"capacite": "video_rapide"}]}
     verdict = composite.verifier(composite.lier(graphe, apps))
-    assert verdict["cout_max_usd"] == 0.558
-    assert "0,56" in verdict["pourquoi"], verdict["pourquoi"]
+    assert verdict["cout_max_usd"] == 0.277
+    assert "0,28" in verdict["pourquoi"], verdict["pourquoi"]
 
 
 # --- compiler : ce qu'il refuse, et pourquoi --------------------------------
@@ -1580,7 +1580,7 @@ def test_les_briques_sans_route_sont_EXACTEMENT_celles_qu_on_a_nommees(registre)
               if a["id"] not in composite.ROUTES}
     assert dehors == {"chat_secours_openrouter", "chat_secours_groq",
                       "recherche_web"}, dehors
-    assert len(composite.ROUTES) == 14, sorted(composite.ROUTES)
+    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)  # 14 avant le retrait du clip soigne, 23/09
 
 
 # --- 10. Preferer le local : y a-t-il seulement un choix a faire ? ----------

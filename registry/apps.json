@@ -291,25 +291,6 @@
       "code": "sandbox-manager/video.py MODELES['rapide']"
     },
     {
-      "id": "video_soignee",
-      "fonction": "Vidéo, qualité « Soignée » (si on loue)",
-      "capacite": "video_soignee",
-      "entrees": ["texte"],
-      "sorties": ["video"],
-      "fournisseur": "Wan-AI",
-      "modele": "Wan-AI/Wan2.1-VACE-14B-diffusers",
-      "nature": "modèle ouvert exécuté à distance, sur une machine louée",
-      "licence": "Apache 2.0",
-      "territoire": "aucune restriction de pays",
-      "vram_min_go": null,
-      "modes": ["modal"],
-      "cout": "Modal : environ 0,558 $ le clip de 1 s au PREMIER lancement du modèle (765 s d'A100), et environ 0,349 $ les fois suivantes (479 s). Les deux sont mesurés, le 21/09/2026, sur la même carte et avec la même phrase : la charge du modèle tombe de 382 s à 120 s une fois les 75 Go de poids sur le disque du loueur, tandis que le calcul lui-même ne bouge pas (353 s puis 345 s). Ce qui ne se reproduit pas vaut donc 262 s, et non 382. Aucune autre durée n'a été chronométrée sur ce modèle, donc aucune autre n'est chiffrée. L'A100 coûte 1,98 fois la L4 à la seconde (2,62 $/h contre 1,33 $/h, mémoire et processeur compris)",
-      "cout_max_usd": 0.558,
-      "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-14B",
-      "verifie_le": "2026-09-11",
-      "code": "sandbox-manager/video.py MODELES['soigne']"
-    },
-    {
       "id": "video_maison",
       "fonction": "Vidéo fabriquée À LA MAISON, sur la carte de ce PC",
       "capacite": "video_maison",

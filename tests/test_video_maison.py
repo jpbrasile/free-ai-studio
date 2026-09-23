@@ -654,7 +654,7 @@ def test_la_droite_du_loueur_ne_promet_JAMAIS_moins_qu_un_clip_deja_paye(sandbox
     constate, et la promesse serait dementie par un clip deja fabrique.
     """
     video = sandbox.video
-    for qualite in ("rapide", "soigne"):
+    for qualite in ("rapide",):
         points = video._points_loueur(qualite)
         if len(points) < 2:
             continue
@@ -680,7 +680,7 @@ def test_un_temps_chronometre_est_rendu_TEL_QUEL(sandbox):
 def test_le_temps_du_loueur_monte_avec_la_duree(sandbox):
     """Un clip plus long ne peut pas etre annonce plus court."""
     video = sandbox.video
-    for qualite in ("rapide", "soigne"):
+    for qualite in ("rapide",):
         temps = [(d, video.secondes_loueur(qualite, d)) for d in video.DUREES]
         connus = [(int(d), s) for d, s in temps if s is not None]
         connus.sort()
@@ -712,7 +712,7 @@ def test_le_prix_du_loueur_est_le_TEMPS_fois_le_TARIF(sandbox):
     le registre gardait une copie 25 % trop basse.
     """
     video = sandbox.video
-    for qualite in ("rapide", "soigne"):
+    for qualite in ("rapide",):
         carte = video.MODELES[qualite]["gpu"]
         for duree in video.DUREES:
             secondes = video.secondes_loueur(qualite, duree)
@@ -890,53 +890,6 @@ def test_ouvrir_le_menu_ne_sonde_la_carte_QU_UNE_fois(sandbox, monkeypatch):
         "recevoir le verdict au lieu de resonder" % len(appels))
 
 
-def test_une_REPRISE_est_toujours_plus_rapide_que_le_PREMIER_lancement(sandbox):
-    """Un modele relance ne redescend pas ses poids ; il ne peut pas etre plus lent.
-
-    Mesure du 21/09/2026 sur le 14B : 765,4 s au premier lancement, 479,4 s au
-    second, meme carte et meme phrase. Ce test tient les deux tables l'une
-    contre l'autre -- c'est la seule facon de voir qu'on a interverti les deux
-    nombres, ce qui ferait annoncer un clip ordinaire plus cher qu'une
-    decouverte et n'aurait l'air faux nulle part ailleurs.
-    """
-    video = sandbox.video
-    assert video.SECONDES_MESUREES_REPRISE, (
-        "table vide : la supprimer plutot que de garder un test qui ne peut "
-        "plus rien attraper")
-    for cle, reprise in video.SECONDES_MESUREES_REPRISE.items():
-        premier = video.SECONDES_MESUREES.get(cle)
-        assert premier is not None, (
-            "%s a une reprise mais pas de premier lancement : la reprise ne "
-            "veut rien dire seule" % (cle,))
-        assert reprise < premier, (
-            "%s : reprise %s s contre premier lancement %s s -- une reprise "
-            "ne redescend pas les poids" % (cle, reprise, premier))
-
-
-def test_le_PRIX_d_une_reprise_sort_du_temps_et_du_TARIF(sandbox):
-    """Le prix d'une reprise se calcule, il ne se recopie pas."""
-    video = sandbox.video
-    for (qualite, duree), secondes in video.SECONDES_MESUREES_REPRISE.items():
-        attendu = round(
-            video.prix_seconde(video.MODELES[qualite]["gpu"]) * secondes, 4)
-        assert video.prix_reprise(qualite, duree) == attendu
-        assert video.prix_reprise(qualite, duree) < video.prix_estime(qualite, duree)
-
-
-def test_une_duree_JAMAIS_relancee_n_annonce_pas_de_prix_de_reprise(sandbox):
-    """Sans seconde mesure, la part qui disparait est inconnue -- donc rien.
-
-    Ecrit dans le bon sens : le jour ou une reprise de << rapide >> sera
-    chronometree, ce test reclamera de lui-meme qu'elle soit declaree, au lieu
-    de laisser le code rendre `None` pour toujours.
-    """
-    video = sandbox.video
-    for cle in video.SECONDES_MESUREES:
-        if cle not in video.SECONDES_MESUREES_REPRISE:
-            assert video.secondes_reprise(*cle) is None
-            assert video.prix_reprise(*cle) is None
-
-
 def test_la_page_ne_dit_pas_que_le_modele_est_CHARGE_une_seule_fois(sandbox):
     """<< Telecharge une fois puis garde en cache >> etait vrai et trompeur.
 
@@ -954,3 +907,48 @@ def test_la_page_ne_dit_pas_que_le_modele_est_CHARGE_une_seule_fois(sandbox):
         "la page redit que le modele est mis en cache une fois pour toutes")
     assert "recharg\u00e9 \u00e0 chaque clip" in page, (
         "la page doit dire que le modele est recharge a chaque clip")
+
+
+# --- Un clip qui meurt en manque de memoire le DIT (23/09/2026) ---
+# Travail `4e92505679ad4ecc8fd8119c65374063` : le soigne 5 s est mort en
+# `torch.OutOfMemoryError` et la page n'a montre que « Échec — voir le
+# journal » au-dessus d'une trace Python.
+
+TRACE_OOM = ("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate "
+             "1.44 GiB. GPU 0 has a total capacity of 39.49 GiB")
+
+
+def _echec(sandbox, stderr, maison=False, error=None):
+    jid = "e" * 32
+    job = {"id": jid, "status": "failed", "artifacts": [], "stderr": stderr,
+           "video": {"maison": maison}}
+    if error:
+        job["error"] = error
+    sandbox.write_job(jid, job)
+    r = TestClient(sandbox.app, base_url=LOCAL).get("/video/jobs/" + jid, headers=CLE)
+    assert r.status_code == 200
+    return r.json()
+
+
+def test_un_manque_de_memoire_LOUE_recoit_une_phrase_et_dit_que_c_est_paye(sandbox):
+    corps = _echec(sandbox, TRACE_OOM)
+    assert "manqué de mémoire" in corps["message"]
+    assert "durée plus courte" in corps["message"]
+    assert "dépense du mois" in corps["message"]
+    # La trace reste la, pour qui veut le detail.
+    assert corps["stderr"] == TRACE_OOM
+
+
+def test_un_manque_de_memoire_A_LA_MAISON_ne_parle_pas_de_depense(sandbox):
+    corps = _echec(sandbox, TRACE_OOM, maison=True)
+    assert "manqué de mémoire" in corps["message"]
+    assert "dépense" not in corps["message"]
+
+
+def test_une_cause_inconnue_garde_le_journal_et_n_invente_rien(sandbox):
+    assert _echec(sandbox, "RuntimeError: autre chose")["message"] == ""
+
+
+def test_un_message_deja_ecrit_n_est_pas_remplace(sandbox):
+    corps = _echec(sandbox, TRACE_OOM, error="Arrêté à votre demande.")
+    assert corps["message"] == "Arrêté à votre demande."

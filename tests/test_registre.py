@@ -126,8 +126,7 @@ def test_les_modeles_du_routeur_sont_ceux_du_registre(routeur, par_id):
             "%s : registre %r, code %r" % (identifiant, par_id[identifiant]["modele"], modele)
 
 
-VIDEOS = [("video_rapide", "rapide"), ("video_soignee", "soigne"),
-          ("video_maison", "maison")]
+VIDEOS = [("video_rapide", "rapide"), ("video_maison", "maison")]
 
 
 @pytest.mark.parametrize("identifiant,cle", VIDEOS)
@@ -211,52 +210,6 @@ def test_le_prix_du_clip_loue_suit_le_TARIF_et_non_un_souvenir(sandbox, par_id):
     assert ecrit in par_id["video_rapide"]["cout"], (
         "le registre annonce %r, le code calcule %s $"
         % (par_id["video_rapide"]["cout"], ecrit))
-
-
-def test_un_modele_JAMAIS_lance_n_annonce_pas_un_prix(sandbox, par_id):
-    """Le registre disait << environ six fois le prix de Rapide >>.
-
-    Ce nombre n'avait de source nulle part dans le depot, et le modele soigne
-    n'a jamais ete lance une seule fois : `prix_estime("soigne", ...)` rend
-    None pour toutes les durees. Un multiple annonce au client est alors un
-    nombre fabrique, quelle que soit sa vraisemblance.
-
-    Le controle est ecrit dans ce sens-la, et non sur le texte : tant que le
-    code ne sait pas chiffrer ce clip, le registre ne doit pas le chiffrer non
-    plus. Le jour ou une mesure entre dans `SECONDES_MESUREES`, ce test demande
-    de lui-meme que le registre porte enfin un prix.
-    """
-    sait_chiffrer = any(sandbox.video.prix_estime("soigne", str(d)) is not None
-                        for d in range(1, 13))
-    cout = par_id["video_soignee"]["cout"]
-    if sait_chiffrer:
-        assert "INCONNU" not in cout, (
-            "une mesure existe desormais : le registre doit donner le prix")
-        # Et ce doit etre LE prix, pas un prix. Tant que rien n'etait mesure,
-        # ce test ne pouvait demander que la disparition d'un mot ; la mesure
-        # entree le 21/09, il deduit le nombre comme celui du modele rapide.
-        duree = next(d for d in map(str, range(1, 13))
-                     if sandbox.video.prix_estime("soigne", d) is not None)
-        ecrit = ("%.3f" % sandbox.video.prix_estime("soigne", duree)).replace(".", ",")
-        assert ecrit in cout, (
-            "le registre annonce %r, le code calcule %s $ pour %s s"
-            % (cout, ecrit, duree))
-        # ET LE PRIX D'UNE REPRISE, des qu'il est mesure. Un premier lancement
-        # descend les poids du modele chez le loueur ; les fois suivantes non,
-        # et l'ecart est du simple au double sur ce modele-la. Annoncer le seul
-        # premier lancement fait croire au client que chacun de ses clips
-        # coutera ce prix. Sans cette ligne, remettre la fourchette d'avant
-        # laissait la suite verte -- mesure par mutation le 21/09/2026.
-        reprise = sandbox.video.prix_reprise("soigne", duree)
-        if reprise is not None:
-            ecrit_reprise = ("%.3f" % reprise).replace(".", ",")
-            assert ecrit_reprise in cout, (
-                "le registre ne dit pas ce que coute un clip ORDINAIRE : "
-                "il annonce %r, le code calcule %s $ pour une reprise de %s s"
-                % (cout, ecrit_reprise, duree))
-    else:
-        assert "INCONNU" in cout and "jamais" in cout, (
-            "aucune mesure n'existe pour ce modele, et le registre annonce %r" % cout)
 
 
 # --- 3. Rien ne se sert sans ligne au registre -------------------------------
