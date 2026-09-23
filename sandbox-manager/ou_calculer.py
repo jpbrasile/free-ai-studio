@@ -380,21 +380,37 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
             "besoin_est_mesure": bool(images) and besoin_est_mesure(int(images)),
         }
 
-    # 1. Ce que la maison ne sait pas faire passe avant tout le reste, y compris
-    #    avant << toujours a la maison >> : sinon on rendrait un clip qui ignore
-    #    la consigne, ce qui est pire qu'un clip paye.
+    def louer_ou_demander(phrase_louee, raison, **kw):
+        """Partir chez le loueur -- sauf si le client a regle << toujours a la maison >>.
+
+        Jusqu'au 23/09/2026, quatre chemins louaient malgre ce reglage : une
+        image jointe, une duree jamais mesuree, une duree trop loin de la
+        mesure, aucune carte utilisable. Le premier le DISAIT (<< ou il est
+        refuse si vous preferez >>) mais rendait MODAL, et la route lancait.
+        Ce reglage promet que rien ne part sans accord : ici, rien ne part, et
+        le client choisit entre louer et annuler. Attendre n'est pas propose --
+        aucun de ces quatre cas ne se regle en attendant.
+        """
+        if reglage != TOUJOURS_MAISON:
+            return reponse(MODAL, phrase_louee, **kw)
+        d = reponse(ON_DEMANDE, (
+            "Vous avez réglé « toujours à la maison », et ce clip ne peut pas se "
+            "fabriquer sur votre carte : %s Rien n'est parti, rien n'est facturé. "
+            "Louer chez %s, ou annuler ?" % (raison, loueur)),
+            sorties=(MODAL, "annuler"), **kw)
+        d["titre"] = "Ce clip ne peut pas se fabriquer sur votre carte"
+        return d
+
+    # 1. Ce que la maison ne sait pas faire passe avant tout le reste : sinon on
+    #    rendrait un clip qui ignore la consigne, ce qui est pire qu'un clip paye.
     ignorees = commandes_que_la_maison_ignore(resume)
     if ignorees:
         quoi = " et ".join(ignorees)
-        if reglage == TOUJOURS_MAISON:
-            return reponse(MODAL, (
-                "Vous avez réglé « toujours à la maison », mais %s demande un modèle "
-                "que la carte d'ici ne peut pas faire tourner. Ce clip part chez %s, "
-                "ou il est refusé si vous préférez : il ne peut pas être fabriqué ici."
-                % (quoi, loueur)), sorties=(MODAL, "annuler"))
-        return reponse(MODAL, (
+        return louer_ou_demander(
             "%s se fabrique avec un modele que la carte d'ici ne peut pas porter. "
-            "Ce clip part chez %s." % (quoi.capitalize(), loueur)))
+            "Ce clip part chez %s." % (quoi.capitalize(), loueur),
+            "%s demande un modèle que la carte d'ici ne peut pas faire tourner."
+            % quoi.capitalize())
 
     # 2. Le contournement permanent. Rien a sonder : c'est le comportement
     #    d'avant ce chantier, et il reste disponible en un reglage.
@@ -403,17 +419,21 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
 
     # 3. Un besoin non mesure ne se devine pas.
     if images is None:
-        return reponse(MODAL, (
+        return louer_ou_demander(
             "Cette duree n'a pas encore ete mesuree sur la carte d'ici. Tant qu'elle "
             "ne l'est pas, ce clip part chez %s : on ne lance pas un travail sur un "
-            "chiffre suppose." % loueur))
+            "chiffre suppose." % loueur,
+            "cette durée n'a jamais été mesurée sur elle, et on ne lance pas un "
+            "travail sur un chiffre supposé.")
     # Un MAJORANT, pas une mesure -- et c'est assez, parce que ce chiffre ne
     # repond qu'a une question : reste-t-il assez de place a cette seconde.
     if extrapolation_trop_loin(int(images)):
-        return reponse(MODAL, (
+        return louer_ou_demander(
             "Un clip de %d images est trop loin de ce qui a ete mesure sur la carte "
             "d'ici pour qu'on sache l'y faire tenir. Il part chez %s."
-            % (int(images), loueur)))
+            % (int(images), loueur),
+            "un clip de %d images est trop loin de ce qui y a été mesuré pour qu'on "
+            "sache l'y faire tenir." % int(images))
     besoin = besoin_mo(int(images))
 
     # 4. L'etat de la carte, a cette seconde.
@@ -423,8 +443,10 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
                        carte=carte, besoin=besoin)
 
     if not carte.get("vue"):
-        return reponse(MODAL, "Aucune carte utilisable ici : " + phrase,
-                       carte=carte, besoin=besoin)
+        return louer_ou_demander("Aucune carte utilisable ici : " + phrase,
+                                 "aucune carte n'est utilisable ici (%s)."
+                                 % phrase.rstrip(". "),
+                                 carte=carte, besoin=besoin)
 
     # La carte existe et elle est prise.
     if not loueur_peut:

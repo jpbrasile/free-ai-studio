@@ -225,6 +225,35 @@ def test_sans_poids_le_clip_part_chez_le_loueur_au_lieu_d_echouer_dix_minutes_pl
     assert "34 Go" in fiche["ou_calculer"]["pourquoi"]
 
 
+def test_toujours_maison_et_bac_a_sable_muet_DEMANDE_au_lieu_de_louer(sandbox, monkeypatch):
+    """La friction du 23/09 : reglage << toujours a la maison >>, bac a sable
+    de la carte qui ne repond pas, et le clip partait chez le loueur sans un
+    mot. Maintenant la question revient au client, et rien ne part."""
+    monkeypatch.setattr(sandbox, "WORKER_GPU_URL", GPU_URL)
+    monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    partis = []
+    monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: partis.append(a))
+    monkeypatch.setattr(sandbox, "maison_prete",
+                        lambda: (False, "Le bac a sable de la carte ne repond pas", False))
+    r = creer(sandbox, ou_calculer="toujours-maison")
+    assert r.status_code == 409
+    decision = r.json()["detail"]
+    assert decision["ou"] == "on-demande"
+    assert decision["sorties"] == ["modal", "annuler"]
+    assert "ne repond pas" in decision["pourquoi"]
+    assert "rien n'est facturé" in decision["pourquoi"]
+    assert partis == []
+    # Le client repond << louer >> : la meme demande part, en location.
+    fiche = creer(sandbox, ou_calculer="toujours-modal").json()
+    assert fiche["provider"] == "modal"
+    assert partis and partis[0][3] == "modal"
+
+
+def test_la_page_ne_propose_d_attendre_que_si_le_serveur_l_offre(studio):
+    page = TestClient(studio.app, base_url=LOCAL).get("/video", headers=CLE).text
+    assert 'd.sorties.indexOf("attente")' in page
+
+
 def test_maison_prete_lit_ce_que_le_bac_a_sable_repond(sandbox, monkeypatch):
     """Trois reponses possibles, trois verdicts, aucun devine."""
     monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "")

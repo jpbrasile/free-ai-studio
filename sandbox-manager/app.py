@@ -2639,6 +2639,28 @@ def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
             "prix_estime_usd": prix,
             "sorties": [ou_calculer.ATTENTE, ou_calculer.MODAL, "annuler"],
         }
+    reglage_demande = (ou_calculer.TOUJOURS_MAISON if payload.get("attendre")
+                       else str(payload.get("ou_calculer") or "").strip()
+                       or ou_calculer.reglage_lu())
+    if not prete and reglage_demande == ou_calculer.TOUJOURS_MAISON:
+        # << Toujours a la maison >> promet que rien ne part sans accord. Jusqu'au
+        # 23/09/2026 ce chemin louait quand meme, avant meme de lire le reglage.
+        # Rien ne part : le client choisit entre louer et annuler. Sans carte
+        # (le cas de la plupart des clients), le reglage par defaut << maison si
+        # libre >> ne passe pas ici et le clip part chez le loueur, prix dit.
+        prix = video.prix_estime(plan["qualite"], plan["duree"])
+        return {
+            "ou": ou_calculer.ON_DEMANDE,
+            "reglage": ou_calculer.TOUJOURS_MAISON,
+            "titre": "Votre carte ne répond pas",
+            "pourquoi": ("%s. Vous avez réglé « toujours à la maison » : rien n'est "
+                         "parti, rien n'est facturé. Relancez le Studio pour réveiller "
+                         "la carte, ou louez chez %s." % (motif, loueur.capitalize())),
+            "besoin_mo": None,
+            "carte": {"vue": False, "motif": motif},
+            "prix_estime_usd": prix,
+            "sorties": [ou_calculer.MODAL, "annuler"],
+        }
     if not prete:
         return {
             "ou": ou_calculer.MODAL,

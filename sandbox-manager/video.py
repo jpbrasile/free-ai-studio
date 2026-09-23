@@ -1582,14 +1582,22 @@ function demanderAuClient(d){
     return;
   }
 
-  // « on-demande » : trois sorties, et le prix AVANT, pas après.
+  // « on-demande » : trois sorties, et le prix AVANT, pas après. Quand la
+  // décision ne propose pas d'attendre (carte muette, image jointe, durée non
+  // mesurée sous « toujours à la maison »), le bouton n'existe pas : attendre
+  // n'y changerait rien.
+  const peutAttendre = !d.sorties || d.sorties.indexOf("attente") >= 0;
   boite.innerHTML = "<h3>" + (d.titre ? d.titre : "La carte de cet ordinateur est prise") + "</h3>"
-    + '<div class="chiffres">' + chiffres + " Attendre ne coûte rien ; louer, si.</div>"
+    + '<div class="chiffres">' + chiffres
+    + (peutAttendre ? " Attendre ne coûte rien ; louer, si." : " Rien n’est parti ; louer coûte, annuler non.")
+    + "</div>"
     + '<div class="ligne">'
-    + '<button class="primaire" id="btAttendre">J’attends</button>'
+    + (peutAttendre ? '<button class="primaire" id="btAttendre">J’attends</button>' : "")
     + '<button id="btLouer">Louer chez ' + (document.getElementById("ou").value === "kaggle" ? "Kaggle" : "Modal") + prix(d) + '</button>'
     + '<button id="btAnnuler">Annuler</button></div>';
-  document.getElementById("btAttendre").onclick = () => { ATTENTE_DEPUIS = Date.now(); envoyer({attendre:true}); };
+  if(peutAttendre){
+    document.getElementById("btAttendre").onclick = () => { ATTENTE_DEPUIS = Date.now(); envoyer({attendre:true}); };
+  }
   document.getElementById("btLouer").onclick = () => { fermerAttente(); envoyer({ou_calculer:"toujours-modal"}); };
   document.getElementById("btAnnuler").onclick = () => {
     fermerAttente();

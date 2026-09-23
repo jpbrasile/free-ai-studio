@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -60,10 +61,14 @@ def test_chanson_et_dialogue_d_une_chaine_partent_chez_Modal(brique):
 
 
 def test_video_maison_ne_promet_PAS_plus_que_ce_que_le_code_tient():
-    """Sans carte joignable, `decider_ou_fabriquer` rend Modal (FRICTIONS.md)."""
+    """La promesse << rien ne sort >> tient a deux choses, verifiees ici : la
+    chaine envoie << toujours a la maison >>, et ce reglage ne loue jamais
+    sans demander (test_ou_calculer, test_video_maison)."""
     d = composite.donnees_de("video_maison")
-    assert d["sort"] == "selon la carte"
-    assert "Modal" in d["phrase"]
+    assert d["sort"] == "non"
+    assert "sans votre accord" in d["phrase"]
+    source = Path(composite.__file__).read_text(encoding="utf-8")
+    assert '"video_maison": ("video", {"ou_calculer": "toujours-maison"})' in source
 
 
 def test_une_brique_inconnue_est_dite_inconnue_pas_locale():

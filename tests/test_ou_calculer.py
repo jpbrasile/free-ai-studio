@@ -97,11 +97,18 @@ def test_une_commande_sans_vace_part_chez_modal_meme_carte_libre(commande, mot):
 
 
 def test_toujours_maison_ne_peut_pas_forcer_une_commande_que_la_maison_ignore():
-    """Le reglage le plus ferme ne fabrique pas ce que le modele ne sait pas faire."""
+    """Le reglage le plus ferme ne fabrique pas ce que le modele ne sait pas faire.
+
+    Et il ne LOUE pas non plus sans accord : jusqu'au 23/09 cette decision
+    rendait MODAL, et la route lancait le clip chez le loueur. Elle rend
+    maintenant la question -- louer ou annuler -- sans proposer d'attendre.
+    """
     d = ou_calculer.decider(resume(image_fin=True), IMAGES_MESUREES,
                             reglage=ou_calculer.TOUJOURS_MAISON, sonde=sonde_libre)
-    assert d["ou"] == ou_calculer.MODAL
-    assert "ne peut pas être fabriqué ici" in d["pourquoi"]
+    assert d["ou"] == ou_calculer.ON_DEMANDE
+    assert d["sorties"] == [ou_calculer.MODAL, "annuler"]
+    assert "Rien n'est parti" in d["pourquoi"]
+    assert "image de fin" in d["pourquoi"].lower()
 
 
 def test_les_deux_commandes_manquantes_sont_nommees_ensemble():
@@ -482,6 +489,32 @@ def test_aucune_carte_va_chez_modal_et_dit_pourquoi():
                             reglage=ou_calculer.MAISON_SI_LIBRE, sonde=sonde_absente)
     assert d["ou"] == ou_calculer.MODAL
     assert "nvidia-smi absent" in d["pourquoi"]
+
+
+# « Toujours a la maison » ne loue JAMAIS en silence (friction du 23/09). Le
+# reglage par defaut, lui, continue de louer : c'est le client sans carte.
+TOUJOURS_MAISON_SANS_ISSUE = [
+    ("aucune carte", dict(images=IMAGES_MESUREES, sonde=sonde_absente)),
+    ("duree sans table", dict(images=None, sonde=sonde_libre)),
+    ("trop loin", dict(images=max(ou_calculer.ANCRES) + 24 * (ou_calculer.IMAGES_MAX_EXTRAPOLATION + 1),
+                       sonde=sonde_libre)),
+]
+
+
+@pytest.mark.parametrize("cas,kw", TOUJOURS_MAISON_SANS_ISSUE, ids=[c for c, _ in TOUJOURS_MAISON_SANS_ISSUE])
+def test_toujours_maison_sans_issue_DEMANDE_au_lieu_de_louer(cas, kw):
+    d = ou_calculer.decider(resume(), kw["images"], prix_estime_usd=0.117,
+                            reglage=ou_calculer.TOUJOURS_MAISON, sonde=kw["sonde"])
+    assert d["ou"] == ou_calculer.ON_DEMANDE
+    assert list(d["sorties"]) == [ou_calculer.MODAL, "annuler"]
+    assert "Rien n'est parti" in d["pourquoi"]
+
+
+@pytest.mark.parametrize("cas,kw", TOUJOURS_MAISON_SANS_ISSUE, ids=[c for c, _ in TOUJOURS_MAISON_SANS_ISSUE])
+def test_le_reglage_par_defaut_loue_toujours_dans_les_memes_cas(cas, kw):
+    d = ou_calculer.decider(resume(), kw["images"], prix_estime_usd=0.117,
+                            reglage=ou_calculer.MAISON_SI_LIBRE, sonde=kw["sonde"])
+    assert d["ou"] == ou_calculer.MODAL
 
 
 # --- 4. Le motif porte des chiffres ------------------------------------------

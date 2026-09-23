@@ -28,12 +28,13 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
-| 23/09/2026 | `/composite`, `/video` | « vidéo sur votre carte » (`video_maison`) peut partir chez Modal : si le Studio ne joint pas la carte d'ici, ou si une image de départ est jointe, la décision rend Modal avant de lire « toujours-maison ». L'annonce de chaque étape le dit ; la promesse n'est pas encore tenue | oui | une lecture du code |
+| — | — | aucune pour l'instant | — | — |
 
 ## Levées
 
 | Date | Page | Ce qui gênait | Bloquait ? | Levée par | Vue par |
 |---|---|---|---|---|---|
+| 23/09/2026 | `/composite`, `/video` | « vidéo sur votre carte » (`video_maison`) pouvait partir chez Modal sans demander : carte injoignable, image jointe, durée hors table. Avec « toujours à la maison » (le réglage des chaînes), le Studio demande maintenant « louer ou annuler ? » et rien ne part ; le réglage par défaut loue encore, pour le client sans carte | oui | le commit de cette ligne | une lecture du code |
 | 23/09/2026 | `/sandbox` | « local first before modal if ressources available, local options not always proposed » : Modal passait avant l'ordinateur et la carte d'ici | oui | `c951868`, `49af741` | le propriétaire |
 | 23/09/2026 | `/composite` | le dialogue affichait « maximum inconnu » au lieu de son coût au pire | non | `c392f6b` | le propriétaire |
 | 23/09/2026 | `/dialogue` | un dialogue de 63 répliques était accepté puis s'arrêtait à la 36e, carte déjà louée sur Modal | oui | `37059af` | une mesure sur la 4090 |

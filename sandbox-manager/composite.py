@@ -894,9 +894,11 @@ DONNEES = {
     # ne joint pas la carte d'ici, `decider_ou_fabriquer` rend Modal avant meme
     # de lire << toujours-maison >> (docs/FRICTIONS.md, ouverte le 23/09).
     "video_maison": {
-        "sort": "selon la carte", "vers": ["Modal"],
-        "phrase": "Sur votre carte, et rien ne sort ; mais si le Studio ne la "
-                  "joint pas, votre description part chez Modal."},
+        # La chaine envoie << toujours a la maison >> (ETAPES_DE_TRAVAIL) :
+        # carte muette => 409, la chaine s'arrete et rien ne part (23/09).
+        "sort": "non", "vers": [],
+        "phrase": "Sur votre carte. Si elle ne peut pas, la chaîne s'arrête et "
+                  "vous demande : rien ne part chez un loueur sans votre accord."},
     "chanson": {
         "sort": "oui", "vers": ["Modal"],
         "phrase": "Vos paroles et le style partent chez Modal."},
