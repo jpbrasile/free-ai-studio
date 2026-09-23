@@ -28,12 +28,14 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
+| 23/09/2026 | `/video` | la vidéo sur Kaggle échoue : clip « Rapide » de 1 s, Tesla T4 de 14,6 Go, mort au bout de 205 s pendant la lecture du texte (`CUBLAS_STATUS_ALLOC_FAILED`, travail `ef554b3c…`). La page propose Kaggle comme « gratuit, plus lent », mais aucune vidéo n'y a jamais réussi. Hypothèse non prouvée : le lecteur de texte (UMT5-XXL, environ 11 Go) remplit presque toute la carte | oui | le propriétaire |
 | 23/09/2026 | le chat | on ne peut pas demander une chaîne depuis le chat : il renvoie à Open WebUI, qui ne connaît pas `/composite`. La carte « Enchaîner » de l'accueil donne l'adresse, mais demander dans le chat reste impossible | non | le propriétaire |
 
 ## Levées
 
 | Date | Page | Ce qui gênait | Bloquait ? | Levée par | Vue par |
 |---|---|---|---|---|---|
+| 23/09/2026 | `/chanson` | « la synchro de la partition n'est pas toujours synchrone » : quand la chanson atteint la durée choisie, le son n'est que le début de la partition écrite, et le surlignage étirait toute la partition dessus. Mesuré sur les 20 chansons réussies : partition / son de 1,01 à 1,07 sur les 9 entières, de 1,19 à 18,3 sur les 11 coupées. Une chanson coupée suit maintenant le tempo écrit, sans recalage | non | ce commit (tests seulement, à écouter après reconstruction) | le propriétaire |
 | 23/09/2026 | `/chanson` | « Kaggle apparaît mais n'est pas sélectionnable » : voulu pour la version LoRA (vérifiée sur Modal seulement), mais la raison n'était écrite qu'à la fin d'un long paragraphe. L'option grisée dit maintenant « pas pour cette version (vérifiée sur Modal seulement) » | non | ce commit (tests seulement, à essayer après reconstruction) | le propriétaire |
 | 23/09/2026 | `/chanson` (et `/video`, `/dialogue`) | « on a bien l'historique des chansons mais on ne peut pas les jouer » : le clic sur l'heure affichait le lecteur en haut de page, cinq secondes plus tard, loin de la liste. Chaque ligne a maintenant un bouton « ▶ Écouter » (« ▶ Voir » pour la vidéo), l'affichage est immédiat et la page remonte jusqu'au lecteur | oui | ce commit (tests seulement, à essayer après reconstruction) | le propriétaire |
 | 23/09/2026 | `/video`, `/chanson`, `/dialogue` | toutes les chansons s'appelaient « chanson de 60 s au plus ». Un champ « Titre » à la création ; vide, le début de la description, des paroles ou du dialogue. Il nomme aussi le fichier téléchargé. Les travaux d'avant n'ont pas de titre : leur fiche ne gardait pas le texte | non | ce commit (tests seulement, à essayer après reconstruction) | le propriétaire, et une vérification |

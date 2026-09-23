@@ -1113,14 +1113,15 @@ function afficherChanson(j){
   }
   document.getElementById("resultat").innerHTML = html;
   // Le dessin vient APRES l'insertion : avant, le div n'existe pas encore.
-  if(j.partition) dessinerPortee(j.partition, (j.resume || {}).secondes_audio || 0);
+  if(j.partition) dessinerPortee(j.partition, (j.resume || {}).secondes_audio || 0,
+                                 !!((j.resume || {}).coupee || {}).son);
 }
 
 // Dessine la partition en vraies portees. Ne casse jamais la page : si la
 // bibliotheque n'a pas pu se charger, ou si cet ABC-la ne lui plait pas, on le
 // DIT, et la notation texte reste lisible juste en dessous. Un echec muet
 // ferait chercher la panne ailleurs.
-function dessinerPortee(abc, secondesAudio){
+function dessinerPortee(abc, secondesAudio, sonCoupe){
   const cible = document.getElementById("portee");
   if(!cible) return;
   const lib = (typeof ABCJS !== "undefined") ? ABCJS
@@ -1134,7 +1135,7 @@ function dessinerPortee(abc, secondesAudio){
     // La valeur de retour etait JETEE. C'est elle qui porte le minutage des
     // notes et les noeuds SVG a colorer : sans elle, aucun surlignage possible.
     const objets = lib.renderAbc(cible, abc, {responsive:"resize"});
-    suivreAuSon(objets && objets[0], secondesAudio);
+    suivreAuSon(objets && objets[0], secondesAudio, sonCoupe);
   } catch(e) {
     cible.innerHTML = '<p class="avert">Cette partition n’a pas pu être dessinée : '
       + echapper(String((e && e.message) || e))
@@ -1154,7 +1155,15 @@ function dessinerPortee(abc, secondesAudio){
 // est affiche ; loin de 1, la page dit elle-meme que le repere est grossier.
 // AUCUNE ECOUTE n'a jamais valide ce reglage sur ce projet -- la page le dit
 // aussi, plutot que de laisser croire a une synchronisation verifiee.
-function suivreAuSon(visuel, secondesAudio){
+//
+// SAUF QUAND LE SON EST COUPE. YuE2 ecrit TOUTE la partition d'abord, puis
+// chante 25 jetons par seconde jusqu'a la duree choisie : le son n'est alors
+// que le DEBUT de la partition. Recaler l'etirait sur tout le papier et le
+// curseur filait devant la voix (« la synchro de la partition n'est pas
+// toujours synchrone », 23/09). Mesure le 23/09 sur les 20 chansons reussies :
+// partition / son = 1,01 a 1,07 sur les 9 entieres, 1,19 a 18,3 sur les 11
+// coupees. Coupee, on suit donc le tempo ecrit tel quel (rapport 1).
+function suivreAuSon(visuel, secondesAudio, sonCoupe){
   const note = document.getElementById("note-surlignage");
   const audio = document.getElementById("lecteur");
   if(!visuel || !audio || !note) return;
@@ -1195,7 +1204,7 @@ function suivreAuSon(visuel, secondesAudio){
   function placer(){
     const son = dureeSon();
     if(!(son > 0)) return;
-    const ms = audio.currentTime * (totalPartition / son) * 1000;
+    const ms = audio.currentTime * (sonCoupe ? 1 : totalPartition / son) * 1000;
     let i = 0;
     while(i + 1 < evenements.length && evenements[i + 1].ms <= ms){ i++; }
     if(i === courant) return;
@@ -1233,6 +1242,14 @@ function suivreAuSon(visuel, secondesAudio){
     if(!(son > 0)){
       note.textContent = "Le surlignage suit la partition écrite ; la durée réelle du son "
         + "n’est pas encore connue.";
+      return;
+    }
+    if(sonCoupe){
+      note.textContent = "La chanson s’arrête à la durée choisie (" + fr(son, 1)
+        + " s) : elle ne chante que le début de la partition écrite (" + fr(totalPartition, 1)
+        + " s au tempo noté). Le surlignage suit ce tempo noté, sans recalage ; "
+        + "la suite de la partition n’est jamais chantée. Personne n’a vérifié à l’oreille "
+        + "que la note surlignée est bien celle qu’on entend.";
       return;
     }
     const ecart = Math.round(Math.abs(totalPartition / son - 1) * 100);
