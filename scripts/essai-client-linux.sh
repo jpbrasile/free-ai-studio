@@ -39,9 +39,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-RACINE="$(cd "$(dirname "$0")/.." && pwd)"
+# Chemins de CETTE machine passes a git et docker : sous Git Bash, la
+# conversion automatique est coupee plus haut (elle abimerait les chemins du
+# conteneur), donc on les donne deja sous forme Windows.
+natif() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s\n' "$1"; fi; }
+RACINE="$(natif "$(cd "$(dirname "$0")/.." && pwd)")"
 NOM="fas-essai-client-$$"
-SORTIE="${TMPDIR:-/tmp}/free-ai-studio-essai-client/$(date +%Y%m%d-%H%M%S)"
+SORTIE="$(natif "${TMPDIR:-/tmp}")/free-ai-studio-essai-client/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$SORTIE"
 
 nettoyer() {
@@ -55,6 +59,9 @@ for _ in $(seq 1 30); do
   docker exec "$NOM" docker info >/dev/null 2>&1 && break
   sleep 2
 done
+# Jamais /tmp : docker:dind y monte un tmpfs au demarrage, et `docker cp` ecrit
+# dessous -- il annonce la copie faite, le fichier reste invisible (23/09/2026).
+docker exec "$NOM" mkdir -p /essai-client
 
 if [ "$LOCAL" -eq 1 ]; then
   # Le clone de l'assistant vise GitHub ; git le detourne vers ce dossier-ci.
@@ -72,7 +79,7 @@ fi
 cat > "$SORTIE/dedans.sh" <<DEDANS
 set -u
 apk add --no-cache bash git python3 openssl curl nodejs npm >/dev/null 2>&1 || { echo "apk echoue"; exit 1; }
-npm i -g opencode-ai@$VERSION_OPENCODE >/tmp/npm.log 2>&1 || { echo "npm echoue"; exit 1; }
+npm i -g opencode-ai@$VERSION_OPENCODE >/essai-client/npm.log 2>&1 || { echo "npm echoue"; exit 1; }
 if [ -d /depot ]; then
   git config --global --add safe.directory '*'
   git config --global url./depot.insteadOf "$DEPOT_GITHUB"
@@ -80,12 +87,12 @@ fi
 echo "== opencode \$(opencode --version), modele $MODELE, identifiants : \$(ls ~/.local/share/opencode/auth.json 2>/dev/null || echo aucun)"
 mkdir -p /root/Documents && cd /root/Documents
 t=\$(date +%s)
-timeout 2400 opencode run -m "$MODELE" "$PHRASE" > /tmp/transcript.txt 2>&1
+timeout 2400 opencode run -m "$MODELE" "$PHRASE" > /essai-client/transcript.txt 2>&1
 echo "== assistant : code \$? en \$(( \$(date +%s) - t )) s"
 DEDANS
-docker cp "$SORTIE/dedans.sh" "$NOM:/tmp/dedans.sh"
-docker exec "$NOM" sh /tmp/dedans.sh | tee "$SORTIE/resume.txt"
-docker cp "$NOM:/tmp/transcript.txt" "$SORTIE/transcript.txt" >/dev/null 2>&1 || true
+docker cp "$SORTIE/dedans.sh" "$NOM:/essai-client/dedans.sh"
+docker exec "$NOM" sh /essai-client/dedans.sh | tee "$SORTIE/resume.txt"
+docker cp "$NOM:/essai-client/transcript.txt" "$SORTIE/transcript.txt" >/dev/null 2>&1 || true
 
 # --- Ce que l'on mesure soi-meme, sans croire le compte rendu de l'assistant ---
 ok=1
