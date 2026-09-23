@@ -169,7 +169,14 @@ Regles :
 - l'ordre compte : la sortie de chaque fonction alimente la suivante ;
 - n'invente aucune fonction qui ne soit pas dans la liste ;
 - si la demande ne correspond a aucune suite de ces fonctions, reponds
-  {"noeuds": []} plutot que de choisir au hasard.
+  {"noeuds": []} plutot que de choisir au hasard ;
+- si la demande precise une langue, ajoute a l'objet "proprietes", avec les
+  codes fr, en, es, de, it, pt :
+  "langue_reponse" : la langue ou la personne veut LIRE la reponse ecrite ;
+  "langue_ecrite" : la langue du texte affiche quand elle differe de celle de
+  la voix (ex. « voix en anglais, texte en francais » -> "langue_ecrite": "fr").
+  Exemple : {"noeuds": [...], "proprietes": {"langue_ecrite": "fr"}}.
+  Sans langue precisee, n'ajoute pas "proprietes".
 
 La demande : %s
 """
@@ -231,7 +238,9 @@ def compiler(phrase: str, appeler_modele, apps: list[dict] | None = None,
             "Fonction(s) inconnue(s) de ce Studio : %s. Rien n'est lance."
             % ", ".join(inventees), ou=COMPILATION)
 
-    return {"phrase": phrase.strip(), "noeuds": [{"capacite": n} for n in noeuds]}
+    proprietes, sans_effet = _lire_proprietes(brut)
+    return {"phrase": phrase.strip(), "noeuds": [{"capacite": n} for n in noeuds],
+            "proprietes": proprietes, "proprietes_sans_effet": sans_effet}
 
 
 def _lire_json(brut: str):
@@ -1170,7 +1179,8 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
         # << English Text to Read Aloud >> compris, et Piper l'a lu en entier.
         suivantes = chaine["etapes"][rang + 1:rang + 2]
         etape = dict(etape, demande=chaine.get("phrase", ""),
-                     suivante=suivantes[0]["brique"] if suivantes else None)
+                     suivante=suivantes[0]["brique"] if suivantes else None,
+                     reglages=reglages_de_l_etape(chaine, rang))
         try:
             # JUSTE AVANT le lancement, et par noeud : c'est la seule place ou
             # le pire cas est celui de CE travail-la.
@@ -1560,6 +1570,230 @@ def texte_a_dire(texte) -> str:
     return "\n".join(phrases)
 
 
+# ---------------------------------------------------------------------------
+# Les reglages d'une chaine : ce que le client change, et que l'execution SAIT tenir
+# ---------------------------------------------------------------------------
+# Essai du 23/09 : << ok fonctionne, sauf si on demande une voix en anglais et
+# un texte en francais >>, puis : << il faudrait attacher au composite un champ
+# propriete compatible de l'execution >>, puis : << generalise ces cas
+# particuliers a tous les composites >>.
+#
+# Trois sortes de reglages, declarees ICI, du cote qui les execute -- c'est ce
+# qui les rend << compatibles de l'execution >> : un reglage n'est montre que
+# si une etape de CETTE chaine sait le tenir.
+#   1. la VARIANTE d'une etape : une autre brique qui prend et rend la meme
+#      chose (voix francaise ou anglaise, chat Auto ou Max, dictee locale ou
+#      Groq, video maison ou louee). Changer de brique change le cout, les
+#      cles et ce qui sort : la page REFAIT le verdict, sans rappeler le modele ;
+#   2. la LANGUE DE LA REPONSE de chaque etape de modele dont le texte est
+#      montre tel quel (une etape suivie d'une voix ecrit dans la langue de la
+#      voix, et n'a donc pas ce reglage) ;
+#   3. le TEXTE AFFICHE EN, quand la chaine finit par une voix : le texte dit,
+#      traduit a part. Le graphe est une suite : un texte APRES un son n'y a
+#      pas de place.
+# Le lecteur de phrase PROPOSE des valeurs ; le verdict les montre ; le client
+# les change ; le lancement les VERIFIE. Une proposition que rien ne tient est
+# dite, jamais ignoree en silence.
+LANGUE_ECRITE = "langue_ecrite"
+LANGUE_REPONSE = "langue_reponse"
+MEME_LANGUE = "meme"
+NOMS_DES_LANGUES = {"fr": "français", "en": "anglais", "es": "espagnol",
+                    "de": "allemand", "it": "italien", "pt": "portugais"}
+PROPOSABLES = (LANGUE_ECRITE, LANGUE_REPONSE)
+SANS_EFFET = {
+    LANGUE_ECRITE: "« Texte affiché en %s » : cette chaîne ne finit pas par une voix, "
+                   "son texte reste celui de la dernière étape.",
+    LANGUE_REPONSE: "« Réponse en %s » : aucune étape de cette chaîne n'écrit un texte "
+                    "montré tel quel.",
+}
+NOTE_TRADUCTION = ("Traduit par le service de chat gratuit : le texte dit part chez "
+                   "Google (Gemini) ; s’il ne répond pas, chez OpenRouter ou Groq.")
+# Les briques interchangeables, par famille. Un choix n'est offert que si la
+# brique existe au registre et prend et rend EXACTEMENT ce que prend et rend
+# l'etape : la suite de la chaine ne voit pas la difference.
+VARIANTES = {
+    "voix": ("Langue de la voix", {"voix_fr": "français", "voix_en": "anglais"}),
+    "chat": ("Service de chat", {"chat_auto": "Free AI Auto",
+                                 "chat_max": "Free AI Max (quota dédié)"}),
+    "dictee": ("Dictée", {"dictee_locale": "sur cet ordinateur",
+                          "dictee_groq": "chez Groq si possible"}),
+    "video": ("Vidéo", {"video_maison": "à la maison, sur la carte de ce PC",
+                        "video_rapide": "« Rapide », machine louée si besoin"}),
+}
+# Les routes dont la reponse est ecrite par un modele qui suit une consigne.
+GENRES_QUI_ECRIVENT = ("chat", "vision")
+
+
+def _lire_proprietes(brut) -> tuple[dict, list]:
+    """Ce que le lecteur de phrase propose : (retenues, sans effet).
+
+    Seules les cles et valeurs connues sont retenues. Le reste revient comme
+    une phrase, que le verdict montre.
+    """
+    m = re.search(r"\{.*\}", brut, re.S) if isinstance(brut, str) else None
+    try:
+        objet = json.loads(m.group(0)) if m else {}
+    except (ValueError, TypeError):
+        objet = {}
+    demandees = objet.get("proprietes") if isinstance(objet, dict) else None
+    if not isinstance(demandees, dict):
+        return {}, []
+    retenues, sans_effet = {}, []
+    for cle, valeur in demandees.items():
+        if cle in PROPOSABLES and valeur in NOMS_DES_LANGUES:
+            retenues[cle] = valeur
+        elif not (cle in PROPOSABLES and valeur in (None, "", MEME_LANGUE)):
+            sans_effet.append("« %s = %s » : aucune étape de ce Studio ne sait "
+                              "respecter ce réglage." % (cle, valeur))
+    return retenues, sans_effet
+
+
+def _finit_par_une_voix(chaine: dict) -> bool:
+    etapes = chaine.get("etapes") or []
+    return bool(etapes) and etapes[-1]["brique"] in VOIX
+
+
+def _ecrit_pour_etre_lu(chaine: dict, rang: int) -> bool:
+    """Une etape de modele dont le texte sera LU tel quel, pas dit par une voix."""
+    etapes = chaine["etapes"]
+    route = ROUTES.get(etapes[rang]["brique"])
+    suivante = etapes[rang + 1]["brique"] if rang + 1 < len(etapes) else None
+    return bool(route) and route[0] in GENRES_QUI_ECRIVENT and suivante not in VOIX
+
+
+def _choix_de_langue(premier: str) -> list[dict]:
+    return ([{"valeur": MEME_LANGUE, "nom": premier}]
+            + [{"valeur": c, "nom": n} for c, n in NOMS_DES_LANGUES.items()])
+
+
+def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[dict]:
+    """Les reglages que CETTE chaine sait tenir, chacun avec ses choix et sa valeur.
+
+    `id` est ce que la page renvoie : << cle@rang >> pour un reglage d'etape,
+    << cle >> pour un reglage de la chaine. Une variante n'est jamais renvoyee
+    comme valeur : la page change la brique, et les briques repartent.
+    """
+    apps = apps if apps is not None else charger_registre()
+    par_id = {a["id"]: a for a in apps}
+    valeurs = chaine.get("proprietes") or {}
+    montrees = []
+    for rang, etape in enumerate(chaine.get("etapes") or []):
+        for famille, (nom, briques) in VARIANTES.items():
+            if etape["brique"] not in briques:
+                continue
+            choix = [{"valeur": b, "nom": n} for b, n in briques.items()
+                     if b in par_id and list(par_id[b]["entrees"]) == list(etape["entrees"])
+                     and list(par_id[b]["sorties"]) == list(etape["sorties"])]
+            if len(choix) > 1:
+                montrees.append({"id": "%s@%d" % (famille, rang), "nom": nom, "etape": rang,
+                                 "variante": True, "valeur": etape["brique"],
+                                 "defaut": etape["brique"], "choix": choix})
+        if _ecrit_pour_etre_lu(chaine, rang):
+            ident = "%s@%d" % (LANGUE_REPONSE, rang)
+            montrees.append({"id": ident, "nom": "Réponse de « %s » en" % etape["fonction"],
+                             "etape": rang, "valeur": valeurs.get(ident, MEME_LANGUE),
+                             "defaut": MEME_LANGUE,
+                             "choix": _choix_de_langue("celle de la demande")})
+    if _finit_par_une_voix(chaine):
+        montrees.append({"id": LANGUE_ECRITE, "nom": "Texte affiché en",
+                         "valeur": valeurs.get(LANGUE_ECRITE, MEME_LANGUE),
+                         "defaut": MEME_LANGUE, "note": NOTE_TRADUCTION,
+                         "choix": _choix_de_langue("la langue de la voix")})
+    return montrees
+
+
+def appliquer_proposees(chaine: dict, graphe: dict,
+                        apps: list[dict] | None = None) -> tuple[dict, list]:
+    """Les propositions du lecteur de phrase, posees sur les reglages de CETTE chaine.
+
+    Une proposition vaut pour chaque etape qui a ce reglage (<< reponse en
+    anglais >> vaut pour chaque texte montre). Aucune etape ne l'a : c'est dit.
+    """
+    sans_effet = list(graphe.get("proprietes_sans_effet") or [])
+    ids = [p["id"] for p in proprietes_montrees(chaine, apps)]
+    valeurs = {}
+    for cle, valeur in (graphe.get("proprietes") or {}).items():
+        cibles = [i for i in ids if i == cle or i.startswith(cle + "@")]
+        for ident in cibles:
+            valeurs[ident] = valeur
+        if not cibles:
+            sans_effet.append(SANS_EFFET[cle] % NOMS_DES_LANGUES.get(valeur, valeur))
+    return valeurs, sans_effet
+
+
+def proprietes_lues(valeur, chaine: dict, apps: list[dict] | None = None) -> dict:
+    """Les reglages renvoyes par la page, VERIFIES sur ce que la chaine sait tenir.
+
+    Un reglage inconnu, ou une valeur hors de ses choix, est REFUSE : rien ne
+    part avec un reglage que l'execution ignorerait. Une valeur par defaut
+    n'est pas gardee.
+    """
+    if valeur in (None, ""):
+        return {}
+    try:
+        recues = json.loads(str(valeur))
+    except ValueError:
+        recues = None
+    if not isinstance(recues, dict):
+        raise CompositeRefuse("proprietes_illisibles",
+                              "Les réglages envoyés par la page sont illisibles. "
+                              "Rechargez la page.", ou=CONTROLE)
+    tenus = {p["id"]: p for p in proprietes_montrees(chaine, apps) if not p.get("variante")}
+    retenues = {}
+    for ident, v in recues.items():
+        tenu = tenus.get(ident)
+        if tenu is None or v not in {c["valeur"] for c in tenu["choix"]}:
+            raise CompositeRefuse("propriete_inconnue",
+                                  "Réglage que cette chaîne ne sait pas tenir : « %s = %s ». "
+                                  "Rien n'est lancé." % (ident, v), ou=CONTROLE)
+        if v != tenu["defaut"]:
+            retenues[ident] = v
+    return retenues
+
+
+def reglages_de_l_etape(chaine: dict, rang: int) -> dict:
+    """<< langue_reponse@2 >> -> {"langue_reponse": ...} pour l'etape 2."""
+    suffixe = "@%d" % rang
+    return {k[:-len(suffixe)]: v for k, v in (chaine.get("proprietes") or {}).items()
+            if k.endswith(suffixe)}
+
+
+def _consigne_de_langue(etape: dict) -> str:
+    langue = (etape.get("reglages") or {}).get(LANGUE_REPONSE)
+    if langue not in NOMS_DES_LANGUES:
+        return ""
+    return "\nRépondez en %s." % NOMS_DES_LANGUES[langue]
+
+
+def traduire_le_texte_dit(chaine: dict, trace: dict, lancer) -> dict | None:
+    """La traduction du texte DIT, quand la personne veut le lire dans une autre langue.
+
+    Rien si la chaine ne finit pas par une voix, si le reglage
+    `langue_ecrite` n'est pas pose, ou si c'est la langue de la voix. Ne casse jamais la chaine : le son
+    est fait, une traduction manquee se dit dans `motif`.
+    """
+    ecoute = getattr(trace.get("sortie"), "ecoute", None) or {}
+    dit = ecoute.get("texte_dit")
+    voix = chaine["etapes"][-1]["brique"] if chaine.get("etapes") else None
+    if not dit or voix not in VOIX:
+        return None
+    langue = (chaine.get("proprietes") or {}).get(LANGUE_ECRITE)
+    if not langue or langue == LANGUE_DE_LA_VOIX[voix]:
+        return None
+    nom = NOMS_DES_LANGUES[langue]
+    etape = {"brique": "chat_auto", "fonction": "Traduction",
+             "demande": "Traduisez ce texte en %s, fidèlement, sans rien ajouter "
+                        "ni commenter." % nom}
+    try:
+        texte = lancer(etape, dit)
+    except Exception as exc:  # noqa: BLE001 - le son est fait, la traduction ne le casse pas
+        return {"langue": nom, "texte": None,
+                "motif": getattr(exc, "phrase", None) or "%s: %s" % (type(exc).__name__, str(exc)[:200])}
+    texte = str(texte or "").strip()[:TEXTE_MONTRE_MAX]
+    return {"langue": nom, "texte": texte or None,
+            "motif": None if texte else "le service de chat n'a rien rendu"}
+
+
 class Son(bytes):
     """Un son rendu par la voix, et ce que l'ecoute en a dit (`ecoute`)."""
 
@@ -1772,7 +2006,7 @@ def _consigne_de_l_image(etape: dict) -> str:
     demande = (etape.get("demande") or "").strip()
     return (demande or "Décris cette image en français.") + (
         "\n\nRépondez seulement par le résultat de cette étape."
-        + _consigne_orale(etape.get("suivante")))
+        + _consigne_orale(etape.get("suivante")) + _consigne_de_langue(etape))
 
 
 def _consigne_du_chat(etape: dict, entree) -> str:
@@ -1794,7 +2028,7 @@ def _consigne_du_chat(etape: dict, entree) -> str:
     APRES lui : c'est elle, pas le document, qui a le dernier mot.
     """
     demande = (etape.get("demande") or "").strip()
-    oral = _consigne_orale(etape.get("suivante"))
+    oral = _consigne_orale(etape.get("suivante")) + _consigne_de_langue(etape)
     if entree is None:
         return (demande or "Bonjour.") + oral
     demande = demande or "Résume ce texte en quelques phrases, en français."
@@ -1910,6 +2144,7 @@ div.texte h4{margin:.6em 0 .3em}div.texte p{margin:.4em 0}div.texte ul,div.texte
 div.texte code{background:#e8e8e8;border-radius:4px;padding:0 3px}
 img.vignette,video.vignette{max-width:220px;max-height:160px;border-radius:8px;display:block;margin-top:8px}
 span.document{font-size:40px}p.ecoute{font-size:.9em;color:#555}
+div.reglages{border-top:1px solid #ddd;margin-top:8px;padding-top:4px}p.reglage select{font:inherit}
 .oui{border-color:#2d7a33}.non{border-color:#a33}.inconnu,.partiel{border-color:#b7791f}
 .etat{font-weight:600}
 ol{margin:10px 0 0 0;padding-left:22px}
@@ -1966,7 +2201,43 @@ function bloc(v){
   return "<div class='bloc " + v.atteignable + "'>" +
     "<p class=etat>" + (noms[v.atteignable]||v.atteignable) + "</p>" +
     "<p>" + (v.phrase || v.pourquoi) + "</p>" +
-    (etapes ? "<ol>" + etapes + "</ol>" : "") + "</div>";
+    (etapes ? "<ol>" + etapes + "</ol>" : "") + reglages(v) + "</div>";
+}
+
+// Les reglages de la chaine (23/09) : proposes par la lecture de la phrase,
+// modifiables ici avant de lancer. Seuls existent ceux qu'une etape sait tenir.
+function reglages(v){
+  const lignes = (v.proprietes || []).map((p, i) =>
+    "<p class=reglage><label>" + echapper(p.nom) + " : <select data-i='" + i + "'>"
+    + p.choix.map(c => "<option value='" + echapper(c.valeur) + "'"
+      + (c.valeur === p.valeur ? " selected" : "") + ">" + echapper(c.nom) + "</option>").join("")
+    + "</select></label>"
+    + (p.note && p.valeur !== p.defaut ? "<br><span class='donnees sort'>" + echapper(p.note) + "</span>" : "")
+    + "</p>").join("");
+  const sans = (v.proprietes_sans_effet || []).map(s => "<p class=motif>" + echapper(s) + "</p>").join("");
+  return (lignes ? "<div class=reglages><p><strong>Réglages</strong> (modifiables avant de lancer)</p>"
+    + lignes + "</div>" : "") + sans;
+}
+
+// Un reglage change. Une VARIANTE remplace la brique de l'etape : cout, cles
+// et donnees changent, le verdict doit etre refait (« chaine »). Les autres
+// ne changent qu'une valeur (« valeur »). Un choix hors liste ne change rien.
+function changerReglage(v, i, valeur){
+  const p = (v.proprietes || [])[Number(i)];
+  if (!p || !p.choix.some(c => c.valeur === valeur)) return null;
+  p.valeur = valeur;
+  if (p.variante && v.etapes && v.etapes[p.etape]) {
+    v.etapes[p.etape].brique = valeur;
+    return "chaine";
+  }
+  return "valeur";
+}
+
+function reglagesChoisis(v){
+  const choisis = {};
+  for (const p of (v.proprietes || []))
+    if (!p.variante && p.valeur !== p.defaut) choisis[p.id] = p.valeur;
+  return choisis;
 }
 
 function phraseEcoute(e){
@@ -2056,14 +2327,17 @@ document.getElementById("fichier").addEventListener("change", () => {
   document.getElementById("verdict").innerHTML = "";
 });
 
-async function envoyer(chemin, avecFichier){
+async function envoyer(chemin, avecFichier, avecChaine){
   const corps = new FormData();
   corps.append("phrase", document.getElementById("phrase").value);
   // Les briques MONTREES repartent telles quelles : sans elles, la route
   // recompilerait la phrase et pourrait lancer une autre chaine que celle
   // dont le verdict vient d'etre lu.
-  if (avecFichier && derniere)
+  // Avec ses reglages : ceux que la page montre au moment du clic.
+  if ((avecFichier || avecChaine) && derniere) {
     corps.append("briques", (derniere.etapes||[]).map(e => e.brique).join(","));
+    corps.append("proprietes", JSON.stringify(reglagesChoisis(derniere)));
+  }
   const f = document.getElementById("fichier").files[0];
   if (avecFichier && f) corps.append("fichier", f);
   // Le TYPE seulement, jamais le contenu : le verdict doit savoir si la
@@ -2074,12 +2348,24 @@ async function envoyer(chemin, avecFichier){
   return {ok:r.ok, statut:r.status, corps:r};
 }
 
-document.getElementById("voir").onclick = async () => {
+document.getElementById("verdict").addEventListener("change", async e => {
+  const i = e.target && e.target.dataset ? e.target.dataset.i : undefined;
+  if (!derniere || i === undefined) return;
+  const quoi = changerReglage(derniere, i, e.target.value);
+  if (quoi === "valeur") document.getElementById("verdict").innerHTML = bloc(derniere);
+  // Une autre brique : le verdict est REFAIT sur les briques montrees, sans
+  // relire la phrase -- ce qui sera lance est ce qui vient d'etre verifie.
+  else if (quoi === "chaine") await voir(true);
+});
+
+// avecChaine : refaire le verdict de la chaine MONTREE (un reglage a change)
+// plutot que relire la phrase.
+async function voir(avecChaine){
   const b = document.getElementById("voir");
   b.disabled = true; b.textContent = "Je regarde\u2026";
   document.getElementById("resultat").innerHTML = "";
   try {
-    const r = await envoyer("/composite/verdict", false);
+    const r = await envoyer("/composite/verdict", false, avecChaine);
     const v = await r.corps.json();
     if (!r.ok) {
       document.getElementById("verdict").innerHTML =
@@ -2095,7 +2381,8 @@ document.getElementById("voir").onclick = async () => {
     document.getElementById("lancer").disabled =
       !(derniere && (derniere.atteignable === "oui" || derniere.atteignable === "partiel"));
   }
-};
+}
+document.getElementById("voir").onclick = () => voir(false);
 
 document.getElementById("lancer").onclick = async () => {
   const b = document.getElementById("lancer");
@@ -2139,6 +2426,13 @@ document.getElementById("lancer").onclick = async () => {
     if (ecoute && ecoute.texte_dit) {
       blocTextes += "<p><strong>Le texte dit par « " + echapper(d.derniere || "")
         + " »</strong></p>" + miseEnForme(ecoute.texte_dit) + "<p class=ecoute>" + phraseEcoute(ecoute) + "</p>";
+      const tr = d.traduction || null;
+      if (tr && tr.texte)
+        blocTextes += "<p><strong>Le même texte en " + echapper(tr.langue) + "</strong> "
+          + "<span class=ecoute>(traduit par le service de chat gratuit)</span></p>" + miseEnForme(tr.texte);
+      else if (tr)
+        blocTextes += "<p class=ecoute>Traduction en " + echapper(tr.langue) + " non faite ("
+          + echapper(tr.motif || "raison inconnue") + ").</p>";
       if (dernier)
         blocTextes += "<details><summary>Rendu par " + echapper(dernier.fonction) + "</summary>"
           + miseEnForme(dernier.texte) + "</details>";

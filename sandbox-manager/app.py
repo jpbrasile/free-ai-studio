@@ -3653,9 +3653,19 @@ async def _chaine_depuis(request: Request):
     """La phrase -> un graphe -> une chaine de briques nommees."""
     formulaire = await request.form()
     phrase = str(formulaire.get("phrase") or "")
+    # Un reglage vient de changer sur la page : le verdict se refait sur les
+    # briques MONTREES, sans relire la phrase (23/09, reglages de la chaine).
+    briques = [b for b in str(formulaire.get("briques") or "").split(",") if b]
+    if briques:
+        chaine = composite.chaine_depuis_briques(briques, phrase=phrase)
+        chaine["proprietes"] = composite.proprietes_lues(formulaire.get("proprietes"), chaine)
+        return formulaire, chaine
     graphe = composite.compiler(phrase, composite.appeler_le_modele,
                                 entree=composite.entree_lue(formulaire.get("entree")))
-    return formulaire, composite.lier(graphe)
+    chaine = composite.lier(graphe)
+    chaine["proprietes"], chaine["proprietes_sans_effet"] = (
+        composite.appliquer_proposees(chaine, graphe))
+    return formulaire, chaine
 
 
 @app.post("/composite/verdict")
@@ -3670,6 +3680,9 @@ async def composite_verdict(request: Request,
         # montants sont verrouilles dans `rediger`. Hors boucle : c'est un appel
         # reseau, il ne doit pas tenir le service pendant qu'il attend.
         verdict["phrase"] = await asyncio.to_thread(composite.rediger, verdict)
+        # Les reglages que la page montre et laisse changer (23/09).
+        verdict["proprietes"] = composite.proprietes_montrees(chaine)
+        verdict["proprietes_sans_effet"] = chaine.get("proprietes_sans_effet", [])
         return JSONResponse(verdict)
     except composite.CompositeRefuse as exc:
         raise _refus_composite(exc) from exc
@@ -3701,6 +3714,8 @@ async def composite_lancer(request: Request,
                 ou=composite.CONTROLE)
         chaine = composite.chaine_depuis_briques(
             briques, phrase=str(formulaire.get("phrase") or ""))
+        # Les reglages tels que la page les montre au moment du clic, VERIFIES.
+        chaine["proprietes"] = composite.proprietes_lues(formulaire.get("proprietes"), chaine)
         fichier = formulaire.get("fichier")
         # Le VRAI fichier decide ici, pas ce que la page a annonce : une
         # image ne part plus jamais comme du texte (23/09, 540 498 jetons).
@@ -3743,10 +3758,15 @@ async def composite_lancer(request: Request,
         # derniere brique declare rendre. Il etait fige sur `audio/wav`, ce qui
         # ne se voyait pas tant qu'aucune chaine ne pouvait finir autrement.
         mime, nom = composite.type_de_sortie(sortie, chaine["etapes"][-1]["sorties"])
+        # « une voix en anglais et un texte en français » (23/09) : le texte
+        # dit, traduit a part, puisque la chaine finit par le son.
+        traduction = await asyncio.to_thread(
+            composite.traduire_le_texte_dit, chaine, trace, composite.lancer_par_le_routeur)
         return JSONResponse({"fichier": base64.b64encode(bytes(sortie)).decode("ascii"),
                              "type": mime, "nom": nom, "textes": textes,
                              "derniere": derniere, "etapes": trace["etapes"],
-                             "ecoute": getattr(sortie, "ecoute", None)})
+                             "ecoute": getattr(sortie, "ecoute", None),
+                             "traduction": traduction})
     return JSONResponse({"texte": str(sortie), "textes": textes, "derniere": derniere,
                          "etapes": trace["etapes"]})
 
