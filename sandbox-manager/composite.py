@@ -184,6 +184,10 @@ Regles :
 - si la demande precise la duree d'une video ou d'une chanson, ajoute a
   "proprietes" une "duree" : le nombre de SECONDES (ex. « 3 secondes » -> 3,
   « deux minutes » -> 120) ;
+- une video louee dure 5 secondes au plus. Pour une video plus longue, ou si
+  la demande dit de la prolonger, fais suivre la fonction video de
+  video_prolonger, UNE seule fois, et mets dans "duree" la duree TOTALE
+  (ex. « 10 secondes » -> 10) ; la consigne de video_prolonger est "" ;
 - si la demande nomme la machine louee, ajoute "loueur" : "modal" ou
   "kaggle" (« gratuitement sur Kaggle » -> "kaggle") ;
 - si elle demande une chanson sans voix, ajoute "version" : "instrumentale" ;
@@ -263,6 +267,12 @@ def compiler(phrase: str, appeler_modele, apps: list[dict] | None = None,
 
     proprietes, sans_effet = _lire_proprietes(brut)
     consignes = _lire_consignes(brut, len(noeuds))
+    # La suite d'une video garde SA scene par defaut (vide = celle de l'etape
+    # precedente) ; le client la fait evoluer sur la page. Le 24/09, le chat
+    # avait ecrit « Prolonge la video de 5 secondes. » : la suite serait partie
+    # au modele sans phare ni pluie.
+    if consignes:
+        consignes = ["" if n in PROLONGENT else c for n, c in zip(noeuds, consignes)]
     return {"phrase": phrase.strip(),
             "noeuds": [dict({"capacite": n}, **({"consigne": consignes[i]} if consignes else {}))
                        for i, n in enumerate(noeuds)],
@@ -597,6 +607,20 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                           "rend": amont["sorties"], "aval": aval["fonction"],
                           "attend": aval["entrees"]})
             etat = NON
+        # Une video de la carte d'ici ne se prolonge pas chez le loueur : autre
+        # taille, autre cadence, le recollage echouerait APRES avoir paye la suite.
+        if aval["brique"] in PROLONGENT and amont["brique"] in DEFINITIONS_DES_VIDEOS \
+                and "rapide" not in DEFINITIONS_DES_VIDEOS[amont["brique"]]:
+            motifs.append("prolongation_impossible")
+            pourquoi.append(
+                "%s ne peut pas continuer une vidéo faite sur la carte de ce PC : "
+                "les deux clips n'ont ni la même taille ni la même cadence. Choisissez "
+                "la vidéo « Rapide »." % aval["fonction"])
+            faits.append({"quoi": "prolongation_impossible", "amont": amont["fonction"],
+                          "aval": aval["fonction"],
+                          "consequence": "cette chaîne ne peut pas être lancée : "
+                                         "choisir la vidéo « Rapide »"})
+            etat = NON
 
     # --- l'entree : ce qui est joint, la premiere etape le prend-elle ? -------
     # None = on ne sait pas (appel sans le champ) : rien n'est juge.
@@ -685,7 +709,7 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
             continue
         if not refus:
             continue
-        (ferme if e["brique"] in LOUEUR_SEUL else prive_du_loueur).append((e, refus))
+        (ferme if loueur_seul(e) else prive_du_loueur).append((e, refus))
 
     if ferme:
         motifs.append("budget_depasse")
@@ -931,7 +955,11 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                     etat = PARTIEL
                 motifs.append("carte_occupee" if vue else "carte_absente")
 
-    return _verdict(etat, motifs, pourquoi, chaine, total, faits)
+    verdict = _verdict(etat, motifs, pourquoi, chaine, total, faits)
+    # Pour la ligne du cout que la page ecrit elle-meme, sans passer par le
+    # chat : l'estimation a la duree reglee, et le pire des gardes.
+    verdict["cout_pire_usd"] = pire_des_gardes
+    return verdict
 
 
 # L'ETAT s'ecrit d'avance et ne passe JAMAIS par le modele. C'est le verrou qui
@@ -1094,6 +1122,8 @@ def _verdict(etat, motifs, pourquoi, chaine, total, faits):
              "entrees": e["entrees"], "sorties": e["sorties"],
              "cout_max_usd": e["cout_max_usd"],
              "donnees": donnees_de(e["brique"]),
+             **({"prolonge": True} if e["brique"] in PROLONGENT else {}),
+             **({"loue": True} if loue_chez_modal(e) else {}),
              **({"consigne": e.get("consigne")} if lit_une_consigne(e["brique"]) else {})}
             for e in chaine["etapes"]],
     }
@@ -1252,7 +1282,8 @@ def mesure_du_noeud(etape) -> dict | None:
         etat = module.budget_verifier(gpu, module.DUREE_MAX_S)
     except module.BudgetDepasse as exc:
         return {"refus": str(exc), "cout_max_usd": None, "reste_usd": None}
-    return {"refus": None, "cout_max_usd": float(etat["cout_max_usd"]),
+    # La garde est taillee pour UN travail ; « Prolonger » en lance un par clip.
+    return {"refus": None, "cout_max_usd": float(etat["cout_max_usd"]) * clips_de(etape),
             "reste_usd": max(0.0, float(etat["plafond_usd"]) - float(etat["usd"]))}
 
 
@@ -1283,9 +1314,9 @@ def cumul_de_chaine(etapes, mesure=None) -> dict | None:
     return {
         "reste_usd": min(m["reste_usd"] for _, m in mesures),
         "loueur_seul_usd": sum(m["cout_max_usd"] for e, m in mesures
-                               if e["brique"] in LOUEUR_SEUL),
+                               if loueur_seul(e)),
         "tous_usd": sum(m["cout_max_usd"] for _, m in mesures),
-        "loueur_seul": [e["fonction"] for e, _ in mesures if e["brique"] in LOUEUR_SEUL],
+        "loueur_seul": [e["fonction"] for e, _ in mesures if loueur_seul(e)],
         "applications": [e["fonction"] for e, _ in mesures],
     }
 
@@ -1387,6 +1418,7 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
         return trace
     courant = entree
     pret_precedent = None
+    demande_precedente = None
     for rang, etape in enumerate(chaine["etapes"]):
         # La demande du client voyage AVEC le pas. Elle etait portee par le
         # graphe, puis par la chaine, et lue par personne : le noeud de chat
@@ -1398,7 +1430,12 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
         suivantes = chaine["etapes"][rang + 1:rang + 2]
         # SA consigne quand le lecteur de phrase (ou le client) en a donne une ;
         # sinon la phrase entiere, comme avant le 23/09.
-        etape = dict(etape, demande=etape.get("consigne") or chaine.get("phrase", ""),
+        # « Prolonger » sans consigne a elle : la MEME scene que l'etape d'avant
+        # (24/09 : « par defaut il reste identique au clip 1 »).
+        demande = etape.get("consigne") or (
+            demande_precedente if etape["brique"] in PROLONGENT and demande_precedente
+            else chaine.get("phrase", ""))
+        etape = dict(etape, demande=demande,
                      suivante=suivantes[0]["brique"] if suivantes else None,
                      reglages=reglages_de_l_etape(chaine, rang))
         if arret is not None:
@@ -1417,6 +1454,7 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             # JUSTE AVANT le lancement, et par noeud : c'est la seule place ou
             # le pire cas est celui de CE travail-la.
             garde_budget(etape)
+            demande_precedente = etape["demande"]
             if pretraiter is not None and pret_precedent:
                 etape["pretraitement_precedent"] = pret_precedent
             pret = pretraiter(etape, courant) if pretraiter is not None else None
@@ -1879,7 +1917,7 @@ DUREE = "duree"
 DUREES_DES_TRAVAUX = {
     "video_maison": ("video", "DUREES_MAISON", "DUREE_PAR_DEFAUT", 1, "%s s"),
     "video_rapide": ("video", "DUREES", "DUREE_PAR_DEFAUT", 1, "%s s"),
-    "video_prolonger": ("video", "DUREES", "DUREE_PAR_DEFAUT", 1, "%s s de plus"),
+    "video_prolonger": ("video", "DUREES", "DUREE_PAR_DEFAUT", 1, "%s s par clip ajouté"),
     "chanson": ("chanson", "DUREES", None, 60, "%s min au plus"),
 }
 
@@ -1909,10 +1947,12 @@ DEFINITIONS_DES_VIDEOS = {"video_maison": ("maison",), "video_rapide": ("rapide"
 LIEU_DU_MODELE = {"maison": "sur cette carte", "rapide": "chez le loueur"}
 
 
-def _definition_de_la_video(brique: str) -> dict | None:
+def _definition_de_la_video(brique: str, loue_d_office: bool = False) -> dict | None:
     qualites = DEFINITIONS_DES_VIDEOS.get(brique)
     if not qualites:
         return None
+    if loue_d_office:
+        qualites = tuple(q for q in qualites if q == "rapide") or qualites
     import video
 
     tailles = [(video.MODELES[q]["largeur"], video.MODELES[q]["hauteur"], q) for q in qualites]
@@ -1951,18 +1991,77 @@ CHOIX_ENRICHIR = {OUI: "oui, le chat détaille la scène en anglais",
                   NON_MERCI: "non, traduire seulement"}
 NOTE_SANS_ENRICHIR = ("Sans enrichissement, une description courte donne souvent une autre "
                       "scène : « un phare » a donné une côte, puis un homme barbu.")
+# Le NOMBRE de clips qu'ajoute « Prolonger » (24/09 : « on devrait pouvoir
+# parametrer le nombre de clip a ajouter »). Chacun part de la derniere image
+# du precedent ; 4 au plus : 5 s + 4 x 5 s = 25 s, et une heure de location.
+CLIPS = "clips"
+CLIPS_MAX = 4
+
+
+def clips_de(etape: dict) -> int:
+    """Combien de clips cette etape fabrique : 1, sauf « Prolonger » reglee."""
+    if etape.get("brique") not in PROLONGENT:
+        return 1
+    valeur = str((etape.get("reglages") or {}).get(CLIPS) or "1")
+    return int(valeur) if valeur.isdigit() and 1 <= int(valeur) <= CLIPS_MAX else 1
+
+
+def _suivie_d_une_prolongation(etapes: list, rang: int) -> bool:
+    """Une video que « Prolonger » continue : elle se fabrique chez le loueur.
+
+    La carte d'ici (Wan 2.2) rend du 1280 x 704 a 24 images/s, le loueur du
+    832 x 480 a 16 : les deux ne se recollent pas. Releve du 24/09 sur la page,
+    le premier clip proposait encore « à la maison si la carte est libre ».
+    """
+    if rang + 1 >= len(etapes):
+        return False
+    return (etapes[rang + 1]["brique"] in PROLONGENT
+            and _prepare_une_video(etapes[rang]["brique"]))
+
+
+def _cout_estime(etape: dict, reglages: dict):
+    """Le prix d'une etape video louee chez Modal, a SA duree et pour SES clips.
+
+    Le registre porte le prix d'un clip de 5 s (0,277 $) quelle que soit la
+    duree reglee : 2 x 1 s s'annoncait 0,55 $ pour 0,11 $ attendus. Le temps
+    vient des clips chronometres (`video.prix_estime`) ; sans lui, le prix du
+    registre, par clip.
+    """
+    qualite = QUALITE_DU_NOEUD.get(etape["brique"])
+    if not qualite or etape.get("cout_max_usd") is None:
+        return etape.get("cout_max_usd")
+    import video
+
+    duree = str(reglages.get(DUREE) or video.DUREE_PAR_DEFAUT)
+    par_clip = video.prix_estime(qualite, duree)
+    if par_clip is None:
+        par_clip = etape["cout_max_usd"]
+    return round(par_clip * clips_de(dict(etape, reglages=reglages)), 4)
 
 
 def etapes_reglees(chaine: dict) -> list[dict]:
     """Les etapes, chacune avec SES reglages ; celle louee chez Kaggle ne coute rien."""
     reglees = []
-    for rang, etape in enumerate(chaine.get("etapes") or []):
+    etapes = chaine.get("etapes") or []
+    for rang, etape in enumerate(etapes):
         reglages = reglages_de_l_etape(chaine, rang)
+        d_office = _suivie_d_une_prolongation(etapes, rang)
+        if d_office:
+            reglages[OU_CALCULER] = "toujours-modal"
         etape = dict(etape, reglages=reglages)
+        if d_office:
+            etape["loue_d_office"] = True
         if reglages.get(LOUEUR) == "kaggle":
             etape["cout_max_usd"] = 0.0
+        else:
+            etape["cout_max_usd"] = _cout_estime(etape, reglages)
         reglees.append(etape)
     return reglees
+
+
+def loueur_seul(etape: dict) -> bool:
+    """Une etape qui ne peut partir QUE chez le loueur, dans CETTE chaine."""
+    return etape["brique"] in LOUEUR_SEUL or bool(etape.get("loue_d_office"))
 
 
 def loue_chez_modal(etape: dict) -> bool:
@@ -2084,7 +2183,8 @@ def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[di
                              "defaut": FORMAT_LIBRE,
                              "choix": [{"valeur": FORMAT_LIBRE, "nom": "au choix du modèle"}]
                              + [{"valeur": v, "nom": n} for v, (n, _) in FORMATS.items()]})
-        definition = _definition_de_la_video(etape["brique"])
+        d_office = _suivie_d_une_prolongation(chaine["etapes"], rang)
+        definition = _definition_de_la_video(etape["brique"], d_office)
         if definition:
             montrees.append({"id": "%s@%d" % (DEFINITION, rang),
                              "nom": "Format de « %s »" % etape["fonction"], "etape": rang,
@@ -2094,9 +2194,20 @@ def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[di
         if durees:
             unite_s, choix, defaut = durees
             ident = "%s@%d" % (DUREE, rang)
+            # Chez le loueur, la duree change le prix : le verdict se refait.
             montrees.append({"id": ident, "nom": "Durée de « %s »" % etape["fonction"],
                              "etape": rang, "valeur": valeurs.get(ident, defaut),
-                             "defaut": defaut, "unite_s": unite_s, "choix": choix})
+                             "defaut": defaut, "unite_s": unite_s, "choix": choix,
+                             **({"refait": True} if BUDGET_PAR_BRIQUE.get(etape["brique"])
+                                else {})})
+        if etape["brique"] in PROLONGENT:
+            ident = "%s@%d" % (CLIPS, rang)
+            montrees.append({"id": ident, "nom": "Clips ajoutés par « %s »" % etape["fonction"],
+                             "etape": rang, "refait": True,
+                             "valeur": valeurs.get(ident, "1"), "defaut": "1",
+                             "choix": [{"valeur": str(n),
+                                        "nom": "%d clip%s de plus" % (n, "s" if n > 1 else "")}
+                                       for n in range(1, CLIPS_MAX + 1)]})
         if BUDGET_PAR_BRIQUE.get(etape["brique"]):
             # Le loueur change le cout, la garde du budget et ou partent les
             # donnees : la page REFAIT le verdict (`refait`).
@@ -2106,7 +2217,9 @@ def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[di
                              "valeur": valeurs.get(ident, "modal"), "defaut": "modal",
                              "note": NOTE_KAGGLE,
                              "choix": [{"valeur": v, "nom": n} for v, n in LOUEURS.items()]})
-        if etape["brique"] == "video_rapide":
+        # Suivie de « Prolonger », elle part chez le loueur d'office : le choix
+        # de la carte d'ici n'est pas offert (`_suivie_d_une_prolongation`).
+        if etape["brique"] == "video_rapide" and not d_office:
             ident = "%s@%d" % (OU_CALCULER, rang)
             montrees.append({"id": ident, "nom": "Carte de cet ordinateur pour « %s »"
                                                  % etape["fonction"],
@@ -2157,7 +2270,18 @@ def appliquer_proposees(chaine: dict, graphe: dict,
     montrees = {p["id"]: p for p in proprietes_montrees(chaine, apps)}
     ids = list(montrees)
     valeurs = {}
-    for cle, valeur in (graphe.get("proprietes") or {}).items():
+    proposees = dict(graphe.get("proprietes") or {})
+    # Une video PROLONGEE : la duree proposee est celle de la video entiere,
+    # repartie entre le premier clip et ceux qu'ajoute « Prolonger ».
+    if DUREE in proposees:
+        reparties = _duree_repartie(chaine, montrees, proposees[DUREE])
+        if reparties:
+            valeurs_reparties, note = reparties
+            valeurs.update(valeurs_reparties)
+            if note:
+                sans_effet.append(note)
+            del proposees[DUREE]
+    for cle, valeur in proposees.items():
         cibles = [i for i in ids if i == cle or i.startswith(cle + "@")]
         for ident in cibles:
             if cle != DUREE:
@@ -2177,6 +2301,41 @@ def appliquer_proposees(chaine: dict, graphe: dict,
         if not cibles:
             sans_effet.append(SANS_EFFET[cle] % NOMS_DES_LANGUES.get(valeur, valeur))
     return valeurs, sans_effet
+
+
+def _duree_repartie(chaine: dict, montrees: dict, secondes) -> tuple[dict, str] | None:
+    """10 s demandees, « Vidéo » puis « Prolonger » : 5 s, puis 1 clip de 5 s.
+
+    None si la chaine ne prolonge pas de video. Sinon les valeurs des reglages,
+    et une phrase quand la duree obtenue n'est pas exactement celle demandee.
+    """
+    etapes = chaine.get("etapes") or []
+    rangs = [r for r in range(len(etapes)) if _suivie_d_une_prolongation(etapes, r)]
+    if not rangs or not str(secondes).isdigit():
+        return None
+    rang = rangs[0]
+    premier, suite = montrees.get("%s@%d" % (DUREE, rang)), montrees.get(
+        "%s@%d" % (DUREE, rang + 1))
+    if not premier or not suite:
+        return None
+    voulu = int(secondes)
+    offertes = sorted(int(c["valeur"]) for c in premier["choix"])
+    par_suite = sorted(int(c["valeur"]) for c in suite["choix"])
+    debut = max([s for s in offertes if s <= voulu] or offertes[:1])
+    reste = voulu - debut
+    valeurs = {premier["id"]: str(debut)}
+    if reste <= 0:
+        # La prolongation est demandee sans duree de plus : son defaut.
+        return valeurs, ""
+    clips = min(CLIPS_MAX, -(-reste // par_suite[-1]))
+    chacun = min([s for s in par_suite if s * clips >= reste] or par_suite[-1:])
+    valeurs[suite["id"]] = str(chacun)
+    valeurs["%s@%d" % (CLIPS, rang + 1)] = str(clips)
+    obtenu = debut + clips * chacun
+    note = ("" if obtenu == voulu else
+            "« Durée de %d s » : la vidéo fera %d s (%d s, puis %d clip%s de %d s)."
+            % (voulu, obtenu, debut, clips, "s" if clips > 1 else "", chacun))
+    return valeurs, note
 
 
 def proprietes_lues(valeur, chaine: dict, apps: list[dict] | None = None) -> dict:
@@ -2350,6 +2509,9 @@ def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
         fixe = dict(fixe, ou=reglages[LOUEUR])
     if reglages.get(OU_CALCULER) in PLACEMENTS:
         fixe = dict(fixe, ou_calculer=reglages[OU_CALCULER])
+    if etape.get("suivante") in PROLONGENT:
+        # Continuee par « Prolonger » : chez le loueur, a sa taille et sa cadence.
+        fixe = dict(fixe, ou_calculer="toujours-modal")
     if reglages.get(VERSION) == INSTRUMENTALE:
         fixe = dict(fixe, lora=True)
     une_video = isinstance(entree, (bytes, bytearray))
@@ -2445,6 +2607,27 @@ def _arreter_le_travail(client, entetes, jid: str, etape: dict):
 
 
 def lancer_un_travail(etape: dict, entree):
+    """Un travail -- ou, pour « Prolonger », un par clip ajoute.
+
+    Chaque clip part de la derniere image du clip recolle jusque-la, avec la
+    meme description preparee. La garde du budget est reposee avant chaque
+    clip au-dela du premier : c'est un travail loue de plus.
+    """
+    fois = clips_de(etape)
+    for n in range(fois):
+        if n:
+            arret = etape.get("arret")
+            if arret is not None and arret.is_set():
+                # Les clips deja payes restent : la video recollee jusque-la.
+                return entree
+            _budget_verifie(etape)
+        entree = _un_travail(etape, entree)
+        if entree is None:
+            return None
+    return entree
+
+
+def _un_travail(etape: dict, entree):
     """Creer, attendre, recuperer -- aux adresses des pages du Studio.
 
     Le sondeur separe << pas ENCORE >> de << JAMAIS >>. Une boucle d'attente est
@@ -2799,17 +2982,47 @@ function bloc(v){
                 inconnu:"Je ne peux pas trancher", non:"Ce n\u2019est pas possible"};
   // La consigne de chaque etape qui en suit une (23/09) : ce que CETTE etape
   // va faire, modifiable avant de lancer. Vide = votre demande entiere.
+  // \u00ab Prolonger \u00bb (24/09) : sa description, vide, reste celle de l'etape
+  // precedente ; l'ecrire fait evoluer la scene de la suite.
   const etapes = (v.etapes||[]).map((e, i) =>
     "<li>" + e.fonction + " <span class=motif>(" + e.entrees.join(", ") +
-    " \u2192 " + e.sorties.join(", ") + ")</span>" +
-    (e.consigne !== undefined ? "<br><label class=consigne>Consigne : <input data-c='" + i
-      + "' value='" + echapper(e.consigne || "") + "' placeholder='votre demande enti\u00e8re'></label>" : "") +
+    " \u2192 " + e.sorties.join(", ") + ")</span>" + coutDeLEtape(e) +
+    (e.consigne !== undefined ? "<br><label class=consigne>"
+      + (e.prolonge ? "Description de la suite : " : "Consigne : ") + "<input data-c='" + i
+      + "' value='" + echapper(e.consigne || "") + "' placeholder='"
+      + echapper(e.prolonge ? suiteParDefaut(v, i) : "votre demande enti\u00e8re") + "'></label>" : "") +
     (e.donnees ? "<br><span class='donnees " + (e.donnees.sort === "non" ? "reste" : "sort") +
       "'>" + e.donnees.phrase + "</span>" : "") + "</li>").join("");
   return "<div class='bloc " + v.atteignable + "'>" +
     "<p class=etat>" + (noms[v.atteignable]||v.atteignable) + "</p>" +
-    "<p>" + (v.phrase || v.pourquoi) + "</p>" +
+    "<p>" + (v.phrase || v.pourquoi) + "</p>" + coutEstime(v) +
     (etapes ? "<ol>" + etapes + "</ol>" : "") + reglages(v) + "</div>";
+}
+
+// Le cout ESTIME (24/09 : « un cout estimatif doit apparaitre »), ecrit par
+// la page et non par le chat : la duree et le nombre de clips regles, au
+// prix des clips deja chronometres. Il se refait a chaque reglage.
+function coutEstime(v){
+  const loues = (v.etapes || []).filter(e => e.loue && e.cout_max_usd != null);
+  if (!loues.length) return "";
+  const estime = loues.reduce((s, e) => s + e.cout_max_usd, 0);
+  return "<p class=cout><strong>Coût estimé</strong> : environ " + fr(estime, 2)
+    + " $ chez Modal" + (v.cout_pire_usd != null ? " ; au pire " + fr(v.cout_pire_usd, 2)
+    + " $, si chaque calcul allait jusqu’à son délai" : "") + ".</p>";
+}
+
+function coutDeLEtape(e){
+  return e.loue && e.cout_max_usd != null
+    ? " <span class=motif>— environ " + fr(e.cout_max_usd, 2) + " $</span>" : "";
+}
+
+// Ce que la suite recoit quand sa description est vide : celle de l'etape
+// d'avant, telle qu'elle est ecrite maintenant.
+function suiteParDefaut(v, i){
+  let j = i - 1;
+  while (j > 0 && v.etapes[j].prolonge && !v.etapes[j].consigne) j--;
+  const avant = (v.etapes[j] && v.etapes[j].consigne) || document.getElementById("phrase").value;
+  return "vide = même scène que l’étape précédente : « " + avant + " »";
 }
 
 // Les reglages de la chaine (23/09) : proposes par la lecture de la phrase,
@@ -2980,8 +3193,14 @@ async function envoyer(chemin, avecFichier, avecChaine){
 // les cles et ce qui sort ne changent pas avec elle).
 document.getElementById("verdict").addEventListener("input", e => {
   const c = e.target && e.target.dataset ? e.target.dataset.c : undefined;
-  if (derniere && c !== undefined && derniere.etapes && derniere.etapes[Number(c)])
+  if (derniere && c !== undefined && derniere.etapes && derniere.etapes[Number(c)]) {
     derniere.etapes[Number(c)].consigne = e.target.value;
+    // La suite vide suit la scene qu'on est en train d'ecrire.
+    derniere.etapes.forEach((etape, j) => {
+      const champ = document.querySelector("input[data-c='" + j + "']");
+      if (etape.prolonge && champ) champ.placeholder = suiteParDefaut(derniere, j);
+    });
+  }
 });
 
 document.getElementById("verdict").addEventListener("change", async e => {

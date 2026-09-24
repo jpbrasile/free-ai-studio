@@ -1232,10 +1232,17 @@ def test_une_licence_qu_on_ne_peut_pas_nommer_rend_inconnu(apps):
 
 
 def test_le_cout_dune_chaine_payante_est_la_somme_des_pires_cas(apps):
-    """Chaque nombre vient de la prose mesuree, aucun n'est estime."""
+    """Le cout d'un clip loue est celui de SA duree, au temps des clips chronometres.
+
+    24/09 : le registre (0,277 $, un clip de 5 s) s'annoncait pour toute duree.
+    Au defaut de 5 s, les deux se rejoignent a moins d'un centime.
+    """
+    import video
+
     graphe = {"phrase": "", "noeuds": [{"capacite": "video_rapide"}]}
     verdict = composite.verifier(composite.lier(graphe, apps))
-    assert verdict["cout_max_usd"] == 0.277
+    assert verdict["cout_max_usd"] == video.prix_estime("rapide", video.DUREE_PAR_DEFAUT)
+    assert abs(verdict["cout_max_usd"] - 0.277) < 0.01
     assert "0,28" in verdict["pourquoi"], verdict["pourquoi"]
 
 
