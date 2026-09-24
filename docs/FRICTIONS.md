@@ -35,6 +35,7 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gênait | Bloquait ? | Levée par | Vue par |
 |---|---|---|---|---|---|
+| 24/09/2026 | `/composite` | Enchaîner ne montrait rien avant la fin et n'avait pas de bouton d'arrêt. Chaque étape se montre dès qu'elle finit (image, son, vidéo, texte) ; « Arrêter » coupe la suite et arrête un travail en cours | non | ce commit (tests seulement) | le propriétaire |
 | 24/09/2026 | `/composite` | Les champs des pages Vidéo, Chanson et Dialogue ne passaient pas par la chaîne. Réglages ajoutés : machine louée (Modal ou Kaggle, coût et budget suivis), carte de cet ordinateur (vidéo Rapide), version chantée ou instrumentale | non | ce commit (tests seulement) | le propriétaire |
 | 24/09/2026 | `/composite` | Pas de champ pour la durée d'une vidéo ou d'une chanson, ni pour le format ; « fais un phare analogue le jour » devenait une vidéo. Durée réglable (choix lus dans le module du travail), format vidéo montré grisé (fixé par le modèle), vidéo seulement si elle est demandée | non | ce commit (tests seulement) | le propriétaire |
 | 23/09/2026 | `/composite` | Taille de l'image fabriquée figée, et jamais dite. Réglage « Format » ajouté (au choix du modèle, carré, 16:9, 9:16 : les seules proportions que le routeur transmet) ; la page montre la largeur × hauteur réelles | non | ce commit (tests seulement) | le propriétaire |

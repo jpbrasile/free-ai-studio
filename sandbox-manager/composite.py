@@ -1231,8 +1231,11 @@ def _budget_verifie(etape):
             "%s Ce pas n'est pas lance." % refus, ou=CONTROLE)
 
 
+ARRETE_PAR_LE_CLIENT = "arrete_par_le_client"
+
+
 def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
-             garde_budget=None, garde_cumul=None) -> dict:
+             garde_budget=None, garde_cumul=None, suivi=None, arret=None) -> dict:
     """Lance la chaine noeud par noeud et rend une trace.
 
     `lancer(etape, entree) -> sortie` est injecte : chaque noeud part par la
@@ -1243,6 +1246,12 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
     Le resultat n'est pas un booleen. << Ou ca a casse >> est ce qui apprend :
     compilation, liaison, controle, execution, sortie invalide. Un booleen ne
     fait pas tourner le volant.
+
+    `suivi(rang, statut, rendu, sortie)`, s'il est donne, est appele quand une
+    etape commence (<< en_cours >>) et quand elle finit (son `resultat`) : la
+    page montre chaque sortie intermediaire (24/09 : << pas de visualisation
+    intermediaire, ni d'abort button >>). `arret`, un `threading.Event` : pose,
+    aucune etape de plus ne part, et un travail en cours est arrete.
     """
     # `phrase` est le champ que le client LIT. Il manquait, et le motif tenait
     # sa place : quand la carte etait prise, la page montrait le slug
@@ -1284,14 +1293,25 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
         etape = dict(etape, demande=etape.get("consigne") or chaine.get("phrase", ""),
                      suivante=suivantes[0]["brique"] if suivantes else None,
                      reglages=reglages_de_l_etape(chaine, rang))
+        if arret is not None:
+            etape["arret"] = arret
         try:
+            if arret is not None and arret.is_set():
+                raise CompositeRefuse(
+                    ARRETE_PAR_LE_CLIENT,
+                    "Arrêté à votre demande, avant « %s ». Ce qui était déjà fait "
+                    "reste montré." % etape["fonction"], ou=EXECUTION)
             # JUSTE AVANT le lancement, et par noeud : c'est la seule place ou
             # le pire cas est celui de CE travail-la.
             garde_budget(etape)
+            if suivi:
+                suivi(rang, "en_cours", None, None)
             courant = lancer(etape, courant)
         except CompositeRefuse as refus:
             trace["etapes"].append({"brique": etape["brique"], "resultat": "refus",
                                     "motif": refus.motif, "phrase": refus.phrase})
+            if suivi:
+                suivi(rang, "refus", trace["etapes"][-1], None)
             trace.update(resultat="refus", ou=refus.ou, motif=refus.motif,
                          phrase=refus.phrase)
             return trace
@@ -1302,6 +1322,8 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             trace["etapes"].append({"brique": etape["brique"], "resultat": "echec",
                                     "motif": type(erreur).__name__,
                                     "phrase": str(erreur)})
+            if suivi:
+                suivi(rang, "echec", trace["etapes"][-1], None)
             trace.update(resultat="echec", ou=EXECUTION,
                          motif=type(erreur).__name__, phrase=str(erreur))
             return trace
@@ -1324,6 +1346,8 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
         if getattr(courant, "ecoute", None):
             rendu["ecoute"] = courant.ecoute
         trace["etapes"].append(rendu)
+        if suivi:
+            suivi(rang, "rendu", rendu, courant)
 
     trace.update(resultat="rendu", sortie=courant)
     return trace
@@ -2184,6 +2208,23 @@ def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
     return usage, dict(fixe, texte=texte or demande)
 
 
+def _arreter_le_travail(client, entetes, jid: str, etape: dict):
+    """L'arret demande depuis la chaine, par la route du bouton des pages.
+
+    Sa phrase est reprise TELLE QUELLE : elle ne promet pas plus que ce qui est
+    fait (Modal termine la machine ; Kaggle n'a pas d'annulation).
+    """
+    detail = ""
+    try:
+        reponse = client.post("%s/jobs/%s/arreter" % (SANDBOX, jid), headers=entetes)
+        detail = str((reponse.json() or {}).get("detail") or "")
+    except Exception as erreur:  # noqa: BLE001 -- l'arret se dit, meme rate
+        detail = "L'arrêt du travail n'a pas pu être demandé (%s)." % type(erreur).__name__
+    raise CompositeRefuse(ARRETE_PAR_LE_CLIENT,
+                          ("« %s » arrêté à votre demande. %s" % (etape["fonction"], detail)).strip(),
+                          ou=EXECUTION)
+
+
 def lancer_un_travail(etape: dict, entree):
     """Creer, attendre, recuperer -- aux adresses des pages du Studio.
 
@@ -2235,7 +2276,13 @@ def lancer_un_travail(etape: dict, entree):
                     "« %s » n'a pas fini en %d secondes. Il continue peut-être "
                     "sur sa propre page ; la chaîne, elle, s'arrête ici."
                     % (etape["fonction"], DELAI_S), ou=EXECUTION)
-            time.sleep(ATTENTE_S)
+            arret = etape.get("arret")
+            if arret is not None and arret.is_set():
+                _arreter_le_travail(client, entetes, jid, etape)
+            if arret is not None:
+                arret.wait(ATTENTE_S)
+            else:
+                time.sleep(ATTENTE_S)
 
         # L'adresse du fichier se LIT dans la reponse d'etat, elle ne se
         # fabrique pas. Deux raisons, mesurees toutes les deux :
@@ -2453,6 +2500,8 @@ button[disabled]{opacity:.55;cursor:progress}
 div.texte{background:#f6f6f6;border-radius:8px;padding:10px;overflow-wrap:anywhere}
 div.texte h4{margin:.6em 0 .3em}div.texte p{margin:.4em 0}div.texte ul,div.texte ol{margin:.3em 0}
 div.texte code{background:#e8e8e8;border-radius:4px;padding:0 3px}
+ol.pas{padding-left:1.4em}ol.pas li{margin:.5em 0}ol.pas .statut{color:#555;font-size:.9em}
+ol.pas li.en_cours .statut{font-weight:bold;color:#000}ol.pas li.refus .statut,ol.pas li.echec .statut{color:#a00}
 img.vignette,video.vignette{max-width:220px;max-height:160px;border-radius:8px;display:block;margin-top:8px}
 span.document{font-size:40px}p.ecoute{font-size:.9em;color:#555}
 div.reglages{border-top:1px solid #ddd;margin-top:8px;padding-top:4px}p.reglage select{font:inherit}
@@ -2482,8 +2531,10 @@ ou Groq. Chaque \u00e9tape dit ensuite ce qui quitte votre ordinateur, et chez q
 
 <button id=voir>Voir si c\u2019est possible</button>
 <button id=lancer disabled>Lancer</button>
+<button id=arreter hidden>Arr\u00eater</button>
 
 <div id=verdict></div>
+<div id=progression></div>
 <div id=resultat></div>
 
 <script>
@@ -2726,19 +2777,100 @@ async function voir(avecChaine){
 }
 document.getElementById("voir").onclick = () => voir(false);
 
+// La chaine se SUIT pas a pas (24/09 : << pas de visualisation
+// intermediaire, ni d'abort button >>). Chaque etape dit ou elle en est, et
+// montre sa sortie des qu'elle existe ; « Arreter » coupe la suite.
+const STATUTS = {attente: "en attente", en_cours: "en cours\u2026", rendu: "fait",
+                 refus: "arr\u00eat\u00e9", echec: "\u00e9chec", vide: "rien rendu"};
+let course = null;
+
+function blocArret(ou, detail){
+  return "<div class='bloc non'><p class=etat>\u00c7a s\u2019est arr\u00eat\u00e9 \u00e0 l\u2019\u00e9tape "
+    + echapper(ou || "?") + "</p><p>" + echapper(detail || "") + "</p></div>";
+}
+
+function lecteur(type, url){
+  if (type.startsWith("image/")) return "<img src='" + url + "' alt='' style='max-width:100%'>";
+  if (type.startsWith("video/")) return "<video controls src='" + url + "' style='max-width:100%'></video>";
+  if (type.startsWith("audio/")) return "<audio controls src='" + url + "'></audio>";
+  return "<a href='" + url + "' download>Le fichier de cette \u00e9tape</a>";
+}
+
+// Une ligne par etape. Elle n'est reecrite que quand son statut change : un
+// son ou une video en cours d'ecoute ne repart pas a zero a chaque lecture.
+async function montrerPas(id, s, vus){
+  const liste = document.getElementById("pas");
+  for (let i = 0; i < s.etapes.length; i++) {
+    const e = s.etapes[i];
+    if (vus[i] === e.statut) continue;
+    vus[i] = e.statut;
+    let html = "<strong>" + echapper(e.fonction) + "</strong> <span class=statut>"
+      + (STATUTS[e.statut] || echapper(e.statut)) + "</span>";
+    if (e.type) {
+      const r = await fetch("/composite/courses/" + id + "/etapes/" + i,
+                            {headers:{"Authorization":"Bearer " + CLE}});
+      if (r.ok) html += "<br>" + lecteur(e.type, URL.createObjectURL(await r.blob()));
+    }
+    if (e.texte) html += "<details open><summary>Texte rendu</summary>" + miseEnForme(e.texte) + "</details>";
+    if (e.phrase) html += "<p class=motif>" + echapper(e.phrase) + "</p>";
+    liste.children[i].className = e.statut;
+    liste.children[i].innerHTML = html;
+  }
+}
+
+document.getElementById("arreter").onclick = async () => {
+  const bouton = document.getElementById("arreter");
+  if (!course) return;
+  bouton.disabled = true; bouton.textContent = "Arr\u00eat demand\u00e9\u2026";
+  const r = await fetch("/composite/courses/" + course + "/arreter",
+                        {method:"POST", headers:{"Authorization":"Bearer " + CLE}});
+  const v = await r.json().catch(() => ({}));
+  document.getElementById("noteArret").textContent = v.detail || "";
+};
+
 document.getElementById("lancer").onclick = async () => {
   const b = document.getElementById("lancer");
+  const arret = document.getElementById("arreter");
+  const zone = document.getElementById("resultat");
   b.disabled = true; b.textContent = "Je fais\u2026";
+  zone.innerHTML = "";
+  document.getElementById("progression").innerHTML = "";
   try {
-    const r = await envoyer("/composite/lancer", true);
+    const r = await envoyer("/composite/demarrer", true);
     if (!r.ok) {
       const v = await r.corps.json();
-      document.getElementById("resultat").innerHTML =
-        "<div class='bloc non'><p class=etat>\u00c7a s\u2019est arr\u00eat\u00e9 \u00e0 l\u2019\u00e9tape "
-        + (v.ou || r.corps.headers.get("X-Composite-Ou") || "?") + "</p><p>" + (v.detail || "") + "</p></div>";
+      zone.innerHTML = blocArret(v.ou || r.corps.headers.get("X-Composite-Ou"), v.detail);
       return;
     }
-    const d = await r.corps.json();
+    course = (await r.corps.json()).id;
+    arret.hidden = false; arret.disabled = false; arret.textContent = "Arr\u00eater";
+    const vus = {};
+    let premier = true;
+    while (true) {
+      const lu = await fetch("/composite/courses/" + course, {headers:{"Authorization":"Bearer " + CLE}});
+      const s = await lu.json();
+      if (!lu.ok) { zone.innerHTML = blocArret("?", s.detail); return; }
+      if (premier) {
+        document.getElementById("progression").innerHTML =
+          "<div class=bloc><p class=etat>\u00c9tapes</p><ol class=pas id=pas>"
+          + s.etapes.map(() => "<li></li>").join("") + "</ol><p class=motif id=noteArret></p></div>";
+        premier = false;
+      }
+      await montrerPas(course, s, vus);
+      if (s.etat === "rendu") { montrerResultat(s.resultat); return; }
+      if (s.etat !== "en_cours") {
+        zone.innerHTML = blocArret(s.erreur && s.erreur.ou, s.erreur && s.erreur.detail);
+        return;
+      }
+      await new Promise(ok => setTimeout(ok, 1500));
+    }
+  } finally {
+    b.disabled = false; b.textContent = "Lancer";
+    arret.hidden = true; course = null;
+  }
+};
+
+function montrerResultat(d){
     let apercu = "", lien = "";
     if (d.fichier) {
       const brut = atob(d.fichier);
@@ -2796,9 +2928,6 @@ document.getElementById("lancer").onclick = async () => {
       const p = document.querySelector("#resultat p.dimensions");
       if (p) p.textContent = dimensions(image.naturalWidth, image.naturalHeight);
     });
-  } finally {
-    b.disabled = false; b.textContent = "Lancer";
-  }
-};
+}
 </script>
 </html>"""

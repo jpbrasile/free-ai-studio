@@ -54,14 +54,14 @@ def test_une_chaine_de_texte_rend_son_texte(sandbox, monkeypatch):
 def afficher(page: str, reponse: dict) -> str:
     debut = page.index("function phraseEcoute(e){")
     fin = page.index("\nfunction typeDuFichier", debut)
-    rendu_debut = page.index("    const d = await r.corps.json();")
-    rendu_fin = page.index("  } finally {", rendu_debut)
+    rendu_debut = page.index("function montrerResultat(d){")
+    rendu_fin = page.index("\n</script>", rendu_debut)
     code = (page[debut:fin]
             + "\nconst champs = {resultat: {innerHTML: ''}};\n"
             + "const document = {getElementById: id => champs[id], querySelector: () => null};\n"
             + "(async () => {\n"
             + "const r = {corps: {json: async () => (" + json.dumps(reponse) + ")}};\n"
-            + page[rendu_debut:rendu_fin]
+            + page[rendu_debut:rendu_fin] + "\nmontrerResultat(await r.corps.json());"
             + "\nconsole.log(champs.resultat.innerHTML);\n})();\n")
     sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
                             encoding="utf-8", timeout=20)

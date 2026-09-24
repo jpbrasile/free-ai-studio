@@ -580,8 +580,8 @@ def test_le_verdict_se_refait_sur_les_briques_sans_relire_la_phrase(sandbox, mon
 
 
 def test_la_page_montre_la_traduction(page):
-    rendu_debut = page.index("    const d = await r.corps.json();")
-    rendu_fin = page.index("  } finally {", rendu_debut)
+    rendu_debut = page.index("function montrerResultat(d){")
+    rendu_fin = page.index("\n</script>", rendu_debut)
     reponse = {"fichier": "UklGRg==", "type": "audio/wav", "nom": "s.wav", "derniere": "Voix",
                "textes": [{"fonction": "Chat", "texte": "A lighthouse."}],
                "ecoute": {"texte_dit": "A lighthouse.", "fait": False, "motif": "test"},
@@ -591,7 +591,7 @@ def test_la_page_montre_la_traduction(page):
             + "\nconst document = {getElementById: id => champs[id], querySelector: () => null};"
             + "\nconst URL = {createObjectURL: () => 'blob:x'};"
             + "\n(async () => {\nconst r = {corps: {json: async () => (" + json.dumps(reponse) + ")}};\n"
-            + page[rendu_debut:rendu_fin]
+            + page[rendu_debut:rendu_fin] + "\nmontrerResultat(await r.corps.json());"
             + "\nconsole.log(champs.resultat.innerHTML);\n})();")
     html = node(code)
     assert "Le même texte en français" in html

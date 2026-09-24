@@ -3705,40 +3705,49 @@ async def composite_lancer(request: Request,
     """
     auth(authorization)
     try:
-        formulaire = await request.form()
-        briques = [b for b in str(formulaire.get("briques") or "").split(",") if b]
-        if not briques:
-            raise composite.CompositeRefuse(
-                "chaine_absente",
-                "Cette demande n'a pas encore \u00e9t\u00e9 regard\u00e9e. Cliquez "
-                "\u00ab Voir si c\u2019est possible \u00bb, puis \u00ab Lancer \u00bb.",
-                ou=composite.CONTROLE)
-        chaine = composite.chaine_depuis_briques(
-            briques, phrase=str(formulaire.get("phrase") or ""))
-        # Les reglages tels que la page les montre au moment du clic, VERIFIES.
-        chaine["proprietes"] = composite.proprietes_lues(formulaire.get("proprietes"), chaine)
-        # Et la consigne de chaque etape, telle qu'elle est montree (23/09).
-        composite.consignes_lues(formulaire.get("consignes"), chaine)
-        fichier = formulaire.get("fichier")
-        # Le VRAI fichier decide ici, pas ce que la page a annonce : une
-        # image ne part plus jamais comme du texte (23/09, 540 498 jetons).
-        joint = (composite.type_d_entree(fichier.filename, fichier.content_type)
-                 if fichier is not None and not isinstance(fichier, str) else composite.SANS_FICHIER)
-        verdict = composite.verifier(chaine, entree=joint)
-        if verdict["atteignable"] == composite.NON:
-            raise composite.CompositeRefuse(
-                ";".join(verdict["motifs"]) or "refuse", verdict["pourquoi"],
-                ou=composite.CONTROLE)
-
-        entree = await fichier.read() if fichier is not None and not isinstance(
-            fichier, str) else None
-
+        chaine, verdict, entree = await _preparer_le_lancement(request)
         trace = await asyncio.to_thread(
             composite.executer, chaine, composite.lancer_par_le_routeur, entree,
             verdict)
     except composite.CompositeRefuse as exc:
         raise _refus_composite(exc) from exc
+    return JSONResponse(await asyncio.to_thread(_resultat_de_la_chaine, chaine, trace))
 
+
+async def _preparer_le_lancement(request: Request):
+    """La chaine MONTREE, rebatie, reglee et reverifiee : (chaine, verdict, entree)."""
+    formulaire = await request.form()
+    briques = [b for b in str(formulaire.get("briques") or "").split(",") if b]
+    if not briques:
+        raise composite.CompositeRefuse(
+            "chaine_absente",
+            "Cette demande n'a pas encore \u00e9t\u00e9 regard\u00e9e. Cliquez "
+            "\u00ab Voir si c\u2019est possible \u00bb, puis \u00ab Lancer \u00bb.",
+            ou=composite.CONTROLE)
+    chaine = composite.chaine_depuis_briques(
+        briques, phrase=str(formulaire.get("phrase") or ""))
+    # Les reglages tels que la page les montre au moment du clic, VERIFIES.
+    chaine["proprietes"] = composite.proprietes_lues(formulaire.get("proprietes"), chaine)
+    # Et la consigne de chaque etape, telle qu'elle est montree (23/09).
+    composite.consignes_lues(formulaire.get("consignes"), chaine)
+    fichier = formulaire.get("fichier")
+    # Le VRAI fichier decide ici, pas ce que la page a annonce : une
+    # image ne part plus jamais comme du texte (23/09, 540 498 jetons).
+    joint = (composite.type_d_entree(fichier.filename, fichier.content_type)
+             if fichier is not None and not isinstance(fichier, str) else composite.SANS_FICHIER)
+    verdict = composite.verifier(chaine, entree=joint)
+    if verdict["atteignable"] == composite.NON:
+        raise composite.CompositeRefuse(
+            ";".join(verdict["motifs"]) or "refuse", verdict["pourquoi"],
+            ou=composite.CONTROLE)
+
+    entree = await fichier.read() if fichier is not None and not isinstance(
+        fichier, str) else None
+    return chaine, verdict, entree
+
+
+def _resultat_de_la_chaine(chaine: dict, trace: dict) -> dict:
+    """Ce que la page montre d'une chaine finie ; HTTPException si elle n'a pas abouti."""
     if trace["resultat"] != "rendu":
         # La PHRASE d'abord : c'est elle que la page montre. Le motif reste,
         # dans l'en-tete, pour le journal. L'inverse etait en service jusqu'au
@@ -3763,15 +3772,117 @@ async def composite_lancer(request: Request,
         mime, nom = composite.type_de_sortie(sortie, chaine["etapes"][-1]["sorties"])
         # « une voix en anglais et un texte en français » (23/09) : le texte
         # dit, traduit a part, puisque la chaine finit par le son.
-        traduction = await asyncio.to_thread(
-            composite.traduire_le_texte_dit, chaine, trace, composite.lancer_par_le_routeur)
-        return JSONResponse({"fichier": base64.b64encode(bytes(sortie)).decode("ascii"),
-                             "type": mime, "nom": nom, "textes": textes,
-                             "derniere": derniere, "etapes": trace["etapes"],
-                             "ecoute": getattr(sortie, "ecoute", None),
-                             "traduction": traduction})
-    return JSONResponse({"texte": str(sortie), "textes": textes, "derniere": derniere,
-                         "etapes": trace["etapes"]})
+        traduction = composite.traduire_le_texte_dit(
+            chaine, trace, composite.lancer_par_le_routeur)
+        return {"fichier": base64.b64encode(bytes(sortie)).decode("ascii"),
+                "type": mime, "nom": nom, "textes": textes,
+                "derniere": derniere, "etapes": trace["etapes"],
+                "ecoute": getattr(sortie, "ecoute", None),
+                "traduction": traduction}
+    return {"texte": str(sortie), "textes": textes, "derniere": derniere,
+            "etapes": trace["etapes"]}
+
+
+# --- Une chaine SUIVIE pas a pas, et arretable (24/09) ------------------------
+# << enchainer : pas de visualisation intermediaire, ni d'abort button >>, puis
+# << il faut les y mettre dans l'ui de pilotage >>. `/composite/lancer` rendait
+# tout a la fin, en un bloc. Une COURSE tourne dans un fil ; la page lit son
+# avancement, montre chaque sortie des qu'elle existe, et peut l'arreter.
+# En memoire : une course ne survit pas a un redemarrage, et la page le dit.
+COURSES: Dict[str, dict] = {}
+COURSES_VERROU = threading.Lock()
+COURSES_GARDEES = 20
+PHRASE_ARRET = ("Arrêt demandé. Aucune étape de plus ne part. Un travail en cours (vidéo, "
+                "chanson, dialogue) est arrêté tout de suite ; une autre étape déjà partie "
+                "(chat, image, voix) finit d'abord, et son résultat reste montré.")
+
+
+def _courir(course: dict, chaine: dict, verdict: dict, entree) -> None:
+    def suivi(rang, statut, rendu, sortie):
+        vue = {"fonction": chaine["etapes"][rang]["fonction"], "statut": statut}
+        for cle in ("texte", "ecoute", "phrase"):
+            if rendu and rendu.get(cle):
+                vue[cle] = rendu[cle]
+        if isinstance(sortie, (bytes, bytearray)):
+            mime, _ = composite.type_de_sortie(sortie, chaine["etapes"][rang]["sorties"])
+            course["sorties"][rang] = (bytes(sortie), mime)
+            vue["type"] = mime
+        course["etapes"][rang] = vue
+
+    try:
+        trace = composite.executer(chaine, composite.lancer_par_le_routeur, entree, verdict,
+                                   suivi=suivi, arret=course["arret"])
+        course["resultat"] = _resultat_de_la_chaine(chaine, trace)
+        course["etat"] = "rendu"
+    except HTTPException as exc:
+        entetes = exc.headers or {}
+        course["erreur"] = {"detail": exc.detail, "ou": entetes.get("X-Composite-Ou", "")}
+        course["etat"] = ("arrete" if entetes.get("X-Composite-Motif")
+                          == composite.ARRETE_PAR_LE_CLIENT else "echec")
+    except Exception as exc:  # noqa: BLE001 -- une course finit TOUJOURS, et le dit
+        course["erreur"] = {"detail": "%s : %s" % (type(exc).__name__, exc),
+                            "ou": composite.EXECUTION}
+        course["etat"] = "echec"
+
+
+def _course(cid: str) -> dict:
+    course = COURSES.get(cid)
+    if course is None:
+        raise HTTPException(404, "Cette chaîne n'est plus suivie : le Studio a peut-être "
+                                 "redémarré. Relancez-la.")
+    return course
+
+
+@app.post("/composite/demarrer")
+async def composite_demarrer(request: Request,
+                             authorization: Optional[str] = Header(default=None)):
+    """Comme `/composite/lancer`, mais rend tout de suite un numero de course."""
+    auth(authorization)
+    try:
+        chaine, verdict, entree = await _preparer_le_lancement(request)
+    except composite.CompositeRefuse as exc:
+        raise _refus_composite(exc) from exc
+    cid = uuid.uuid4().hex
+    course = {"etat": "en_cours", "arret": threading.Event(), "sorties": {},
+              "etapes": [{"fonction": e["fonction"], "statut": "attente"}
+                         for e in chaine["etapes"]],
+              "resultat": None, "erreur": None, "cree": time.time()}
+    with COURSES_VERROU:
+        finies = sorted((c["cree"], k) for k, c in COURSES.items() if c["etat"] != "en_cours")
+        for _, vieille in finies[:max(0, len(COURSES) + 1 - COURSES_GARDEES)]:
+            COURSES.pop(vieille, None)
+        COURSES[cid] = course
+    threading.Thread(target=_courir, args=(course, chaine, verdict, entree),
+                     name="composite-" + cid[:8], daemon=True).start()
+    return {"id": cid}
+
+
+@app.get("/composite/courses/{cid}")
+def composite_course(cid: str, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    course = _course(cid)
+    return {"etat": course["etat"], "etapes": course["etapes"], "erreur": course["erreur"],
+            "resultat": course["resultat"], "arret_demande": course["arret"].is_set()}
+
+
+@app.get("/composite/courses/{cid}/etapes/{rang}")
+def composite_sortie_d_etape(cid: str, rang: int,
+                             authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    sortie = _course(cid)["sorties"].get(rang)
+    if sortie is None:
+        raise HTTPException(404, "Cette étape n'a pas rendu de fichier.")
+    return Response(content=sortie[0], media_type=sortie[1])
+
+
+@app.post("/composite/courses/{cid}/arreter")
+def composite_arreter(cid: str, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    course = _course(cid)
+    if course["etat"] != "en_cours":
+        return {"detail": "Cette chaîne est déjà finie : rien n'a été arrêté."}
+    course["arret"].set()
+    return {"detail": PHRASE_ARRET}
 
 
 @app.get("/", response_class=HTMLResponse)
