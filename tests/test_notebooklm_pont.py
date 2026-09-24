@@ -1,0 +1,548 @@
+"""NotebookLM par notebooklm-py (PLAN.md 17.6), sans Google.
+
+Une FAUSSE bibliotheque `notebooklm` prend la place de la vraie dans
+sys.modules : memes noms (NotebookLMClient.from_storage, notebooks, sources,
+artifacts, chat, AudioFormat, AudioLength), memes attributs de statut que la
+0.8.2 relue le 24/09/2026. Ce qui est verifie ici : le coffre (la session n'est
+jamais en clair sur le disque), la traduction des erreurs, le parcours du
+resume audio y compris le faux << removed >> du ticket #2432, les routes et
+leurs refus. Ce qui ne l'est pas : le vrai NotebookLM -- voir PLAN.md 17.6.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import time
+import types
+from pathlib import Path
+
+import pytest
+
+ENTETE = {"Authorization": "Bearer cle-sandbox-de-test"}
+AUTRE_SITE = {"origin": "https://exemple.com", "sec-fetch-site": "cross-site"}
+
+ETAT = {"cookies": [{"name": "SID", "value": "valeur-sid-secrete", "domain": ".google.com", "path": "/"},
+                    {"name": "__Secure-1PSIDTS", "value": "valeur-psidts-secrete",
+                     "domain": ".google.com", "path": "/"}],
+        "origins": [], "notebooklm": {"account": {"email": "personne@exemple.com"}}}
+
+
+# --- La fausse bibliotheque ------------------------------------------------------
+
+class Statut(types.SimpleNamespace):
+    task_id = "tache-1"
+    status = ""
+    error = None
+    is_complete = False
+    is_failed = False
+    is_rate_limited = False
+
+
+class Scenario:
+    def __init__(self):
+        self.ouverture: Exception | None = None   # leve a l'ouverture du client
+        self.tourner = False                      # la bibliotheque fait tourner les cookies
+        self.depart = Statut(status="in_progress")
+        self.fin = Statut(status="completed", is_complete=True)
+        self.audios: list = []
+        self.erreur_source: Exception | None = None
+        self.appels: list = []
+        self.chemins: list = []                   # fichiers de session vus par le client
+
+
+def faux_module(sc: Scenario) -> types.ModuleType:
+    m = types.ModuleType("notebooklm")
+    m.AudioFormat = types.SimpleNamespace(DEEP_DIVE="deep_dive", BRIEF="brief",
+                                          CRITIQUE="critique", DEBATE="debate")
+    m.AudioLength = types.SimpleNamespace(SHORT="short", DEFAULT="default", LONG="long")
+
+    class Client:
+        def __init__(self, path):
+            self.path = Path(path)
+
+        async def __aenter__(self):
+            sc.chemins.append(self.path)
+            sc.appels.append(("ouvrir", json.loads(self.path.read_text(encoding="utf-8"))))
+            if sc.ouverture is not None:
+                raise sc.ouverture
+            if sc.tourner:
+                neuf = json.loads(self.path.read_text(encoding="utf-8"))
+                neuf["cookies"][1]["value"] = "valeur-psidts-tournee"
+                self.path.write_text(json.dumps(neuf), encoding="utf-8")
+            c = types.SimpleNamespace()
+
+            async def lister():
+                sc.appels.append(("lister",))
+                return ["a", "b", "c"]
+
+            async def creer(titre):
+                sc.appels.append(("creer", titre))
+                return types.SimpleNamespace(id="carnet-42")
+
+            async def ajouter_texte(carnet, titre, contenu, wait=False, wait_timeout=None):
+                sc.appels.append(("texte", carnet, titre, contenu, wait))
+                if sc.erreur_source:
+                    raise sc.erreur_source
+                return types.SimpleNamespace(id="src-texte")
+
+            async def ajouter_fichier(carnet, chemin, wait=False, wait_timeout=None, title=None):
+                sc.appels.append(("fichier", carnet, Path(chemin).read_bytes(), title, wait))
+                return types.SimpleNamespace(id="src-fichier")
+
+            async def generer(carnet, source_ids=None, language="en", instructions=None,
+                              audio_format=None, audio_length=None):
+                sc.appels.append(("generer", carnet, list(source_ids), language, instructions,
+                                  audio_format, audio_length))
+                return sc.depart
+
+            async def attendre(carnet, tache, timeout=None):
+                sc.appels.append(("attendre", tache, timeout))
+                return sc.fin
+
+            async def lister_audio(carnet):
+                sc.appels.append(("lister_audio",))
+                return sc.audios
+
+            async def rapatrier(carnet, chemin, artifact_id=None):
+                sc.appels.append(("rapatrier", artifact_id))
+                Path(chemin).write_bytes(b"\x00\x00\x00\x20ftypM4A  faux-audio")
+                return chemin
+
+            async def demander(carnet, question):
+                sc.appels.append(("demander", carnet, question))
+                return types.SimpleNamespace(answer="Il parle des phares.", references=[
+                    types.SimpleNamespace(citation_number=1, cited_text="Le phare de Cordouan…")])
+
+            c.notebooks = types.SimpleNamespace(list=lister, create=creer)
+            c.sources = types.SimpleNamespace(add_text=ajouter_texte, add_file=ajouter_fichier)
+            c.artifacts = types.SimpleNamespace(generate_audio=generer, wait_for_completion=attendre,
+                                                list_audio=lister_audio, download_audio=rapatrier)
+            c.chat = types.SimpleNamespace(ask=demander)
+            return c
+
+        async def __aexit__(self, *exc):
+            return False
+
+    m.NotebookLMClient = types.SimpleNamespace(from_storage=lambda path: Client(path))
+    return m
+
+
+def erreur(nom: str, base=Exception, texte="rien"):
+    """Une erreur de la bibliotheque, reconnue par son NOM comme dans `traduire`."""
+    return type(nom, (base,), {})(texte)
+
+
+@pytest.fixture
+def nlm(sandbox, monkeypatch, tmp_path):
+    """Le pont, sur un dossier de configuration neuf et la fausse bibliotheque."""
+    pont = sandbox.notebooklm_pont
+    monkeypatch.setattr(pont, "DOSSIER", tmp_path / "config" / "notebooklm")
+    monkeypatch.setattr(pont, "FICHIER", tmp_path / "config" / "notebooklm" / "session.coffre")
+    sc = Scenario()
+    monkeypatch.setitem(sys.modules, "notebooklm", faux_module(sc))
+    return pont, sc
+
+
+def brancher(pont):
+    pont._sceller(json.dumps(ETAT))
+
+
+def lancer(pont, fabrique):
+    return pont.executer(fabrique)
+
+
+# --- 1. La session : dans le coffre, jamais en clair ------------------------------
+
+def test_la_session_est_fermee_dans_le_coffre_et_jamais_en_clair(nlm):
+    pont, _ = nlm
+    assert pont.compte() == {"branchee": False}
+    brancher(pont)
+    brut = pont.FICHIER.read_text(encoding="utf-8")
+    assert "valeur-sid-secrete" not in brut and "SID" not in brut
+    assert json.loads(pont._lire()) == ETAT
+    info = pont.compte()
+    assert info["branchee"] and info["cookies"] == 2 and info["compte"] == "personne@exemple.com"
+    assert "valeur-sid-secrete" not in json.dumps(info)
+    assert pont.oublier() is True and not pont.branchee() and pont.oublier() is False
+
+
+def faux_import(sortie=0, message="", garder=lambda c: c["domain"].endswith("google.com")):
+    """`notebooklm auth import-cookies` : lit l'export, ecrit le storage_state
+    sous NOTEBOOKLM_HOME. Rend aussi ce qu'il a vu."""
+    vu = {}
+
+    def run(argv, capture_output, text, env, timeout):
+        vu.update(argv=list(argv), home=env["NOTEBOOKLM_HOME"], export=Path(argv[3]))
+        if not sortie:
+            cookies = [c for c in json.loads(Path(argv[3]).read_text(encoding="utf-8")) if garder(c)]
+            cible = Path(env["NOTEBOOKLM_HOME"]) / "profiles" / "default" / "storage_state.json"
+            cible.parent.mkdir(parents=True)
+            cible.write_text(json.dumps({"cookies": cookies, "origins": []}), encoding="utf-8")
+        return types.SimpleNamespace(returncode=sortie, stdout="", stderr=message)
+    return run, vu
+
+
+EXPORT = json.dumps([
+    {"domain": ".google.com", "name": "SID", "value": "valeur-sid-secrete", "path": "/"},
+    {"domain": ".google.com", "name": "__Secure-1PSIDTS", "value": "valeur-psidts-secrete", "path": "/"},
+    {"domain": ".exemple.com", "name": "PISTEUR", "value": "x", "path": "/"},
+])
+
+
+def test_l_export_passe_par_la_commande_de_la_bibliotheque_puis_le_dossier_part(nlm, monkeypatch):
+    pont, _ = nlm
+    run, vu = faux_import()
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    assert pont.enregistrer(EXPORT) == {"cookies": 2}
+    assert vu["argv"][:3] == ["notebooklm", "auth", "import-cookies"]
+    # Le dossier temporaire -- export en clair compris -- n'existe plus.
+    assert not vu["export"].exists() and not Path(vu["home"]).exists()
+    assert "PISTEUR" not in pont._lire() and "valeur-sid-secrete" in pont._lire()
+    assert "valeur-sid-secrete" not in pont.FICHIER.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("export, attendu", [
+    ("", "Collez l’export"),
+    ("pas du json", "pas un export JSON"),
+])
+def test_un_export_vide_ou_illisible_est_refuse_sans_rien_lancer(nlm, monkeypatch, export, attendu):
+    pont, _ = nlm
+    monkeypatch.setattr(pont.subprocess, "run", lambda *a, **k: pytest.fail("lance a tort"))
+    with pytest.raises(ValueError, match=attendu):
+        pont.enregistrer(export)
+    assert not pont.branchee()
+
+
+def test_un_export_refuse_par_la_bibliotheque_dit_pourquoi_et_ne_ferme_rien(nlm, monkeypatch):
+    pont, _ = nlm
+    run, vu = faux_import(sortie=1, message="Error: Missing required cookies: SID\n")
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    with pytest.raises(ValueError, match="Export refusé : Error: Missing required cookies: SID"):
+        pont.enregistrer(EXPORT)
+    assert not pont.branchee() and not vu["export"].exists()
+
+
+def _commande_reelle():
+    return os.getenv("NOTEBOOKLM_CLI") or shutil.which("notebooklm")
+
+
+@pytest.mark.skipif(not _commande_reelle(), reason="notebooklm-py absent de cet environnement")
+def test_la_vraie_commande_d_import_garde_les_cookies_google_seulement(nlm):
+    """La commande PUBLIE de la bibliotheque, hors reseau, sur des cookies faux."""
+    pont, _ = nlm
+    export = json.dumps([
+        {"domain": ".google.com", "name": "SID", "value": "faux-sid", "path": "/",
+         "expirationDate": 1893456000, "secure": False, "httpOnly": False},
+        {"domain": ".google.com", "name": "__Secure-1PSIDTS", "value": "faux-psidts", "path": "/",
+         "expirationDate": 1893456000, "secure": True, "httpOnly": True},
+        {"domain": ".exemple.com", "name": "PISTEUR", "value": "x", "path": "/"},
+    ])
+    assert pont.enregistrer(export, commande=_commande_reelle()) == {"cookies": 2}
+    assert "PISTEUR" not in pont._lire()
+
+
+# --- 2. Les erreurs, dites a la personne ---------------------------------------
+
+@pytest.mark.parametrize("exc, classe, morceau", [
+    (erreur("AuthError"), "SessionExpiree", "a expiré"),
+    (erreur("_LoginRedirectError", ValueError,
+            "Authentication expired or invalid. Redirected to: https://accounts.google.com/"),
+     "SessionExpiree", "a expiré"),
+    (erreur("RateLimitError"), "QuotaAtteint", "3 résumés audio par jour"),
+    (erreur("NotebookLimitError"), "NotebookLMEchec", "nombre maximal de carnets"),
+    (erreur("SourceProcessingError", texte="PDF chiffre"), "NotebookLMEchec", "PDF chiffre"),
+    (erreur("WaitTimeoutError"), "NotebookLMEchec", "pas fini à temps"),
+    (erreur("UnknownRPCMethodError"), "NotebookLMEchec", "mettre le Studio à jour"),
+    (RuntimeError("boum"), "NotebookLMEchec", "RuntimeError: boum"),
+])
+def test_chaque_erreur_de_la_bibliotheque_a_sa_phrase(nlm, exc, classe, morceau):
+    pont, _ = nlm
+    dite = pont.traduire(exc)
+    assert type(dite).__name__ == classe and morceau in str(dite)
+
+
+def test_une_ValueError_ordinaire_n_est_pas_une_session_expiree(nlm):
+    pont, _ = nlm
+    assert isinstance(pont.traduire(ValueError("mauvais argument")), pont.NotebookLMEchec)
+
+
+def test_sans_session_rien_ne_part_chez_google(nlm):
+    pont, sc = nlm
+    with pytest.raises(pont.SessionAbsente):
+        lancer(pont, pont.verifier)
+    assert sc.appels == []
+
+
+def test_une_session_morte_se_dit_expiree(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    sc.ouverture = erreur("_LoginRedirectError", ValueError, "Authentication expired or invalid.")
+    with pytest.raises(pont.SessionExpiree):
+        lancer(pont, pont.verifier)
+    assert pont.branchee(), "une session refusee reste la ; la personne choisit d'oublier"
+
+
+def test_sans_la_bibliotheque_le_studio_dit_de_reconstruire(nlm, monkeypatch):
+    pont, _ = nlm
+    brancher(pont)
+    monkeypatch.setitem(sys.modules, "notebooklm", None)   # import -> ImportError
+    with pytest.raises(pont.NotebookLMEchec, match="demarrer.cmd"):
+        lancer(pont, pont.verifier)
+
+
+# --- 3. Le client : fichier temporaire, cookies tournes refermes -------------------
+
+def test_le_fichier_de_session_en_clair_ne_survit_pas_a_l_appel(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    assert lancer(pont, pont.verifier) == {"ok": True, "carnets": 3}
+    assert sc.chemins and not sc.chemins[0].exists() and not sc.chemins[0].parent.exists()
+
+
+def test_les_cookies_tournes_par_la_bibliotheque_sont_refermes_dans_le_coffre(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    sc.tourner = True
+    lancer(pont, pont.verifier)
+    assert "valeur-psidts-tournee" in pont._lire()
+    assert "valeur-psidts-tournee" not in pont.FICHIER.read_text(encoding="utf-8")
+
+
+# --- 4. Le resume audio ------------------------------------------------------------
+
+def _resume(pont, tmp_path, sources=None, **reglages):
+    etapes = []
+    r = lancer(pont, lambda: pont.resume_audio(
+        sources if sources is not None else [{"titre": "Notes", "texte": "Les phares de France."}],
+        tmp_path / "sortie", progres=etapes.append, **reglages))
+    return r, etapes
+
+
+def test_le_resume_fabrique_un_carnet_en_francais_et_rapporte_l_audio(nlm, tmp_path):
+    pont, sc = nlm
+    brancher(pont)
+    doc = tmp_path / "cours.pdf"
+    doc.write_bytes(b"%PDF-1.4 faux")
+    r, etapes = _resume(pont, tmp_path, [{"chemin": str(doc), "titre": "cours.pdf"},
+                                         {"titre": "Notes", "texte": "Les phares."}],
+                        titre="Phares", consigne="pour des lyceens", format_="debat", longueur="court")
+    assert r["carnet_id"] == "carnet-42" and r["sources"] == 2
+    assert r["carnet_url"] == "https://notebook.google.com/notebook/carnet-42"
+    assert r["audio"].read_bytes().startswith(b"\x00\x00\x00\x20ftyp")
+    noms = [a[0] for a in sc.appels]
+    assert noms == ["ouvrir", "creer", "fichier", "texte", "generer", "attendre", "rapatrier"]
+    creer, fichier, _, generer, attendre = (sc.appels[i] for i in range(1, 6))
+    assert creer[1] == "Free AI Studio — Phares"
+    assert fichier[2] == b"%PDF-1.4 faux" and fichier[3] == "cours.pdf" and fichier[4] is True
+    assert generer[2:] == (["src-fichier", "src-texte"], "fr", "pour des lyceens", "debate", "short")
+    assert attendre[2] == pont.AUDIO_DELAI_S == 1200
+    assert etapes[0].startswith("Création du carnet") and any("5 à 10 minutes" in e for e in etapes)
+
+
+def test_une_forme_inconnue_retombe_sur_la_discussion_approfondie(nlm, tmp_path):
+    pont, sc = nlm
+    brancher(pont)
+    _resume(pont, tmp_path, format_="n-importe", longueur="??")
+    generer = next(a for a in sc.appels if a[0] == "generer")
+    assert generer[5:] == ("deep_dive", "default") and generer[4] is None
+
+
+def test_un_resume_fini_mais_dit_removed_est_rapatrie_ticket_2432(nlm, tmp_path):
+    pont, sc = nlm
+    brancher(pont)
+    sc.fin = Statut(status="removed")
+    sc.audios = [types.SimpleNamespace(id="audio-ancien", is_completed=True),
+                 types.SimpleNamespace(id="audio-9", is_completed=True)]
+    r, _ = _resume(pont, tmp_path)
+    assert r["audio"].exists()
+    assert ("rapatrier", "audio-9") in sc.appels
+
+
+def test_removed_sans_audio_pret_est_un_echec_dit(nlm, tmp_path):
+    pont, sc = nlm
+    brancher(pont)
+    sc.fin = Statut(status="failed", error="Generation failed")
+    sc.audios = [types.SimpleNamespace(id="x", is_completed=False)]
+    with pytest.raises(pont.NotebookLMEchec, match="Generation failed"):
+        _resume(pont, tmp_path)
+    assert not any(a[0] == "rapatrier" for a in sc.appels)
+
+
+def test_le_quota_au_depart_se_dit_et_rien_n_est_attendu(nlm, tmp_path):
+    pont, sc = nlm
+    brancher(pont)
+    sc.depart = Statut(is_rate_limited=True, is_failed=True)
+    with pytest.raises(pont.QuotaAtteint, match="Réessayez demain"):
+        _resume(pont, tmp_path)
+    assert not any(a[0] == "attendre" for a in sc.appels)
+
+
+def test_un_document_illisible_pour_notebooklm_se_dit(nlm, tmp_path):
+    pont, sc = nlm
+    brancher(pont)
+    sc.erreur_source = erreur("SourceProcessingError", texte="source en echec")
+    with pytest.raises(pont.NotebookLMEchec, match="n’a pas su lire un des documents"):
+        _resume(pont, tmp_path)
+
+
+def test_une_question_rend_la_reponse_et_ses_citations(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    r = lancer(pont, lambda: pont.demander("carnet-42", "De quoi parle-t-il ?"))
+    assert r == {"reponse": "Il parle des phares.",
+                 "citations": [{"numero": 1, "extrait": "Le phare de Cordouan…"}]}
+
+
+# --- 5. Les routes ---------------------------------------------------------------
+
+@pytest.fixture
+def client(sandbox, nlm):
+    from fastapi.testclient import TestClient
+    return TestClient(sandbox.app, base_url="http://localhost"), nlm[0], nlm[1]
+
+
+def test_l_etat_contre_la_cle_seulement_puis_la_verification(client):
+    c, pont, sc = client
+    assert c.get("/notebooklm/etat").status_code == 401
+    assert c.get("/notebooklm/etat?verifier=1", headers=ENTETE).json() == {"branchee": False, "coupe": None}
+    brancher(pont)
+    e = c.get("/notebooklm/etat?verifier=1", headers=ENTETE).json()
+    assert e["branchee"] and e["ok"] and e["carnets"] == 3 and e["compte"] == "personne@exemple.com"
+    sc.ouverture = erreur("AuthError")
+    e = c.get("/notebooklm/etat?verifier=1", headers=ENTETE).json()
+    assert e["ok"] is False and "a expiré" in e["message"]
+    assert "valeur-sid-secrete" not in json.dumps(e)
+
+
+def test_brancher_ferme_l_export_l_essaie_et_ne_le_renvoie_pas(client, monkeypatch):
+    c, pont, _ = client
+    run, _ = faux_import()
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    r = c.post("/notebooklm/session", headers=ENTETE, json={"export": EXPORT})
+    assert r.status_code == 200
+    assert r.json() == {"enregistree": True, "cookies": 2, "ok": True, "carnets": 3}
+    assert "valeur" not in r.text
+    r = c.post("/notebooklm/session", headers=ENTETE, json={"export": "pas du json"})
+    assert r.status_code == 400 and "pas un export JSON" in r.json()["detail"]
+
+
+def test_brancher_une_session_que_google_refuse_la_garde_et_le_dit(client, monkeypatch):
+    c, pont, sc = client
+    run, _ = faux_import()
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    sc.ouverture = erreur("_LoginRedirectError", ValueError, "Authentication expired or invalid.")
+    d = c.post("/notebooklm/session", headers=ENTETE, json={"export": EXPORT}).json()
+    assert d["enregistree"] and d["ok"] is False and "a expiré" in d["message"]
+
+
+def test_un_autre_site_ne_peut_ni_brancher_ni_lancer_ni_oublier(client):
+    c, pont, _ = client
+    brancher(pont)
+    h = dict(ENTETE, **AUTRE_SITE)
+    assert c.post("/notebooklm/session", headers=h, json={"export": EXPORT}).status_code == 403
+    assert c.post("/notebooklm/resume", headers=h, data={"texte": "x"}).status_code == 403
+    assert c.post("/notebooklm/demander", headers=h,
+                  json={"carnet_id": "c", "question": "q"}).status_code == 403
+    assert c.post("/notebooklm/oublier", headers=h).status_code == 403
+    assert pont.branchee()
+
+
+def test_en_studio_partage_tout_est_coupe(sandbox, nlm):
+    from fastapi.testclient import TestClient
+    pont, _ = nlm
+    brancher(pont)
+    c = TestClient(sandbox.app, base_url="http://192.168.1.20")
+    assert c.get("/notebooklm/etat", headers=ENTETE).json()["coupe"]
+    r = c.post("/notebooklm/resume", headers=ENTETE, data={"texte": "x"})
+    assert r.status_code == 403 and "une seule personne" in r.json()["detail"]
+    assert c.post("/notebooklm/demander", headers=ENTETE,
+                  json={"carnet_id": "c", "question": "q"}).status_code == 403
+
+
+def test_resumer_sans_session_ou_sans_document_ou_avec_un_mauvais_fichier(client):
+    c, pont, _ = client
+    r = c.post("/notebooklm/resume", headers=ENTETE, data={"texte": "x"})
+    assert r.status_code == 409 and "pas encore branché" in r.json()["detail"]
+    brancher(pont)
+    assert c.post("/notebooklm/resume", headers=ENTETE, data={"texte": "  "}).status_code == 400
+    r = c.post("/notebooklm/resume", headers=ENTETE,
+               files={"fichiers": ("virus.exe", b"MZ", "application/octet-stream")})
+    assert r.status_code == 400 and "PDF, .txt, .md ou .docx" in r.json()["detail"]
+
+
+def _attendre_fin(c, jid, delai=20.0):
+    fin = time.time() + delai
+    while time.time() < fin:
+        j = c.get("/notebooklm/jobs/" + jid, headers=ENTETE).json()
+        if j["status"] in ("succeeded", "failed", "cancelled"):
+            return j
+        time.sleep(0.05)
+    pytest.fail("le travail NotebookLM ne finit pas")
+
+
+def test_un_resume_complet_par_la_page_puis_l_audio_par_son_jeton(client):
+    c, pont, sc = client
+    brancher(pont)
+    r = c.post("/notebooklm/resume", headers=ENTETE,
+               data={"texte": "Les phares de France.", "format": "bref", "longueur": "long"},
+               files={"fichiers": ("cours.md", b"# Cours", "text/markdown")})
+    assert r.status_code == 200, r.text
+    j = _attendre_fin(c, r.json()["id"])
+    assert j["status"] == "succeeded", j
+    assert j["carnet_id"] == "carnet-42" and j["carnet_url"].endswith("/notebook/carnet-42")
+    generer = next(a for a in sc.appels if a[0] == "generer")
+    assert generer[3] == "fr" and generer[5:] == ("brief", "long")
+    son = c.get(j["audio_url"])
+    assert son.status_code == 200 and son.headers["content-type"] == "audio/mp4"
+    assert son.content.startswith(b"\x00\x00\x00\x20ftyp")
+    assert "cle-sandbox-de-test" not in j["audio_url"]
+    faux = j["audio_url"].split("cle=")[0] + "cle=faux"
+    assert c.get(faux).status_code == 401
+    assert c.get(j["audio_url"] + "&telecharger=1").headers["content-disposition"].startswith("attachment")
+
+
+def test_un_resume_qui_echoue_chez_google_finit_en_echec_dit(client):
+    c, pont, sc = client
+    brancher(pont)
+    sc.depart = Statut(is_rate_limited=True)
+    r = c.post("/notebooklm/resume", headers=ENTETE, data={"texte": "x"})
+    j = _attendre_fin(c, r.json()["id"])
+    assert j["status"] == "failed" and "Réessayez demain" in j["message"]
+    assert "audio_url" not in j
+
+
+def test_la_fiche_d_un_autre_travail_n_est_pas_lue_ici(client, sandbox):
+    c, _, _ = client
+    jid = "autre-travail"
+    sandbox.write_job(jid, {"id": jid, "provider": "modal", "status": "succeeded", "artifacts": []})
+    assert c.get("/notebooklm/jobs/" + jid, headers=ENTETE).status_code == 404
+
+
+def test_poser_une_question_et_la_refuser_vide(client):
+    c, pont, _ = client
+    brancher(pont)
+    r = c.post("/notebooklm/demander", headers=ENTETE, json={"carnet_id": "carnet-42", "question": "Quoi ?"})
+    assert r.status_code == 200 and r.json()["reponse"] == "Il parle des phares."
+    assert c.post("/notebooklm/demander", headers=ENTETE,
+                  json={"carnet_id": "carnet-42", "question": " "}).status_code == 400
+
+
+def test_oublier_efface_la_session(client):
+    c, pont, _ = client
+    brancher(pont)
+    assert c.post("/notebooklm/oublier", headers=ENTETE).json() == {"oubliee": True}
+    assert not pont.branchee()
+
+
+def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
+    c, _, _ = client
+    html = c.get("/notebooklm").text
+    assert "__CLE__" not in html and '"cle-sandbox-de-test"' in html
+    for morceau in ("ouvre votre compte Google entier", "navigation privée",
+                    "sans vous déconnecter", "Vos documents partent chez Google (NotebookLM)",
+                    "notebooklm-py 0.8.2", "Oublier la session NotebookLM"):
+        assert morceau in html, morceau
+    # Un message venu de Google ne s'ecrit jamais en HTML dans la page.
+    assert "innerHTML" not in html

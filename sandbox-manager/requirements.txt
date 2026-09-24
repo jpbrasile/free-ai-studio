@@ -20,3 +20,9 @@ cryptography==46.0.4
 # images avant ce jour : c'est une dependance neuve, pas un transitif. Il
 # n'est PAS ajoute a `free-tier-manager` : ce service ne lit aucun document.
 pypdf==6.19.0
+# NotebookLM (« Gemini Notebook ») par ses accès NON DOCUMENTÉS (`notebooklm_pont.py`,
+# PLAN.md 17.6). MIT. Épinglé : une API non documentée casse sans prévenir, et
+# la version se change exprès, après essai. Dépendances à l'exécution : httpx,
+# click, rich, filelock (relu sur PyPI le 24/09/2026) ; Playwright n'est PAS
+# installé -- il ne sert qu'à `notebooklm login`, fait hors du Studio.
+notebooklm-py==0.8.2

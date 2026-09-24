@@ -1,0 +1,526 @@
+"""NotebookLM (« Gemini Notebook ») par la bibliotheque notebooklm-py (PLAN.md 17.5-17.6).
+
+Decision du proprietaire, 23-24/09/2026 : la page /notebooklm cesse d'etre un
+simple lien. Le Studio fabrique un carnet, y verse les documents, demande un
+resume audio EN FRANCAIS, le rapatrie, et laisse le carnet ouvert dans le
+compte de la personne pour qu'elle y pose ses questions.
+
+CE QUE CA COUTE EN CONFIANCE -- a dire a la personne, pas a cacher :
+  - notebooklm-py (MIT) pilote des API NON DOCUMENTEES de Google. Elles
+    peuvent changer sans preavis ; la bibliotheque est epinglee (0.8.2) et
+    `verifier()` le voit avant la personne.
+  - La << session >> est un jeu de cookies de compte Google entier, pas une cle
+    d'API. Elle est gardee FERMEE par le coffre du Studio (`coffre.chiffrer`),
+    ne sort en clair que dans un dossier temporaire le temps d'un appel, et
+    n'est jamais affichee ni renvoyee par une route.
+
+Mesure du 24/09/2026 (session fausse, aucune donnee de compte) : une session
+morte ne leve PAS AuthError a l'ouverture, mais une ValueError
+(`_LoginRedirectError`) << Authentication expired or invalid >>. `traduire`
+la reconnait a ce message.
+"""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Callable
+
+import coffre
+
+DOSSIER = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config")) / "notebooklm"
+FICHIER = DOSSIER / "session.coffre"
+URL_CARNET = "https://notebook.google.com/notebook/%s"
+# Les formats et longueurs de l'Audio Overview (notebooklm.AudioFormat /
+# AudioLength, relus dans la 0.8.2 installee le 24/09/2026).
+FORMATS = {"approfondi": "DEEP_DIVE", "bref": "BRIEF", "critique": "CRITIQUE", "debat": "DEBATE"}
+LONGUEURS = {"court": "SHORT", "normal": "DEFAULT", "long": "LONG"}
+# La documentation de la bibliotheque conseille 1 200 s pour l'audio ; son
+# defaut Python (300 s) est trop court.
+AUDIO_DELAI_S = int(os.getenv("NOTEBOOKLM_AUDIO_TIMEOUT_SECONDS", "1200"))
+SOURCE_DELAI_S = 300.0
+EXTENSIONS = (".pdf", ".txt", ".md", ".docx")
+TEXTE_MAX = 500_000   # signes colles dans la page ; NotebookLM borne une source a 500 000 mots
+
+PHRASE_ABSENTE = ("NotebookLM n’est pas encore branché : suivez « Brancher NotebookLM » "
+                  "sur cette page (une seule fois).")
+PHRASE_EXPIREE = ("La session NotebookLM a expiré ou a été refusée par Google. Refaites "
+                  "« Brancher NotebookLM » avec un nouvel export des cookies.")
+PHRASE_QUOTA = ("Google refuse pour l’instant : le quota de NotebookLM est atteint (l’offre "
+                "gratuite annonce 3 résumés audio par jour). Réessayez demain.")
+
+_verrou = threading.Lock()
+
+
+def regler(dossier_config: Path) -> None:
+    """Le service donne son dossier de configuration (volume persistant)."""
+    global DOSSIER, FICHIER
+    DOSSIER = Path(dossier_config) / "notebooklm"
+    FICHIER = DOSSIER / "session.coffre"
+
+
+class SessionAbsente(Exception):
+    pass
+
+
+class SessionExpiree(Exception):
+    pass
+
+
+class QuotaAtteint(Exception):
+    pass
+
+
+class NotebookLMEchec(Exception):
+    pass
+
+
+# --- La session : fermee dans le coffre, ouverte le temps d'un appel ---------
+
+def branchee() -> bool:
+    return FICHIER.exists()
+
+
+def _lire() -> str:
+    if not FICHIER.exists():
+        raise SessionAbsente(PHRASE_ABSENTE)
+    return coffre.dechiffrer(FICHIER.read_text(encoding="utf-8"))
+
+
+def _sceller(storage_state: str) -> None:
+    DOSSIER.mkdir(parents=True, exist_ok=True)
+    tmp = FICHIER.with_suffix(".tmp")
+    tmp.write_text(coffre.chiffrer(storage_state), encoding="utf-8")
+    os.replace(tmp, FICHIER)
+
+
+def oublier() -> bool:
+    if FICHIER.exists():
+        FICHIER.unlink()
+        return True
+    return False
+
+
+def compte() -> dict:
+    """Ce qu'on peut dire de la session sans l'ouvrir chez Google."""
+    if not FICHIER.exists():
+        return {"branchee": False}
+    info = {"branchee": True, "depuis": FICHIER.stat().st_mtime}
+    try:
+        etat = json.loads(_lire())
+        compte_ = ((etat.get("notebooklm") or {}).get("account") or {})
+        info["compte"] = compte_.get("email") or ""
+        info["cookies"] = len(etat.get("cookies", []))
+    except Exception:  # noqa: BLE001 -- une session illisible se dit, sans detail
+        info["illisible"] = True
+    return info
+
+
+def enregistrer(export: str, commande: str = "notebooklm") -> dict:
+    """Ferme dans le coffre la session collee par la personne.
+
+    Accepte l'export JSON d'une extension de cookies (liste, ou {"cookies": [...]})
+    ou un storage_state.json de `notebooklm login`. La normalisation, le tri
+    des domaines (seuls ceux de Google restent) et le controle des cookies
+    requis (SID, __Secure-1PSIDTS) sont ceux de la bibliotheque, par sa
+    commande publique `notebooklm auth import-cookies`."""
+    texte = (export or "").strip()
+    if not texte:
+        raise ValueError("Collez l’export des cookies (un texte qui commence par [ ou {).")
+    try:
+        json.loads(texte)
+    except ValueError as exc:
+        raise ValueError("Ce texte n’est pas un export JSON de cookies.") from exc
+    d = Path(tempfile.mkdtemp(prefix="nlm-import-"))
+    try:
+        brut = d / "export.json"
+        brut.write_text(texte, encoding="utf-8")
+        env = dict(os.environ, NOTEBOOKLM_HOME=str(d / "home"))
+        env.pop("NOTEBOOKLM_AUTH_JSON", None)
+        r = subprocess.run([commande, "auth", "import-cookies", str(brut)], capture_output=True,
+                           text=True, env=env, timeout=60)
+        cible = d / "home" / "profiles" / "default" / "storage_state.json"
+        if r.returncode or not cible.exists():
+            # Le message de la bibliotheque dit QUEL cookie manque ; il ne
+            # contient pas de valeur de cookie.
+            raise ValueError("Export refusé : " + " ".join((r.stderr or r.stdout or "").split())[:400])
+        etat = cible.read_text(encoding="utf-8")
+        _sceller(etat)
+        return {"cookies": len(json.loads(etat).get("cookies", []))}
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def traduire(exc: BaseException) -> Exception:
+    """Une erreur de la bibliotheque, dite a la personne. Par NOMS de classes :
+    le module se teste sans la bibliotheque, et ses classes privees changent."""
+    noms = {k.__name__ for k in type(exc).__mro__}
+    texte = str(exc)
+    if isinstance(exc, (SessionAbsente, SessionExpiree, QuotaAtteint, NotebookLMEchec)):
+        return exc
+    if "AuthError" in noms or "HeadlessLoginRequiredError" in noms or (
+            isinstance(exc, ValueError) and "authentication expired" in texte.lower()):
+        return SessionExpiree(PHRASE_EXPIREE)
+    if "RateLimitError" in noms:
+        return QuotaAtteint(PHRASE_QUOTA)
+    if "NotebookLimitError" in noms:
+        return NotebookLMEchec("Votre compte a atteint le nombre maximal de carnets NotebookLM : "
+                               "supprimez-en un dans NotebookLM, puis recommencez.")
+    if "SourceProcessingError" in noms or "SourceAddError" in noms:
+        return NotebookLMEchec("NotebookLM n’a pas su lire un des documents : %s" % texte[:300])
+    if "WaitTimeoutError" in noms or "SourceTimeoutError" in noms:
+        return NotebookLMEchec("NotebookLM n’a pas fini à temps. Le travail continue peut-être "
+                               "chez Google : ouvrez le carnet dans NotebookLM.")
+    if "AuthExtractionError" in noms or "UnknownRPCMethodError" in noms:
+        return NotebookLMEchec("Google a changé NotebookLM et la bibliothèque du Studio ne le "
+                               "comprend plus : il faut mettre le Studio à jour. (%s)" % texte[:200])
+    return NotebookLMEchec("NotebookLM a échoué : %s: %s" % (type(exc).__name__, texte[:300]))
+
+
+@contextlib.asynccontextmanager
+async def client():
+    """Un client NotebookLM sur la session du coffre.
+
+    La bibliotheque RECRIT les cookies qu'elle fait tourner dans son fichier ;
+    ce fichier est relu a la sortie et referme dans le coffre, sinon la
+    session vieillirait a chaque appel."""
+    try:
+        import notebooklm   # la bibliotheque n'est chargee qu'a l'usage
+    except ImportError as exc:
+        raise NotebookLMEchec("La bibliothèque notebooklm-py manque dans le Studio : "
+                              "relancez demarrer.cmd pour reconstruire.") from exc
+
+    etat = _lire()
+    d = Path(tempfile.mkdtemp(prefix="nlm-"))
+    chemin = d / "storage_state.json"
+    try:
+        chemin.write_text(etat, encoding="utf-8")
+        os.chmod(chemin, 0o600)
+        try:
+            async with notebooklm.NotebookLMClient.from_storage(path=str(chemin)) as c:
+                yield c
+        except Exception as exc:  # noqa: BLE001
+            dite = traduire(exc)
+            if dite is exc:
+                raise
+            raise dite from exc
+        finally:
+            with contextlib.suppress(Exception):
+                nouveau = chemin.read_text(encoding="utf-8")
+                if nouveau != etat and json.loads(nouveau).get("cookies"):
+                    _sceller(nouveau)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def executer(coro_fabrique: Callable) -> object:
+    """Un appel a la fois : deux appels ecriraient chacun leur rotation de
+    cookies, et le second effacerait le premier."""
+    with _verrou:
+        return asyncio.run(coro_fabrique())
+
+
+# --- Les operations ------------------------------------------------------------
+
+async def verifier() -> dict:
+    """Un appel qui ne fabrique rien : la liste des carnets. C'est la fumee
+    de SP-NOTEBOOKLM-PAR-API -- une API non documentee casse sans prevenir."""
+    async with client() as c:
+        carnets = await c.notebooks.list()
+    return {"ok": True, "carnets": len(carnets)}
+
+
+def _statut(s) -> str:
+    return str(getattr(s, "status", "") or "")
+
+
+async def resume_audio(sources: list[dict], dossier: Path, titre: str = "", consigne: str = "",
+                       format_: str = "approfondi", longueur: str = "normal", langue: str = "fr",
+                       progres: Callable[[str], None] = lambda t: None) -> dict:
+    """Carnet neuf + sources + resume audio en francais, rapatrie dans `dossier`.
+
+    `sources` : [{"titre": ..., "texte": ...}] ou [{"chemin": Path}]. Rend
+    {"audio": Path, "carnet_id", "carnet_url", "sources": n}. Le carnet RESTE
+    dans le compte de la personne : c'est la qu'elle pose ses questions."""
+    import notebooklm
+
+    if not sources:
+        raise NotebookLMEchec("Aucun document ni texte à résumer.")
+    fmt = getattr(notebooklm.AudioFormat, FORMATS.get(format_, "DEEP_DIVE"))
+    lon = getattr(notebooklm.AudioLength, LONGUEURS.get(longueur, "DEFAULT"))
+    async with client() as c:
+        progres("Création du carnet dans NotebookLM…")
+        carnet = await c.notebooks.create(("Free AI Studio — " + (titre or time.strftime("%d/%m/%Y %H:%M")))[:100])
+        ids = []
+        for i, s in enumerate(sources, 1):
+            progres("Envoi du document %d sur %d, puis lecture par NotebookLM…" % (i, len(sources)))
+            if "chemin" in s:
+                src = await c.sources.add_file(carnet.id, Path(s["chemin"]), wait=True,
+                                               wait_timeout=SOURCE_DELAI_S, title=s.get("titre"))
+            else:
+                src = await c.sources.add_text(carnet.id, s.get("titre") or "Texte collé", s["texte"],
+                                               wait=True, wait_timeout=SOURCE_DELAI_S)
+            ids.append(src.id)
+        progres("NotebookLM fabrique le résumé audio (souvent 5 à 10 minutes)…")
+        depart = await c.artifacts.generate_audio(carnet.id, source_ids=ids, language=langue,
+                                                  instructions=consigne or None,
+                                                  audio_format=fmt, audio_length=lon)
+        if getattr(depart, "is_rate_limited", False):
+            raise QuotaAtteint(PHRASE_QUOTA)
+        if getattr(depart, "is_failed", False):
+            raise NotebookLMEchec("NotebookLM a refusé le résumé audio : %s"
+                                  % (getattr(depart, "error", "") or _statut(depart)))
+        fin = await c.artifacts.wait_for_completion(carnet.id, depart.task_id, timeout=AUDIO_DELAI_S)
+        artefact = None
+        if not getattr(fin, "is_complete", False):
+            # notebooklm-py 0.8.2, ticket #2432 (corrige apres la 0.8.2) : une
+            # generation FINIE peut etre dite << removed >>. On regarde la
+            # liste des audios du carnet avant de conclure a l'echec.
+            prets = [a for a in await c.artifacts.list_audio(carnet.id)
+                     if getattr(a, "is_completed", False)]
+            if not prets:
+                if getattr(fin, "is_rate_limited", False):
+                    raise QuotaAtteint(PHRASE_QUOTA)
+                raise NotebookLMEchec("Le résumé audio n’a pas abouti (%s)."
+                                      % (getattr(fin, "error", "") or _statut(fin)))
+            artefact = prets[-1].id
+        progres("Rapatriement du fichier audio…")
+        dossier.mkdir(parents=True, exist_ok=True)
+        cible = dossier / "resume-notebooklm.m4a"
+        await c.artifacts.download_audio(carnet.id, str(cible), artifact_id=artefact)
+    if not cible.exists() or cible.stat().st_size == 0:
+        raise NotebookLMEchec("NotebookLM a dit le résumé prêt, mais le fichier reçu est vide.")
+    return {"audio": cible, "carnet_id": carnet.id, "carnet_url": URL_CARNET % carnet.id,
+            "sources": len(ids)}
+
+
+async def demander(carnet_id: str, question: str) -> dict:
+    """Une question aux sources d'un carnet ; la reponse et ses citations."""
+    async with client() as c:
+        r = await c.chat.ask(carnet_id, question)
+    return {"reponse": r.answer,
+            "citations": [{"numero": getattr(x, "citation_number", None),
+                           "extrait": (getattr(x, "cited_text", "") or "")[:500]}
+                          for x in (getattr(r, "references", None) or [])]}
+
+
+PAGE_HTML = r"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NotebookLM — Free AI Studio</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:900px;
+ margin:34px auto;padding:0 18px;line-height:1.55}
+h1{font-size:1.5rem;margin-bottom:4px}
+h2{font-size:1.15rem;margin:26px 0 6px}
+.sous{opacity:.8;margin-top:0}
+.banniere{padding:14px 16px;border-radius:14px;margin:16px 0;border:1px solid #bbb;background:#eef4fb}
+.carte{padding:14px 16px;border-radius:14px;margin:14px 0;border:1px solid #bbb}
+.ligne{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0}
+select,button,input{font:inherit;padding:9px 12px;border-radius:10px;border:1px solid #666;background:#fff}
+button.primaire{background:#222;color:#fff;border-color:#222;cursor:pointer}
+button[disabled]{opacity:.5;cursor:default}
+textarea{font:inherit;width:100%;box-sizing:border-box;height:150px;padding:12px;
+ border-radius:12px;border:1px solid #999}
+label.titre{display:block;font-weight:600;margin:16px 0 6px}
+audio{width:100%;margin-top:12px}
+.ok{color:#1d6b32}.ko{color:#9b2116}
+.avert{font-size:.86rem;opacity:.8}
+.donnees{padding:10px 14px;border-radius:12px;border:1px solid #d9ad63;background:#fdf6e8;font-size:.9rem}
+.pied{margin-top:26px;padding-top:16px;border-top:1px solid #ddd;font-size:.9rem;opacity:.8}
+ol li{margin:4px 0}
+</style>
+</head><body>
+<h1>📚 Résumé audio avec NotebookLM</h1>
+<p class="sous">Donnez vos documents : le Studio les dépose dans un carnet NotebookLM neuf, à votre
+nom, demande un résumé audio en français (deux voix, façon podcast) et vous le rapporte ici. Le
+carnet reste dans votre NotebookLM pour y poser vos questions.</p>
+
+<div id="banniere" class="banniere">Vérification en cours…</div>
+
+<div id="brancher" class="carte" hidden>
+  <h2>Brancher NotebookLM (une seule fois)</h2>
+  <p class="donnees"><b>À savoir avant de commencer.</b> NotebookLM n’a pas d’accès officiel pour les
+  programmes. Le Studio passe par la bibliothèque libre <i>notebooklm-py</i>, qui utilise la connexion
+  de votre compte Google : ce que vous collez ci-dessous <b>ouvre votre compte Google entier</b>.
+  Le Studio le garde chiffré sur cet ordinateur, ne l’affiche jamais et ne l’envoie qu’à Google.
+  « Oublier » l’efface. Si vous le pouvez, utilisez un compte Google réservé à cet usage.
+  Google peut changer NotebookLM sans prévenir : le Studio le vérifie à chaque ouverture de la page.</p>
+  <ol>
+    <li>Ajoutez à votre navigateur une extension qui exporte les cookies en JSON
+      (par exemple « Cookie-Editor »), et autorisez-la en navigation privée.</li>
+    <li>Ouvrez une <b>fenêtre de navigation privée</b>, connectez-vous à Google, puis ouvrez
+      <a href="https://notebook.google.com/" target="_blank" rel="noopener noreferrer">notebook.google.com</a>.</li>
+    <li>Dans l’extension : « Exporter » › « JSON ». L’export est copié.</li>
+    <li>Fermez la fenêtre privée <b>sans vous déconnecter</b> (se déconnecter tuerait la session).
+      La fenêtre privée sert à ça : votre navigateur habituel ne remplace pas cette session.</li>
+    <li>Collez l’export ici, puis « Brancher ».</li>
+  </ol>
+  <textarea id="export" spellcheck="false" placeholder="[{&quot;domain&quot;: &quot;.google.com&quot;, &quot;name&quot;: &quot;SID&quot;, …}]"></textarea>
+  <p class="avert">Vous avez Python ? Autre chemin : <code>pip install "notebooklm-py[browser]"</code>,
+  puis <code>notebooklm login</code>, et collez le contenu du fichier
+  <code>storage_state.json</code> qu’il indique.</p>
+  <div class="ligne"><button id="btBrancher" class="primaire">Brancher</button><span id="etatBrancher"></span></div>
+</div>
+
+<div id="travail" hidden>
+  <h2>Vos documents</h2>
+  <label class="titre" for="fichiers">Fichiers (PDF, .txt, .md, .docx)</label>
+  <input id="fichiers" type="file" multiple accept=".pdf,.txt,.md,.docx">
+  <label class="titre" for="texte">ou un texte collé</label>
+  <textarea id="texte" placeholder="Collez ici un article, des notes, un chapitre…"></textarea>
+  <label class="titre" for="consigne">Consigne pour le résumé (facultatif)</label>
+  <input id="consigne" style="width:100%;box-sizing:border-box" maxlength="2000"
+    placeholder="Par exemple : pour un public de lycéens, insister sur les dates">
+  <div class="ligne">
+    <label>Forme <select id="format">
+      <option value="approfondi" selected>Discussion approfondie</option>
+      <option value="bref">Bref</option>
+      <option value="critique">Critique</option>
+      <option value="debat">Débat</option></select></label>
+    <label>Durée <select id="longueur">
+      <option value="court">Courte</option>
+      <option value="normal" selected>Normale</option>
+      <option value="long">Longue</option></select></label>
+    <button id="btFabriquer" class="primaire">Fabriquer le résumé audio</button>
+  </div>
+  <p class="donnees">Vos documents partent chez Google (NotebookLM), dans votre compte. L’offre
+  gratuite annonce 3 résumés audio par jour ; comptez souvent 5 à 10 minutes.</p>
+  <div id="etat" class="ligne"></div>
+  <div id="resultat" hidden>
+    <audio id="lecteur" controls></audio>
+    <div class="ligne"><a id="telecharger" href="#">Enregistrer le fichier audio</a>
+      <a id="carnet" href="#" target="_blank" rel="noopener noreferrer">Ouvrir le carnet dans NotebookLM ↗</a></div>
+    <h2>Poser une question à vos documents</h2>
+    <div class="ligne"><input id="question" style="flex:1" placeholder="Que dit le document sur… ?">
+      <button id="btDemander">Demander</button></div>
+    <div id="reponse"></div>
+  </div>
+  <p class="ligne"><button id="btOublier">Oublier la session NotebookLM</button></p>
+</div>
+
+<div class="pied">Bibliothèque : notebooklm-py 0.8.2 (licence MIT), qui pilote des accès non documentés
+de Google. <a href="/">Retour au Sandbox</a></div>
+
+<script>
+const CLE = "__CLE__";
+const H = {"Authorization": "Bearer " + CLE};
+let CARNET = "";
+function el(i){ return document.getElementById(i); }
+function texte(i, t, classe){ const e = el(i); e.textContent = t; e.className = classe || ""; }
+
+async function charger(){
+  const r = await fetch("/notebooklm/etat?verifier=1", {headers: H});
+  const e = await r.json();
+  const b = el("banniere");
+  if(e.coupe){
+    b.textContent = "NotebookLM piloté est coupé ici (" + e.coupe + ") : ouvrez NotebookLM vous-même.";
+    return;
+  }
+  el("brancher").hidden = !!(e.branchee && e.ok);
+  el("travail").hidden = !(e.branchee && e.ok);
+  // textContent seulement : le message peut porter un texte venu de Google.
+  b.className = "banniere";
+  if(!e.branchee){
+    b.textContent = "NotebookLM n’est pas encore branché.";
+  } else if(e.ok){
+    b.textContent = "✅ NotebookLM branché" + (e.compte ? " (" + e.compte + ")" : "")
+      + " — " + e.carnets + " carnet(s) dans ce compte.";
+    b.classList.add("ok");
+  } else {
+    b.textContent = "⚠️ " + (e.message || "Session refusée.");
+    b.classList.add("ko");
+  }
+}
+
+el("btBrancher").onclick = async () => {
+  el("btBrancher").disabled = true;
+  texte("etatBrancher", "Vérification auprès de Google…");
+  try {
+    const r = await fetch("/notebooklm/session", {method: "POST",
+      headers: Object.assign({"Content-Type": "application/json"}, H),
+      body: JSON.stringify({export: el("export").value})});
+    const d = await r.json();
+    if(!r.ok){ texte("etatBrancher", d.detail || "Refusé.", "ko"); return; }
+    el("export").value = "";
+    if(d.ok){ texte("etatBrancher", "Branché.", "ok"); await charger(); }
+    else { texte("etatBrancher", d.message || "Google a refusé la session.", "ko"); }
+  } finally { el("btBrancher").disabled = false; }
+};
+
+el("btOublier").onclick = async () => {
+  await fetch("/notebooklm/oublier", {method: "POST", headers: H});
+  await charger();
+};
+
+function suivre(id){
+  fetch("/notebooklm/jobs/" + id, {headers: H}).then(r => r.json()).then(j => {
+    if(j.status === "succeeded"){
+      texte("etat", "✅ Résumé prêt.", "ok");
+      el("resultat").hidden = false;
+      el("lecteur").src = j.audio_url;
+      el("telecharger").href = j.audio_url + "&telecharger=1";
+      el("carnet").href = j.carnet_url;
+      CARNET = j.carnet_id;
+      el("btFabriquer").disabled = false;
+      return;
+    }
+    if(j.status === "failed" || j.status === "cancelled"){
+      texte("etat", "Échec : " + (j.message || "sans détail."), "ko");
+      el("btFabriquer").disabled = false;
+      return;
+    }
+    const t = Math.round(Date.now()/1000 - (j.created_at || Date.now()/1000));
+    texte("etat", "⏳ " + (j.etape || "En file…") + " (depuis " + t + " s)");
+    setTimeout(() => suivre(id), 4000);
+  });
+}
+
+el("btFabriquer").onclick = async () => {
+  const f = new FormData();
+  for(const x of el("fichiers").files){ f.append("fichiers", x); }
+  f.append("texte", el("texte").value);
+  f.append("consigne", el("consigne").value);
+  f.append("format", el("format").value);
+  f.append("longueur", el("longueur").value);
+  el("btFabriquer").disabled = true;
+  el("resultat").hidden = true;
+  texte("etat", "Envoi…");
+  const r = await fetch("/notebooklm/resume", {method: "POST", headers: H, body: f});
+  const d = await r.json();
+  if(!r.ok){ texte("etat", d.detail || "Refusé.", "ko"); el("btFabriquer").disabled = false; return; }
+  suivre(d.id);
+};
+
+el("btDemander").onclick = async () => {
+  const q = el("question").value.trim();
+  if(!q || !CARNET) return;
+  texte("reponse", "NotebookLM lit vos documents…");
+  const r = await fetch("/notebooklm/demander", {method: "POST",
+    headers: Object.assign({"Content-Type": "application/json"}, H),
+    body: JSON.stringify({carnet_id: CARNET, question: q})});
+  const d = await r.json();
+  if(!r.ok){ texte("reponse", d.detail || "Refusé.", "ko"); return; }
+  const div = el("reponse");
+  div.textContent = "";
+  const p = document.createElement("p");
+  p.textContent = d.reponse;
+  div.appendChild(p);
+  for(const c of d.citations || []){
+    const q2 = document.createElement("p");
+    q2.className = "avert";
+    q2.textContent = "[" + c.numero + "] « " + c.extrait + " »";
+    div.appendChild(q2);
+  }
+};
+
+charger();
+</script>
+</body></html>
+"""

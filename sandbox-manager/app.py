@@ -54,6 +54,9 @@ import gpu_local
 # tomber bruyamment au demarrage plutot que degrader en silence un nettoyage
 # annonce comme systematique. Bibliotheque standard seulement, rien a installer.
 import nettoyage_dialogue
+# NotebookLM par notebooklm-py : session Google fermee dans le coffre
+# (PLAN.md 17.6). La bibliotheque elle-meme n'est chargee qu'a l'usage.
+import notebooklm_pont
 import ou_calculer
 import poids_video
 import video
@@ -142,6 +145,7 @@ def refus_kaggle(raison: str) -> HTTPException:
 # depuis le navigateur, sans terminal.
 CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
 KEYS_FILE = CONFIG_DIR / "sandbox-keys.json"
+notebooklm_pont.regler(CONFIG_DIR)
 
 # Meme refus que cote routeur, et pour la meme raison : ce magasin-ci tient les
 # jetons Modal et les identifiants Kaggle, en clair. Le paragraphe 2.1 du plan ne
@@ -1421,6 +1425,194 @@ async def colab_branchement(websocket: WebSocket, chemin: str = ""):
         log.info("carnet Colab debranche : %s", type(exc).__name__)
     except Exception:  # noqa: BLE001 -- un onglet qui part mal ne tue pas le service
         log.exception("carnet Colab debranche sur une erreur")
+
+
+# --- NotebookLM (PLAN.md 17.6) -------------------------------------------------
+
+NLM_ERREURS = (notebooklm_pont.SessionAbsente, notebooklm_pont.SessionExpiree,
+               notebooklm_pont.QuotaAtteint, notebooklm_pont.NotebookLMEchec)
+
+
+def _nlm_coupe(request: Request) -> None:
+    raison = contexte_partage(request)
+    if raison:
+        raise HTTPException(403, "NotebookLM piloté est coupé ici (%s) : la session est celle du "
+                                 "compte Google d'une seule personne. Ouvrez NotebookLM vous-même : "
+                                 "https://notebook.google.com/" % raison)
+
+
+@app.get("/notebooklm/etat")
+def notebooklm_etat(request: Request, verifier: int = Query(default=0),
+                    authorization: Optional[str] = Header(default=None)):
+    """La session est-elle branchee ? Avec verifier=1, un appel qui ne fabrique
+    rien (la liste des carnets) dit si Google l'accepte encore."""
+    auth(authorization)
+    raison = contexte_partage(request)
+    if raison:
+        return {"branchee": False, "coupe": raison}
+    etat = notebooklm_pont.compte()
+    etat["coupe"] = None
+    if verifier and etat.get("branchee"):
+        try:
+            etat.update(notebooklm_pont.executer(notebooklm_pont.verifier))
+        except NLM_ERREURS as exc:
+            etat.update({"ok": False, "message": str(exc)})
+    return etat
+
+
+@app.post("/notebooklm/session")
+async def notebooklm_session(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Ferme dans le coffre la session collee par la personne, puis l'essaie.
+    Ni la reponse ni le journal ne portent une valeur de cookie."""
+    auth(authorization)
+    exiger_page_du_studio(request)
+    exiger_json(request)
+    _nlm_coupe(request)
+    payload = await request.json()
+    try:
+        r = await asyncio.to_thread(notebooklm_pont.enregistrer, str(payload.get("export") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        v = await asyncio.to_thread(notebooklm_pont.executer, notebooklm_pont.verifier)
+    except NLM_ERREURS as exc:
+        return {"enregistree": True, "ok": False, "message": str(exc), **r}
+    return {"enregistree": True, **r, **v}
+
+
+@app.post("/notebooklm/oublier")
+def notebooklm_oublier(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    exiger_page_du_studio(request)
+    return {"oubliee": notebooklm_pont.oublier()}
+
+
+def run_notebooklm(jid: str, sources: list, reglages: dict) -> None:
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": time.time(), "provider_effective": "notebooklm"})
+    write_job(jid, job)
+
+    def progres(texte: str) -> None:
+        j = read_job(jid)
+        j["etape"] = texte
+        write_job(jid, j)
+
+    try:
+        r = notebooklm_pont.executer(lambda: notebooklm_pont.resume_audio(
+            sources, JOBS / jid / "output", progres=progres, **reglages))
+    except NLM_ERREURS as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+        return
+    except Exception as exc:  # noqa: BLE001 -- jamais un fil mort sur une fiche << running >>
+        log.exception("notebooklm")
+        terminer_en_echec(jid, "NotebookLM a échoué : %s" % type(exc).__name__)
+        return
+    art = add_artifact(jid, r["audio"], "notebooklm")
+    job = read_job(jid)
+    job.update({"status": "succeeded", "finished_at": time.time(), "artifacts": [art],
+                "carnet_id": r["carnet_id"], "carnet_url": r["carnet_url"], "etape": ""})
+    write_job(jid, job)
+
+
+@app.post("/notebooklm/resume")
+async def notebooklm_resume(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Documents et/ou texte -> un carnet NotebookLM neuf -> un resume audio."""
+    auth(authorization)
+    exiger_page_du_studio(request)
+    _nlm_coupe(request)
+    if not notebooklm_pont.branchee():
+        raise HTTPException(409, notebooklm_pont.PHRASE_ABSENTE)
+    f = await request.form()
+    jid = uuid.uuid4().hex
+    dossier = JOBS / jid / "sources"
+    dossier.mkdir(parents=True, exist_ok=True)
+    sources: list[dict] = []
+    for envoi in f.getlist("fichiers"):
+        if not getattr(envoi, "filename", ""):
+            continue
+        nom = clean_name(envoi.filename)
+        if not nom.lower().endswith(notebooklm_pont.EXTENSIONS):
+            raise HTTPException(400, "« %s » : NotebookLM reçoit ici des PDF, .txt, .md ou .docx." % nom)
+        contenu = await envoi.read()
+        if len(contenu) > MAX_UPLOAD:
+            raise HTTPException(413, "« %s » est trop gros (%s au plus)." % (
+                nom, format_fr.en_memoire(MAX_UPLOAD // 2**20)))
+        (dossier / nom).write_bytes(contenu)
+        sources.append({"chemin": str(dossier / nom), "titre": nom})
+    texte = str(f.get("texte") or "").strip()
+    if texte:
+        if len(texte) > notebooklm_pont.TEXTE_MAX:
+            raise HTTPException(413, "Texte trop long (%d signes au plus)." % notebooklm_pont.TEXTE_MAX)
+        sources.append({"titre": "Texte collé", "texte": texte})
+    if not sources:
+        raise HTTPException(400, "Donnez au moins un document ou un texte.")
+    titre = str(f.get("titre") or "").strip()[:80]
+    reglages = {
+        "titre": titre,
+        "consigne": str(f.get("consigne") or "").strip()[:2000],
+        "format_": str(f.get("format") or "approfondi"),
+        "longueur": str(f.get("longueur") or "normal"),
+        "langue": "fr",
+    }
+    write_job(jid, {"id": jid, "provider": "notebooklm", "title": "NotebookLM", "status": "queued",
+                    "created_at": time.time(), "artifacts": [], "titre": titre or sources[0]["titre"],
+                    "sources": [s["titre"] for s in sources]})
+    threading.Thread(target=run_notebooklm, args=(jid, sources, reglages), daemon=True).start()
+    return read_job(jid)
+
+
+@app.get("/notebooklm/jobs/{jid}")
+def notebooklm_job(jid: str, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    job = read_job(jid)
+    if job.get("provider") != "notebooklm":
+        raise HTTPException(404, "Ce travail n'est pas un résumé NotebookLM")
+    sortie = {"id": jid, "status": job.get("status"), "etape": job.get("etape") or "",
+              "created_at": job.get("created_at"), "titre": job.get("titre") or "",
+              "message": job.get("error") or "", "carnet_url": job.get("carnet_url") or "",
+              "carnet_id": job.get("carnet_id") or ""}
+    if any(a.get("path") for a in job.get("artifacts", [])):
+        sortie["audio_url"] = "/notebooklm/jobs/%s/audio?cle=%s" % (jid, jeton_video(jid))
+    return sortie
+
+
+@app.get("/notebooklm/jobs/{jid}/audio")
+def notebooklm_audio(jid: str, cle: str = Query(default=""), telecharger: int = Query(default=0)):
+    attendu = jeton_video(jid)
+    if not attendu or not hmac.compare_digest(cle, attendu):
+        raise HTTPException(401, "Unauthorized")
+    arts = [a for a in read_job(jid).get("artifacts", []) if a.get("path")]
+    if not arts:
+        raise HTTPException(404, "Pas de résumé audio pour ce travail")
+    chemin = ART / arts[0]["path"]
+    if not chemin.exists() or chemin.is_symlink():
+        raise HTTPException(404, "Fichier absent")
+    if telecharger:
+        return FileResponse(chemin, media_type="audio/mp4", filename="resume-notebooklm.m4a")
+    return FileResponse(chemin, media_type="audio/mp4")
+
+
+@app.post("/notebooklm/demander")
+async def notebooklm_demander(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Une question aux sources d'un carnet que le Studio a fabrique."""
+    auth(authorization)
+    exiger_page_du_studio(request)
+    exiger_json(request)
+    _nlm_coupe(request)
+    p = await request.json()
+    carnet, question = str(p.get("carnet_id") or ""), str(p.get("question") or "").strip()
+    if not carnet or not question:
+        raise HTTPException(400, "Il faut un carnet et une question.")
+    try:
+        return await asyncio.to_thread(notebooklm_pont.executer,
+                                       lambda: notebooklm_pont.demander(carnet, question[:4000]))
+    except NLM_ERREURS as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/notebooklm", response_class=HTMLResponse)
+def notebooklm_page():
+    return HTMLResponse(format_fr.avec_formateurs(notebooklm_pont.PAGE_HTML.replace("__CLE__", KEY)))
 
 
 @app.get("/health")

@@ -119,6 +119,9 @@ http://127.0.0.1:8010/notebooklm
 
 Elle permet d'ouvrir NotebookLM dans le navigateur. Free AI Studio reste entièrement fonctionnel sans ce service.
 
+Le résumé audio automatique (`http://localhost:8020/notebooklm`, expérimental) demande en plus de
+brancher une fois votre session Google : voir `docs/NOTEBOOKLM.md`, qui dit ce que cela ouvre.
+
 
 ## Portail débutant
 

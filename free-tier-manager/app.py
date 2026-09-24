@@ -3038,8 +3038,13 @@ small{opacity:.75}
 <h3>Gratuit, avec limites</h3>
 <p>NotebookLM possède une offre gratuite, mais certaines fonctions ont des quotas journaliers ou mensuels. Ces limites peuvent évoluer : consultez l'aide officielle Google pour les valeurs actuelles.</p>
 </div>
-<p><a class="button" href="https://notebooklm.google.com/" target="_blank" rel="noopener noreferrer">Ouvrir NotebookLM ↗</a></p>
-<p><small>NotebookLM reste un service Google externe. Free AI Studio ne transmet pas vos clés API ni vos documents automatiquement à NotebookLM.</small></p>
+<div class="card">
+<h3>🎙️ Le Studio fabrique le résumé audio pour vous <small>(expérimental)</small></h3>
+<p>Donnez vos documents : le Studio crée un carnet NotebookLM dans votre compte, demande un résumé audio en français et vous le rapporte. Il faut brancher NotebookLM une fois, avec votre session Google : cela ouvre votre compte Google entier au Studio, qui la garde chiffrée sur cet ordinateur. Vos documents partent alors chez Google.</p>
+<p><a class="button" href="http://localhost:8020/notebooklm" target="_blank">Résumé audio automatique</a></p>
+</div>
+<p><a class="button" href="https://notebooklm.google.com/" target="_blank" rel="noopener noreferrer">Ouvrir NotebookLM vous-même ↗</a></p>
+<p><small>NotebookLM reste un service Google externe. Free AI Studio n’y envoie vos documents que si vous passez par « Résumé audio automatique » ; il ne transmet jamais vos clés API.</small></p>
 </body></html>
 """
     return HTMLResponse(html)

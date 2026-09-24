@@ -244,12 +244,17 @@ Voir `docs/SERVICES_DEBUTANT.md` et `docs/API_KEYS.md`.
 
 ## Étudier avec NotebookLM
 
-La section **Étudier** peut ouvrir le service officiel NotebookLM comme complément externe.
+La section **Étudier** ouvre NotebookLM de deux façons :
 
-Free AI Studio :
-- n'envoie aucun document automatiquement ;
-- n'utilise pas d'API non officielle ;
-- ne présente pas le niveau gratuit comme illimité.
+- **vous-même** : un simple lien vers le service de Google, rien n'est envoyé ;
+- **résumé audio automatique** (expérimental, `http://localhost:8020/notebooklm`) : le Studio
+  crée un carnet dans votre compte, y verse vos documents et rapporte un résumé audio en
+  français. Il passe par **des accès non documentés de Google** (bibliothèque notebooklm-py,
+  MIT) et demande votre session Google, qui **ouvre le compte entier** : elle est gardée
+  chiffrée par le coffre du Studio, et vos documents partent alors chez Google.
+
+Le niveau gratuit n'est jamais présenté comme illimité (3 résumés audio par jour annoncés par Google).
+Pas encore essayé sur un vrai compte Google au 24/09/2026 : voir PLAN.md 17.6.
 
 Voir `docs/NOTEBOOKLM.md`.
 
