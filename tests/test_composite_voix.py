@@ -279,6 +279,49 @@ def test_un_format_hors_des_choix_est_refuse(composite):
         composite.proprietes_lues('{"format@0": "1920x1080"}', chaine)
 
 
+def test_un_travail_offre_sa_duree_lue_dans_son_module(composite):
+    import chanson
+    import video
+
+    ids = par_id(composite.proprietes_montrees(chaine_de(composite, ["video_maison"])))
+    assert [c["valeur"] for c in ids["duree@0"]["choix"]] == list(video.DUREES_MAISON)
+    assert ids["duree@0"]["defaut"] == video.DUREE_PAR_DEFAUT
+    ids = par_id(composite.proprietes_montrees(chaine_de(composite, ["video_rapide"])))
+    assert [c["valeur"] for c in ids["duree@0"]["choix"]] == list(video.DUREES)
+    ids = par_id(composite.proprietes_montrees(chaine_de(composite, ["chat_auto", "chanson"])))
+    assert [c["valeur"] for c in ids["duree@1"]["choix"]] == list(chanson.DUREES)
+    assert ids["duree@1"]["choix"][0]["nom"] == "1 min au plus"
+    with pytest.raises(composite.CompositeRefuse):
+        composite.proprietes_lues('{"duree@0": "12"}', chaine_de(composite, ["video_rapide"]))
+
+
+def test_le_format_de_la_video_est_montre_jamais_offert(composite):
+    import video
+
+    ids = par_id(composite.proprietes_montrees(chaine_de(composite, ["video_maison"])))
+    maison = video.MODELES["maison"]
+    assert ids["definition@0"]["choix"] == [
+        {"valeur": "%dx%d" % (maison["largeur"], maison["hauteur"]),
+         "nom": "%d × %d sur cette carte (fixé par le modèle)" % (maison["largeur"], maison["hauteur"])}]
+    rapide = par_id(composite.proprietes_montrees(chaine_de(composite, ["video_rapide"])))
+    assert "chez le loueur" in rapide["definition@0"]["choix"][0]["nom"]
+    assert "sur cette carte" in rapide["definition@0"]["choix"][0]["nom"], "elle peut tourner ici"
+
+
+def test_la_duree_proposee_en_secondes(composite):
+    def appliquer(briques, duree):
+        graphe = composite.compiler("p", lambda _c: json.dumps(
+            {"noeuds": briques, "proprietes": {"duree": duree}}))
+        return composite.appliquer_proposees(composite.lier(graphe), graphe)
+
+    assert appliquer(["video_maison"], 3) == ({"duree@0": "3"}, [])
+    valeurs, sans_effet = appliquer(["video_maison"], 60)
+    assert valeurs == {} and sans_effet[0].startswith("« Durée de 60 s » : « Vidéo")
+    assert "ne propose que 1 s, 2 s" in sans_effet[0], "jamais arrondie en silence"
+    assert appliquer(["fabrication_image"], 3)[1] == [
+        "« Durée de 3 s » : aucune étape de cette chaîne n'a de durée à choisir."]
+
+
 def test_la_page_montre_les_dimensions_vraies(page):
     debut = page.index("function dimensions(")
     fin = page.index("}", debut) + 1
@@ -502,6 +545,30 @@ def test_la_page_montre_et_change_les_reglages(page):
     assert "chaine valeur null" in apres
     assert 'voix_fr {"langue_ecrite":"fr"}' in apres, "une variante ne part pas comme valeur"
     assert "part chez &lt;Google&gt;" in apres
+
+
+def test_changer_de_brique_remet_les_reglages_de_l_etape(page):
+    debut = page.index("function changerReglage(")
+    fin = page.index("\n}\n", debut) + 3
+    v = {"etapes": [{"brique": "video_maison"}],
+         "proprietes": [{"id": "video@0", "etape": 0, "variante": True, "valeur": "video_maison",
+                         "defaut": "video_maison", "choix": [{"valeur": "video_maison"},
+                                                             {"valeur": "video_rapide"}]},
+                        {"id": "duree@0", "etape": 0, "valeur": "12", "defaut": "5",
+                         "choix": [{"valeur": "5"}, {"valeur": "12"}]}]}
+    code = (page[debut:fin] + "\nconst v = " + json.dumps(v) + ";"
+            + "\nconsole.log(changerReglage(v, 0, 'video_rapide'), v.proprietes[1].valeur);")
+    assert node(code).strip() == "chaine 5"
+
+
+def test_un_reglage_a_choix_unique_est_grise(page):
+    debut = page.index("function reglages(")
+    fin = page.index("\n}\n", debut) + 3
+    v = {"proprietes": [{"id": "definition@0", "nom": "Format", "valeur": "a", "defaut": "a",
+                         "choix": [{"valeur": "a", "nom": "1280 × 704"}]}]}
+    code = (page[debut:fin] + "\nfunction echapper(s){ return String(s); }"
+            + "\nconsole.log(reglages(" + json.dumps(v) + "));")
+    assert "<select data-i='0' disabled>" in node(code)
 
 
 # --- Chaque étape reçoit SA consigne (23/09) -------------------------------------

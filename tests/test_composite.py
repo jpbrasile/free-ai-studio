@@ -1662,6 +1662,25 @@ def test_le_clip_MAISON_porte_son_reglage_et_ne_demande_aucune_qualite():
         {"brique": "video_maison", "demande": "un chat qui dort"}, "")
     assert demande["ou_calculer"] == "toujours-maison", demande
     assert "qualite" not in demande, demande
+    assert "duree" not in demande, "sans reglage, le defaut de preparer(), comme avant"
+
+
+def test_la_duree_reglee_part_avec_le_travail():
+    """24/09 : << il manque des champs pour la duree >>. La duree part dans
+    l'unite de la page du travail, et `preparer()` la lit telle quelle."""
+    import chanson
+    import video
+
+    _, demande = composite.demande_du_travail(
+        {"brique": "video_maison", "demande": "un phare", "reglages": {"duree": "3"}}, "")
+    assert demande["duree"] == "3"
+    plan = video.preparer(demande, pour_modal=False, maison=True)
+    assert plan["demande"]["images"] == video.DUREES_MAISON["3"]["images"]
+    _, demande = composite.demande_du_travail(
+        {"brique": "chanson", "demande": "douce", "reglages": {"duree": "2"}}, "la la")
+    assert demande["duree"] == "2" and "2" in chanson.DUREES
+
+
 # --- 12. Les trois briques qui n'ont AUCUNE adresse, et pourquoi ------------
 
 def test_les_deux_secours_sont_des_POSITIONS_pas_des_adresses(par_id):

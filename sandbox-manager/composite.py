@@ -181,6 +181,9 @@ Regles :
   a "proprietes" un "format" : "1:1" (carre), "16:9" (plus large que haute)
   ou "9:16" (plus haute que large) -- le plus proche des dimensions demandees
   (ex. « 1920x1080 » -> "16:9", « portrait » -> "9:16") ;
+- si la demande precise la duree d'une video ou d'une chanson, ajoute a
+  "proprietes" une "duree" : le nombre de SECONDES (ex. « 3 secondes » -> 3,
+  « deux minutes » -> 120) ;
 - ajoute "consignes" : une consigne par fonction, dans le meme ordre, qui dit
   ce que CETTE fonction doit faire -- sa part de la demande seulement, avec
   les exigences de contenu qui la concernent (niveau de detail, longueur,
@@ -190,7 +193,10 @@ Regles :
   Exemple : {"noeuds": ["lecture_image", "synthese_vocale_fr"],
              "consignes": ["Decris cette image de facon tres detaillee.", ""]} ;
 - choisis la suite la plus courte qui repond a la demande : pas de fonction
-  qui ne ferait que recopier ou reformuler le texte d'une autre.
+  qui ne ferait que recopier ou reformuler le texte d'une autre ;
+- ne choisis une video que si la demande parle de video, de clip, de film ou
+  d'animation : « fais une image », « fais-en un autre » apres une image, c'est
+  une image.
 
 La demande : %s
 """
@@ -1705,10 +1711,69 @@ FORMAT_LIBRE = "libre"
 FORMATS = {"1:1": ("carré", "1024x1024"),
            "16:9": ("paysage, plus large que haute (16:9)", "1344x768"),
            "9:16": ("portrait, plus haute que large (9:16)", "768x1344")}
-# Les valeurs qu'un lecteur de phrase peut proposer, par reglage.
-PROPOSABLES = {LANGUE_ECRITE: NOMS_DES_LANGUES, LANGUE_REPONSE: NOMS_DES_LANGUES,
-               FORMAT: FORMATS}
+# La DUREE d'un travail (24/09 : << il manque des champs pour la duree >>).
+# Les choix sont ceux que la page du travail offre, lus dans SON module : la
+# table ou `preparer()` les verifie, jamais une copie. Par brique : module,
+# table des durees, nom de la duree par defaut (None : la premiere, celle que
+# `chanson.preparer` prend sans duree), secondes par unite, affichage.
+DUREE = "duree"
+DUREES_DES_TRAVAUX = {
+    "video_maison": ("video", "DUREES_MAISON", "DUREE_PAR_DEFAUT", 1, "%s s"),
+    "video_rapide": ("video", "DUREES", "DUREE_PAR_DEFAUT", 1, "%s s"),
+    "chanson": ("chanson", "DUREES", None, 60, "%s min au plus"),
+}
+
+
+def _durees_du_travail(brique: str) -> tuple[int, list[dict], str] | None:
+    """(secondes par unite, choix, defaut) pour un travail qui a une duree."""
+    fiche = DUREES_DES_TRAVAUX.get(brique)
+    if not fiche:
+        return None
+    import importlib
+
+    nom_du_module, table, nom_du_defaut, unite_s, affichage = fiche
+    module = importlib.import_module(nom_du_module)
+    cles = list(getattr(module, table))
+    defaut = getattr(module, nom_du_defaut) if nom_du_defaut else cles[0]
+    return unite_s, [{"valeur": c, "nom": affichage % c} for c in cles], defaut
+
+
+# Le FORMAT d'une video n'est pas un choix : chaque modele a le sien, fixe
+# dans `video.MODELES` (24/09 : << et le format >>). Il est MONTRE, grise,
+# plutot que tu -- et jamais offert tant que la page video ne l'offre pas.
+# `video_rapide` peut aussi tourner ici quand la carte est libre : les deux
+# definitions sont dites.
+DEFINITION = "definition"
+DEFINITIONS_DES_VIDEOS = {"video_maison": ("maison",), "video_rapide": ("rapide", "maison")}
+LIEU_DU_MODELE = {"maison": "sur cette carte", "rapide": "chez le loueur"}
+
+
+def _definition_de_la_video(brique: str) -> dict | None:
+    qualites = DEFINITIONS_DES_VIDEOS.get(brique)
+    if not qualites:
+        return None
+    import video
+
+    tailles = [(video.MODELES[q]["largeur"], video.MODELES[q]["hauteur"], q) for q in qualites]
+    valeur = "x".join("%dx%d" % (lg, ht) for lg, ht, _ in tailles)
+    nom = ", ".join("%d × %d %s" % (lg, ht, LIEU_DU_MODELE[q]) for lg, ht, q in tailles)
+    return {"valeur": valeur, "nom": nom + " (fixé par le modèle)"}
+
+
+def _secondes_lisibles(valeur) -> bool:
+    if isinstance(valeur, bool):
+        return False
+    texte = str(valeur).strip()
+    return texte.isdigit() and 0 < int(texte) <= 3600
+
+
+# Ce qu'un lecteur de phrase peut proposer, par reglage : la valeur est-elle lisible ?
+PROPOSABLES = {LANGUE_ECRITE: lambda v: v in NOMS_DES_LANGUES,
+               LANGUE_REPONSE: lambda v: v in NOMS_DES_LANGUES,
+               FORMAT: lambda v: v in FORMATS,
+               DUREE: _secondes_lisibles}
 SANS_EFFET = {
+    DUREE: "« Durée de %s s » : aucune étape de cette chaîne n'a de durée à choisir.",
     FORMAT: "« Format %s » : aucune étape de cette chaîne ne fabrique d'image.",
     LANGUE_ECRITE: "« Texte affiché en %s » : cette chaîne ne finit pas par une voix, "
                    "son texte reste celui de la dernière étape.",
@@ -1749,8 +1814,8 @@ def _lire_proprietes(brut) -> tuple[dict, list]:
         return {}, []
     retenues, sans_effet = {}, []
     for cle, valeur in demandees.items():
-        if cle in PROPOSABLES and valeur in PROPOSABLES[cle]:
-            retenues[cle] = valeur
+        if cle in PROPOSABLES and PROPOSABLES[cle](valeur):
+            retenues[cle] = str(int(str(valeur).strip())) if cle == DUREE else valeur
         elif not (cle in PROPOSABLES and valeur in (None, "", MEME_LANGUE, FORMAT_LIBRE)):
             sans_effet.append("« %s = %s » : aucune étape de ce Studio ne sait "
                               "respecter ce réglage." % (cle, valeur))
@@ -1804,6 +1869,19 @@ def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[di
                              "defaut": FORMAT_LIBRE,
                              "choix": [{"valeur": FORMAT_LIBRE, "nom": "au choix du modèle"}]
                              + [{"valeur": v, "nom": n} for v, (n, _) in FORMATS.items()]})
+        definition = _definition_de_la_video(etape["brique"])
+        if definition:
+            montrees.append({"id": "%s@%d" % (DEFINITION, rang),
+                             "nom": "Format de « %s »" % etape["fonction"], "etape": rang,
+                             "valeur": definition["valeur"], "defaut": definition["valeur"],
+                             "choix": [definition]})
+        durees = _durees_du_travail(etape["brique"])
+        if durees:
+            unite_s, choix, defaut = durees
+            ident = "%s@%d" % (DUREE, rang)
+            montrees.append({"id": ident, "nom": "Durée de « %s »" % etape["fonction"],
+                             "etape": rang, "valeur": valeurs.get(ident, defaut),
+                             "defaut": defaut, "unite_s": unite_s, "choix": choix})
         if _ecrit_pour_etre_lu(chaine, rang):
             ident = "%s@%d" % (LANGUE_REPONSE, rang)
             montrees.append({"id": ident, "nom": "Réponse de « %s » en" % etape["fonction"],
@@ -1826,12 +1904,26 @@ def appliquer_proposees(chaine: dict, graphe: dict,
     anglais >> vaut pour chaque texte montre). Aucune etape ne l'a : c'est dit.
     """
     sans_effet = list(graphe.get("proprietes_sans_effet") or [])
-    ids = [p["id"] for p in proprietes_montrees(chaine, apps)]
+    montrees = {p["id"]: p for p in proprietes_montrees(chaine, apps)}
+    ids = list(montrees)
     valeurs = {}
     for cle, valeur in (graphe.get("proprietes") or {}).items():
         cibles = [i for i in ids if i == cle or i.startswith(cle + "@")]
         for ident in cibles:
-            valeurs[ident] = valeur
+            if cle != DUREE:
+                valeurs[ident] = valeur
+                continue
+            # Une duree se propose en secondes et se regle dans l'unite de
+            # l'etape. Hors de ses choix, elle est dite, jamais arrondie.
+            reglage = montrees[ident]
+            secondes, unite_s = int(valeur), reglage["unite_s"]
+            dans_l_unite = str(secondes // unite_s) if secondes % unite_s == 0 else None
+            if dans_l_unite in {c["valeur"] for c in reglage["choix"]}:
+                valeurs[ident] = dans_l_unite
+            else:
+                sans_effet.append("« Durée de %s s » : %s ne propose que %s."
+                                  % (secondes, reglage["nom"][len("Durée de "):],
+                                     ", ".join(c["nom"] for c in reglage["choix"])))
         if not cibles:
             sans_effet.append(SANS_EFFET[cle] % NOMS_DES_LANGUES.get(valeur, valeur))
     return valeurs, sans_effet
@@ -1987,6 +2079,12 @@ def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
     precedente.
     """
     usage, fixe = TRAVAUX[etape["brique"]]
+    # La duree choisie dans les reglages, dans l'unite de la page du travail
+    # (secondes pour la video, minutes pour la chanson). Absente : le defaut de
+    # `preparer()`, comme avant le 24/09.
+    duree = (etape.get("reglages") or {}).get(DUREE)
+    if duree:
+        fixe = dict(fixe, duree=str(duree))
     texte = str(entree or "").strip()
     demande = (etape.get("demande") or "").strip()
     if usage == "video":
@@ -2337,7 +2435,8 @@ function bloc(v){
 // modifiables ici avant de lancer. Seuls existent ceux qu'une etape sait tenir.
 function reglages(v){
   const lignes = (v.proprietes || []).map((p, i) =>
-    "<p class=reglage><label>" + echapper(p.nom) + " : <select data-i='" + i + "'>"
+    "<p class=reglage><label>" + echapper(p.nom) + " : <select data-i='" + i + "'"
+    + (p.choix.length < 2 ? " disabled" : "") + ">"
     + p.choix.map(c => "<option value='" + echapper(c.valeur) + "'"
       + (c.valeur === p.valeur ? " selected" : "") + ">" + echapper(c.nom) + "</option>").join("")
     + "</select></label>"
@@ -2357,6 +2456,11 @@ function changerReglage(v, i, valeur){
   p.valeur = valeur;
   if (p.variante && v.etapes && v.etapes[p.etape]) {
     v.etapes[p.etape].brique = valeur;
+    // Les autres reglages de CETTE etape reviennent a leur defaut : la
+    // nouvelle brique n'a pas forcement les memes choix (12 s a la maison,
+    // 5 s au plus chez le loueur), et le verdict refait les reproposera.
+    for (const q of v.proprietes)
+      if (q !== p && !q.variante && q.etape === p.etape) q.valeur = q.defaut;
     return "chaine";
   }
   return "valeur";
