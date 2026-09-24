@@ -24,6 +24,16 @@ os.environ.setdefault("SANDBOX_WORKSPACE", str(_JETABLE / "workspace"))
 # test_sans_jeton_rien_n_est_lance (trace du 23/09/2026). Les tests de
 # l'amorce appellent amorcer() eux-memes.
 os.environ["SANDBOX_AMORCE_BUDGET"] = "false"
+# Meme regle, meme cause, pour la reprise des travaux orphelins (24/09/2026).
+# La fixture `sandbox` la coupait, mais test_kaggle, test_garde_exposition et
+# test_magasin_cles chargent app.py sans elle : leur fil `reprise-travaux`
+# parcourait les fiches du dossier COMMUN pendant les tests suivants, lisait
+# une fiche en cours, la declarait orpheline et la reecrivait apres coup.
+# C'etait l'echec intermittent de test_local_d_abord (vu les 23 et 24/09,
+# jamais sur le meme test) : fil mesure vivant pendant ses quatre premiers
+# tests, fiche finie chez Modal remise a << local >> en reproduction forcee.
+# test_reprise.py appelle reprendre_les_travaux() lui-meme.
+os.environ["SANDBOX_REPRISE_AU_DEMARRAGE"] = "false"
 # La cle du coffre vit hors de config/ ; son defaut est /secrets/coffre.cle, qui
 # sous Windows voudrait dire C:\secrets. Une suite de tests ne cree pas un
 # dossier a la racine du disque. UNE seule cle pour toute la suite : deux tests

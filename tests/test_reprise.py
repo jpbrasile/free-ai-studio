@@ -414,3 +414,21 @@ def test_une_reprise_qui_TOMBE_le_dit_au_lieu_de_se_taire(sandbox, monkeypatch, 
     assert constat.get("echec") == "RuntimeError", constat
     dit = "\n".join(r.getMessage() for r in caplog.records)
     assert "RuntimeError" in dit or "illisible" in dit, dit
+
+
+def test_aucun_module_charge_sous_test_ne_lance_la_reprise_tout_seul():
+    """Charge SANS la fixture, comme test_kaggle : aucun fil de reprise.
+
+    24/09/2026 : un tel fil, parti d'un module voisin, lisait la fiche d'un
+    test en cours, la declarait orpheline et la reecrivait apres coup -- la
+    fiche finie chez Modal redevenait << local >>. C'etait l'echec
+    intermittent de test_local_d_abord. La regle vit dans conftest.py.
+    """
+    import threading
+
+    from conftest import charger
+    avant = {id(t) for t in threading.enumerate()}
+    module = charger("sandbox-manager")
+    nouveaux = [t.name for t in threading.enumerate() if id(t) not in avant]
+    assert module.REPRISE_AU_DEMARRAGE is False
+    assert "reprise-travaux" not in nouveaux, nouveaux
