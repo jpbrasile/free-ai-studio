@@ -330,7 +330,9 @@ def test_l_etat_du_travail_rend_le_titre(sandbox, monkeypatch, tmp_path, usage):
 def test_chaque_page_a_un_champ_titre_ENVOYE_avec_la_demande(sandbox, usage):
     page = TestClient(sandbox.app, base_url=LOCAL).get("/" + usage, headers=CLE).text
     assert page.index('id="titre"') < page.index('<button id="lancer"')
-    assert 'titre: (document.getElementById("titre") || {}).value || ""' in page
+    # /video y ajoute le texte tape quand la description a ete enrichie (24/09).
+    assert ('titre: (document.getElementById("titre") || {}).value || ""' in page
+            or 'titre: (document.getElementById("titre") || {}).value || ORIGINALE || ""' in page)
 
 
 @pytest.mark.parametrize("usage", derniers.USAGES)

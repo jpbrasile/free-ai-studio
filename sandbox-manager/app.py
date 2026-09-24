@@ -2801,6 +2801,34 @@ def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
     )
 
 
+@app.post("/video/enrichir")
+async def video_enrichir(request: Request, authorization: Optional[str] = Header(default=None)):
+    """La description allongee par le chat gratuit, pour que la page la MONTRE.
+
+    Rien ne part au calcul d'ici : la page remplace le texte, la personne relit,
+    puis lance. Un chat muet rend une phrase, jamais une description vide."""
+    auth(authorization)
+    exiger_json(request)
+    exiger_page_du_studio(request)
+    payload = await corps_json(request)
+    texte = " ".join(str(payload.get("description") or "").split())[:2000]
+    if not texte:
+        raise HTTPException(400, "Il faut d'abord décrire la scène en quelques mots.")
+    try:
+        brut = await asyncio.to_thread(composite.appeler_le_modele,
+                                       video.CONSIGNE_ENRICHIR % texte)
+    except composite.CompositeRefuse as exc:
+        raise HTTPException(503, exc.phrase) from exc
+    except Exception as exc:  # noqa: BLE001 -- reseau, delai : une phrase, pas une trace
+        raise HTTPException(503, "Le chat ne répond pas : la description n'a pas pu "
+                                 "être enrichie. Vous pouvez la détailler vous-même.") from exc
+    enrichie = video.nettoyer_enrichie(brut)
+    if not enrichie:
+        raise HTTPException(502, "Le chat a rendu une réponse inutilisable : la "
+                                 "description reste la vôtre.")
+    return {"originale": texte, "enrichie": enrichie}
+
+
 @app.get("/video/budget")
 def video_budget(request: Request, authorization: Optional[str] = Header(default=None)):
     auth(authorization)

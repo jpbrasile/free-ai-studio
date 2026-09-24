@@ -24,6 +24,10 @@ lancement sont remplaces.
 """
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -1070,3 +1074,89 @@ def test_le_temps_kaggle_est_servi_mesure_pour_1_s_estime_ailleurs(studio):
     assert plus_long["tient"] and plus_long["secondes"] < video.KAGGLE_LIMITE_S
     # Le rapport vient des deux mesures a 17 images, pas d'un chiffre pose.
     assert round(video.RAPPORT_T4_L4, 2) == 2.98
+
+
+# --- 8. Enrichir une description trop courte (24/09) --------------------------
+# « un phare » : une cote, un homme barbu, une nageuse -- sur deux modeles.
+# La phrase complete, sur le meme modele loue : un phare parfait (`0d1afe0e`).
+
+def test_enrichir_rend_la_description_du_chat_nettoyee(sandbox, monkeypatch):
+    vus = []
+
+    def chat(consigne):
+        vus.append(consigne)
+        return ('**Prompt:** "A tall white lighthouse stands on a rocky islet in heavy '
+                'rain, waves crash below, its beam turns slowly, wide shot."')
+
+    monkeypatch.setattr(sandbox.composite, "appeler_le_modele", chat)
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    r = client.post("/video/enrichir", headers=CLE, json={"description": "  un   phare "})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["originale"] == "un phare"
+    assert d["enrichie"].startswith("A tall white lighthouse") and d["enrichie"].endswith("wide shot.")
+    assert "**" not in d["enrichie"] and "Prompt" not in d["enrichie"]
+    # Le texte de la personne est DANS la consigne, et la consigne demande l'anglais.
+    assert "un phare" in vus[0] and "English" in vus[0]
+
+
+def test_enrichir_sans_chat_rend_une_phrase_et_jamais_du_vide(sandbox, monkeypatch):
+    client = TestClient(sandbox.app, base_url=LOCAL)
+
+    def refuse(_c):
+        raise sandbox.composite.CompositeRefuse("chat_indisponible", "Aucun service de chat.")
+    monkeypatch.setattr(sandbox.composite, "appeler_le_modele", refuse)
+    r = client.post("/video/enrichir", headers=CLE, json={"description": "un phare"})
+    assert r.status_code == 503 and r.json()["detail"] == "Aucun service de chat."
+
+    monkeypatch.setattr(sandbox.composite, "appeler_le_modele", lambda _c: '"ok"')
+    r = client.post("/video/enrichir", headers=CLE, json={"description": "un phare"})
+    assert r.status_code == 502 and "reste la vôtre" in r.json()["detail"]
+
+    r = client.post("/video/enrichir", headers=CLE, json={"description": "   "})
+    assert r.status_code == 400
+
+
+def test_court_ou_pas_la_meme_borne_des_deux_cotes(sandbox):
+    video = sandbox.video
+    assert video.est_courte("un phare") and not video.est_courte(
+        "Un phare breton sous la pluie, la mer se soulève, la lumière tourne.")
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/video").text
+    assert "const MOTS_POUR_UNE_SCENE = %d;" % video.MOTS_POUR_UNE_SCENE in page
+
+
+def test_fabriquer_une_description_courte_la_detaille_d_abord(sandbox):
+    """Premier clic : enrichie et montree, rien ne part. Second clic : elle part,
+    et le titre du travail reste le texte tape."""
+    if not shutil.which("node"):
+        pytest.skip("node absent")
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/video").text
+    debut = page.index("const MOTS_POUR_UNE_SCENE")
+    fin = page.index("\n});", page.index('getElementById("lancer").addEventListener')) + 4
+    code = (
+        "const els = {};\n"
+        "function el(id){ return els[id] || (els[id] = {id, value: '', textContent: '', disabled: false,"
+        " handlers: {}, append(){}, addEventListener(t, f){ this.handlers[t] = f; }}); }\n"
+        "const document = {getElementById: el, createElement: () => ({})};\n"
+        "const ENTETES = {}; let ATTENTE_DEPUIS = null; const partis = [];\n"
+        "function envoyer(x){ partis.push(el('description').value); }\n"
+        "let appels = 0;\n"
+        "async function fetch(url, o){ appels++; return {ok: true, json: async () =>"
+        " ({enrichie: 'A white lighthouse on a rock in the rain, waves crashing, beam turning.'})}; }\n"
+        + page[debut:fin] + "\n"
+        "(async () => {\n"
+        "  el('description').value = 'un phare';\n"
+        "  await el('lancer').handlers.click();\n"
+        "  const apres1 = [partis.length, appels, el('description').value, el('etat').textContent];\n"
+        "  await el('lancer').handlers.click();\n"
+        "  console.log(JSON.stringify({apres1, partis, appels, titre: ORIGINALE}));\n"
+        "})();\n")
+    sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
+                            encoding="utf-8", timeout=20)
+    assert sortie.returncode == 0, sortie.stderr
+    vu = json.loads(sortie.stdout)
+    partis1, appels1, zone1, etat1 = vu["apres1"]
+    assert partis1 == 0 and appels1 == 1, vu
+    assert zone1.startswith("A white lighthouse") and "cliquez à nouveau" in etat1, vu
+    assert vu["partis"] == ["A white lighthouse on a rock in the rain, waves crashing, beam turning."]
+    assert vu["appels"] == 1 and vu["titre"] == "un phare", vu

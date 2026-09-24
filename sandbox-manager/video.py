@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 from pathlib import Path
 
 import budget_modal
@@ -484,6 +485,46 @@ NEGATIF = (
     "visages mal dessinés, deforme, membres difformes, doigts fusionnes, "
     "arriere-plan encombre, trois jambes, marche a reculons"
 )
+
+
+# --- Enrichir la description (24/09/2026) -------------------------------------
+# « un phare » a donne, en trois essais sur deux modeles, une cote, un homme
+# barbu et une nageuse ; « Un phare breton sous la pluie, la mer se souleve, la
+# lumiere tourne » a donne un phare parfait sur le MEME modele loue (`0d1afe0e`).
+# Deux mots ne decrivent pas une scene. Wan le dit lui-meme : son depot officiel
+# fait allonger la description par un modele de langue avant le calcul
+# (« prompt extension », recommandee). Le Studio le fait par le chat gratuit, et
+# MONTRE le resultat avant de lancer : la personne relit ce qui part.
+MOTS_POUR_UNE_SCENE = 8
+
+CONSIGNE_ENRICHIR = (
+    "Rewrite the following video idea as ONE detailed English prompt for a "
+    "text-to-video model, 60 to 100 words. Keep the meaning and every element "
+    "the person asked for; add nothing that contradicts it. Describe: the main "
+    "subject and what it looks like, the setting, the light and weather, what "
+    "moves during the shot, and the camera framing. Plain visual description "
+    "only: no title, no list, no quotation marks, no text or captions in the "
+    "image, no commentary. Reply with the prompt alone.\n\n"
+    "Video idea (it may be in French): %s"
+)
+
+
+def est_courte(description: str) -> bool:
+    """Trop peu de mots pour decrire une scene : la page propose d'enrichir."""
+    return len(str(description or "").split()) < MOTS_POUR_UNE_SCENE
+
+
+def nettoyer_enrichie(texte: str) -> str:
+    """La reponse du chat, sans son emballage : guillemets, << Prompt : >>, gras.
+
+    Rend "" quand il ne reste rien d'utilisable : la page garde alors le texte
+    de la personne au lieu d'envoyer du vide."""
+    t = str(texte or "").strip()
+    t = re.sub(r"^\s*(\*\*)?\s*(prompt|enhanced prompt|video prompt)\s*:?\s*(\*\*)?\s*:?",
+               "", t, flags=re.I)
+    t = t.replace("**", "").replace("`", "")
+    t = " ".join(t.split()).strip(" \"'«»“”")
+    return t[:1200].strip() if len(t.split()) >= 5 else ""
 
 
 # --- Compteur de depense ------------------------------------------------------
@@ -1226,6 +1267,12 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
 <div id="banniere" class="banniere">Vérification en cours…</div>
 
 <textarea id="description" placeholder="Un phare breton sous la pluie, la mer se soulève, la lumière tourne."></textarea>
+<!-- 24/09 : « un phare » a donné une côte, un homme barbu, une nageuse. Le chat
+     gratuit détaille la scène, et la page MONTRE ce qui partira. -->
+<div class="ligne">
+  <button id="enrichir">✨ Enrichir la description</button>
+  <span class="avert" id="enrichieNote"></span>
+</div>
 
 <div class="ligne">
   <label>Durée
@@ -1824,7 +1871,9 @@ function envoyer(extra){
     qualite: QUALITE_LOUEE,
     ou: document.getElementById("ou").value,
     ou_calculer: reglageActuel(),
-    titre: (document.getElementById("titre") || {}).value || "",
+    // Enrichie, la description est un paragraphe anglais : « Vos travaux » et
+    // le nom du fichier gardent le texte que la personne a tapé.
+    titre: (document.getElementById("titre") || {}).value || ORIGINALE || "",
   }, IMAGES, extra || {});
   bouton.disabled = true;
   if(!extra || !extra.attendre){
@@ -1859,7 +1908,70 @@ function envoyer(extra){
     });
 }
 
-document.getElementById("lancer").addEventListener("click", () => { ATTENTE_DEPUIS = null; envoyer(null); });
+// --- Enrichir la description (24/09) -----------------------------------------
+// Moins de MOTS_POUR_UNE_SCENE mots ne décrivent pas une scène (video.py, même
+// constante) : « un phare » a donné trois vidéos sans phare.
+const MOTS_POUR_UNE_SCENE = 8;
+let ORIGINALE = null;      // le texte tapé, quand la zone montre la version enrichie
+let DEJA_PROPOSE = false;  // un seul détour par l'enrichissement avant de lancer
+function motsDe(t){ return (t || "").trim().split(/\s+/).filter(Boolean).length; }
+
+async function enrichir(){
+  const zone = document.getElementById("description");
+  const note = document.getElementById("enrichieNote");
+  const bouton = document.getElementById("enrichir");
+  const texte = zone.value.trim();
+  if(!texte){ note.textContent = "Décrivez d’abord la scène en quelques mots."; return false; }
+  bouton.disabled = true;
+  note.textContent = "Le chat détaille la scène…";
+  try {
+    const r = await fetch("/video/enrichir", {method:"POST", headers:ENTETES,
+                                              body:JSON.stringify({description: texte})});
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok){
+      note.textContent = d.detail || "La description n’a pas pu être enrichie : elle reste la vôtre.";
+      return false;
+    }
+    ORIGINALE = ORIGINALE || texte;
+    zone.value = d.enrichie;
+    note.textContent = "Description détaillée en anglais par le chat : le modèle vidéo "
+      + "comprend mieux une scène décrite ainsi. Relisez-la, modifiez-la si besoin. "
+      + "Votre texte : « " + ORIGINALE + " ». ";
+    const retour = document.createElement("button");
+    retour.className = "discret";
+    retour.textContent = "Revenir à mon texte";
+    retour.onclick = () => { zone.value = ORIGINALE; ORIGINALE = null; note.textContent = ""; };
+    note.append(retour);
+    return true;
+  } catch(e){
+    note.textContent = "Le chat ne répond pas : la description reste la vôtre.";
+    return false;
+  } finally {
+    bouton.disabled = false;
+  }
+}
+document.getElementById("enrichir").addEventListener("click", enrichir);
+// La zone vidée : on repart de zéro, l'ancien texte tapé n'est plus le titre.
+document.getElementById("description").addEventListener("input", (e) => {
+  if(!e.target.value.trim()){ ORIGINALE = null; DEJA_PROPOSE = false;
+                              document.getElementById("enrichieNote").textContent = ""; }
+});
+
+document.getElementById("lancer").addEventListener("click", async () => {
+  ATTENTE_DEPUIS = null;
+  const n = motsDe(document.getElementById("description").value);
+  if(!ORIGINALE && !DEJA_PROPOSE && n > 0 && n < MOTS_POUR_UNE_SCENE){
+    DEJA_PROPOSE = true;
+    const ok = await enrichir();
+    document.getElementById("etat").textContent = ok
+      ? "Votre description était très courte : elle a été détaillée ci-dessus. "
+        + "Relisez-la, puis cliquez à nouveau sur « Fabriquer »."
+      : "Description très courte, et elle n’a pas pu être détaillée : cliquez à "
+        + "nouveau sur « Fabriquer » pour lancer tel quel, ou décrivez davantage la scène.";
+    return;
+  }
+  envoyer(null);
+});
 
 // Dans cet ordre, et pas l'inverse : le pied de page et la ligne de licence
 // nomment le modèle de la maison, ce qu'ils ne peuvent faire que si l'on sait
