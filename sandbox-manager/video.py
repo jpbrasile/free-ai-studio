@@ -660,6 +660,47 @@ def temps_loueur_est_mesure(qualite: str, duree: str) -> bool:
     return (str(qualite), str(duree)) in SECONDES_MESUREES
 
 
+# KAGGLE (Tesla T4, float16). UN SEUL clip chronometre, le 24/09/2026,
+# `639ae707` : 17 images, calcul 349 s dans le carnet, 623 s vus du
+# gestionnaire (installation, poids retelecharges, chargement, envoi et
+# relecture du carnet : 274 s qui ne dependent pas de la duree).
+# Au meme nombre d'images, le L4 de Modal calcule en 117 s (`0d1afe0e`) :
+# le T4 va 2,98 fois moins vite. Les autres durees prennent donc la courbe
+# MESUREE du L4 (sans son chargement, 151 - 117 = 34 s), multipliee par ce
+# rapport. C'est une extrapolation d'un point : elle suppose que le T4 garde
+# le meme retard quand le clip s'allonge, ce que rien n'a verifie. La page le
+# dit (<< estime >>), et seule la duree de 1 s est dite << mesuree >>.
+KAGGLE_IMAGES_MESUREES = 17
+KAGGLE_TOTAL_MESURE_S = 623
+KAGGLE_CALCUL_MESURE_S = 349
+KAGGLE_FIXE_S = KAGGLE_TOTAL_MESURE_S - KAGGLE_CALCUL_MESURE_S
+L4_CALCUL_17_IMAGES_S = 117
+L4_HORS_CALCUL_S = SECONDES_MESUREES[("rapide", "1")] - L4_CALCUL_17_IMAGES_S
+RAPPORT_T4_L4 = KAGGLE_CALCUL_MESURE_S / L4_CALCUL_17_IMAGES_S
+# Kaggle arrete lui-meme le carnet a ce delai (app.py, `run_kaggle`).
+KAGGLE_LIMITE_S = int(os.getenv("KAGGLE_JOB_TIMEOUT_SECONDS", "3600"))
+
+
+def secondes_kaggle(duree: str) -> dict | None:
+    """Le temps d'un clip << rapide >> sur Kaggle, de l'envoi a la video rendue.
+
+    {"secondes", "mesure", "tient"} ; `tient` dit si l'estimation reste sous
+    le delai ou Kaggle arrete le carnet. None hors des durees offertes."""
+    if str(duree) not in DUREES:
+        return None
+    images = images_pour(int(duree), fps_de("rapide"))
+    if images == KAGGLE_IMAGES_MESUREES:
+        secondes, mesure = float(KAGGLE_TOTAL_MESURE_S), True
+    else:
+        l4 = secondes_loueur("rapide", duree)
+        if l4 is None:
+            return None
+        secondes = round(KAGGLE_FIXE_S + RAPPORT_T4_L4 * (l4 - L4_HORS_CALCUL_S))
+        mesure = False
+    return {"secondes": secondes, "mesure": mesure,
+            "tient": secondes < KAGGLE_LIMITE_S}
+
+
 def prix_estime(qualite: str, duree: str):
     """Ce que cette location couterait, en dollars, ou None si on n'en sait rien.
 
@@ -1251,6 +1292,7 @@ const ENTETES = {"Authorization":"Bearer "+CLE, "Content-Type":"application/json
 const IMAGES = {};
 let minuteur = null;
 let MODELES = null;
+let KAGGLE_TEMPS = null;   // {duree: {secondes, mesure, tient}}, servi par /video/budget
 // Le modèle loué : `QUALITE_LOUEE_PAR_DEFAUT` côté serveur, posé à l'affichage.
 const QUALITE_LOUEE = "__QUALITE_LOUEE__";
 let CARTE_POSSIBLE = false;   // cet ordinateur a-t-il une carte branchée au Studio
@@ -1380,7 +1422,9 @@ function rafraichirBudget(){
     .then(d => {
       document.getElementById("banniere").innerHTML = budgetTexte(d.budget);
       MODELES = d.modeles;
+      KAGGLE_TEMPS = d.kaggle_temps || null;
       majLicence();
+      majNoteLoueur();
       if(d.kaggle_permis === false){
         const k = document.querySelector('#ou option[value="kaggle"]');
         k.disabled = true;
@@ -1605,6 +1649,20 @@ function reglageActuel(){
   return s ? s.value : null;
 }
 
+// Kaggle est lent (24/09 : 10 min pour 1 s) : on le lance en tâche de fond.
+// La page dit donc combien de temps, AVANT, et qu'on peut fermer la page.
+function tempsKaggle(){
+  const t = KAGGLE_TEMPS && KAGGLE_TEMPS[document.getElementById("duree").value];
+  if(!t) return "";
+  const minutes = Math.max(1, Math.round(t.secondes / 60));
+  return "Sur Kaggle, ce clip prend environ " + minutes + " min"
+    + (t.mesure ? " (mesuré)" : " (estimé d’après un clip d’1 s mesuré)")
+    + ". Il se fabrique en tâche de fond : vous pouvez fermer cette page, "
+    + "il vous attendra dans « Vos travaux »."
+    + (t.tient ? "" : " Attention : Kaggle arrête le calcul au bout d’une heure, "
+                      + "ce clip risque de ne pas finir.");
+}
+
 // Kaggle choisi, mais la carte d'ici passe d'abord : le dire AU MOMENT du choix.
 function majNoteLoueur(){
   const note = document.getElementById("noteLoueur");
@@ -1618,11 +1676,14 @@ function majNoteLoueur(){
   } else if(CARTE_POSSIBLE && loueur === "kaggle" && reglage === "toujours-maison"){
     texte = "Kaggle ne servira pas : « Toujours à la maison » fabrique le clip "
           + "sur la carte de cet ordinateur.";
+  } else if(loueur === "kaggle"){
+    texte = tempsKaggle();
   }
   note.textContent = texte;
   note.hidden = !texte;
 }
 document.getElementById("ou").addEventListener("change", majNoteLoueur);
+document.getElementById("duree").addEventListener("change", majNoteLoueur);
 
 function chargerReglage(){
   return fetch("/video/ou-calculer", {headers:{"Authorization":"Bearer "+CLE}})

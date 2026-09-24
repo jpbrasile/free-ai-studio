@@ -1047,3 +1047,26 @@ def test_la_page_n_a_plus_de_menu_de_qualite_et_loue_en_rapide(sandbox):
     assert 'const QUALITE_LOUEE = "%s";' % sandbox.video.QUALITE_LOUEE_PAR_DEFAUT in page
     assert "__QUALITE_LOUEE__" not in page
     assert "qualite: QUALITE_LOUEE" in page
+
+
+# --- 7. Kaggle : lent, donc dit AVANT, et lance en tache de fond (24/09) -------
+
+def test_le_temps_kaggle_est_servi_mesure_pour_1_s_estime_ailleurs(studio):
+    """24/09 : 10 min 23 s pour 1 s sur Kaggle (T4, float16, `639ae707`). Le
+    proprietaire : << on dit lent, a faire en tache de fond ; on peut extrapoler
+    la duree max et son temps >>. Seul 1 s est mesure ; le reste est estime, et
+    le plus long clip offert doit finir avant que Kaggle arrete le carnet."""
+    video = studio.video
+    client = TestClient(studio.app, base_url=LOCAL)
+    temps = client.get("/video/budget", headers=CLE).json()["kaggle_temps"]
+    assert set(temps) == set(video.DUREES)
+    assert temps["1"] == {"secondes": 623, "mesure": True, "tient": True}
+    autres = [temps[d] for d in video.DUREES if d != "1"]
+    assert autres and not any(t["mesure"] for t in autres)
+    # Plus long clip, plus long temps -- et jamais moins que le clip mesure.
+    suite = [temps[d]["secondes"] for d in sorted(video.DUREES, key=int)]
+    assert suite == sorted(suite) and suite[0] == 623
+    plus_long = temps[str(max(map(int, video.DUREES)))]
+    assert plus_long["tient"] and plus_long["secondes"] < video.KAGGLE_LIMITE_S
+    # Le rapport vient des deux mesures a 17 images, pas d'un chiffre pose.
+    assert round(video.RAPPORT_T4_L4, 2) == 2.98

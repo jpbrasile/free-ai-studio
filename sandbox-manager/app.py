@@ -2813,6 +2813,9 @@ def video_budget(request: Request, authorization: Optional[str] = Header(default
         "kaggle_configure": kaggle_configured(),
         "kaggle_permis": raison is None,
         "kaggle_raison": raison,
+        # Le temps d'un clip sur Kaggle, par duree : la page le montre quand
+        # Kaggle est choisi, pour qu'on le lance en tache de fond (24/09).
+        "kaggle_temps": {d: video.secondes_kaggle(d) for d in video.DUREES},
     }
 
 

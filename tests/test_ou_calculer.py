@@ -617,29 +617,42 @@ def test_la_boite_d_attente_montre_la_raison_quand_la_memoire_suffit():
 
 def test_choisir_kaggle_quand_la_carte_passe_avant_se_voit_tout_de_suite():
     """23/09 : « phare lance » sur Kaggle, parti sur la carte d'ici, sans rappel.
-    La note apparait au choix de Kaggle, et seulement quand la carte passe avant."""
+    La note apparait au choix de Kaggle, et seulement quand la carte passe avant.
+    24/09 : quand Kaggle servira vraiment, elle dit son temps et la tache de fond."""
     import shutil
     import subprocess
     if not shutil.which("node"):
         pytest.skip("node absent")
     page = (RACINE / "sandbox-manager" / "video.py").read_text(encoding="utf-8")
-    debut = page.index("function majNoteLoueur(){")
-    fin = page.index("\n}\n", debut) + 3
+    debut = page.index("function tempsKaggle(){")
+    fin = page.index("\n}\n", page.index("function majNoteLoueur(){")) + 3
     corps = page[debut:fin]
-    cas = [("kaggle", "maison-si-libre", True), ("kaggle", "toujours-maison", True),
-           ("kaggle", "toujours-modal", True), ("modal", "maison-si-libre", True),
-           ("kaggle", "maison-si-libre", False)]
-    code = ("let CARTE_POSSIBLE, OU, REGLAGE; const note = {};\n"
-            "const document = {getElementById: (i) => i === 'ou' ? {value: OU} : note};\n"
+    temps = {"1": {"secondes": 623, "mesure": True, "tient": True},
+             "5": {"secondes": 2413, "mesure": False, "tient": True},
+             "9": {"secondes": 4000, "mesure": False, "tient": False}}
+    cas = [("kaggle", "maison-si-libre", True, "1"), ("kaggle", "toujours-maison", True, "1"),
+           ("kaggle", "toujours-modal", True, "1"), ("kaggle", "maison-si-libre", False, "5"),
+           ("kaggle", "toujours-modal", True, "9"),
+           ("modal", "maison-si-libre", True, "1"), ("modal", "toujours-modal", False, "5"),
+           ("kaggle", "toujours-modal", True, "7")]
+    code = ("let CARTE_POSSIBLE, OU, REGLAGE, DUREE; const note = {};\n"
+            "const KAGGLE_TEMPS = " + json.dumps(temps) + ";\n"
+            "const document = {getElementById: (i) => i === 'ou' ? {value: OU}"
+            " : i === 'duree' ? {value: DUREE} : note};\n"
             "const reglageActuel = () => REGLAGE;\n" + corps
-            + "".join("\nCARTE_POSSIBLE=%s; OU=%s; REGLAGE=%s; majNoteLoueur();"
+            + "".join("\nCARTE_POSSIBLE=%s; OU=%s; REGLAGE=%s; DUREE=%s; majNoteLoueur();"
                       " console.log(JSON.stringify([note.hidden, note.textContent]));"
-                      % (json.dumps(c), json.dumps(o), json.dumps(r)) for o, r, c in cas))
+                      % (json.dumps(c), json.dumps(o), json.dumps(r), json.dumps(d))
+                      for o, r, c, d in cas))
     sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
                             encoding="utf-8", timeout=20)
     assert sortie.returncode == 0, sortie.stderr
     vus = [json.loads(ligne) for ligne in sortie.stdout.strip().splitlines()]
     assert vus[0][0] is False and "Toujours sur une machine louée" in vus[0][1], vus[0]
     assert vus[1][0] is False and "Kaggle ne servira pas" in vus[1][1], vus[1]
-    # Loue a coup sur, Modal choisi, ou pas de carte ici : rien a rappeler.
-    assert all(v == [True, ""] for v in vus[2:]), vus[2:]
+    # Kaggle servira : le temps, mesure ou estime, et la tache de fond.
+    assert "environ 10 min (mesuré)" in vus[2][1] and "« Vos travaux »" in vus[2][1], vus[2]
+    assert "environ 40 min (estimé" in vus[3][1] and "une heure" not in vus[3][1], vus[3]
+    assert "au bout d’une heure" in vus[4][1], vus[4]
+    # Modal choisi, ou une duree sans temps connu : rien a dire.
+    assert all(v == [True, ""] for v in vus[5:]), vus[5:]
