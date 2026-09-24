@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import httpx
-from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,9 @@ import chanson
 # mordu le 22/09/2026 : un filtre de lecture sur la configuration a emporte les
 # jetons Modal. Ce que cela ne ferme PAS est dit en tete du module.
 import coffre
+# Le carnet Colab ouvert dans le navigateur de la personne, pilote par
+# cellules (PLAN.md 17.4). Rien n'y tourne sur cet ordinateur.
+import colab_pont
 import composite
 import depenses
 # Les derniers travaux de /video, /chanson et /dialogue : une page rechargee
@@ -1203,6 +1206,72 @@ def prepare_colab_handoff(jid: str, code: str, attempts: list[dict] | None = Non
     write_job(jid, job)
 
 
+# Le port que le NAVIGATEUR voit : celui que docker-compose publie (8020), pas
+# celui du conteneur (8000). L'onglet Colab ouvre ws://localhost:<ce port>.
+PORT_PUBLIE = int(os.getenv("SANDBOX_MANAGER_PORT_PUBLIE", "8020"))
+COLAB_DELAI_S = int(os.getenv("COLAB_JOB_TIMEOUT_SECONDS", "3600"))
+
+
+def colab_execute(jid: str, code: str, gpu: bool, delai_s: int = COLAB_DELAI_S) -> dict:
+    """Le travail dans le carnet Colab branche, s'il y en a un.
+
+    Meme forme de reponse que les autres executeurs. Toute impossibilite --
+    pas de carnet, carnet occupe, pas de carte, carnet debranche -- devient
+    BackendUnavailable avec sa phrase : ce n'est jamais l'erreur du code."""
+    od = JOBS / jid / "output"
+
+    def arret() -> bool:
+        return bool(read_job(jid).get("arret_demande"))
+
+    def progres(e: dict) -> None:
+        job = read_job(jid)
+        job["colab"] = e
+        write_job(jid, job)
+
+    try:
+        data = colab_pont.executer(colab_pont.PONT, code, od, delai_s, gpu=gpu,
+                                   arret=arret, progres=progres)
+    except (colab_pont.ColabAbsent, colab_pont.ColabOccupe,
+            colab_pont.ColabSansCarte, colab_pont.ColabErreur) as exc:
+        raise BackendUnavailable(str(exc)) from exc
+    data["artifacts"] = [add_artifact(jid, p, "colab") for p in data.pop("fichiers")]
+    return data
+
+
+def run_colab(jid: str, code: str, gpu: bool) -> None:
+    """Un travail envoye au carnet ; sans carnet branche, le carnet a importer
+    comme avant -- la personne a toujours une suite."""
+    if not colab_pont.PONT.branche():
+        prepare_colab_handoff(jid, code)
+        return
+    job = read_job(jid)
+    job.update({"status": "running", "provider_effective": "colab", "started_at": job.get("started_at", time.time())})
+    write_job(jid, job)
+    try:
+        data = colab_execute(jid, code, gpu)
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+        return
+    finish_execution(jid, "colab", data)
+
+
+def _essayer_colab(jid: str, code: str, gpu: bool, attempts: list) -> bool:
+    if not colab_pont.PONT.branche():
+        attempts.append({"provider": "colab", "result": "not_connected"})
+        return False
+    try:
+        job = read_job(jid)
+        job.update({"status": "running", "provider_effective": "colab"})
+        write_job(jid, job)
+        data = colab_execute(jid, code, gpu)
+        attempts.append({"provider": "colab", "result": "executed", "exit_code": data.get("exit_code")})
+        finish_execution(jid, "colab", data, attempts)
+        return True
+    except BackendUnavailable as exc:
+        attempts.append({"provider": "colab", "result": "unavailable", "detail": str(exc)[:500]})
+    return False
+
+
 def _essayer_modal(jid: str, code: str, gpu: bool, internet: bool, attempts: list) -> bool:
     if not modal_configured():
         attempts.append({"provider": "modal", "result": "not_configured"})
@@ -1297,8 +1366,61 @@ def run_auto(jid: str, code: str, gpu: bool, internet: bool, kaggle_permis: bool
     else:
         attempts.append({"provider": "kaggle", "result": "not_configured"})
 
+    # Un carnet Colab branche par la personne passe avant le fichier a importer.
+    # Pas en Studio partage : le carnet est celui d'une seule personne, comme
+    # les identifiants Kaggle.
+    if kaggle_permis and _essayer_colab(jid, code, gpu, attempts):
+        return
     attempts.append({"provider": "colab", "result": "handoff"})
     prepare_colab_handoff(jid, code, attempts)
+
+
+@app.get("/colab/etat")
+def colab_etat(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le carnet Colab est-il branche ? Et l'adresse qui le branche.
+
+    L'adresse porte le jeton du pont : elle ne sort que contre la cle du
+    service, comme le reste des pages. En Studio partage, pas d'adresse du
+    tout : le carnet serait celui d'une seule personne."""
+    auth(authorization)
+    raison = contexte_partage(request)
+    etat = colab_pont.PONT.etat()
+    etat["coupe"] = raison
+    if raison is None:
+        etat["adresse"] = colab_pont.PONT.adresse(PORT_PUBLIE)
+    return etat
+
+
+@app.websocket("/{chemin:path}")
+async def colab_branchement(websocket: WebSocket, chemin: str = ""):
+    """L'onglet Colab se branche ici (ws://localhost:8020, sous-protocole mcp).
+
+    Trois gardes avant d'accepter : l'Origin est Colab, le jeton est celui de
+    l'adresse donnee par /colab/etat, et aucun autre carnet n'est branche."""
+    if contexte_partage() is not None:
+        await websocket.close(code=1008)
+        return
+    auth_entete = websocket.headers.get("authorization", "")
+    jeton = websocket.query_params.get("access_token") or (
+        auth_entete[7:] if auth_entete.startswith("Bearer ") else "")
+    refus = colab_pont.PONT.refus(websocket.headers.get("origin"), jeton)
+    if refus:
+        colab_pont.PONT.dernier_refus = refus
+        log.warning("branchement Colab refuse : %s", refus)
+        await websocket.close(code=1008)
+        return
+    await websocket.accept(subprotocol="mcp")
+    log.info("carnet Colab branche")
+
+    async def recevoir() -> str:
+        return await websocket.receive_text()
+
+    try:
+        await colab_pont.PONT.servir(websocket.send_text, recevoir)
+    except (WebSocketDisconnect, colab_pont.ColabErreur) as exc:
+        log.info("carnet Colab debranche : %s", type(exc).__name__)
+    except Exception:  # noqa: BLE001 -- un onglet qui part mal ne tue pas le service
+        log.exception("carnet Colab debranche sur une erreur")
 
 
 @app.get("/health")
@@ -2010,9 +2132,10 @@ def providers(request: Request, authorization: Optional[str] = Header(default=No
             "direct_url": "https://colab.research.google.com/",
             "api_beta_allowlist": True,
             "api_enabled": COLAB_API_ENABLED,
-            "automatic_execution": False,
+            # Vrai quand la personne a branche un carnet ouvert (/colab/etat).
+            "automatic_execution": raison is None and colab_pont.PONT.branche(),
             "automatic_handoff": True,
-            "note": "Direct access stays available; auto routing can prepare a notebook handoff when other execution backends are unavailable.",
+            "note": "Direct access stays available; an open Colab notebook connected to the Studio runs jobs cell by cell; otherwise auto routing prepares a notebook handoff.",
         },
     }
 
@@ -2046,6 +2169,8 @@ def create_job(req: JobRequest, request: Request, authorization: Optional[str] =
         threading.Thread(target=run_local, args=(jid, req.code, req.gpu), daemon=True).start()
     elif req.provider == "kaggle":
         threading.Thread(target=run_kaggle, args=(jid, req.code, req.gpu, req.internet), daemon=True).start()
+    elif raison is None and colab_pont.PONT.branche():
+        threading.Thread(target=run_colab, args=(jid, req.code, req.gpu), daemon=True).start()
     else:
         prepare_colab_handoff(jid, req.code)
     return read_job(jid)
@@ -2515,6 +2640,14 @@ def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
                              "lui-même, et votre quota court jusque-là."}
     elif fournisseur == "maison":
         constat = arreter_maison(jid)
+    elif fournisseur == "colab":
+        # Le fil du travail relit cette marque a chaque suivi (toutes les
+        # colab_pont.SUIVI_S secondes) et tue le calcul dans le carnet.
+        constat = {"arretees": 1 if colab_pont.PONT.branche() else 0,
+                   "detail": ("Le calcul dans votre carnet Colab est tué à la prochaine vérification, "
+                              "dans %d s au plus. Le carnet reste ouvert." % int(colab_pont.SUIVI_S))
+                   if colab_pont.PONT.branche() else
+                   "Le carnet Colab n'est plus branché : rien à arrêter depuis le Studio."}
     else:
         constat = {"arretees": 0,
                    "detail": f"Rien à arrêter à distance pour « {fournisseur or 'inconnu'} »."}
@@ -2657,6 +2790,11 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
             # Kaggle ne facture rien : pas de compteur, mais un GPU plus petit et
             # un modele a retelecharger a chaque fois.
             run_kaggle(jid, code, True, True)
+            return
+        if ou == "colab":
+            # Le carnet de la personne : rien a encaisser non plus. Sans carte
+            # dans le carnet, l'echec dit quel menu ouvrir.
+            finish_execution(jid, "colab", colab_execute(jid, code, True, video.DUREE_MAX_S))
             return
         donnees = modal_execute(
             jid, code, True, True,
@@ -2906,12 +3044,19 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
     # la maison ne le prend pas. C'est `ou_calculer.decider()` qui tranche entre
     # la carte d'ici et cette location -- ou qui rend la question au client.
     ou = str(payload.get("ou") or "modal")
-    if ou not in ("modal", "kaggle"):
+    if ou not in ("modal", "kaggle", "colab"):
         ou = "modal"
     if ou == "kaggle":
         raison = contexte_partage(request)
         if raison:
             raise refus_kaggle(raison)
+    if ou == "colab":
+        raison = contexte_partage(request)
+        if raison:
+            raise HTTPException(403, "Colab piloté est coupé ici (%s) : le carnet branché serait "
+                                     "celui d'une seule personne." % raison)
+        if not colab_pont.PONT.branche():
+            raise HTTPException(503, colab_pont.PHRASE_ABSENT)
     try:
         plan = video.preparer(payload, pour_modal=(ou == "modal"))
     except ValueError as exc:
@@ -2954,6 +3099,10 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
         # La table des modeles porte la carte LOUEE chez Modal ; Kaggle donne
         # un T4. La fiche disait « L4 » pour le clip Kaggle du 23/09.
         fiche["carte"] = "T4 (Kaggle)"
+    elif ou == "colab":
+        # La carte que Colab donnera n'est connue qu'au lancement ; la
+        # cellule de depart la lit (`nvidia-smi -L`) et la fiche la reprend.
+        fiche["carte"] = "celle de votre carnet Colab (T4 gratuite si Colab en donne une)"
     jid = uuid.uuid4().hex
     write_job(jid, {
         "id": jid,

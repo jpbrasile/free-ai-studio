@@ -1322,7 +1322,7 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
        Celui-ci dit quelle machine on loue QUAND on loue. Garder le mot « Où »
        aurait laissé deux réglages se disputer la même question. -->
   <label>Si on loue
-    <select id="ou"><option value="modal" selected>Modal — machine louée (carte bancaire exigée)</option><option value="kaggle">Kaggle — gratuit, plus lent</option></select>
+    <select id="ou"><option value="modal" selected>Modal — machine louée (carte bancaire exigée)</option><option value="kaggle">Kaggle — gratuit, plus lent</option><option value="colab">Colab — gratuit, dans votre carnet ouvert</option></select>
   </label>
   <button id="lancer" class="primaire">Fabriquer</button>
 </div>
@@ -1331,6 +1331,17 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
      « À la maison si la carte est libre » passe avant « Si on loue ». Rien ne le
      rappelait au moment de choisir Kaggle. Cette note le dit, sans rien régler. -->
 <p id="noteLoueur" class="avert" hidden></p>
+<!-- Colab (PLAN 17.4) : le clip tourne dans le carnet que la personne ouvre et
+     branche elle-meme. Cette boite n'apparait que quand Colab est choisi. -->
+<div id="colabBoite" class="avert" hidden>
+  <div id="colabEtat">Carnet Colab : vérification…</div>
+  <ol id="colabEtapes">
+    <li><a id="colabOuvrir" href="#" target="_blank" rel="noopener">Ouvrir Colab ↗</a> (votre compte Google).</li>
+    <li>Dans Colab, acceptez la boîte « Connect to a local Colab MCP server ».</li>
+    <li>Menu « Exécution » › « Modifier le type d’exécution » › « GPU T4 », puis « Enregistrer ».</li>
+  </ol>
+  <div>Gardez l’onglet Colab ouvert pendant le calcul : le Studio y ajoute ses cellules sous vos yeux, puis les retire.</div>
+</div>
 
 <!-- N'apparait QUE si cet ordinateur a une carte branchee au Studio. Celui qui
      n'en a pas ne doit pas voir un reglage qui ne le concerne pas. -->
@@ -1511,6 +1522,9 @@ function rafraichirBudget(){
         const k = document.querySelector('#ou option[value="kaggle"]');
         k.disabled = true;
         k.textContent = "Kaggle — coupé ici : Studio partagé";
+        const c = document.querySelector('#ou option[value="colab"]');
+        c.disabled = true;
+        c.textContent = "Colab — coupé ici : Studio partagé";
       }
       const p = document.getElementById("pied");
       // Deux modèles, pas un : celui qu'on loue et celui d'ici. Le pied ne
@@ -1579,7 +1593,8 @@ function nomDeFichier(titre){
 // valeurs par defaut (5 secondes, Modal) -- on croyait suivre un clip de 5 s
 // chez Modal, c'etait 1 s chez Kaggle. Et « le modele se telecharge (une seule
 // fois) » est faux chez Kaggle, qui repart d'une machine vide a chaque clip.
-const NOMS_FOURNISSEURS = {modal: "Modal", kaggle: "Kaggle", maison: "la carte de cet ordinateur"};
+const NOMS_FOURNISSEURS = {modal: "Modal", kaggle: "Kaggle", colab: "votre carnet Colab",
+                           maison: "la carte de cet ordinateur"};
 function enAttente(j){
   const t = Math.max(0, Math.round((Date.now()/1000) - (j.created_at || Date.now()/1000)));
   const duree = t < 120 ? (t + " s") : (Math.floor(t / 60) + " min " + (t % 60) + " s");
@@ -1591,6 +1606,9 @@ function enAttente(j){
   const attente = j.fournisseur === "kaggle"
     ? "Kaggle repart d’une machine vide à chaque clip : démarrage, installation et "
       + "téléchargement du modèle se refont à chaque fois, c’est plus lent."
+    : j.fournisseur === "colab"
+    ? "Le calcul tourne dans votre carnet Colab : gardez son onglet ouvert. Le modèle "
+      + "s’y télécharge à chaque clip, c’est plus lent."
     : "Le tout premier clip est le plus long : le modèle se télécharge (une seule fois).";
   return "⏳ " + (j.titre ? ("« " + enTexte(j.titre) + " » — ") : "")
     + (quoi.length ? (quoi.join(", ") + " — ") : "")
@@ -1760,11 +1778,53 @@ function majNoteLoueur(){
           + "sur la carte de cet ordinateur.";
   } else if(loueur === "kaggle"){
     texte = tempsKaggle();
+  } else if(CARTE_POSSIBLE && loueur === "colab" && reglage === "maison-si-libre"){
+    texte = "Colab ne servira que si la carte de cet ordinateur est occupée : "
+          + "« À la maison si la carte est libre » passe avant.";
+  } else if(loueur === "colab"){
+    texte = "Colab repart d’une machine vide à chaque clip : le modèle s’y télécharge "
+          + "à chaque fois, comptez comme Kaggle. La carte gratuite n’est pas garantie.";
   }
   note.textContent = texte;
   note.hidden = !texte;
 }
 document.getElementById("ou").addEventListener("change", majNoteLoueur);
+
+// Le bouton de la boite « carte prise » : on loue chez Modal ou Kaggle, on
+// n'en loue rien chez Colab -- c'est le carnet de la personne, gratuit.
+function texteLouer(d){
+  const loueur = document.getElementById("ou").value;
+  if(loueur === "colab") return "Envoyer à votre carnet Colab";
+  return "Louer chez " + (loueur === "kaggle" ? "Kaggle" : "Modal") + prix(d);
+}
+
+let COLAB_MINUTEUR = null;
+function majColab(){
+  const boite = document.getElementById("colabBoite");
+  const choisi = document.getElementById("ou").value === "colab";
+  boite.hidden = !choisi;
+  if(COLAB_MINUTEUR){ clearTimeout(COLAB_MINUTEUR); COLAB_MINUTEUR = null; }
+  if(!choisi) return;
+  fetch("/colab/etat", {headers:{"Authorization":"Bearer "+CLE}})
+    .then(r => r.json())
+    .then(e => {
+      const etat = document.getElementById("colabEtat");
+      if(e.coupe){
+        etat.textContent = "Colab piloté est coupé ici (" + e.coupe + ").";
+        document.getElementById("colabEtapes").hidden = true;
+        return;
+      }
+      document.getElementById("colabOuvrir").href = e.adresse;
+      document.getElementById("colabEtapes").hidden = !!e.branche;
+      etat.textContent = e.branche
+        ? (e.occupe ? "✅ Carnet Colab branché — il fait déjà un travail du Studio."
+                    : "✅ Carnet Colab branché : vous pouvez fabriquer.")
+        : "⏳ Aucun carnet Colab branché pour l’instant.";
+    })
+    .catch(() => { document.getElementById("colabEtat").textContent = "Carnet Colab : état illisible."; })
+    .finally(() => { COLAB_MINUTEUR = setTimeout(majColab, 3000); });
+}
+document.getElementById("ou").addEventListener("change", majColab);
 document.getElementById("duree").addEventListener("change", majNoteLoueur);
 
 function chargerReglage(){
@@ -1860,7 +1920,7 @@ function demanderAuClient(d){
       + "j’attends depuis " + depuis + " s."
       + (d.titre ? "" : " On n’arrête jamais le calcul qui tient la carte.") + "</div>"
       + '<div class="ligne">'
-      + '<button class="primaire" id="btLouer">Louer chez ' + (document.getElementById("ou").value === "kaggle" ? "Kaggle" : "Modal") + prix(d) + '</button>'
+      + '<button class="primaire" id="btLouer">' + texteLouer(d) + '</button>'
       + '<button id="btAnnuler">Annuler</button></div>';
     document.getElementById("btLouer").onclick = () => { fermerAttente(); envoyer({ou_calculer:"toujours-modal"}); };
     document.getElementById("btAnnuler").onclick = () => {
@@ -1884,7 +1944,7 @@ function demanderAuClient(d){
     + "</div>"
     + '<div class="ligne">'
     + (peutAttendre ? '<button class="primaire" id="btAttendre">J’attends</button>' : "")
-    + '<button id="btLouer">Louer chez ' + (document.getElementById("ou").value === "kaggle" ? "Kaggle" : "Modal") + prix(d) + '</button>'
+    + '<button id="btLouer">' + texteLouer(d) + '</button>'
     + '<button id="btAnnuler">Annuler</button></div>';
   if(peutAttendre){
     document.getElementById("btAttendre").onclick = () => { ATTENTE_DEPUIS = Date.now(); envoyer({attendre:true}); };

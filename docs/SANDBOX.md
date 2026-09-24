@@ -87,11 +87,35 @@ Ce pilotage suppose **vos** identifiants, sur **votre** machine. Si le Studio se
 
 Même sur votre machine, le mode `auto` n'envoie sur Kaggle que les jobs `gpu=true` : la politique d'usage de Kaggle exclut ce qui n'est pas de la science des données. Un job sans GPU passe au handoff Colab, avec `cpu_job_not_sent` dans `fallback_attempts` ; `GET /providers` le dit (`kaggle.automatic_only_for: "gpu_jobs"`).
 
-## Colab direct / handoff
+## Colab : le carnet ouvert, piloté par le Studio
 
-Colab reste accessible directement. Si tous les moteurs d'exécution automatique sont indisponibles, le provider `auto` prépare un `.ipynb` que l'utilisateur peut ouvrir dans Colab. Les résultats déposés dans `FREE_AI_OUTPUT_DIR` peuvent ensuite être réimportés dans le registre de ressources.
+Colab n'a pas d'API d'exécution ouverte à tous, et sa FAQ interdit, sur l'offre gratuite, de contourner l'interface du carnet. Le Studio passe donc **par** le carnet, avec le protocole de `googlecolab/colab-mcp` (Apache-2.0, Google), réimplémenté dans `sandbox-manager/colab_pont.py` :
 
-L'API Colab officielle reste en bêta/allowlist ; le Studio ne prétend pas disposer d'une exécution arbitraire universelle via cette API.
+1. `GET /colab/etat` donne une adresse `https://colab.research.google.com/notebooks/empty.ipynb#mcpProxyToken=…&mcpProxyPort=8020`. La page vidéo l'affiche dans le bouton « Ouvrir Colab ».
+2. La personne l'ouvre dans **son** navigateur, avec **son** compte Google, et accepte la boîte « Connect to a local Colab MCP server ». L'onglet se branche sur `ws://localhost:8020`.
+3. Le Studio ajoute ses cellules dans le carnet, sous les yeux de la personne. Le script tourne en arrière-plan dans la machine Colab. Une petite cellule le suit toutes les 10 s, puis les fichiers de `FREE_AI_OUTPUT_DIR` reviennent par morceaux de 256 Kio, avec contrôle de l'empreinte SHA-256. À la fin, les cellules du Studio sont retirées.
+
+Les gardes du branchement :
+- **Origin :** Colab seulement.
+- **Jeton :** tiré au hasard, renouvelé à chaque débranchement.
+- **Un seul carnet à la fois.**
+- **Studio partagé :** le branchement est coupé, comme Kaggle automatique.
+
+Rien ne s'exécute sur cet ordinateur : il envoie du texte de cellule et relit des sorties.
+
+Où ça sert :
+- **Vidéo :** « Si on loue » › « Colab ». Pour une vidéo, la carte du carnet doit être réglée sur GPU T4 (menu « Exécution » › « Modifier le type d'exécution ») ; sans carte, le travail ne part pas et la page le dit.
+- **`POST /jobs` avec `provider=colab` :** le travail va au carnet s'il est branché.
+- **Mode `auto` :** le carnet branché passe avant le fichier `.ipynb` à importer.
+- **Arrêt d'urgence :** il tue vraiment le calcul dans le carnet, dans les 10 s.
+
+Sans carnet branché, le comportement d'avant reste : `auto` prépare un `.ipynb` que l'utilisateur peut ouvrir dans Colab, et les résultats déposés dans `FREE_AI_OUTPUT_DIR` peuvent être réimportés dans le registre de ressources.
+
+**Vérifié :**
+- sur un faux carnet qui parle le même protocole et exécute les cellules (`tests/test_colab_pont.py`) ;
+- sur de vraies websockets (uvicorn, 24/09/2026) : 403 pour une mauvaise origine ou un mauvais jeton, et un travail avec fichier de 700 Ko rapatrié intact.
+
+**Non vérifié sur le vrai Colab** : voir `PLAN.md`, point 17.4.
 
 ## API pour l'agent
 
