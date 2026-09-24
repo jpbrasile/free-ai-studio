@@ -571,3 +571,45 @@ def test_un_reglage_inconnu_dans_le_fichier_rend_le_defaut(tmp_path, monkeypatch
     chemin.write_text(json.dumps({"reglage": "ailleurs"}), encoding="utf-8")
     monkeypatch.setattr(ou_calculer, "FICHIER", chemin)
     assert ou_calculer.reglage_lu() == ou_calculer.REGLAGE_DEFAUT
+
+
+# --- La raison d'une carte prise voyage avec ses chiffres (24/09/2026) --------
+# Verifie en vrai : la page affichait « 23,0 Go libres sur 24,0, il en faut
+# 11,5 » et attendait. julia.exe tenait la carte ; seule la sonde le disait.
+
+def sonde_tenue_par_julia(besoin_mo, delai_s=None):
+    return False, ("NVIDIA GeForce RTX 4090 : julia.exe (PID 76088) tient la carte, même "
+                   "sans y avoir encore écrit, et on ne l'arrête jamais."), CARTE_LIBRE
+
+
+def test_une_carte_tenue_par_un_autre_calcul_dit_qui_la_tient():
+    d = ou_calculer.decider(resume(), IMAGES_MESUREES,
+                            reglage=ou_calculer.TOUJOURS_MAISON, sonde=sonde_tenue_par_julia)
+    assert d["ou"] == ou_calculer.ATTENTE
+    assert "julia.exe (PID 76088)" in d["carte"]["raison"]
+    assert d["carte"]["libre_mo"] == CARTE_LIBRE["libre_mo"], "les chiffres restent"
+
+
+def test_la_boite_d_attente_montre_la_raison_quand_la_memoire_suffit():
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("node absent")
+    page = (RACINE / "sandbox-manager" / "video.py").read_text(encoding="utf-8")
+    debut = page.index("function demanderAuClient(d){")
+    fin = page.index("\n  boite.hidden = false;", debut)
+    corps = page[debut:fin] + "\n  return chiffres;\n}"
+    tenue = ou_calculer.decider(resume(), IMAGES_MESUREES,
+                                reglage=ou_calculer.TOUJOURS_MAISON, sonde=sonde_tenue_par_julia)
+    pleine = ou_calculer.decider(resume(), IMAGES_MESUREES,
+                                 reglage=ou_calculer.TOUJOURS_MAISON, sonde=sonde_prise)
+    code = ("const fr = (x, n) => x.toFixed(n).replace('.', ',');"
+            + "\nconst document = {getElementById: () => ({})};\n" + corps
+            + "\nconsole.log(demanderAuClient(" + json.dumps(tenue) + "));"
+            + "\nconsole.log(demanderAuClient(" + json.dumps(pleine) + "));")
+    sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
+                            encoding="utf-8", timeout=20)
+    assert sortie.returncode == 0, sortie.stderr
+    julia, memoire = sortie.stdout.strip().splitlines()
+    assert "julia.exe (PID 76088) tient la carte" in julia
+    assert "Go libres" in memoire and "julia" not in memoire, "une carte vraiment pleine garde ses chiffres"

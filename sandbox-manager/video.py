@@ -1668,7 +1668,13 @@ function prix(d){
 function demanderAuClient(d){
   const boite = document.getElementById("carteprise");
   const c = d.carte || {};
-  const chiffres = (c.libre_mo != null && c.totale_mo != null)
+  // Assez de mémoire et pourtant refusée : ce n'est pas la mémoire qui bloque,
+  // c'est un autre calcul (24/09 : « 23,0 Go libres, il en faut 11,5 », et on
+  // attendait — julia.exe tenait la carte). Alors on dit QUI, pas les chiffres.
+  const assez = c.libre_mo != null && d.besoin_mo != null
+    && c.libre_mo >= d.besoin_mo + (c.marge_mo || 0);
+  const chiffres = (assez && c.raison) ? c.raison
+    : (c.libre_mo != null && c.totale_mo != null)
     ? (c.nom + " : " + fr((c.libre_mo/1024), 1) + " Go libres sur "
        + fr((c.totale_mo/1024), 1)
        + (d.besoin_est_mesure ? ", il en faut " : ", il en faut au plus ")

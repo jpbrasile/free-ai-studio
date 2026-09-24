@@ -441,6 +441,11 @@ def decider(resume: dict, images: int | None, prix_estime_usd: float | None = No
     if libre:
         return reponse(MAISON, "Fabrique ici, gratuitement. " + phrase,
                        carte=carte, besoin=besoin)
+    # CE QUI BLOQUE, dit par la sonde, voyage avec les chiffres. 24/09 : la page
+    # ecrivait << 23,0 Go libres sur 24,0, il en faut 11,5 >> et attendait --
+    # la carte semblait libre. C'etait julia.exe qui la tenait, et seule cette
+    # phrase le disait.
+    carte = dict(carte, raison=phrase)
 
     if not carte.get("vue"):
         return louer_ou_demander("Aucune carte utilisable ici : " + phrase,
