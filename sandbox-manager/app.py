@@ -3832,6 +3832,37 @@ PHRASE_ARRET = ("Arrêt demandé. Aucune étape de plus ne part. Un travail en c
                 "(chat, image, voix) finit d'abord, et son résultat reste montré.")
 
 
+# Une pause oubliee ne tient pas un fil pour toujours : au-dela, la chaine
+# s'arrete d'elle-meme, et le dit.
+PAUSE_MAX_S = int(os.getenv("COMPOSITE_PAUSE_MAX_S", "3600"))
+
+
+def _attendre_le_feu_vert(course: dict, chaine: dict, rang: int, etape: dict):
+    """Mode pas a pas : la course attend « Continuer » ou « Arreter »."""
+    course["continuer"].clear()
+    course.pop("consigne_suivante", None)
+    course["pause"] = {"avant": rang, "fonction": etape["fonction"],
+                       "consigne": etape.get("demande") or ""}
+    course["etapes"][rang] = dict(course["etapes"][rang], statut="pause")
+    limite = time.monotonic() + PAUSE_MAX_S
+    try:
+        while not course["continuer"].is_set():
+            if course["arret"].is_set():
+                return None
+            if time.monotonic() > limite:
+                course["arret"].set()
+                raise composite.CompositeRefuse(
+                    composite.ARRETE_PAR_LE_CLIENT,
+                    "En pause depuis plus de %d min sans suite : la chaîne s'est arrêtée "
+                    "d'elle-même avant « %s ». Ce qui était déjà fait reste montré."
+                    % (PAUSE_MAX_S // 60, etape["fonction"]), ou=composite.EXECUTION)
+            course["continuer"].wait(0.25)
+        retouchee = (course.pop("consigne_suivante", None) or "").strip()
+        return retouchee if retouchee and retouchee != course["pause"]["consigne"] else None
+    finally:
+        course["pause"] = None
+
+
 def _courir(course: dict, chaine: dict, verdict: dict, entree) -> None:
     def suivi(rang, statut, rendu, sortie):
         vue = {"fonction": chaine["etapes"][rang]["fonction"], "statut": statut}
@@ -3845,8 +3876,10 @@ def _courir(course: dict, chaine: dict, verdict: dict, entree) -> None:
         course["etapes"][rang] = vue
 
     try:
+        pause = ((lambda rang, etape: _attendre_le_feu_vert(course, chaine, rang, etape))
+                 if course.get("pas_a_pas") else None)
         trace = composite.executer(chaine, composite.lancer_par_le_routeur, entree, verdict,
-                                   suivi=suivi, arret=course["arret"])
+                                   suivi=suivi, arret=course["arret"], pause=pause)
         course["resultat"] = _resultat_de_la_chaine(chaine, trace)
         course["etat"] = "rendu"
     except HTTPException as exc:
@@ -3871,14 +3904,21 @@ def _course(cid: str) -> dict:
 @app.post("/composite/demarrer")
 async def composite_demarrer(request: Request,
                              authorization: Optional[str] = Header(default=None)):
-    """Comme `/composite/lancer`, mais rend tout de suite un numero de course."""
+    """Comme `/composite/lancer`, mais rend tout de suite un numero de course.
+
+    `pas_a_pas` (formulaire) : la course attend « Continuer » avant chaque
+    etape a partir de la deuxieme. Sans lui, elle va d'un trait.
+    """
     auth(authorization)
     try:
         chaine, verdict, entree = await _preparer_le_lancement(request)
     except composite.CompositeRefuse as exc:
         raise _refus_composite(exc) from exc
+    pas_a_pas = str((await request.form()).get("pas_a_pas") or "").strip().lower() in (
+        "1", "true", "oui", "on")
     cid = uuid.uuid4().hex
     course = {"etat": "en_cours", "arret": threading.Event(), "sorties": {},
+              "pas_a_pas": pas_a_pas, "continuer": threading.Event(), "pause": None,
               "etapes": [{"fonction": e["fonction"], "statut": "attente"}
                          for e in chaine["etapes"]],
               "resultat": None, "erreur": None, "cree": time.time()}
@@ -3897,7 +3937,8 @@ def composite_course(cid: str, authorization: Optional[str] = Header(default=Non
     auth(authorization)
     course = _course(cid)
     return {"etat": course["etat"], "etapes": course["etapes"], "erreur": course["erreur"],
-            "resultat": course["resultat"], "arret_demande": course["arret"].is_set()}
+            "resultat": course["resultat"], "arret_demande": course["arret"].is_set(),
+            "pas_a_pas": course["pas_a_pas"], "pause": course["pause"]}
 
 
 @app.get("/composite/courses/{cid}/etapes/{rang}")
@@ -3918,6 +3959,22 @@ def composite_arreter(cid: str, authorization: Optional[str] = Header(default=No
         return {"detail": "Cette chaîne est déjà finie : rien n'a été arrêté."}
     course["arret"].set()
     return {"detail": PHRASE_ARRET}
+
+
+@app.post("/composite/courses/{cid}/continuer")
+async def composite_continuer(cid: str, request: Request,
+                              authorization: Optional[str] = Header(default=None)):
+    """Pas a pas : laisse partir l'etape qui attend, avec sa consigne retouchee
+    (champ `consigne`) si le client l'a changee."""
+    auth(authorization)
+    course = _course(cid)
+    if course["etat"] != "en_cours" or not course["pause"]:
+        raise HTTPException(409, "Cette chaîne n'attend pas de feu vert.")
+    consigne = (await request.form()).get("consigne")
+    if isinstance(consigne, str):
+        course["consigne_suivante"] = consigne
+    course["continuer"].set()
+    return {"detail": "L'étape « %s » part." % course["pause"]["fonction"]}
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -168,3 +168,115 @@ def test_la_page_suit_les_etapes_sans_tout_redessiner(sandbox):
     assert "fait" in premiere and "&lt;b&gt;phare&lt;/b&gt;" in premiere
     assert seconde.startswith("en_cours |") and "en cours" in seconde
     assert rejouee == "intact", "une ligne dont le statut n'a pas change n'est pas redessinee"
+
+
+# --- D'un trait ou pas a pas (24/09/2026) --------------------------------------
+# « on devrait pouvoir choisir pour un flow one shot ou step by step ».
+
+
+def test_la_pause_passe_avant_chaque_etape_suivante_et_sa_consigne_part(sandbox):
+    c = sandbox.composite
+    pauses, demandes = [], []
+
+    def pause(rang, etape):
+        pauses.append((rang, etape["fonction"]))
+        return "Lis seulement la premiere phrase."
+
+    def lancer(e, _x):
+        demandes.append(e["demande"])
+        return "texte"
+
+    trace = c.executer({"phrase": "p", "etapes": [{"brique": "chat_auto", "fonction": "Chat"},
+                                                  {"brique": "voix_fr", "fonction": "Voix"}]},
+                       lancer, garde_budget=lambda _e: None, pause=pause)
+    assert trace["resultat"] == "rendu"
+    assert pauses == [(1, "Voix")], "pas de pause avant la premiere : Lancer vaut feu vert"
+    assert demandes == ["p", "Lis seulement la premiere phrase."]
+
+
+def _course_pas_a_pas(sandbox, monkeypatch):
+    demandes = []
+
+    def lancer(e, _x):
+        demandes.append(e["demande"])
+        return "texte"
+
+    monkeypatch.setattr(sandbox.composite, "lancer_par_le_routeur", lancer)
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    r = client.post("/composite/demarrer", headers=CLE,
+                    data={"phrase": "p", "briques": "chat_auto,voix_fr", "pas_a_pas": "1"})
+    assert r.status_code == 200, r.text
+    return client, r.json()["id"], demandes
+
+
+def test_pas_a_pas_attend_le_feu_vert_et_prend_la_consigne_retouchee(sandbox, monkeypatch):
+    client, cid, demandes = _course_pas_a_pas(sandbox, monkeypatch)
+    s = attendre(client, cid, lambda s: s["pause"])
+    assert s["pas_a_pas"] is True and s["etat"] == "en_cours"
+    assert s["pause"] == {"avant": 1, "fonction": s["etapes"][1]["fonction"], "consigne": "p"}
+    assert [e["statut"] for e in s["etapes"]] == ["rendu", "pause"]
+    time.sleep(0.3)
+    assert demandes == ["p"], "l'etape suivante est partie sans feu vert"
+    r = client.post("/composite/courses/%s/continuer" % cid, headers=CLE,
+                    data={"consigne": "Lis-le lentement."})
+    assert r.status_code == 200 and "part" in r.json()["detail"]
+    s = attendre(client, cid, lambda s: s["etat"] != "en_cours")
+    assert s["etat"] == "rendu" and s["pause"] is None
+    assert demandes == ["p", "Lis-le lentement."]
+    fini = client.post("/composite/courses/%s/continuer" % cid, headers=CLE)
+    assert fini.status_code == 409
+
+
+def test_d_un_trait_ne_s_arrete_jamais_en_route(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox.composite, "lancer_par_le_routeur", lambda _e, _x: "texte")
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    cid = client.post("/composite/demarrer", headers=CLE,
+                      data={"phrase": "p", "briques": "chat_auto,voix_fr"}).json()["id"]
+    s = attendre(client, cid, lambda s: s["etat"] != "en_cours")
+    assert s["etat"] == "rendu" and s["pas_a_pas"] is False and s["pause"] is None
+
+
+def test_arreter_pendant_la_pause(sandbox, monkeypatch):
+    client, cid, demandes = _course_pas_a_pas(sandbox, monkeypatch)
+    attendre(client, cid, lambda s: s["pause"])
+    client.post("/composite/courses/%s/arreter" % cid, headers=CLE)
+    s = attendre(client, cid, lambda s: s["etat"] != "en_cours")
+    assert s["etat"] == "arrete" and demandes == ["p"]
+    assert [e["statut"] for e in s["etapes"]] == ["rendu", "refus"]
+
+
+def test_une_pause_oubliee_finit_par_s_arreter_et_le_dit(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "PAUSE_MAX_S", 0)
+    client, cid, demandes = _course_pas_a_pas(sandbox, monkeypatch)
+    s = attendre(client, cid, lambda s: s["etat"] != "en_cours")
+    assert s["etat"] == "arrete" and demandes == ["p"]
+    assert "En pause depuis plus de" in s["erreur"]["detail"]
+
+
+def test_la_page_propose_les_deux_modes_et_montre_la_pause(sandbox):
+    if not shutil.which("node"):
+        pytest.skip("node absent")
+    page = TestClient(sandbox.app, base_url=LOCAL).get("/composite").text
+    assert "value=trait checked" in page and "value=pas>" in page
+    assert 'corps.append("pas_a_pas", "1")' in page
+    debut = page.index("function montrerPause(s, vue){")
+    fin = page.index('\ndocument.getElementById("arreter").onclick', debut)
+    pause = {"pause": {"avant": 1, "fonction": "Voix", "consigne": "Lis <vite>"}}
+    code = ("function echapper(s){ return String(s).replace(/</g, '&lt;').replace(/>/g, '&gt;'); }"
+            + "\nconst zone = {innerHTML: ''}; const bouton = {};"
+            + "\nconst document = {getElementById: id => id === 'pause' ? zone : bouton};"
+            + "\n" + page[debut:fin]
+            + "\nconst vue = {};"
+            + "\nmontrerPause(" + json.dumps(pause) + ", vue); console.log(zone.innerHTML);"
+            + "\nconsole.log(typeof bouton.onclick);"
+            + "\nzone.innerHTML = 'intact'; montrerPause(" + json.dumps(pause) + ", vue);"
+            + "\nconsole.log(zone.innerHTML);"
+            + "\nmontrerPause({pause: null}, vue); console.log('[' + zone.innerHTML + ']');")
+    sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
+                            encoding="utf-8", timeout=20)
+    assert sortie.returncode == 0, sortie.stderr
+    bloc, clic, rejoue, vide = sortie.stdout.strip().splitlines()
+    assert "« Voix »" in bloc and "Lis &lt;vite&gt;</textarea>" in bloc and "Continuer" in bloc
+    assert clic == "function"
+    assert rejoue == "intact", "une consigne en cours de frappe serait effacee"
+    assert vide == "[]"

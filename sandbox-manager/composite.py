@@ -1235,7 +1235,8 @@ ARRETE_PAR_LE_CLIENT = "arrete_par_le_client"
 
 
 def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
-             garde_budget=None, garde_cumul=None, suivi=None, arret=None) -> dict:
+             garde_budget=None, garde_cumul=None, suivi=None, arret=None,
+             pause=None) -> dict:
     """Lance la chaine noeud par noeud et rend une trace.
 
     `lancer(etape, entree) -> sortie` est injecte : chaque noeud part par la
@@ -1252,6 +1253,13 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
     page montre chaque sortie intermediaire (24/09 : << pas de visualisation
     intermediaire, ni d'abort button >>). `arret`, un `threading.Event` : pose,
     aucune etape de plus ne part, et un travail en cours est arrete.
+
+    `pause(rang, etape) -> consigne | None`, s'il est donne, est appele avant
+    chaque etape a partir de la deuxieme : c'est le mode << pas a pas >> (24/09 :
+    << on devrait pouvoir choisir pour un flow one shot ou step by step >>). Il
+    rend la main quand le client a dit de continuer, avec la consigne de
+    l'etape suivante s'il l'a retouchee ; il peut aussi refuser
+    (`CompositeRefuse`), par exemple une pause oubliee.
     """
     # `phrase` est le champ que le client LIT. Il manquait, et le motif tenait
     # sa place : quand la carte etait prise, la page montrait le slug
@@ -1296,6 +1304,10 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
         if arret is not None:
             etape["arret"] = arret
         try:
+            if pause is not None and rang > 0 and not (arret is not None and arret.is_set()):
+                retouchee = pause(rang, etape)
+                if retouchee:
+                    etape["demande"] = retouchee
             if arret is not None and arret.is_set():
                 raise CompositeRefuse(
                     ARRETE_PAR_LE_CLIENT,
@@ -2530,11 +2542,16 @@ ou Groq. Chaque \u00e9tape dit ensuite ce qui quitte votre ordinateur, et chez q
 <div id=apercu></div>
 
 <button id=voir>Voir si c\u2019est possible</button>
+<span class=gris id=mode>
+<label><input type=radio name=mode value=trait checked> d\u2019un trait</label>
+<label><input type=radio name=mode value=pas> pas \u00e0 pas (je regarde chaque \u00e9tape avant la suivante)</label>
+</span>
 <button id=lancer disabled>Lancer</button>
 <button id=arreter hidden>Arr\u00eater</button>
 
 <div id=verdict></div>
 <div id=progression></div>
+<div id=pause></div>
 <div id=resultat></div>
 
 <script>
@@ -2728,6 +2745,8 @@ async function envoyer(chemin, avecFichier, avecChaine){
   // Le TYPE seulement, jamais le contenu : le verdict doit savoir si la
   // premiere etape prend une image, un son ou un document (23/09).
   corps.append("entree", typeDuFichier(f));
+  const pas = document.querySelector("input[name=mode]:checked");
+  if (pas && pas.value === "pas") corps.append("pas_a_pas", "1");
   const r = await fetch(chemin, {method:"POST",
     headers:{"Authorization":"Bearer " + CLE}, body:corps});
   return {ok:r.ok, statut:r.status, corps:r};
@@ -2780,7 +2799,8 @@ document.getElementById("voir").onclick = () => voir(false);
 // La chaine se SUIT pas a pas (24/09 : << pas de visualisation
 // intermediaire, ni d'abort button >>). Chaque etape dit ou elle en est, et
 // montre sa sortie des qu'elle existe ; « Arreter » coupe la suite.
-const STATUTS = {attente: "en attente", en_cours: "en cours\u2026", rendu: "fait",
+const STATUTS = {attente: "en attente", pause: "attend votre feu vert",
+                 en_cours: "en cours\u2026", rendu: "fait",
                  refus: "arr\u00eat\u00e9", echec: "\u00e9chec", vide: "rien rendu"};
 let course = null;
 
@@ -2818,6 +2838,38 @@ async function montrerPas(id, s, vus){
   }
 }
 
+// Pas a pas (24/09 : << on devrait pouvoir choisir pour un flow one shot ou
+// step by step >>). Avant chaque etape suivante, la course attend : la sortie
+// de la precedente est deja montree au-dessus, et la consigne de la suivante
+// se retouche avant de dire \u00ab Continuer \u00bb. Le bloc n'est redessine que quand
+// la pause change d'etape : une consigne en cours de frappe reste.
+function montrerPause(s, vue){
+  const zone = document.getElementById("pause");
+  const p = s.pause;
+  const cle = p ? String(p.avant) : "";
+  if (vue.pause === cle) return;
+  vue.pause = cle;
+  if (!p) { zone.innerHTML = ""; return; }
+  zone.innerHTML = "<div class=bloc><p class=etat>Prochaine \u00e9tape : \u00ab " + echapper(p.fonction)
+    + " \u00bb</p><p class=gris>Regardez le r\u00e9sultat ci-dessus. Vous pouvez retoucher la consigne "
+    + "de cette \u00e9tape avant qu\u2019elle parte, ou tout arr\u00eater.</p>"
+    + "<textarea id=consigneSuivante>" + echapper(p.consigne || "") + "</textarea>"
+    + "<button id=continuer>Continuer</button></div>";
+  document.getElementById("continuer").onclick = async () => {
+    const b = document.getElementById("continuer");
+    b.disabled = true; b.textContent = "C\u2019est parti\u2026";
+    const corps = new FormData();
+    corps.append("consigne", document.getElementById("consigneSuivante").value);
+    const r = await fetch("/composite/courses/" + course + "/continuer",
+                          {method:"POST", headers:{"Authorization":"Bearer " + CLE}, body:corps});
+    if (!r.ok) {
+      const v = await r.json().catch(() => ({}));
+      b.disabled = false; b.textContent = "Continuer";
+      zone.insertAdjacentHTML("beforeend", "<p class=motif>" + echapper(v.detail || ("HTTP " + r.status)) + "</p>");
+    }
+  };
+}
+
 document.getElementById("arreter").onclick = async () => {
   const bouton = document.getElementById("arreter");
   if (!course) return;
@@ -2845,6 +2897,7 @@ document.getElementById("lancer").onclick = async () => {
     course = (await r.corps.json()).id;
     arret.hidden = false; arret.disabled = false; arret.textContent = "Arr\u00eater";
     const vus = {};
+    const vuePause = {};
     let premier = true;
     while (true) {
       const lu = await fetch("/composite/courses/" + course, {headers:{"Authorization":"Bearer " + CLE}});
@@ -2857,6 +2910,7 @@ document.getElementById("lancer").onclick = async () => {
         premier = false;
       }
       await montrerPas(course, s, vus);
+      montrerPause(s, vuePause);
       if (s.etat === "rendu") { montrerResultat(s.resultat); return; }
       if (s.etat !== "en_cours") {
         zone.innerHTML = blocArret(s.erreur && s.erreur.ou, s.erreur && s.erreur.detail);
@@ -2866,6 +2920,7 @@ document.getElementById("lancer").onclick = async () => {
     }
   } finally {
     b.disabled = false; b.textContent = "Lancer";
+    document.getElementById("pause").innerHTML = "";
     arret.hidden = true; course = null;
   }
 };

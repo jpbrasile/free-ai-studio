@@ -35,6 +35,7 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gênait | Bloquait ? | Levée par | Vue par |
 |---|---|---|---|---|---|
+| 24/09/2026 | `/composite` | Enchaîner allait toujours d'un trait : impossible de regarder une étape avant que la suivante parte. Choix « d'un trait » ou « pas à pas » ; en pas à pas, la chaîne attend « Continuer » avant chaque étape, et la consigne de la suivante se retouche avant de partir | non | ce commit (tests seulement) | le propriétaire |
 | 24/09/2026 | `/video`, `/composite` | Une vidéo fabriquée sur la carte de ce PC ne s'arrêtait pas : « rien à arrêter à distance », et la page vidéo n'avait aucun bouton d'arrêt. Le bac à sable de la carte tue maintenant le calcul (la carte est libérée) ; bouton « Arrêt d'urgence » sur `/video`, clip arrêté montré « Arrêté » et non « Échec » | non | ce commit (tests seulement) | le propriétaire |
 | 24/09/2026 | `/composite` | Enchaîner ne montrait rien avant la fin et n'avait pas de bouton d'arrêt. Chaque étape se montre dès qu'elle finit (image, son, vidéo, texte) ; « Arrêter » coupe la suite et arrête un travail en cours | non | ce commit (tests seulement) | le propriétaire |
 | 24/09/2026 | `/composite` | Les champs des pages Vidéo, Chanson et Dialogue ne passaient pas par la chaîne. Réglages ajoutés : machine louée (Modal ou Kaggle, coût et budget suivis), carte de cet ordinateur (vidéo Rapide), version chantée ou instrumentale | non | ce commit (tests seulement) | le propriétaire |
