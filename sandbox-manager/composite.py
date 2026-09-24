@@ -184,6 +184,9 @@ Regles :
 - si la demande precise la duree d'une video ou d'une chanson, ajoute a
   "proprietes" une "duree" : le nombre de SECONDES (ex. « 3 secondes » -> 3,
   « deux minutes » -> 120) ;
+- si la demande nomme la machine louee, ajoute "loueur" : "modal" ou
+  "kaggle" (« gratuitement sur Kaggle » -> "kaggle") ;
+- si elle demande une chanson sans voix, ajoute "version" : "instrumentale" ;
 - ajoute "consignes" : une consigne par fonction, dans le meme ordre, qui dit
   ce que CETTE fonction doit faire -- sa part de la demande seulement, avec
   les exigences de contenu qui la concernent (niveau de detail, longueur,
@@ -504,6 +507,9 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
     `MAX_DAILY_COST=0`, s'entendre dire << non, pas gratuitement, et voila ce
     qui s'en approche >> vaut mieux qu'une chaine qui casse au sixieme noeud.
     """
+    # Chaque etape porte SES reglages : le loueur choisi change le cout et la
+    # garde du budget (Kaggle ne compte pas au budget Modal, app.py:3090).
+    chaine = dict(chaine, etapes=etapes_reglees(chaine))
     etapes = chaine["etapes"]
     motifs: list[str] = []
     pourquoi: list[str] = []
@@ -597,7 +603,7 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
     sonde = sonde_budget or budget_du_noeud
     ferme, prive_du_loueur = [], []
     for e in etapes:
-        if not BUDGET_PAR_BRIQUE.get(e["brique"]):
+        if not loue_chez_modal(e):
             continue
         try:
             refus = sonde(e)
@@ -660,8 +666,7 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
     # vide, garde 0,759 $) -- un nombre de la garde, pas une estimation.
     pire_par_pas: dict[int, float] = {}
     if sonde_mesure and not ferme:
-        louables = [(e, sonde_mesure(e)) for e in etapes
-                    if BUDGET_PAR_BRIQUE.get(e["brique"])]
+        louables = [(e, sonde_mesure(e)) for e in etapes if loue_chez_modal(e)]
         for e, m in louables:
             if m and not m["refus"] and m["cout_max_usd"] is not None:
                 pire_par_pas[id(e)] = m["cout_max_usd"]
@@ -1141,9 +1146,9 @@ def mesure_du_noeud(etape) -> dict | None:
     encore prendre ce mois-ci. Les deux sortent de `budget_verifier`, jamais
     d'ici : c'est ce qui permet a `cumul_de_chaine` d'additionner sans inventer.
     """
-    usage = BUDGET_PAR_BRIQUE.get(etape["brique"])
-    if not usage:
+    if not loue_chez_modal(etape):
         return None
+    usage = BUDGET_PAR_BRIQUE[etape["brique"]]
     import importlib
 
     module = importlib.import_module(usage)
@@ -1176,7 +1181,7 @@ def cumul_de_chaine(etapes, mesure=None) -> dict | None:
     (`budget_modal.plafond_de`) : le plus petit reste rendu est le bon.
     """
     mesure = mesure or mesure_du_noeud
-    candidats = [e for e in etapes if BUDGET_PAR_BRIQUE.get(e["brique"])]
+    candidats = [e for e in etapes if loue_chez_modal(e)]
     if len(candidats) < 2:
         return None
     mesures = [(e, mesure(e)) for e in candidats]
@@ -1205,7 +1210,7 @@ def phrase_cumul_depasse(cumul: dict) -> str:
 def _cumul_verifie(chaine) -> None:
     """La garde de `executer` AVANT le premier noeud : le budget peut avoir
     bouge depuis le verdict (un autre travail, une autre page)."""
-    cumul = cumul_de_chaine(chaine["etapes"])
+    cumul = cumul_de_chaine(etapes_reglees(chaine))
     if cumul and cumul["loueur_seul_usd"] > cumul["reste_usd"]:
         raise CompositeRefuse("budget_cumule_depasse", phrase_cumul_depasse(cumul),
                               ou=CONTROLE)
@@ -1760,6 +1765,45 @@ def _definition_de_la_video(brique: str) -> dict | None:
     return {"valeur": valeur, "nom": nom + " (fixé par le modèle)"}
 
 
+# La MACHINE LOUEE, la CARTE DE CET ORDINATEUR et la VERSION d'une chanson :
+# les autres champs que les pages des travaux envoient (24/09). Les libelles
+# sont ceux de ces pages.
+LOUEUR = "loueur"
+LOUEURS = {"modal": "Modal — machine louée (carte bancaire exigée)",
+           "kaggle": "Kaggle — gratuit, plus lent"}
+NOTE_KAGGLE = ("Kaggle : gratuit, dans son quota de calcul de la semaine, mais plus lent ; "
+               "ce que l'étape reçoit part chez Kaggle (Google) au lieu de Modal. Il faut "
+               "une clé Kaggle branchée (page « Brancher Modal ou Kaggle ») ; sans elle, "
+               "l'étape s'arrête et le dit.")
+OU_CALCULER = "ou_calculer"
+DEFAUT_DU_STUDIO = "studio"
+PLACEMENTS = {"maison-si-libre": "À la maison si la carte est libre",
+              "toujours-modal": "Toujours sur une machine louée",
+              "toujours-maison": "Toujours à la maison, quitte à attendre"}
+VERSION = "version"
+CHANTEE, INSTRUMENTALE = "chantee", "instrumentale"
+VERSIONS = {CHANTEE: "qui chante", INSTRUMENTALE: "instrumentale, sans voix"}
+NOTE_INSTRUMENTALE = "La version instrumentale n'est vérifiée que chez Modal."
+
+
+def etapes_reglees(chaine: dict) -> list[dict]:
+    """Les etapes, chacune avec SES reglages ; celle louee chez Kaggle ne coute rien."""
+    reglees = []
+    for rang, etape in enumerate(chaine.get("etapes") or []):
+        reglages = reglages_de_l_etape(chaine, rang)
+        etape = dict(etape, reglages=reglages)
+        if reglages.get(LOUEUR) == "kaggle":
+            etape["cout_max_usd"] = 0.0
+        reglees.append(etape)
+    return reglees
+
+
+def loue_chez_modal(etape: dict) -> bool:
+    """Une etape qui peut partir chez Modal, et donc compter a son budget."""
+    return (bool(BUDGET_PAR_BRIQUE.get(etape["brique"]))
+            and (etape.get("reglages") or {}).get(LOUEUR) != "kaggle")
+
+
 def _secondes_lisibles(valeur) -> bool:
     if isinstance(valeur, bool):
         return False
@@ -1771,8 +1815,12 @@ def _secondes_lisibles(valeur) -> bool:
 PROPOSABLES = {LANGUE_ECRITE: lambda v: v in NOMS_DES_LANGUES,
                LANGUE_REPONSE: lambda v: v in NOMS_DES_LANGUES,
                FORMAT: lambda v: v in FORMATS,
-               DUREE: _secondes_lisibles}
+               DUREE: _secondes_lisibles,
+               LOUEUR: lambda v: v in LOUEURS,
+               VERSION: lambda v: v in VERSIONS}
 SANS_EFFET = {
+    LOUEUR: "« Machine louée : %s » : aucune étape de cette chaîne ne se loue.",
+    VERSION: "« Version %s » : cette chaîne ne fait pas de chanson.",
     DUREE: "« Durée de %s s » : aucune étape de cette chaîne n'a de durée à choisir.",
     FORMAT: "« Format %s » : aucune étape de cette chaîne ne fabrique d'image.",
     LANGUE_ECRITE: "« Texte affiché en %s » : cette chaîne ne finit pas par une voix, "
@@ -1882,6 +1930,30 @@ def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[di
             montrees.append({"id": ident, "nom": "Durée de « %s »" % etape["fonction"],
                              "etape": rang, "valeur": valeurs.get(ident, defaut),
                              "defaut": defaut, "unite_s": unite_s, "choix": choix})
+        if BUDGET_PAR_BRIQUE.get(etape["brique"]):
+            # Le loueur change le cout, la garde du budget et ou partent les
+            # donnees : la page REFAIT le verdict (`refait`).
+            ident = "%s@%d" % (LOUEUR, rang)
+            montrees.append({"id": ident, "nom": "Machine louée pour « %s »" % etape["fonction"],
+                             "etape": rang, "refait": True,
+                             "valeur": valeurs.get(ident, "modal"), "defaut": "modal",
+                             "note": NOTE_KAGGLE,
+                             "choix": [{"valeur": v, "nom": n} for v, n in LOUEURS.items()]})
+        if etape["brique"] == "video_rapide":
+            ident = "%s@%d" % (OU_CALCULER, rang)
+            montrees.append({"id": ident, "nom": "Carte de cet ordinateur pour « %s »"
+                                                 % etape["fonction"],
+                             "etape": rang, "valeur": valeurs.get(ident, DEFAUT_DU_STUDIO),
+                             "defaut": DEFAUT_DU_STUDIO,
+                             "choix": [{"valeur": DEFAUT_DU_STUDIO,
+                                        "nom": "comme réglé sur la page Vidéo"}]
+                             + [{"valeur": v, "nom": n} for v, n in PLACEMENTS.items()]})
+        if etape["brique"] == "chanson":
+            ident = "%s@%d" % (VERSION, rang)
+            montrees.append({"id": ident, "nom": "Version de « %s »" % etape["fonction"],
+                             "etape": rang, "valeur": valeurs.get(ident, CHANTEE),
+                             "defaut": CHANTEE, "note": NOTE_INSTRUMENTALE,
+                             "choix": [{"valeur": v, "nom": n} for v, n in VERSIONS.items()]})
         if _ecrit_pour_etre_lu(chaine, rang):
             ident = "%s@%d" % (LANGUE_REPONSE, rang)
             montrees.append({"id": ident, "nom": "Réponse de « %s » en" % etape["fonction"],
@@ -1956,6 +2028,14 @@ def proprietes_lues(valeur, chaine: dict, apps: list[dict] | None = None) -> dic
                                   "Rien n'est lancé." % (ident, v), ou=CONTROLE)
         if v != tenu["defaut"]:
             retenues[ident] = v
+    # La seule combinaison que la route du travail refuse, dite AVANT de
+    # lancer les etapes qui precedent (chanson.preparer, meme raison).
+    for ident, v in retenues.items():
+        if v == INSTRUMENTALE and retenues.get(ident.replace(VERSION, LOUEUR, 1)) == "kaggle":
+            raise CompositeRefuse("instrumentale_sur_kaggle",
+                                  "La version instrumentale n'est vérifiée que chez Modal : "
+                                  "choisissez Modal, ou la version qui chante. Rien n'est lancé.",
+                                  ou=CONTROLE)
     return retenues
 
 
@@ -2082,9 +2162,18 @@ def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
     # La duree choisie dans les reglages, dans l'unite de la page du travail
     # (secondes pour la video, minutes pour la chanson). Absente : le defaut de
     # `preparer()`, comme avant le 24/09.
-    duree = (etape.get("reglages") or {}).get(DUREE)
+    reglages = etape.get("reglages") or {}
+    duree = reglages.get(DUREE)
     if duree:
         fixe = dict(fixe, duree=str(duree))
+    # Les memes champs que la page du travail envoie (24/09 : << tous les
+    # parametres doivent etre passes >>). Absents : le defaut de la route.
+    if reglages.get(LOUEUR) in LOUEURS:
+        fixe = dict(fixe, ou=reglages[LOUEUR])
+    if reglages.get(OU_CALCULER) in PLACEMENTS:
+        fixe = dict(fixe, ou_calculer=reglages[OU_CALCULER])
+    if reglages.get(VERSION) == INSTRUMENTALE:
+        fixe = dict(fixe, lora=True)
     texte = str(entree or "").strip()
     demande = (etape.get("demande") or "").strip()
     if usage == "video":
@@ -2463,6 +2552,8 @@ function changerReglage(v, i, valeur){
       if (q !== p && !q.variante && q.etape === p.etape) q.valeur = q.defaut;
     return "chaine";
   }
+  // Le loueur change le cout et la garde du budget : le verdict se refait.
+  if (p.refait) return "chaine";
   return "valeur";
 }
 

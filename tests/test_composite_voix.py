@@ -322,6 +322,88 @@ def test_la_duree_proposee_en_secondes(composite):
         "« Durée de 3 s » : aucune étape de cette chaîne n'a de durée à choisir."]
 
 
+# --- 24/09 : « tous les paramètres doivent être passés » ------------------------
+# Les champs que les pages des travaux envoient : machine louée (vidéo Rapide,
+# chanson, dialogue), carte de cet ordinateur (vidéo Rapide), version (chanson).
+
+def test_chaque_travail_offre_les_champs_de_sa_page(composite):
+    def ids_de(briques):
+        return list(par_id(composite.proprietes_montrees(chaine_de(composite, briques))))
+
+    chanson = ids_de(["chat_auto", "chanson"])
+    assert {"duree@1", "loueur@1", "version@1"} <= set(chanson)
+    assert {"loueur@1"} <= set(ids_de(["chat_auto", "dialogue"]))
+    rapide = ids_de(["video_rapide"])
+    assert {"definition@0", "duree@0", "loueur@0", "ou_calculer@0"} <= set(rapide)
+    maison = ids_de(["video_maison"])
+    assert "loueur@0" not in maison and "ou_calculer@0" not in maison, "la maison ne loue rien"
+
+
+def test_les_placements_sont_ceux_du_studio(composite):
+    import ou_calculer
+
+    assert set(composite.PLACEMENTS) == set(ou_calculer.REGLAGES)
+
+
+def test_les_parametres_partent_avec_le_travail(composite):
+    _, demande = composite.demande_du_travail(
+        {"brique": "chanson", "demande": "douce",
+         "reglages": {"loueur": "kaggle", "duree": "2"}}, "la la")
+    assert demande["ou"] == "kaggle" and demande["duree"] == "2" and "lora" not in demande
+    _, demande = composite.demande_du_travail(
+        {"brique": "chanson", "demande": "douce", "reglages": {"version": "instrumentale"}}, "")
+    assert demande["lora"] is True and "ou" not in demande
+    _, demande = composite.demande_du_travail(
+        {"brique": "video_rapide", "demande": "un phare",
+         "reglages": {"ou_calculer": "toujours-modal"}}, "")
+    assert demande["ou_calculer"] == "toujours-modal" and demande["qualite"] == "rapide"
+    _, demande = composite.demande_du_travail({"brique": "dialogue", "demande": "d"}, "[S1] a")
+    assert "ou" not in demande, "sans reglage, le defaut de la route"
+
+
+def test_instrumentale_chez_kaggle_est_refusee_avant_de_lancer(composite):
+    chaine = chaine_de(composite, ["chat_auto", "chanson"])
+    assert composite.proprietes_lues('{"version@1": "instrumentale"}', chaine) == {
+        "version@1": "instrumentale"}
+    with pytest.raises(composite.CompositeRefuse) as refus:
+        composite.proprietes_lues('{"version@1": "instrumentale", "loueur@1": "kaggle"}', chaine)
+    assert refus.value.motif == "instrumentale_sur_kaggle"
+
+
+def test_kaggle_ne_compte_pas_au_budget_modal(composite):
+    """Comme la route (app.py, /chanson/creer) : chez Kaggle, aucune garde Modal."""
+    chaine = chaine_de(composite, ["chat_auto", "chanson"], {"loueur@1": "kaggle"})
+    reglees = composite.etapes_reglees(chaine)
+    assert reglees[1]["cout_max_usd"] == 0.0
+    assert not composite.loue_chez_modal(reglees[1])
+    assert composite.mesure_du_noeud(reglees[1]) is None
+    modal = composite.etapes_reglees(chaine_de(composite, ["chat_auto", "chanson"]))
+    assert composite.loue_chez_modal(modal[1])
+    assert chaine["etapes"][1]["cout_max_usd"] == modal[1]["cout_max_usd"], "la chaine n'est pas mutee"
+
+
+def test_le_loueur_propose_vaut_pour_chaque_etape_louee(composite):
+    graphe = composite.compiler("p", lambda _c: json.dumps(
+        {"noeuds": ["chanson"], "proprietes": {"loueur": "kaggle", "version": "instrumentale"}}),
+        entree="texte")
+    valeurs, _ = composite.appliquer_proposees(composite.lier(graphe), graphe)
+    assert valeurs == {"loueur@0": "kaggle", "version@0": "instrumentale"}
+
+
+def test_un_reglage_refait_refait_le_verdict(page):
+    debut = page.index("function changerReglage(")
+    fin = page.index("\n}\n", debut) + 3
+    v = {"etapes": [{"brique": "chanson"}],
+         "proprietes": [{"id": "loueur@0", "etape": 0, "refait": True, "valeur": "modal",
+                         "defaut": "modal", "choix": [{"valeur": "modal"}, {"valeur": "kaggle"}]},
+                        {"id": "version@0", "etape": 0, "valeur": "chantee", "defaut": "chantee",
+                         "choix": [{"valeur": "chantee"}, {"valeur": "instrumentale"}]}]}
+    code = (page[debut:fin] + "\nconst v = " + json.dumps(v) + ";"
+            + "\nconsole.log(changerReglage(v, 0, 'kaggle'), changerReglage(v, 1, 'instrumentale'),"
+            + " v.proprietes[1].valeur);")
+    assert node(code).strip() == "chaine valeur instrumentale", "le loueur ne remet rien a zero"
+
+
 def test_la_page_montre_les_dimensions_vraies(page):
     debut = page.index("function dimensions(")
     fin = page.index("}", debut) + 1
