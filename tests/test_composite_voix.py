@@ -52,7 +52,7 @@ def test_le_chat_sait_qu_il_ecrit_pour_une_voix(composite):
     etape = {"brique": "chat_auto", "fonction": "Chat", "demande": "décris en anglais"}
     assert "lue à haute voix" not in composite._consigne_du_chat(etape, "texte")
     oral = composite._consigne_du_chat(dict(etape, suivante="voix_en"), "texte")
-    assert "lue à haute voix" in oral and "en anglais" in oral and "pas de titre" in oral
+    assert "lue à haute voix" in oral and "en anglais" in oral and "pas de titre" in oral.lower()
     assert "en français" in composite._consigne_du_chat(dict(etape, suivante="voix_fr"), None)
     # « décris DANS LE DÉTAIL … à voix haute » a rendu une phrase (23/09) :
     # la consigne orale règle la forme, pas la longueur.
@@ -64,7 +64,7 @@ def test_la_lecture_d_image_sait_aussi_qu_elle_ecrit_pour_une_voix(composite):
     assert "lue à haute voix" not in composite._consigne_de_l_image(etape)
     oral = composite._consigne_de_l_image(dict(etape, suivante="voix_en"))
     assert oral.startswith("décris en anglais")
-    assert "lue à haute voix" in oral and "en anglais" in oral and "pas de titre" in oral
+    assert "lue à haute voix" in oral and "en anglais" in oral and "pas de titre" in oral.lower()
 
 
 def test_executer_dit_a_chaque_etape_ce_qui_suit(composite):

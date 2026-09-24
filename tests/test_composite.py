@@ -2015,3 +2015,15 @@ def test_le_cumul_additionne_les_VRAIS_pires_cas_des_modules(apps, monkeypatch, 
     verdict = composite.verifier(chaine)
     assert "budget_cumule_depasse" in verdict["motifs"], verdict["pourquoi"]
     assert verdict["atteignable"] == composite.NON
+
+
+def test_la_consigne_orale_dit_de_garder_accents_et_ponctuation(sandbox):
+    """24/09 : « pas de symbole » tout court faisait tomber apostrophes et
+    ponctuation (« L ecume danse ... l horizon ») ; la voix lisait mal. Mesure :
+    6 reponses fautives sur 24 avant, 0 sur 24 avec la phrase qui dit quoi garder."""
+    c = sandbox.composite
+    orale = c._consigne_orale("voix_fr")
+    assert "accents, apostrophes, virgules et points" in orale
+    assert "pas de symbole," not in orale and "symbole de mise en forme" in orale
+    assert "en anglais" in c._consigne_orale("voix_en")
+    assert c._consigne_orale(None) == "" and c._consigne_orale("image_fabrication") == ""

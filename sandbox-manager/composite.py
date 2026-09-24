@@ -2410,6 +2410,12 @@ def _consigne_orale(suivante) -> str:
     DETAIL ... a voix haute >> a rendu une seule phrase -- la consigne ne
     parlait que de ce qu'il fallait retirer, et le modele a tout retire. Elle
     dit donc aussi que le contenu demande reste entier.
+
+    Meme lecon, 24/09 : << pas de symbole >> tout court faisait tomber les
+    apostrophes et la ponctuation (<< L ecume danse ... l horizon >>, sans un
+    point) ; la voix lisait mal, l'ecoute de controle retrouvait 28 mots sur 38.
+    Mesure dans le conteneur, memes demandes : 6 reponses fautives sur 24 avec
+    l'ancienne phrase, 0 sur 24 avec celle-ci, qui dit ce qu'il faut GARDER.
     """
     if suivante not in VOIX:
         return ""
@@ -2418,8 +2424,10 @@ def _consigne_orale(suivante) -> str:
             "synthèse. Donnez tout le contenu demandé, avec la longueur et le niveau "
             "de détail demandés : seule la forme change. Écrivez seulement les phrases "
             "à prononcer, " + langue
-            + ", en prose continue : pas de titre, pas de liste, pas de gras, "
-              "pas de symbole, et aucun commentaire sur votre réponse.")
+            + ", en prose continue, avec l'orthographe et la ponctuation normales : "
+              "accents, apostrophes, virgules et points guident la voix, gardez-les. "
+              "Pas de titre, pas de liste, pas de gras, pas de symbole de mise en forme "
+              "(astérisque, dièse, puce, émoji), et aucun commentaire sur votre réponse.")
 
 
 def _consigne_de_l_image_fabriquee(etape: dict, entree) -> str:
