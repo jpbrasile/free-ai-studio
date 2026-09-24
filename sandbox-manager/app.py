@@ -2814,19 +2814,24 @@ async def video_enrichir(request: Request, authorization: Optional[str] = Header
     texte = " ".join(str(payload.get("description") or "").split())[:2000]
     if not texte:
         raise HTTPException(400, "Il faut d'abord décrire la scène en quelques mots.")
+    # La traduction en anglais est toujours faite ; l'enrichissement, sauf si
+    # la case est decochee (24/09 : « en grisé si obligatoire […] ou
+    # modifiable enrichissement »).
+    enrichir = payload.get("enrichir", True) is not False
     try:
         brut = await asyncio.to_thread(composite.appeler_le_modele,
-                                       video.CONSIGNE_ENRICHIR % texte)
+                                       video.consigne_de_preparation(texte, enrichir))
     except composite.CompositeRefuse as exc:
         raise HTTPException(503, exc.phrase) from exc
     except Exception as exc:  # noqa: BLE001 -- reseau, delai : une phrase, pas une trace
         raise HTTPException(503, "Le chat ne répond pas : la description n'a pas pu "
-                                 "être enrichie. Vous pouvez la détailler vous-même.") from exc
-    enrichie = video.nettoyer_enrichie(brut)
+                                 "être préparée. Vous pouvez l'écrire vous-même en "
+                                 "anglais.") from exc
+    enrichie = video.nettoyer_preparee(brut, enrichir)
     if not enrichie:
         raise HTTPException(502, "Le chat a rendu une réponse inutilisable : la "
                                  "description reste la vôtre.")
-    return {"originale": texte, "enrichie": enrichie}
+    return {"originale": texte, "enrichie": enrichie, "enrichir": enrichir}
 
 
 @app.get("/video/budget")
@@ -3794,7 +3799,7 @@ async def composite_lancer(request: Request,
         chaine, verdict, entree = await _preparer_le_lancement(request)
         trace = await asyncio.to_thread(
             composite.executer, chaine, composite.lancer_par_le_routeur, entree,
-            verdict)
+            verdict, pretraiter=composite.pretraiter_par_le_chat)
     except composite.CompositeRefuse as exc:
         raise _refus_composite(exc) from exc
     return JSONResponse(await asyncio.to_thread(_resultat_de_la_chaine, chaine, trace))
@@ -3917,7 +3922,7 @@ def _attendre_le_feu_vert(course: dict, chaine: dict, rang: int, etape: dict):
 def _courir(course: dict, chaine: dict, verdict: dict, entree) -> None:
     def suivi(rang, statut, rendu, sortie):
         vue = {"fonction": chaine["etapes"][rang]["fonction"], "statut": statut}
-        for cle in ("texte", "ecoute", "phrase"):
+        for cle in ("texte", "ecoute", "phrase", "pretraitement"):
             if rendu and rendu.get(cle):
                 vue[cle] = rendu[cle]
         if isinstance(sortie, (bytes, bytearray)):
@@ -3930,7 +3935,8 @@ def _courir(course: dict, chaine: dict, verdict: dict, entree) -> None:
         pause = ((lambda rang, etape: _attendre_le_feu_vert(course, chaine, rang, etape))
                  if course.get("pas_a_pas") else None)
         trace = composite.executer(chaine, composite.lancer_par_le_routeur, entree, verdict,
-                                   suivi=suivi, arret=course["arret"], pause=pause)
+                                   suivi=suivi, arret=course["arret"], pause=pause,
+                                   pretraiter=composite.pretraiter_par_le_chat)
         course["resultat"] = _resultat_de_la_chaine(chaine, trace)
         course["etat"] = "rendu"
     except HTTPException as exc:

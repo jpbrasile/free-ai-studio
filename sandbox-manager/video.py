@@ -509,22 +509,47 @@ CONSIGNE_ENRICHIR = (
 )
 
 
+# La traduction seule, quand la personne ne veut pas qu'on enrichisse. Elle
+# reste OBLIGATOIRE : « un phare » en francais a donne une cote puis un homme
+# barbu sur Kaggle, « a lighthouse » un phare, sur le meme modele (24/09,
+# `ebffade9`, `639ae707` contre `d9104b5c`). Wan n'annonce que l'anglais et le
+# chinois.
+CONSIGNE_TRADUIRE = (
+    "Translate the following video description into English for a text-to-video "
+    "model. Translate faithfully: add nothing, remove nothing. If it is already "
+    "in English, return it unchanged. No quotation marks, no commentary. Reply "
+    "with the English description alone.\n\n"
+    "Video description: %s"
+)
+
+
 def est_courte(description: str) -> bool:
     """Trop peu de mots pour decrire une scene : la page propose d'enrichir."""
     return len(str(description or "").split()) < MOTS_POUR_UNE_SCENE
 
 
-def nettoyer_enrichie(texte: str) -> str:
+def consigne_de_preparation(texte: str, enrichir: bool) -> str:
+    """Ce qu'on demande au chat : traduire toujours, detailler si la personne le veut."""
+    return (CONSIGNE_ENRICHIR if enrichir else CONSIGNE_TRADUIRE) % texte
+
+
+def nettoyer_enrichie(texte: str, mots_min: int = 5) -> str:
     """La reponse du chat, sans son emballage : guillemets, << Prompt : >>, gras.
 
     Rend "" quand il ne reste rien d'utilisable : la page garde alors le texte
-    de la personne au lieu d'envoyer du vide."""
+    de la personne au lieu d'envoyer du vide. Une traduction seule peut tenir
+    en deux mots (« a lighthouse ») : `mots_min=1`."""
     t = str(texte or "").strip()
-    t = re.sub(r"^\s*(\*\*)?\s*(prompt|enhanced prompt|video prompt)\s*:?\s*(\*\*)?\s*:?",
+    t = re.sub(r"^\s*(\*\*)?\s*(prompt|enhanced prompt|video prompt|translation)\s*:?\s*(\*\*)?\s*:?",
                "", t, flags=re.I)
     t = t.replace("**", "").replace("`", "")
     t = " ".join(t.split()).strip(" \"'«»“”")
-    return t[:1200].strip() if len(t.split()) >= 5 else ""
+    return t[:1200].strip() if len(t.split()) >= mots_min else ""
+
+
+def nettoyer_preparee(texte: str, enrichir: bool) -> str:
+    """`nettoyer_enrichie` avec le seuil qui va avec ce qu'on a demande."""
+    return nettoyer_enrichie(texte, 5 if enrichir else 1)
 
 
 # --- Compteur de depense ------------------------------------------------------
@@ -1267,10 +1292,20 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
 <div id="banniere" class="banniere">Vérification en cours…</div>
 
 <textarea id="description" placeholder="Un phare breton sous la pluie, la mer se soulève, la lumière tourne."></textarea>
-<!-- 24/09 : « un phare » a donné une côte, un homme barbu, une nageuse. Le chat
-     gratuit détaille la scène, et la page MONTRE ce qui partira. -->
+<!-- 24/09 : « un phare » a donné une côte, un homme barbu, une nageuse ; « a
+     lighthouse », un phare. Avant de partir, la description est préparée par
+     le chat gratuit, et la page MONTRE ce qui partira. La traduction est grisée
+     parce qu'elle n'est pas un choix ; l'enrichissement, lui, se décoche. -->
 <div class="ligne">
-  <button id="enrichir">✨ Enrichir la description</button>
+  <label class="avert"><input type="checkbox" id="traduire" checked disabled>
+    Traduire en anglais — obligatoire : le modèle vidéo comprend mal le français</label>
+</div>
+<div class="ligne">
+  <label><input type="checkbox" id="enrichirCase" checked>
+    Enrichir la description (le chat détaille la scène : lieu, lumière, mouvement)</label>
+</div>
+<div class="ligne">
+  <button id="enrichir">✨ Préparer la description</button>
   <span class="avert" id="enrichieNote"></span>
 </div>
 
@@ -1922,21 +1957,24 @@ async function enrichir(){
   const bouton = document.getElementById("enrichir");
   const texte = zone.value.trim();
   if(!texte){ note.textContent = "Décrivez d’abord la scène en quelques mots."; return false; }
+  const detailler = document.getElementById("enrichirCase").checked;
   bouton.disabled = true;
-  note.textContent = "Le chat détaille la scène…";
+  note.textContent = detailler ? "Le chat traduit et détaille la scène…" : "Le chat traduit la description…";
   try {
     const r = await fetch("/video/enrichir", {method:"POST", headers:ENTETES,
-                                              body:JSON.stringify({description: texte})});
+                                              body:JSON.stringify({description: texte, enrichir: detailler})});
     const d = await r.json().catch(() => ({}));
     if(!r.ok){
-      note.textContent = d.detail || "La description n’a pas pu être enrichie : elle reste la vôtre.";
+      note.textContent = d.detail || "La description n’a pas pu être préparée : elle reste la vôtre.";
       return false;
     }
     ORIGINALE = ORIGINALE || texte;
     zone.value = d.enrichie;
-    note.textContent = "Description détaillée en anglais par le chat : le modèle vidéo "
-      + "comprend mieux une scène décrite ainsi. Relisez-la, modifiez-la si besoin. "
-      + "Votre texte : « " + ORIGINALE + " ». ";
+    note.textContent = (detailler
+      ? "Traduite en anglais (obligatoire) et détaillée par le chat : le modèle vidéo "
+        + "comprend mieux une scène décrite ainsi. "
+      : "Traduite en anglais par le chat (obligatoire), sans rien ajouter. ")
+      + "Relisez-la, modifiez-la si besoin. Votre texte : « " + ORIGINALE + " ». ";
     const retour = document.createElement("button");
     retour.className = "discret";
     retour.textContent = "Revenir à mon texte";
@@ -1959,15 +1997,20 @@ document.getElementById("description").addEventListener("input", (e) => {
 
 document.getElementById("lancer").addEventListener("click", async () => {
   ATTENTE_DEPUIS = null;
+  // Toute description passe une fois par la préparation (traduction
+  // obligatoire), et la page la montre avant qu'elle parte.
   const n = motsDe(document.getElementById("description").value);
-  if(!ORIGINALE && !DEJA_PROPOSE && n > 0 && n < MOTS_POUR_UNE_SCENE){
+  if(!ORIGINALE && !DEJA_PROPOSE && n > 0){
     DEJA_PROPOSE = true;
     const ok = await enrichir();
+    const courte = n < MOTS_POUR_UNE_SCENE && !document.getElementById("enrichirCase").checked;
     document.getElementById("etat").textContent = ok
-      ? "Votre description était très courte : elle a été détaillée ci-dessus. "
+      ? "Votre description a été préparée pour le modèle, ci-dessus. "
         + "Relisez-la, puis cliquez à nouveau sur « Fabriquer »."
-      : "Description très courte, et elle n’a pas pu être détaillée : cliquez à "
-        + "nouveau sur « Fabriquer » pour lancer tel quel, ou décrivez davantage la scène.";
+        + (courte ? " Elle reste très courte : cochez « Enrichir » pour une scène plus sûre." : "")
+      : "La description n’a pas pu être traduite en anglais : cliquez à nouveau sur "
+        + "« Fabriquer » pour lancer tel quel (le modèle risque de mal la comprendre), "
+        + "ou écrivez-la vous-même en anglais.";
     return;
   }
   envoyer(null);

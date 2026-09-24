@@ -1322,7 +1322,7 @@ ARRETE_PAR_LE_CLIENT = "arrete_par_le_client"
 
 def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
              garde_budget=None, garde_cumul=None, suivi=None, arret=None,
-             pause=None) -> dict:
+             pause=None, pretraiter=None) -> dict:
     """Lance la chaine noeud par noeud et rend une trace.
 
     `lancer(etape, entree) -> sortie` est injecte : chaque noeud part par la
@@ -1346,6 +1346,11 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
     rend la main quand le client a dit de continuer, avec la consigne de
     l'etape suivante s'il l'a retouchee ; il peut aussi refuser
     (`CompositeRefuse`), par exemple une pause oubliee.
+
+    `pretraiter(etape, entree) -> {avant, apres, ...} | None`, s'il est donne,
+    prepare ce que l'etape recoit (une video : traduite en anglais, detaillee)
+    apres la garde du budget et avant le lancement. Ce qu'il rend va dans la
+    trace, sous `pretraitement` : la page montre le texte qui part vraiment.
     """
     # `phrase` est le champ que le client LIT. Il manquait, et le motif tenait
     # sa place : quand la carte etait prise, la page montrait le slug
@@ -1389,6 +1394,7 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
                      reglages=reglages_de_l_etape(chaine, rang))
         if arret is not None:
             etape["arret"] = arret
+        pret = None
         try:
             if pause is not None and rang > 0 and not (arret is not None and arret.is_set()):
                 retouchee = pause(rang, etape)
@@ -1402,12 +1408,17 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             # JUSTE AVANT le lancement, et par noeud : c'est la seule place ou
             # le pire cas est celui de CE travail-la.
             garde_budget(etape)
+            pret = pretraiter(etape, courant) if pretraiter is not None else None
+            if pret:
+                courant = pret["apres"]
             if suivi:
-                suivi(rang, "en_cours", None, None)
+                suivi(rang, "en_cours", {"pretraitement": pret} if pret else None, None)
             courant = lancer(etape, courant)
         except CompositeRefuse as refus:
             trace["etapes"].append({"brique": etape["brique"], "resultat": "refus",
                                     "motif": refus.motif, "phrase": refus.phrase})
+            if pret:
+                trace["etapes"][-1]["pretraitement"] = pret
             if suivi:
                 suivi(rang, "refus", trace["etapes"][-1], None)
             trace.update(resultat="refus", ou=refus.ou, motif=refus.motif,
@@ -1420,6 +1431,8 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             trace["etapes"].append({"brique": etape["brique"], "resultat": "echec",
                                     "motif": type(erreur).__name__,
                                     "phrase": str(erreur)})
+            if pret:
+                trace["etapes"][-1]["pretraitement"] = pret
             if suivi:
                 suivi(rang, "echec", trace["etapes"][-1], None)
             trace.update(resultat="echec", ou=EXECUTION,
@@ -1443,6 +1456,8 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             rendu["texte"] = courant[:TEXTE_MONTRE_MAX]
         if getattr(courant, "ecoute", None):
             rendu["ecoute"] = courant.ecoute
+        if pret:
+            rendu["pretraitement"] = pret
         trace["etapes"].append(rendu)
         if suivi:
             suivi(rang, "rendu", rendu, courant)
@@ -1906,6 +1921,17 @@ VERSION = "version"
 CHANTEE, INSTRUMENTALE = "chantee", "instrumentale"
 VERSIONS = {CHANTEE: "qui chante", INSTRUMENTALE: "instrumentale, sans voix"}
 NOTE_INSTRUMENTALE = "La version instrumentale n'est vérifiée que chez Modal."
+# La PREPARATION d'une description video (24/09 : « transformer en anglais,
+# l'enrichir […] transparent dans le rendu du flow, en grisé si obligatoire
+# […] ou modifiable enrichissement »). La traduction est un reglage a UN seul
+# choix : la page le dessine grise. « un phare » : une cote et un homme barbu
+# sur Kaggle ; « a lighthouse » : un phare, meme modele (`d9104b5c`).
+TRADUIRE, ENRICHIR = "traduire", "enrichir"
+OUI, NON_MERCI = "oui", "non"
+CHOIX_ENRICHIR = {OUI: "oui, le chat détaille la scène en anglais",
+                  NON_MERCI: "non, traduire seulement"}
+NOTE_SANS_ENRICHIR = ("Sans enrichissement, une description courte donne souvent une autre "
+                      "scène : « un phare » a donné une côte, puis un homme barbu.")
 
 
 def etapes_reglees(chaine: dict) -> list[dict]:
@@ -2070,6 +2096,17 @@ def proprietes_montrees(chaine: dict, apps: list[dict] | None = None) -> list[di
                              "choix": [{"valeur": DEFAUT_DU_STUDIO,
                                         "nom": "comme réglé sur la page Vidéo"}]
                              + [{"valeur": v, "nom": n} for v, n in PLACEMENTS.items()]})
+        if _prepare_une_video(etape["brique"]):
+            montrees.append({"id": "%s@%d" % (TRADUIRE, rang),
+                             "nom": "Traduire en anglais ce que reçoit « %s »" % etape["fonction"],
+                             "etape": rang, "valeur": OUI, "defaut": OUI,
+                             "choix": [{"valeur": OUI, "nom": "obligatoire pour ce modèle"}]})
+            ident = "%s@%d" % (ENRICHIR, rang)
+            montrees.append({"id": ident,
+                             "nom": "Enrichir ce que reçoit « %s »" % etape["fonction"],
+                             "etape": rang, "valeur": valeurs.get(ident, OUI), "defaut": OUI,
+                             "note": NOTE_SANS_ENRICHIR,
+                             "choix": [{"valeur": v, "nom": n} for v, n in CHOIX_ENRICHIR.items()]})
         if etape["brique"] == "chanson":
             ident = "%s@%d" % (VERSION, rang)
             montrees.append({"id": ident, "nom": "Version de « %s »" % etape["fonction"],
@@ -2304,6 +2341,43 @@ def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
         return usage, dict(fixe, style=demande or "chanson en français",
                            paroles=texte or demande)
     return usage, dict(fixe, texte=texte or demande)
+
+
+def _prepare_une_video(brique: str) -> bool:
+    """Les briques dont la description passe par la preparation : les videos."""
+    return (TRAVAUX.get(brique) or ("",))[0] == "video"
+
+
+def pretraiter_par_le_chat(etape: dict, entree) -> dict | None:
+    """La description d'une video, traduite en anglais (toujours) et detaillee (sauf refus).
+
+    Rend {avant, apres, enrichie} pour que la trace MONTRE ce qui part, ou None
+    pour une etape qui n'en a pas besoin. La traduction est obligatoire : un
+    chat muet arrete l'etape, avec sa phrase, plutot que d'envoyer du francais
+    au calcul (un clip de 10 min sur Kaggle pour une autre scene).
+    """
+    if not _prepare_une_video(etape["brique"]) or isinstance(entree, (bytes, bytearray)):
+        return None
+    import video
+
+    avant = " ".join((str(entree or "").strip() or etape.get("demande") or "").split())[:2000]
+    if not avant:
+        return None
+    enrichir = (etape.get("reglages") or {}).get(ENRICHIR, OUI) != NON_MERCI
+    try:
+        apres = video.nettoyer_preparee(
+            appeler_le_modele(video.consigne_de_preparation(avant, enrichir)), enrichir)
+    except CompositeRefuse:
+        apres = ""
+    except Exception:  # noqa: BLE001 -- reseau, delai : la phrase ci-dessous le dit
+        apres = ""
+    if not apres:
+        raise CompositeRefuse(
+            "preparation_impossible",
+            "La description de « %s » n'a pas pu être traduite en anglais par le chat "
+            "gratuit : rien n'est parti au calcul. Réessayez, ou écrivez-la vous-même "
+            "en anglais." % etape["fonction"], ou=EXECUTION)
+    return {"avant": avant, "apres": apres, "enrichie": enrichir}
 
 
 def _arreter_le_travail(client, entetes, jid: str, etape: dict):
@@ -2910,6 +2984,16 @@ function lecteur(type, url){
   return "<a href='" + url + "' download>Le fichier de cette \u00e9tape</a>";
 }
 
+// La description preparee avant une video (24/09) : ce que l'etape a recu,
+// grise, et ce qui part vraiment au calcul. La traduction n'est pas un choix,
+// l'enrichissement se regle au-dessus (« Enrichir ce que reçoit … »).
+function preparation(p){
+  return "<div class=preparation><p class=gris>Préparé pour le modèle : traduit en anglais "
+    + "(obligatoire)" + (p.enrichie ? " et enrichi par le chat" : ", sans enrichir") + ".</p>"
+    + "<p class=gris>Reçu : « " + echapper(p.avant) + " »</p>"
+    + "<p>Envoyé au modèle : « " + echapper(p.apres) + " »</p></div>";
+}
+
 // Une ligne par etape. Elle n'est reecrite que quand son statut change : un
 // son ou une video en cours d'ecoute ne repart pas a zero a chaque lecture.
 async function montrerPas(id, s, vus){
@@ -2920,6 +3004,7 @@ async function montrerPas(id, s, vus){
     vus[i] = e.statut;
     let html = "<strong>" + echapper(e.fonction) + "</strong> <span class=statut>"
       + (STATUTS[e.statut] || echapper(e.statut)) + "</span>";
+    if (e.pretraitement) html += preparation(e.pretraitement);
     if (e.type) {
       const r = await fetch("/composite/courses/" + id + "/etapes/" + i,
                             {headers:{"Authorization":"Bearer " + CLE}});

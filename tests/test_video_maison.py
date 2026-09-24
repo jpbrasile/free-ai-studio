@@ -1125,8 +1125,15 @@ def test_court_ou_pas_la_meme_borne_des_deux_cotes(sandbox):
     assert "const MOTS_POUR_UNE_SCENE = %d;" % video.MOTS_POUR_UNE_SCENE in page
 
 
-def test_fabriquer_une_description_courte_la_detaille_d_abord(sandbox):
-    """Premier clic : enrichie et montree, rien ne part. Second clic : elle part,
+@pytest.mark.parametrize("tape, coche", [
+    ("un phare", True),
+    # Longue, ou sans enrichissement : la traduction reste obligatoire, donc
+    # elle passe AUSSI par la preparation, montree avant de partir.
+    ("Un phare breton sous la pluie, la mer se soulève, la lumière tourne.", True),
+    ("un phare", False),
+])
+def test_fabriquer_prepare_d_abord_la_description(sandbox, tape, coche):
+    """Premier clic : preparee et montree, rien ne part. Second clic : elle part,
     et le titre du travail reste le texte tape."""
     if not shutil.which("node"):
         pytest.skip("node absent")
@@ -1140,16 +1147,18 @@ def test_fabriquer_une_description_courte_la_detaille_d_abord(sandbox):
         "const document = {getElementById: el, createElement: () => ({})};\n"
         "const ENTETES = {}; let ATTENTE_DEPUIS = null; const partis = [];\n"
         "function envoyer(x){ partis.push(el('description').value); }\n"
-        "let appels = 0;\n"
-        "async function fetch(url, o){ appels++; return {ok: true, json: async () =>"
+        "let appels = 0; const demandes = [];\n"
+        "async function fetch(url, o){ appels++; demandes.push(JSON.parse(o.body));"
+        " return {ok: true, json: async () =>"
         " ({enrichie: 'A white lighthouse on a rock in the rain, waves crashing, beam turning.'})}; }\n"
         + page[debut:fin] + "\n"
         "(async () => {\n"
-        "  el('description').value = 'un phare';\n"
+        "  el('description').value = " + json.dumps(tape) + ";\n"
+        "  el('enrichirCase').checked = " + ("true" if coche else "false") + ";\n"
         "  await el('lancer').handlers.click();\n"
         "  const apres1 = [partis.length, appels, el('description').value, el('etat').textContent];\n"
         "  await el('lancer').handlers.click();\n"
-        "  console.log(JSON.stringify({apres1, partis, appels, titre: ORIGINALE}));\n"
+        "  console.log(JSON.stringify({apres1, partis, appels, demandes, titre: ORIGINALE}));\n"
         "})();\n")
     sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
                             encoding="utf-8", timeout=20)
@@ -1159,4 +1168,11 @@ def test_fabriquer_une_description_courte_la_detaille_d_abord(sandbox):
     assert partis1 == 0 and appels1 == 1, vu
     assert zone1.startswith("A white lighthouse") and "cliquez à nouveau" in etat1, vu
     assert vu["partis"] == ["A white lighthouse on a rock in the rain, waves crashing, beam turning."]
-    assert vu["appels"] == 1 and vu["titre"] == "un phare", vu
+    assert vu["appels"] == 1 and vu["titre"] == tape, vu
+    assert vu["demandes"] == [{"description": tape, "enrichir": coche}], vu
+    # Courte ET sans enrichissement : la page le dit, sans rien forcer.
+    assert ("cochez « Enrichir »" in etat1) == (not coche and video_courte(sandbox, tape)), etat1
+
+
+def video_courte(sandbox, texte):
+    return sandbox.video.est_courte(texte)
