@@ -753,8 +753,9 @@ Sing it low and sing it clear
 Every morning brings you here"></textarea>
 <p class="avert">Découpez en sections : <code>[Verse]</code>, <code>[Chorus]</code>,
 <code>[Bridge]</code>… Sans aucune, le Studio met tout dans un seul couplet.
-<b>Le modèle chante en anglais et en chinois</b> selon sa fiche ; le français n’y est pas
-annoncé : essayez, sans garantie.</p>
+<b>Le modèle chante en anglais et en chinois</b> selon sa fiche. Le français n’y est pas
+annoncé, mais il le chante : paroles françaises essayées sur Modal le 24/09/2026 et
+reconnues à l’écoute (style décrit en anglais pour cet essai).</p>
 <p><button type="button" id="modele-paroles" class="discret">Utiliser cet exemple</button>
 <span id="note-paroles" class="avert"></span></p>
 
