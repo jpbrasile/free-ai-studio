@@ -104,7 +104,7 @@ def test_executer_lance_le_texte_prepare_et_le_montre(composite):
     recus, suivis = [], []
 
     def lancer(etape, entree):
-        recus.append(entree)
+        recus.append(etape.get("texte_prepare"))
         return b"\x00\x00\x00\x18ftypmp42"
 
     def pretraiter(etape, entree):
@@ -124,9 +124,17 @@ def test_executer_lance_le_texte_prepare_et_le_montre(composite):
 def test_executer_sans_pretraitement_ne_change_rien(composite):
     c = chaine(composite, ["video_rapide"])
     recus = []
-    composite.executer(c, lambda e, x: recus.append(x) or b"x", "un phare",
-                       garde_budget=lambda _e: None)
-    assert recus == ["un phare"]
+    composite.executer(c, lambda e, x: recus.append((x, e.get("texte_prepare"))) or b"x",
+                       "un phare", garde_budget=lambda _e: None)
+    assert recus == [("un phare", None)]
+
+
+def test_le_texte_prepare_passe_devant_dans_la_demande(composite):
+    etape = dict(etape_video(composite), texte_prepare="a lighthouse")
+    _, demande = composite.demande_du_travail(etape, "un phare")
+    assert demande["description"] == "a lighthouse"
+    _, demande = composite.demande_du_travail(etape_video(composite), "un phare")
+    assert demande["description"] == "un phare"
 
 
 def test_un_echec_du_pretraitement_arrete_la_chaine_avec_sa_phrase(composite):

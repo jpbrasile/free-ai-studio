@@ -1218,7 +1218,7 @@ def test_le_masquage_des_etats_est_REMESURE_a_chaque_route_ouverte(apps):
         sonde_carte=CARTE_LIBRE)["atteignable"]
         for a in apps}
     assert etats == {composite.OUI, composite.NON, composite.INCONNU}, etats
-    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)  # 14 avant le retrait du clip soigne, 23/09
+    assert len(composite.ROUTES) == 14, sorted(composite.ROUTES)  # 13 avant « Prolonger la vidéo », 24/09
 
 
 def test_une_licence_qu_on_ne_peut_pas_nommer_rend_inconnu(apps):
@@ -1725,7 +1725,7 @@ def test_les_briques_sans_route_sont_EXACTEMENT_celles_qu_on_a_nommees(registre)
               if a["id"] not in composite.ROUTES}
     assert dehors == {"chat_secours_openrouter", "chat_secours_groq",
                       "recherche_web"}, dehors
-    assert len(composite.ROUTES) == 13, sorted(composite.ROUTES)  # 14 avant le retrait du clip soigne, 23/09
+    assert len(composite.ROUTES) == 14, sorted(composite.ROUTES)  # 13 avant « Prolonger la vidéo », 24/09
 
 
 # --- 10. Preferer le local : y a-t-il seulement un choix a faire ? ----------

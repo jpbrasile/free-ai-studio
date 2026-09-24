@@ -291,6 +291,25 @@
       "code": "sandbox-manager/video.py MODELES['rapide']"
     },
     {
+      "id": "video_prolonger",
+      "fonction": "Prolonger la vidéo de quelques secondes (machine louée)",
+      "capacite": "video_prolonger",
+      "entrees": ["video"],
+      "sorties": ["video"],
+      "fournisseur": "Wan-AI",
+      "modele": "Wan-AI/Wan2.1-VACE-1.3B-diffusers",
+      "nature": "modèle ouvert exécuté à distance : un second clip part de la dernière image du premier, puis les deux sont recollés en un seul (ffmpeg, dans le Studio)",
+      "licence": "Apache 2.0",
+      "territoire": "aucune restriction de pays",
+      "vram_min_go": null,
+      "modes": ["modal", "kaggle"],
+      "cout": "Le prix d'un clip « Rapide » de la même durée : jusqu'à 0,277 $ pour 5 s de plus chez Modal ; Kaggle : gratuit",
+      "cout_max_usd": 0.277,
+      "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B",
+      "verifie_le": "2026-09-24",
+      "code": "sandbox-manager/composite.py demande_du_travail + sandbox-manager/montage.py"
+    },
+    {
       "id": "video_maison",
       "fonction": "Vidéo fabriquée À LA MAISON, sur la carte de ce PC",
       "capacite": "video_maison",

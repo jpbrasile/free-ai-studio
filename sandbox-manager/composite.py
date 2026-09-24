@@ -506,6 +506,7 @@ CLE_DE_LA_BRIQUE = {
     "image_fabrication": (COTE_ROUTEUR, "gemini"),
     "dictee_groq": (COTE_ROUTEUR, "groq"),
     "video_rapide": (COTE_SANDBOX, None),
+    "video_prolonger": (COTE_SANDBOX, None),
     "chanson": (COTE_SANDBOX, None),
     "dialogue": (COTE_SANDBOX, None),
 }
@@ -1158,6 +1159,11 @@ DONNEES = {
         "sort": "non", "vers": [],
         "phrase": "Sur votre carte. Si elle ne peut pas, la chaîne s'arrête et "
                   "vous demande : rien ne part chez un loueur sans votre accord."},
+    # Toujours chez le loueur : seul son modele (VACE) part d'une image donnee.
+    "video_prolonger": {
+        "sort": "oui", "vers": ["Modal"],
+        "phrase": "La dernière image de la vidéo et sa description partent chez "
+                  "le loueur choisi (Modal, ou Kaggle)."},
     "chanson": {
         "sort": "oui", "vers": ["Modal"],
         "phrase": "Vos paroles et le style partent chez Modal."},
@@ -1188,6 +1194,7 @@ def donnees_de(brique: str) -> dict:
 # (`cumul_de_chaine`) n'additionne que les pires cas que ces gardes rendent.
 BUDGET_PAR_BRIQUE = {
     "video_rapide": "video",
+    "video_prolonger": "video",
     "chanson": "chanson",
     "dialogue": "dialogue",
 }
@@ -1202,7 +1209,7 @@ BUDGET_PAR_BRIQUE = {
 # `video_rapide` porte `modes: [modal, kaggle, colab]` sans
 # `local`, alors que `app.py:2321` la prepare bel et bien en mode maison. Le
 # code fait foi ; la fiche du registre est en retard. Sous-plan, pas raccroc.
-LOUEUR_SEUL = ("chanson", "dialogue")
+LOUEUR_SEUL = ("chanson", "dialogue", "video_prolonger")
 
 
 def budget_du_noeud(etape) -> str | None:
@@ -1349,8 +1356,9 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
 
     `pretraiter(etape, entree) -> {avant, apres, ...} | None`, s'il est donne,
     prepare ce que l'etape recoit (une video : traduite en anglais, detaillee)
-    apres la garde du budget et avant le lancement. Ce qu'il rend va dans la
-    trace, sous `pretraitement` : la page montre le texte qui part vraiment.
+    apres la garde du budget et avant le lancement. Son `apres` est pose sur
+    l'etape (`texte_prepare`), et ce qu'il rend va dans la trace, sous
+    `pretraitement` : la page montre le texte qui part vraiment.
     """
     # `phrase` est le champ que le client LIT. Il manquait, et le motif tenait
     # sa place : quand la carte etait prise, la page montrait le slug
@@ -1410,7 +1418,9 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             garde_budget(etape)
             pret = pretraiter(etape, courant) if pretraiter is not None else None
             if pret:
-                courant = pret["apres"]
+                # Pose sur l'etape, pas a la place de l'entree : « Prolonger »
+                # recoit une video ET a besoin de sa description preparee.
+                etape["texte_prepare"] = pret["apres"]
             if suivi:
                 suivi(rang, "en_cours", {"pretraitement": pret} if pret else None, None)
             courant = lancer(etape, courant)
@@ -1498,6 +1508,7 @@ ROUTES = {
     # adresse : il donne les trois adresses d'un coup (voir TRAVAUX).
     "video_rapide": ("travail", "video"),
     "video_maison": ("travail", "video"),
+    "video_prolonger": ("travail", "video"),
     "chanson": ("travail", "chanson"),
     "dialogue": ("travail", "dialogue"),
 }
@@ -1516,13 +1527,15 @@ SANDBOX = os.getenv("COMPOSITE_SANDBOX_URL", "http://127.0.0.1:8000")
 TRAVAUX = {
     "video_rapide": ("video", {"qualite": "rapide"}),
     "video_maison": ("video", {"ou_calculer": "toujours-maison"}),
+    # Toujours louee : la carte d'ici (Wan 2.2) ne pose pas d'image de depart.
+    "video_prolonger": ("video", {"qualite": "rapide", "ou_calculer": "toujours-modal"}),
     "chanson": ("chanson", {}),
     "dialogue": ("dialogue", {}),
 }
 
 # La qualite video de chaque brique, pour aller chercher SA carte dans
 # `video.MODELES` au lieu d'ecrire << L4 >> et << A100 >> une deuxieme fois.
-QUALITE_DU_NOEUD = {"video_rapide": "rapide"}
+QUALITE_DU_NOEUD = {"video_rapide": "rapide", "video_prolonger": "rapide"}
 
 # Un travail se regarde toutes les N secondes. Les etats terminaux sont ceux
 # que `write_job` ecrit vraiment -- releves dans `app.py`, pas supposes.
@@ -1862,6 +1875,7 @@ DUREE = "duree"
 DUREES_DES_TRAVAUX = {
     "video_maison": ("video", "DUREES_MAISON", "DUREE_PAR_DEFAUT", 1, "%s s"),
     "video_rapide": ("video", "DUREES", "DUREE_PAR_DEFAUT", 1, "%s s"),
+    "video_prolonger": ("video", "DUREES", "DUREE_PAR_DEFAUT", 1, "%s s de plus"),
     "chanson": ("chanson", "DUREES", None, 60, "%s min au plus"),
 }
 
@@ -1886,7 +1900,8 @@ def _durees_du_travail(brique: str) -> tuple[int, list[dict], str] | None:
 # `video_rapide` peut aussi tourner ici quand la carte est libre : les deux
 # definitions sont dites.
 DEFINITION = "definition"
-DEFINITIONS_DES_VIDEOS = {"video_maison": ("maison",), "video_rapide": ("rapide", "maison")}
+DEFINITIONS_DES_VIDEOS = {"video_maison": ("maison",), "video_rapide": ("rapide", "maison"),
+                          "video_prolonger": ("rapide",)}
 LIEU_DU_MODELE = {"maison": "sur cette carte", "rapide": "chez le loueur"}
 
 
@@ -2333,10 +2348,24 @@ def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
         fixe = dict(fixe, ou_calculer=reglages[OU_CALCULER])
     if reglages.get(VERSION) == INSTRUMENTALE:
         fixe = dict(fixe, lora=True)
-    texte = str(entree or "").strip()
+    une_video = isinstance(entree, (bytes, bytearray))
+    texte = "" if une_video else str(entree or "").strip()
     demande = (etape.get("demande") or "").strip()
     if usage == "video":
-        return usage, dict(fixe, description=texte or demande)
+        # Le texte prepare (traduit, enrichi) passe devant : c'est lui que la
+        # page a montre comme « envoyé au modèle ».
+        description = etape.get("texte_prepare") or texte or demande
+        if une_video:
+            # Prolonger : le clip part de la DERNIERE image de celui recu.
+            import montage
+
+            try:
+                image = montage.derniere_image(bytes(entree))
+            except montage.MontageImpossible as refus:
+                raise CompositeRefuse("montage_impossible", str(refus), ou=EXECUTION) from refus
+            return usage, dict(fixe, description=description,
+                               image_depart=base64.b64encode(image).decode("ascii"))
+        return usage, dict(fixe, description=description)
     if usage == "chanson":
         return usage, dict(fixe, style=demande or "chanson en français",
                            paroles=texte or demande)
@@ -2356,11 +2385,13 @@ def pretraiter_par_le_chat(etape: dict, entree) -> dict | None:
     chat muet arrete l'etape, avec sa phrase, plutot que d'envoyer du francais
     au calcul (un clip de 10 min sur Kaggle pour une autre scene).
     """
-    if not _prepare_une_video(etape["brique"]) or isinstance(entree, (bytes, bytearray)):
+    if not _prepare_une_video(etape["brique"]):
         return None
     import video
 
-    avant = " ".join((str(entree or "").strip() or etape.get("demande") or "").split())[:2000]
+    # Prolonger recoit une VIDEO : sa description est la consigne de l'etape.
+    recu = "" if isinstance(entree, (bytes, bytearray)) else str(entree or "").strip()
+    avant = " ".join((recu or etape.get("demande") or "").split())[:2000]
     if not avant:
         return None
     enrichir = (etape.get("reglages") or {}).get(ENRICHIR, OUI) != NON_MERCI
@@ -2474,7 +2505,16 @@ def lancer_un_travail(etape: dict, entree):
                 ou=EXECUTION)
         fichier = client.get(SANDBOX + adresse, headers=entetes)
         _ou_refus(fichier, etape, "Ce travail n'a rien rendu.")
-        return fichier.content or None
+    suite = fichier.content or None
+    if suite and demande.get("image_depart") and isinstance(entree, (bytes, bytearray)):
+        # Prolonger : le clip recu, puis sa suite, en UN clip.
+        import montage
+
+        try:
+            return montage.recoller(bytes(entree), suite)
+        except montage.MontageImpossible as refus:
+            raise CompositeRefuse("montage_impossible", str(refus), ou=EXECUTION) from refus
+    return suite
 
 
 def _phrase_de_l_arbitrage(reponse, etape: dict) -> str:
@@ -2705,8 +2745,8 @@ ou Groq. Chaque \u00e9tape dit ensuite ce qui quitte votre ordinateur, et chez q
 <label for=phrase><strong>Ce que vous voulez</strong></label>
 <textarea id=phrase placeholder="R\u00e9sume cet enregistrement et lis-le-moi \u00e0 voix haute"></textarea>
 
-<label for=fichier class=gris>Un enregistrement, une photo ou un document, si votre demande en a besoin</label>
-<input type=file id=fichier accept="audio/*,image/*,application/pdf,.pdf,.txt,.md,.csv">
+<label for=fichier class=gris>Un enregistrement, une photo, une vidéo ou un document, si votre demande en a besoin</label>
+<input type=file id=fichier accept="audio/*,image/*,video/*,application/pdf,.pdf,.txt,.md,.csv">
 <div id=apercu></div>
 
 <button id=voir>Voir si c\u2019est possible</button>
