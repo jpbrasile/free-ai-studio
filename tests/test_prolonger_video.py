@@ -329,6 +329,53 @@ def test_la_page_montre_le_cout_estime_et_la_suite_par_defaut(sandbox):
     assert "function suiteParDefaut(v, i)" in page and "Description de la suite" in page
 
 
+def test_un_clip_ajoute_qui_echoue_garde_ceux_deja_payes(composite, monkeypatch):
+    """24/09 : le 3e clip echoue -- la video des deux premiers est rendue, et dite incomplete."""
+    appels = []
+
+    def un(_e, entree):
+        appels.append(entree)
+        if len(appels) == 3:
+            raise composite.CompositeRefuse("travail_echoue", "Modal a refusé.")
+        return entree + b"+"
+    monkeypatch.setattr(composite, "_un_travail", un)
+    monkeypatch.setattr(composite, "_budget_verifie", lambda _e: None)
+    rendu = composite.lancer_un_travail(
+        {"brique": "video_prolonger", "reglages": {"clips": "3"}}, b"v")
+    assert rendu == b"v++"
+    assert "2 clips ajoutés sur 3" in rendu.avertissement
+    assert "Modal a refusé" in rendu.avertissement
+
+
+def test_le_premier_clip_ajoute_qui_echoue_arrete_l_etape(composite, monkeypatch):
+    def un(_e, _entree):
+        raise composite.CompositeRefuse("travail_echoue", "Modal a refusé.")
+    monkeypatch.setattr(composite, "_un_travail", un)
+    with pytest.raises(composite.CompositeRefuse):
+        composite.lancer_un_travail({"brique": "video_prolonger", "reglages": {"clips": "3"}}, b"v")
+
+
+def test_le_budget_refuse_entre_deux_clips_rend_la_video_faite(composite, monkeypatch):
+    monkeypatch.setattr(composite, "_un_travail", lambda _e, entree: entree + b"+")
+
+    def garde(_e):
+        raise composite.CompositeRefuse("budget_depasse", "Plus de crédit ce mois-ci.")
+    monkeypatch.setattr(composite, "_budget_verifie", garde)
+    rendu = composite.lancer_un_travail(
+        {"brique": "video_prolonger", "reglages": {"clips": "2"}}, b"v")
+    assert rendu == b"v+" and "1 clip ajouté sur 2" in rendu.avertissement
+
+
+def test_la_trace_dit_qu_une_video_est_incomplete(composite):
+    partielle = composite.VideoPartielle.de(b"v+", 1, 2, "Modal a refusé")
+    c = chaine_10_s(composite)
+    c["phrase"] = "un phare"
+    trace = composite.executer(c, lambda e, _x: partielle if e["brique"] in composite.PROLONGENT
+                               else b"v", None, garde_budget=lambda _e: None)
+    assert trace["resultat"] == "rendu"
+    assert trace["etapes"][1]["phrase"].startswith("Vidéo incomplète : 1 clip ajouté sur 2")
+
+
 def test_le_premier_clip_prolonge_ne_promet_pas_la_carte_d_ici(composite):
     """Releve sur la page le 24/09 : « Sur votre carte si elle est libre » pour un
     clip qui part chez le loueur d'office."""

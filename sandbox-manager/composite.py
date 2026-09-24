@@ -1518,6 +1518,9 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             rendu["texte"] = courant[:TEXTE_MONTRE_MAX]
         if getattr(courant, "ecoute", None):
             rendu["ecoute"] = courant.ecoute
+        # Une video prolongee a laquelle des clips manquent : la page le dit.
+        if getattr(courant, "avertissement", None):
+            rendu["phrase"] = courant.avertissement
         if pret:
             rendu["pretraitement"] = pret
         trace["etapes"].append(rendu)
@@ -2629,12 +2632,46 @@ def lancer_un_travail(etape: dict, entree):
             arret = etape.get("arret")
             if arret is not None and arret.is_set():
                 # Les clips deja payes restent : la video recollee jusque-la.
-                return entree
-            _budget_verifie(etape)
-        entree = _un_travail(etape, entree)
-        if entree is None:
-            return None
+                return VideoPartielle.de(entree, n, fois, "arrêté à votre demande")
+        try:
+            if n:
+                _budget_verifie(etape)
+            suite = _un_travail(etape, entree)
+        except CompositeRefuse as refus:
+            if not n:
+                raise
+            return VideoPartielle.de(entree, n, fois, refus.phrase)
+        except Exception as erreur:  # noqa: BLE001 -- dit dans la phrase de l'etape
+            if not n:
+                raise
+            return VideoPartielle.de(entree, n, fois, str(erreur) or type(erreur).__name__)
+        if suite is None:
+            if not n:
+                return None
+            return VideoPartielle.de(entree, n, fois, "le clip suivant n'a rien rendu")
+        entree = suite
     return entree
+
+
+class VideoPartielle(bytes):
+    """La video recollee jusqu'au clip qui a manque, et ce qui l'a arretee.
+
+    24/09 : un clip ajoute qui echouait perdait ceux deja payes de l'etape. La
+    chaine rend maintenant ce qui existe, et l'etape le DIT (`avertissement`,
+    montre sous la video) : jamais une video courte presentee comme entiere.
+    """
+
+    avertissement: str | None = None
+
+    @classmethod
+    def de(cls, video: bytes, faits: int, voulus: int, pourquoi: str) -> "VideoPartielle":
+        partielle = cls(video)
+        partielle.avertissement = (
+            "Vidéo incomplète : %d clip%s ajouté%s sur %d, les suivants manquent (%s). "
+            "Ce qui est montré a déjà été payé."
+            % (faits, "s" if faits > 1 else "", "s" if faits > 1 else "", voulus,
+               pourquoi.strip().rstrip(".")))
+        return partielle
 
 
 def _un_travail(etape: dict, entree):
