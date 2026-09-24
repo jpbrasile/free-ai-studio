@@ -3287,6 +3287,25 @@ def dialogue_fichiers(jid: str) -> dict:
 
 
 ROUTEUR_INTERNE = os.getenv("SANDBOX_ROUTEUR_URL", "http://free-tier-manager:8000")
+
+
+async def etat_des_cles() -> dict:
+    """Ce qui est branche, pour que le verdict ne reclame que ce qui manque.
+
+    Le routeur qui ne repond pas laisse son cote a None : le verdict dit alors
+    << il faut un service deja branche >>, comme avant le 24/09, au lieu
+    d'affirmer qu'il manque ou qu'il est la."""
+    etat = {"routeur": None,
+            "sandbox": {"modal": modal_configured(), "kaggle": kaggle_configured()}}
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            reponse = await client.get(ROUTEUR_INTERNE + "/cles/etat")
+            reponse.raise_for_status()
+            etat["routeur"] = {f["nom"]: bool(f["active"])
+                               for f in reponse.json()["fournisseurs"]}
+    except Exception:  # noqa: BLE001 -- un verdict ne casse pas faute de routeur
+        pass
+    return etat
 # La transcription d'un dialogue de 147 s a pris 63 s sur le processeur (mesure
 # du 17/09/2026). Le delai couvre largement cela, plus le telechargement du
 # modele d'alignement a la toute premiere demande.
@@ -3711,7 +3730,8 @@ async def composite_verdict(request: Request,
     auth(authorization)
     try:
         formulaire, chaine = await _chaine_depuis(request)
-        verdict = composite.verifier(chaine, entree=composite.entree_lue(formulaire.get("entree")))
+        verdict = composite.verifier(chaine, entree=composite.entree_lue(formulaire.get("entree")),
+                                     etat_cles=await etat_des_cles())
         # Le calcul a etabli les faits ; le modele les met en francais, et les
         # montants sont verrouilles dans `rediger`. Hors boucle : c'est un appel
         # reseau, il ne doit pas tenir le service pendant qu'il attend.
@@ -3770,7 +3790,7 @@ async def _preparer_le_lancement(request: Request):
     # image ne part plus jamais comme du texte (23/09, 540 498 jetons).
     joint = (composite.type_d_entree(fichier.filename, fichier.content_type)
              if fichier is not None and not isinstance(fichier, str) else composite.SANS_FICHIER)
-    verdict = composite.verifier(chaine, entree=joint)
+    verdict = composite.verifier(chaine, entree=joint, etat_cles=await etat_des_cles())
     if verdict["atteignable"] == composite.NON:
         raise composite.CompositeRefuse(
             ";".join(verdict["motifs"]) or "refuse", verdict["pourquoi"],

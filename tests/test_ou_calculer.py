@@ -613,3 +613,33 @@ def test_la_boite_d_attente_montre_la_raison_quand_la_memoire_suffit():
     julia, memoire = sortie.stdout.strip().splitlines()
     assert "julia.exe (PID 76088) tient la carte" in julia
     assert "Go libres" in memoire and "julia" not in memoire, "une carte vraiment pleine garde ses chiffres"
+
+
+def test_choisir_kaggle_quand_la_carte_passe_avant_se_voit_tout_de_suite():
+    """23/09 : « phare lance » sur Kaggle, parti sur la carte d'ici, sans rappel.
+    La note apparait au choix de Kaggle, et seulement quand la carte passe avant."""
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("node absent")
+    page = (RACINE / "sandbox-manager" / "video.py").read_text(encoding="utf-8")
+    debut = page.index("function majNoteLoueur(){")
+    fin = page.index("\n}\n", debut) + 3
+    corps = page[debut:fin]
+    cas = [("kaggle", "maison-si-libre", True), ("kaggle", "toujours-maison", True),
+           ("kaggle", "toujours-modal", True), ("modal", "maison-si-libre", True),
+           ("kaggle", "maison-si-libre", False)]
+    code = ("let CARTE_POSSIBLE, OU, REGLAGE; const note = {};\n"
+            "const document = {getElementById: (i) => i === 'ou' ? {value: OU} : note};\n"
+            "const reglageActuel = () => REGLAGE;\n" + corps
+            + "".join("\nCARTE_POSSIBLE=%s; OU=%s; REGLAGE=%s; majNoteLoueur();"
+                      " console.log(JSON.stringify([note.hidden, note.textContent]));"
+                      % (json.dumps(c), json.dumps(o), json.dumps(r)) for o, r, c in cas))
+    sortie = subprocess.run(["node", "-e", code], capture_output=True, text=True,
+                            encoding="utf-8", timeout=20)
+    assert sortie.returncode == 0, sortie.stderr
+    vus = [json.loads(ligne) for ligne in sortie.stdout.strip().splitlines()]
+    assert vus[0][0] is False and "Toujours sur une machine louée" in vus[0][1], vus[0]
+    assert vus[1][0] is False and "Kaggle ne servira pas" in vus[1][1], vus[1]
+    # Loue a coup sur, Modal choisi, ou pas de carte ici : rien a rappeler.
+    assert all(v == [True, ""] for v in vus[2:]), vus[2:]

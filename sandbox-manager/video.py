@@ -1204,6 +1204,10 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
   <button id="lancer" class="primaire">Fabriquer</button>
 </div>
 <p id="licence" class="avert"></p>
+<!-- 23/09 : « phare lancé » sur Kaggle est parti sur la carte d'ici, parce que
+     « À la maison si la carte est libre » passe avant « Si on loue ». Rien ne le
+     rappelait au moment de choisir Kaggle. Cette note le dit, sans rien régler. -->
+<p id="noteLoueur" class="avert" hidden></p>
 
 <!-- N'apparait QUE si cet ordinateur a une carte branchee au Studio. Celui qui
      n'en a pas ne doit pas voir un reglage qui ne le concerne pas. -->
@@ -1601,6 +1605,25 @@ function reglageActuel(){
   return s ? s.value : null;
 }
 
+// Kaggle choisi, mais la carte d'ici passe d'abord : le dire AU MOMENT du choix.
+function majNoteLoueur(){
+  const note = document.getElementById("noteLoueur");
+  const loueur = document.getElementById("ou").value;
+  const reglage = reglageActuel();
+  let texte = "";
+  if(CARTE_POSSIBLE && loueur === "kaggle" && reglage === "maison-si-libre"){
+    texte = "Kaggle ne servira que si la carte de cet ordinateur est occupée : "
+          + "« À la maison si la carte est libre » passe avant. Pour aller sur "
+          + "Kaggle à coup sûr, choisissez « Toujours sur une machine louée ».";
+  } else if(CARTE_POSSIBLE && loueur === "kaggle" && reglage === "toujours-maison"){
+    texte = "Kaggle ne servira pas : « Toujours à la maison » fabrique le clip "
+          + "sur la carte de cet ordinateur.";
+  }
+  note.textContent = texte;
+  note.hidden = !texte;
+}
+document.getElementById("ou").addEventListener("change", majNoteLoueur);
+
 function chargerReglage(){
   return fetch("/video/ou-calculer", {headers:{"Authorization":"Bearer "+CLE}})
     .then(r => r.json())
@@ -1610,6 +1633,7 @@ function chargerReglage(){
       document.getElementById("ouCalculer").hidden = false;
       document.getElementById("reglage").value = d.reglage;
       majLicence();   // la ligne de licence doit nommer le modèle de la maison
+      majNoteLoueur();
       // Ce qui est MESURE, jamais ce qui est offert : les nommer toutes
       // << mesurees >> etait un nombre fabrique, vu en ouvrant la page.
       // Et DEUX listes, pas une : la place a ete relevee sur un vrai clip pour
@@ -1645,6 +1669,7 @@ const selReglage = document.getElementById("reglage");
 if(selReglage){
   selReglage.addEventListener("change", () => {
     majLicence();   // « toujours sur une machine louée » retire la ligne maison
+    majNoteLoueur();
     fetch("/video/ou-calculer", {method:"POST", headers:ENTETES,
                                  body:JSON.stringify({reglage: selReglage.value})})
       .catch(() => {});

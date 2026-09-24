@@ -28,13 +28,14 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
-| 23/09/2026 | `/video` | « phare lancé » sur Kaggle, parti sur la carte de cet ordinateur : le réglage par défaut « À la maison si la carte est libre » passe avant « Si on loue : Kaggle », et rien ne le rappelle au moment de choisir Kaggle | non | le propriétaire |
 | 23/09/2026 | `/video` | « vraiment très lent pour une vidéo d'une seconde » : clip Kaggle ebffade9, 29 min 22 s au total, dont 23 min 48 s de calcul (47 s par étape) pour 1 s de vidéo. Le journal dit « Precision : bfloat16 » sur un T4, qui ne le fait qu'en émulation : corrigé (float16 selon la génération de la carte, comme chanson et dialogue). Reste à mesurer le gain par un vrai clip, et à vérifier que l'image n'est pas abîmée en float16 | oui | le propriétaire |
 
 ## Levées
 
 | Date | Page | Ce qui gênait | Bloquait ? | Levée par | Vue par |
 |---|---|---|---|---|---|
+| 24/09/2026 | `/composite` | Le verdict disait « Chat, Free AI Auto nécessite une clé à configurer » alors que Gemini, OpenRouter et Groq étaient branchés, et envoyait vers /cles du bac à sable, qui ne connaît que Modal et Kaggle. Il demande maintenant au routeur ce qui est branché : il se tait si la clé est là, dit « non » avec la bonne page si elle manque | non | ce commit | Claude, en vérifiant le pas à pas |
+| 23/09/2026 | `/video` | « phare lancé » sur Kaggle, parti sur la carte de cet ordinateur : le réglage par défaut « À la maison si la carte est libre » passe avant « Si on loue : Kaggle », et rien ne le rappelle au moment de choisir Kaggle | non | note sous les menus au choix de Kaggle, rien n'est réglé (ce commit, tests seulement) | le propriétaire |
 | 24/09/2026 | `/composite` | Un texte écrit pour la voix perdait parfois apostrophes et ponctuation (« L ecume danse … l horizon ») ; la voix lisait mal (28 mots retrouvés sur 38). La consigne orale dit maintenant de les garder : 6 réponses fautives sur 24 avant, 0 sur 24 après, mesuré dans le conteneur | non | ce commit | Claude, en vérifiant le pas à pas ; réparation demandée par le propriétaire |
 | 24/09/2026 | `/video` | « J'attends la carte » affichait « 23,0 Go libres, il en faut 11,5 » : la carte semblait libre. julia.exe la tenait, et la boîte ne le disait pas. Elle nomme maintenant qui tient la carte quand la mémoire suffit | non | 1c913f7 (tests seulement) | Claude, en vérifiant l'arrêt |
 | 24/09/2026 | `/composite` | Enchaîner allait toujours d'un trait : impossible de regarder une étape avant que la suivante parte. Choix « d'un trait » ou « pas à pas » ; en pas à pas, la chaîne attend « Continuer » avant chaque étape, et la consigne de la suivante se retouche avant de partir | non | ce commit (tests seulement) | le propriétaire |

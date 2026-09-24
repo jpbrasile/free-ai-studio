@@ -488,6 +488,67 @@ def exige_une_cle(cout: str) -> bool:
     return not _SANS_CLE.search(cout or "")
 
 
+# OU se branche la cle de chaque brique qui en reclame une. DEUX pages, pas
+# une : les services de conversation se branchent dans le routeur (:8010), Modal
+# et Kaggle dans le bac a sable (:8020). Jusqu'au 24/09 le verdict envoyait tout
+# le monde vers /cles du bac a sable, qui ne connait que Modal et Kaggle. Un
+# test epingle : toute brique qui exige une cle a sa ligne ici.
+COTE_ROUTEUR, COTE_SANDBOX = "routeur", "sandbox"
+TOUT_FOURNISSEUR = "*"
+CLE_DE_LA_BRIQUE = {
+    # Le mode automatique passe d'un fournisseur a l'autre : un seul suffit.
+    "chat_auto": (COTE_ROUTEUR, TOUT_FOURNISSEUR),
+    # Free AI Max partage la cle de Gemini (le routeur n'en montre qu'une).
+    "chat_max": (COTE_ROUTEUR, "gemini"),
+    "chat_secours_openrouter": (COTE_ROUTEUR, "openrouter"),
+    "chat_secours_groq": (COTE_ROUTEUR, "groq"),
+    "image_lecture": (COTE_ROUTEUR, "gemini"),
+    "image_fabrication": (COTE_ROUTEUR, "gemini"),
+    "dictee_groq": (COTE_ROUTEUR, "groq"),
+    "video_rapide": (COTE_SANDBOX, None),
+    "chanson": (COTE_SANDBOX, None),
+    "dialogue": (COTE_SANDBOX, None),
+}
+PAGE_DES_CLES = {
+    COTE_ROUTEUR: "la page « vos clés » du Studio (http://localhost:8010/cles)",
+    COTE_SANDBOX: "la page « vos identifiants » du bac à sable "
+                  "(http://localhost:8020/cles)",
+}
+
+
+def pages_des_cles(etapes) -> list[str]:
+    """Les pages ou brancher les cles de ces etapes, sans doublon, dans l'ordre."""
+    pages = []
+    for e in etapes:
+        cote = CLE_DE_LA_BRIQUE.get(e["brique"], (COTE_ROUTEUR, None))[0]
+        if PAGE_DES_CLES[cote] not in pages:
+            pages.append(PAGE_DES_CLES[cote])
+    return pages
+
+
+def cle_branchee(etape: dict, etat_cles: dict | None) -> bool | None:
+    """La cle de ce pas est-elle branchee ? None quand on ne peut pas le dire.
+
+    `etat_cles` : {"routeur": {fournisseur: actif} ou None,
+                   "sandbox": {"modal": bool, "kaggle": bool} ou None}.
+
+    Cote bac a sable, seul le << oui >> est sur : une video peut encore partir
+    sur la carte de la maison sans aucun compte, et une chaine qui marcherait
+    ne doit pas etre refusee. Un loueur absent se dit donc << je ne sais pas >>.
+    """
+    cote, nom = CLE_DE_LA_BRIQUE.get(etape["brique"], (None, None))
+    connus = (etat_cles or {}).get(cote) if cote else None
+    if connus is None:
+        return None
+    if cote == COTE_SANDBOX:
+        loueur = (etape.get("reglages") or {}).get(LOUEUR)
+        pris = [connus.get(loueur)] if loueur in connus else list(connus.values())
+        return True if pris and all(pris) else None
+    if nom == TOUT_FOURNISSEUR:
+        return any(connus.values())
+    return connus.get(nom)
+
+
 def est_non_commercial(licence: str) -> bool:
     """La brique interdit-elle l'usage commercial ? Sur l'USAGE, pas la diffusion."""
     return any(m.search(licence or "") for m in _NON_COMMERCIAL)
@@ -499,7 +560,8 @@ def licence_indeterminee(licence: str) -> bool:
 
 
 def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
-             sonde_budget=None, sonde_mesure=None, entree: str | None = None) -> dict:
+             sonde_budget=None, sonde_mesure=None, entree: str | None = None,
+             etat_cles: dict | None = None) -> dict:
     """Le verdict, rendu dans la MEME forme que `ou_calculer.decider()` :
     un etat, plus un `pourquoi` en francais affichable tel quel.
 
@@ -790,7 +852,31 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
     # Gratuit, oui -- mais avec quoi de deja branche ? La phrase le dit, parce
     # qu'une installation neuve s'arreterait au premier noeud qui reclame une
     # cle, et que << gratuit >> l'aurait laisse croire le contraire.
+    # Et quand l'etat des cles est connu, on ne reclame que celles qui manquent
+    # VRAIMENT. Mesure du 24/09 : Gemini, OpenRouter et Groq branches, et le
+    # verdict disait encore << Chat, Free AI Auto necessite une cle >>.
     avec_cle = [e for e in etapes if exige_une_cle(e["cout"])]
+    branchee = {id(e): cle_branchee(e, etat_cles) for e in avec_cle}
+    manquent = [e for e in avec_cle if branchee[id(e)] is False]
+    avec_cle = [e for e in avec_cle if branchee[id(e)] is None]
+    if manquent:
+        # Sans la cle, la chaine s'arreterait a ce noeud : c'est un << non >>,
+        # et le remede est dans la phrase.
+        etat = NON
+        motifs.append("cle_manquante")
+        pourquoi.append(
+            ("Une étape a besoin d'une clé qui n'est pas branchée : %s. "
+             "Branchez-la dans %s, puis redemandez."
+             if len(manquent) == 1 else
+             "Plusieurs étapes ont besoin de clés qui ne sont pas "
+             "branchées : %s. Branchez-les dans %s, puis redemandez.")
+            % (", ".join(e["fonction"] for e in manquent),
+               " ou ".join(pages_des_cles(manquent))))
+        faits.append({"quoi": "cle_manquante",
+                      "applications": [e["fonction"] for e in manquent],
+                      "ou_la_brancher": " ou ".join(pages_des_cles(manquent)),
+                      "consequence": "sans elle, la chaîne s'arrêterait à "
+                                     "cette étape"})
     if avec_cle:
         motifs.append("cle_requise")
         # Les DEUX phrases sont ecrites en entier. Un gabarit a trou ne peut pas
@@ -800,18 +886,18 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
         # << Plusieurs etapes A BESOIN d'un service deja branche >>.
         pourquoi.append(
             ("Une étape a besoin d'un service déjà branché dans "
-             "la page « vos identifiants » (/cles) : %s. Sans lui, la "
+             "%s : %s. Sans lui, la "
              "chaîne s'arrêtera là, et le dira."
              if len(avec_cle) == 1 else
              "Plusieurs étapes ont besoin de services déjà "
-             "branchés dans la page « vos identifiants » (/cles) : %s. "
+             "branchés dans %s : %s. "
              "Sans eux, la chaîne s'arrêtera au premier qui manque, et "
              "le dira.")
-            % ", ".join(e["fonction"] for e in avec_cle))
+            % (" ou ".join(pages_des_cles(avec_cle)),
+               ", ".join(e["fonction"] for e in avec_cle)))
         faits.append({"quoi": "cle_requise",
                       "applications": [e["fonction"] for e in avec_cle],
-                      "ou_la_configurer": "la page « vos identifiants » du "
-                                          "Studio, à l'adresse /cles",
+                      "ou_la_configurer": " ou ".join(pages_des_cles(avec_cle)),
                       "si_elle_manque": "la chaîne s'arrête à cette "
                                         "étape et le dit"})
 

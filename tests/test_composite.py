@@ -2027,3 +2027,73 @@ def test_la_consigne_orale_dit_de_garder_accents_et_ponctuation(sandbox):
     assert "pas de symbole," not in orale and "symbole de mise en forme" in orale
     assert "en anglais" in c._consigne_orale("voix_en")
     assert c._consigne_orale(None) == "" and c._consigne_orale("image_fabrication") == ""
+
+
+# --- 24/09 : ne reclamer que les cles qui manquent vraiment ------------------
+
+def _temoin_cles(apps, etat_cles):
+    graphe = composite.compiler(
+        "resume cet enregistrement et lis-le-moi",
+        repondre(["transcription_locale", "conversation", "synthese_vocale_fr"]),
+        apps)
+    return composite.verifier(composite.lier(graphe, apps), etat_cles=etat_cles)
+
+
+def test_toute_brique_qui_exige_une_cle_sait_ou_la_brancher(apps):
+    """Une brique nouvelle qui reclame une cle sans ligne dans la table : ca sonne."""
+    exigent = {a["id"] for a in apps if composite.exige_une_cle(a["cout"])}
+    assert exigent == set(composite.CLE_DE_LA_BRIQUE), exigent ^ set(composite.CLE_DE_LA_BRIQUE)
+
+
+def test_une_cle_branchee_n_est_plus_reclamee(apps):
+    """Vu le 24/09 : Gemini, OpenRouter, Groq branches, et le verdict disait encore
+    que « Chat, Free AI Auto necessite une cle a configurer »."""
+    verdict = _temoin_cles(apps, {"routeur": {"gemini": True, "groq": False},
+                                  "sandbox": None})
+    assert verdict["atteignable"] == composite.OUI, verdict["pourquoi"]
+    assert "cle_requise" not in verdict["motifs"], verdict["pourquoi"]
+    assert "cle_manquante" not in verdict["motifs"], verdict["pourquoi"]
+    assert "clé" not in verdict["pourquoi"] and "branch" not in verdict["pourquoi"]
+
+
+def test_une_cle_absente_est_un_non_avec_la_bonne_page(apps):
+    """Aucun service de conversation branche : la chaine s'arreterait au chat.
+    Et la page est celle du ROUTEUR (:8010), pas /cles du bac a sable, qui ne
+    connait que Modal et Kaggle."""
+    verdict = _temoin_cles(apps, {"routeur": {"gemini": False, "groq": False},
+                                  "sandbox": None})
+    assert verdict["atteignable"] == composite.NON, verdict["pourquoi"]
+    assert "cle_manquante" in verdict["motifs"], verdict
+    fait = next(f for f in verdict["faits"] if f["quoi"] == "cle_manquante")
+    assert fait["applications"] == ["Chat, Free AI Auto"], fait
+    assert "http://localhost:8010/cles" in fait["ou_la_brancher"], fait
+    assert "8020" not in verdict["pourquoi"], verdict["pourquoi"]
+    assert "Chat, Free AI Auto" in verdict["pourquoi"], verdict["pourquoi"]
+
+
+def test_routeur_muet_laisse_la_phrase_prudente(apps):
+    """Le routeur ne repond pas : on ne sait pas, on ne refuse pas -- mais la
+    page indiquee est quand meme la bonne."""
+    verdict = _temoin_cles(apps, {"routeur": None, "sandbox": None})
+    assert verdict["atteignable"] == composite.OUI, verdict["pourquoi"]
+    assert "cle_requise" in verdict["motifs"], verdict
+    assert "http://localhost:8010/cles" in verdict["pourquoi"], verdict["pourquoi"]
+
+
+def test_cote_bac_a_sable_seul_le_oui_est_sur(apps):
+    """Une video peut partir sur la carte de la maison sans compte : Modal non
+    branche ne vaut pas refus. Branche pour le loueur choisi : plus reclame."""
+    chaine = composite.chaine_depuis_briques(["video_rapide"], apps)
+    etape = dict(chaine["etapes"][0], reglages={composite.LOUEUR: "kaggle"})
+    assert composite.cle_branchee(
+        etape, {"sandbox": {"modal": False, "kaggle": True}}) is True
+    assert composite.cle_branchee(
+        etape, {"sandbox": {"modal": True, "kaggle": False}}) is None
+    sans_loueur = dict(etape, reglages={})
+    assert composite.cle_branchee(
+        sans_loueur, {"sandbox": {"modal": True, "kaggle": False}}) is None
+    assert composite.cle_branchee(
+        sans_loueur, {"sandbox": {"modal": True, "kaggle": True}}) is True
+    # Et une brique sans cle n'est jamais jugee.
+    voix = composite.chaine_depuis_briques(["voix_fr"], apps)["etapes"][0]
+    assert composite.cle_branchee(voix, {"routeur": {}, "sandbox": {}}) is None
