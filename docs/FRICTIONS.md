@@ -28,7 +28,8 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
-| 23/09/2026 | `/video` | « vraiment très lent pour une vidéo d'une seconde » : clip Kaggle ebffade9, 29 min 22 s au total, dont 23 min 48 s de calcul (47 s par étape) pour 1 s de vidéo. Le journal dit « Precision : bfloat16 » sur un T4, qui ne le fait qu'en émulation : corrigé (float16 selon la génération de la carte, comme chanson et dialogue). Reste à mesurer le gain par un vrai clip, et à vérifier que l'image n'est pas abîmée en float16 | oui | le propriétaire |
+| 24/09/2026 | `/video` | « un phare » sur Kaggle : aucun des deux clips ne montre de phare (ebffade9 : une côte ; 639ae707 : un homme barbu devant la mer). Description de deux mots, en français, négatif en français aussi ; cause non établie (demande trop courte, ou lecture du texte sur Kaggle) | non | Claude, en mesurant le float16 |
+| 23/09/2026 | `/video` | « vraiment très lent pour une vidéo d'une seconde » : clip Kaggle ebffade9, 29 min 22 s au total, dont 23 min 48 s de calcul (47 s par étape) pour 1 s de vidéo. Le journal dit « Precision : bfloat16 » sur un T4, qui ne le fait qu'en émulation : corrigé (float16 selon la génération de la carte, comme chanson et dialogue). Mesuré le 24/09, même demande (« un phare », 1 s), clip 639ae707 : « Precision : float16 », 10 min 23 s au total, dont 4 min 23 s de calcul (8,8 s par étape au lieu de 47,6) ; image nette, luminosité normale. Le reste (environ 4 min avant le calcul) est le chargement sur Kaggle. Au propriétaire de dire si 10 min lève la gêne | oui | le propriétaire |
 
 ## Levées
 
