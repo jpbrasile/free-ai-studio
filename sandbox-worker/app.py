@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, subprocess, uuid
+import os, signal, subprocess, threading, uuid
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, Header, HTTPException
@@ -34,6 +34,31 @@ class RunRequest(BaseModel):
     # SANDBOX_TIMEOUT_SECONDS ci-dessus : une demande ne peut que RACCOURCIR
     # l'attente, jamais l'allonger, sinon ce champ serait une porte.
     secondes: Optional[int] = None
+
+
+class StopRequest(BaseModel):
+    job_id: str = Field(min_length=1)
+
+
+# Le processus de chaque travail en cours, pour pouvoir l'ARRETER (24/09 :
+# << l'arret d'une video fabriquee sur la carte de ce PC : a implementer >>).
+# Jusque-la un clip lance ici tenait la carte jusqu'a sa fin, bouton ou non.
+# `ARRETES` retient aussi un arret arrive AVANT le calcul : sans lui, un clip
+# encore en file partirait quand meme, une seconde apres l'arret.
+PROCESSUS: dict = {}
+ARRETES: set = set()
+VERROU = threading.Lock()
+
+
+def tuer(proc) -> None:
+    """Le script ET ce qu'il a lance : il tourne dans son propre groupe."""
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
 
 
 def auth(value: Optional[str]):
@@ -107,24 +132,47 @@ def run(req: RunRequest, authorization: Optional[str] = Header(default=None)):
             env[nom] = valeur
     # Plafonnee par le reglage : une demande ne peut que raccourcir.
     attente = TIMEOUT if req.secondes is None else max(1, min(TIMEOUT, int(req.secondes)))
+    with VERROU:
+        if job_id in ARRETES:
+            ARRETES.discard(job_id)
+            return {"job_id": job_id, "exit_code": 137, "timed_out": False, "arrete": True,
+                    "stdout": "", "stderr": "Arrêté avant de commencer.", "artifacts": []}
+        proc = subprocess.Popen(
+            ["python", "-I", str(script)], cwd=job_dir, env=env, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        PROCESSUS[job_id] = proc
     try:
-        proc = subprocess.run(
-            ["python", "-I", str(script)], cwd=job_dir, env=env,
-            text=True, capture_output=True, timeout=attente
-        )
-        stdout = proc.stdout[-MAX_OUTPUT:]
-        stderr = proc.stderr[-MAX_OUTPUT:]
+        stdout, stderr = proc.communicate(timeout=attente)
         timed_out = False
         code = proc.returncode
-    except subprocess.TimeoutExpired as exc:
-        stdout = (exc.stdout or "")[-MAX_OUTPUT:] if isinstance(exc.stdout, str) else ""
-        stderr = (exc.stderr or "")[-MAX_OUTPUT:] if isinstance(exc.stderr, str) else ""
+    except subprocess.TimeoutExpired:
+        tuer(proc)
+        stdout, stderr = proc.communicate()
         timed_out = True
         code = 124
+    finally:
+        with VERROU:
+            PROCESSUS.pop(job_id, None)
+            arrete = job_id in ARRETES
+            ARRETES.discard(job_id)
+    stdout = (stdout or "")[-MAX_OUTPUT:]
+    stderr = (stderr or "")[-MAX_OUTPUT:]
     artifacts=[]
     for p in sorted(out_dir.rglob("*")):
         if p.is_file() and not p.is_symlink():
             rel=p.relative_to(out_dir).as_posix()
             artifacts.append({"name": rel, "size": p.stat().st_size})
-    return {"job_id": job_id, "exit_code": code, "timed_out": timed_out,
+    return {"job_id": job_id, "exit_code": code, "timed_out": timed_out, "arrete": arrete,
             "stdout": stdout, "stderr": stderr, "artifacts": artifacts}
+
+
+@app.post("/stop")
+def stop(req: StopRequest, authorization: Optional[str] = Header(default=None)):
+    """Arrete le calcul de ce travail. Rend `en_cours` : tournait-il vraiment ?"""
+    auth(authorization)
+    with VERROU:
+        ARRETES.add(req.job_id)
+        proc = PROCESSUS.get(req.job_id)
+    if proc is not None:
+        tuer(proc)
+    return {"job_id": req.job_id, "arrete": True, "en_cours": proc is not None}

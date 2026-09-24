@@ -1154,6 +1154,9 @@ a.bouton{display:inline-block;font:inherit;padding:10px 16px;border-radius:10px;
  border:1px solid #222;background:#222;color:#fff;text-decoration:none;cursor:pointer}
 a.bouton.discret{background:#fff;color:#222;border-color:#666}
 a.bouton:hover{opacity:.86}
+button.danger{background:#9b2116;color:#fff;border-color:#9b2116;cursor:pointer}
+button.discret{font:inherit;font-size:.86rem;padding:5px 10px;border-radius:8px;
+ border:1px solid #666;background:#fff;color:#222;cursor:pointer;margin-right:8px}
 textarea{font:inherit;width:100%;box-sizing:border-box;height:110px;padding:12px;
  border-radius:12px;border:1px solid #999}
 .images{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
@@ -1230,6 +1233,8 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
 </div>
 
 <div id="etat" class="ligne"></div>
+<div class="ligne"><button id="arreter" class="danger" hidden>⛔ Arrêt d’urgence</button>
+<span id="arreter-texte" class="avert"></span></div>
 <details id="detailJournal" hidden><summary>Voir le détail technique</summary>
 <pre id="journal"></pre></details>
 <div id="resultat"></div>
@@ -1476,9 +1481,11 @@ function suivre(id){
       .then(j => {
         if(j.status === "running" || j.status === "queued"){
           etat.innerHTML = enAttente(j);
+          montrerArret(id, j.fournisseur);
           return;
         }
         clearInterval(minuteur); minuteur = null;
+        cacherArret();
         document.getElementById("lancer").disabled = false;
         afficherJournal([j.stdout, j.stderr].filter(Boolean).join("\n"));
         rafraichirBudget();
@@ -1510,6 +1517,11 @@ function suivre(id){
             + ((j.video && j.video.description)
                 ? ('<p class="avert">Texte : « ' + enTexte(j.video.description) + ' »</p>')
                 : "");
+        } else if(j.status === "cancelled"){
+          // Un arrêt n'est pas un échec : il a été demandé, et la phrase dit
+          // ce qui a vraiment été fait (carte libérée, machine terminée...).
+          etat.innerHTML = '<span class="ko">⛔ Arrêté</span> — '
+            + enTexte(j.arret_detail || "à votre demande.");
         } else {
           etat.innerHTML = '<span class="ko">✖ Échec</span> — ' + (j.message || "voir le journal ci-dessous.");
         }
@@ -1521,6 +1533,57 @@ function suivre(id){
   minuteur = setInterval(tour, 4000);
   tour();
 }
+
+// --- Arrêt d'urgence (24/09/2026) --------------------------------------------
+//
+// « l'arrêt d'une vidéo fabriquée sur la carte de ce PC : à implémenter ».
+// Même bouton que la chanson et le dialogue. Sur la carte d'ici, le calcul est
+// tué et la carte libérée ; chez Modal, la machine est terminée ; Kaggle ne
+// sait pas s'arrêter à distance, et le bouton le dit avant qu'on clique.
+let travailEnCours = null, fournisseurEnCours = "";
+
+function libelleArret(fournisseur){
+  return fournisseur === "kaggle" ? "Ne plus attendre" : "⛔ Arrêt d’urgence";
+}
+
+function montrerArret(id, fournisseur){
+  const b = document.getElementById("arreter");
+  if(travailEnCours === id && !b.hidden){ return; }
+  travailEnCours = id;
+  fournisseurEnCours = fournisseur || "";
+  b.hidden = false; b.disabled = false; b.textContent = libelleArret(fournisseur);
+  b.className = fournisseur === "kaggle" ? "discret" : "danger";
+  document.getElementById("arreter-texte").textContent = fournisseur === "kaggle"
+    ? "Kaggle ne sait pas s’arrêter à distance : le Studio cesserait d’attendre, "
+      + "mais le calcul continue chez Kaggle jusqu’à son échéance, et votre quota gratuit avec."
+    : "";
+}
+
+function cacherArret(){
+  travailEnCours = null;
+  document.getElementById("arreter").hidden = true;
+  document.getElementById("arreter-texte").textContent = "";
+}
+
+document.getElementById("arreter").addEventListener("click", () => {
+  if(!travailEnCours){ return; }
+  const b = document.getElementById("arreter");
+  const t = document.getElementById("arreter-texte");
+  b.disabled = true;
+  b.textContent = "Arrêt demandé…";
+  fetch("/jobs/" + travailEnCours + "/arreter", {method:"POST", headers:ENTETES})
+    .then(async r => {
+      const d = await r.json().catch(() => ({}));
+      if(!r.ok){ throw new Error(typeof d.detail === "string" ? d.detail : ("HTTP " + r.status)); }
+      return d;
+    })
+    .then(d => { t.textContent = d.detail || ""; })
+    .catch(e => {
+      b.disabled = false;
+      b.textContent = libelleArret(fournisseurEnCours);
+      t.innerHTML = '<span class="ko">✖ ' + enTexte(e.message) + "</span>";
+    });
+});
 
 // --- Où le clip se fabrique --------------------------------------------------
 //

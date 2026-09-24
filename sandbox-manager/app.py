@@ -772,10 +772,13 @@ def modal_execute(
 def finish_execution(jid: str, effective_provider: str, data: dict, attempts: list[dict] | None = None):
     job = read_job(jid)
     exit_code = int(data.get("exit_code", 1))
+    # Un calcul tue par le bouton d'arret finit en erreur : c'est la preuve de
+    # l'arret, pas un echec (meme lecon que terminer_en_echec, 17/09).
+    arrete = bool(job.get("arret_demande")) and exit_code != 0
     job.update(
         {
             "provider_effective": effective_provider,
-            "status": "succeeded" if exit_code == 0 else "failed",
+            "status": "cancelled" if arrete else "succeeded" if exit_code == 0 else "failed",
             "finished_at": time.time(),
             "exit_code": exit_code,
             "timed_out": bool(data.get("timed_out", False)),
@@ -2447,6 +2450,34 @@ if REPRISE_AU_DEMARRAGE:
                      daemon=True).start()
 
 
+def arreter_maison(jid: str) -> dict:
+    """Arrete le calcul sur la carte de cet ordinateur (24/09).
+
+    Le bac a sable de la carte tue le script et tout ce qu'il a lance : la
+    memoire de la carte est rendue. Un arret arrive avant le calcul est retenu
+    la-bas, et le calcul ne part pas.
+    """
+    if not WORKER_GPU_URL:
+        return {"arretees": 0,
+                "detail": "Aucun bac à sable sur la carte de cet ordinateur : rien à arrêter."}
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.post(WORKER_GPU_URL + "/stop", headers={"Authorization": f"Bearer {WORKER_KEY}"},
+                       json={"job_id": jid})
+            r.raise_for_status()
+            reponse = r.json()
+    except Exception as exc:  # noqa: BLE001 -- l'echec de l'arret se DIT
+        return {"arretees": 0,
+                "detail": "Le calcul sur la carte de cet ordinateur n'a pas pu être arrêté "
+                          f"({type(exc).__name__}) : il continue jusqu'à sa fin."}
+    if reponse.get("en_cours"):
+        return {"arretees": 1,
+                "detail": "Le calcul sur la carte de cet ordinateur est arrêté : la carte est libérée."}
+    return {"arretees": 0,
+            "detail": "Le calcul n'avait pas encore commencé sur la carte de cet ordinateur : "
+                      "il ne partira pas."}
+
+
 @app.post("/jobs/{jid}/arreter")
 def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
     """Arret d'urgence d'un travail en cours.
@@ -2482,6 +2513,8 @@ def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
                    "detail": "Kaggle n'a pas d'annulation : le Studio cesse d'attendre, "
                              "mais le notebook tourne jusqu'à l'échéance que Kaggle applique "
                              "lui-même, et votre quota court jusque-là."}
+    elif fournisseur == "maison":
+        constat = arreter_maison(jid)
     else:
         constat = {"arretees": 0,
                    "detail": f"Rien à arrêter à distance pour « {fournisseur or 'inconnu'} »."}
@@ -2924,6 +2957,8 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
                                  maison=bool((job.get("video") or {}).get("maison")),
                                  voisins=job.get("voisins_a_l_echec"))
             if job.get("status") == "failed" else ""),
+        # Ce que le bouton d'arret a vraiment fait, dit par la page vidéo.
+        "arret_detail": job.get("arret_detail") or "",
         "video": job.get("video"),
         # Ou ce clip a ete fabrique, et pourquoi la. Deux mots sur la page,
         # et de quoi ne pas refaire le raisonnement six mois plus tard.
