@@ -60,10 +60,56 @@ def recoller(premiere: bytes, suite: bytes) -> bytes:
         a, b, sortie = Path(dossier, "a.mp4"), Path(dossier, "b.mp4"), Path(dossier, "ab.mp4")
         a.write_bytes(premiere)
         b.write_bytes(suite)
+        num, den = _cadence(a)
+        # Les images sont NUMEROTEES a la cadence du clip (settb + setpts=N), pas
+        # recalees sur leurs horodatages : mesure du 24/09, sur deux clips loues
+        # de 17 images, `trim` + `concat` seuls rendaient 33 images avec ffmpeg
+        # 6.1 et 32 avec le 7.1.5 du conteneur -- une image perdue en silence.
         _lancer(["-i", str(a), "-i", str(b), "-filter_complex",
-                 "[1:v]trim=start_frame=1,setpts=PTS-STARTPTS[b];"
-                 "[0:v][b]concat=n=2:v=1:a=0[v]",
-                 "-map", "[v]", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+                 "[1:v]trim=start_frame=1[b];"
+                 "[0:v][b]concat=n=2:v=1:a=0,settb=%d/%d,setpts=N[v]" % (den, num),
+                 "-map", "[v]", "-r", "%d/%d" % (num, den),
+                 "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
                  "-movflags", "+faststart", str(sortie)],
                 "Le recollage des deux clips")
+        attendu = images(a) + images(b) - 1
+        obtenu = images(sortie)
+        if obtenu != attendu:
+            raise MontageImpossible(
+                "Le recollage a rendu %d images au lieu de %d : le clip n'est pas "
+                "rendu, plutôt que de le montrer amputé." % (obtenu, attendu))
         return sortie.read_bytes()
+
+
+def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise MontageImpossible("ffprobe (livré avec ffmpeg) manque dans le Studio : "
+                                "le recollage ne peut pas être vérifié.")
+    fini = subprocess.run([ffprobe, "-v", "error", *(["-count_frames"] if compter else []),
+                           "-select_streams", "v:0", "-show_entries", "stream=" + champ,
+                           "-of", "default=nw=1:nk=1", str(chemin)],
+                          capture_output=True, text=True, timeout=DELAI_S)
+    valeur = (fini.stdout or "").strip().splitlines()
+    if fini.returncode != 0 or not valeur:
+        raise MontageImpossible("La vidéo n'a pas pu être lue (%s)." % champ)
+    return valeur[0]
+
+
+def _cadence(chemin: Path) -> tuple[int, int]:
+    num, _, den = _sonde(chemin, "r_frame_rate").partition("/")
+    try:
+        num, den = int(num), int(den or 1)
+    except ValueError:
+        num = den = 0
+    if num <= 0 or den <= 0:
+        raise MontageImpossible("La cadence de la vidéo est illisible.")
+    return num, den
+
+
+def images(chemin: Path) -> int:
+    """Le nombre d'images, COMPTEES en decodant (pas lu dans l'en-tete)."""
+    try:
+        return int(_sonde(chemin, "nb_read_frames", compter=True))
+    except ValueError as exc:
+        raise MontageImpossible("Le nombre d'images de la vidéo est illisible.") from exc

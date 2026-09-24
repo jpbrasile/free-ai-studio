@@ -1386,6 +1386,7 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
                      phrase=refus.phrase)
         return trace
     courant = entree
+    pret_precedent = None
     for rang, etape in enumerate(chaine["etapes"]):
         # La demande du client voyage AVEC le pas. Elle etait portee par le
         # graphe, puis par la chaine, et lue par personne : le noeud de chat
@@ -1416,8 +1417,11 @@ def executer(chaine: dict, lancer, entree=None, verdict: dict | None = None,
             # JUSTE AVANT le lancement, et par noeud : c'est la seule place ou
             # le pire cas est celui de CE travail-la.
             garde_budget(etape)
+            if pretraiter is not None and pret_precedent:
+                etape["pretraitement_precedent"] = pret_precedent
             pret = pretraiter(etape, courant) if pretraiter is not None else None
             if pret:
+                pret_precedent = pret
                 # Pose sur l'etape, pas a la place de l'entree : « Prolonger »
                 # recoit une video ET a besoin de sa description preparee.
                 etape["texte_prepare"] = pret["apres"]
@@ -2372,6 +2376,9 @@ def demande_du_travail(etape: dict, entree) -> tuple[str, dict]:
     return usage, dict(fixe, texte=texte or demande)
 
 
+PROLONGENT = ("video_prolonger",)
+
+
 def _prepare_une_video(brique: str) -> bool:
     """Les briques dont la description passe par la preparation : les videos."""
     return (TRAVAUX.get(brique) or ("",))[0] == "video"
@@ -2395,6 +2402,15 @@ def pretraiter_par_le_chat(etape: dict, entree) -> dict | None:
     if not avant:
         return None
     enrichir = (etape.get("reglages") or {}).get(ENRICHIR, OUI) != NON_MERCI
+    # Prolonger la MEME scene : la description deja preparee est reprise telle
+    # quelle. Le 24/09 (course 3f2a75ba), chaque etape avait demande la sienne
+    # au chat : deux descriptions differentes du meme phare de part et d'autre
+    # de la jointure (« flashing lantern » d'un cote, « lightning » de l'autre).
+    precedent = etape.get("pretraitement_precedent") or {}
+    if (etape["brique"] in PROLONGENT and precedent.get("avant") == avant
+            and precedent.get("enrichie") == enrichir and precedent.get("apres")):
+        return {"avant": avant, "apres": precedent["apres"], "enrichie": enrichir,
+                "reprise": True}
     try:
         apres = video.nettoyer_preparee(
             appeler_le_modele(video.consigne_de_preparation(avant, enrichir)), enrichir)
@@ -3029,7 +3045,9 @@ function lecteur(type, url){
 // l'enrichissement se regle au-dessus (« Enrichir ce que reçoit … »).
 function preparation(p){
   return "<div class=preparation><p class=gris>Préparé pour le modèle : traduit en anglais "
-    + "(obligatoire)" + (p.enrichie ? " et enrichi par le chat" : ", sans enrichir") + ".</p>"
+    + "(obligatoire)" + (p.enrichie ? " et enrichi par le chat" : ", sans enrichir")
+    + (p.reprise ? " : la même description que l’étape précédente, pour garder la même scène" : "")
+    + ".</p>"
     + "<p class=gris>Reçu : « " + echapper(p.avant) + " »</p>"
     + "<p>Envoyé au modèle : « " + echapper(p.apres) + " »</p></div>";
 }

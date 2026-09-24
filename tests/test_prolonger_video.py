@@ -60,6 +60,37 @@ def test_le_recollage_ne_montre_pas_deux_fois_l_image_de_jointure(sandbox, tmp_p
     assert images_de(tmp_path, montage.recoller(a, b)) == 33
 
 
+@AVEC_FFMPEG
+def test_une_image_perdue_au_recollage_arrete_tout(sandbox, tmp_path, monkeypatch):
+    """24/09 : ffmpeg 7.1.5 perdait une image que le 6.1 gardait. Le recollage
+    recompte ; un clip ampute n'est jamais rendu."""
+    import montage
+
+    a, b = clip(tmp_path, "a.mp4", "red"), clip(tmp_path, "b.mp4", "blue")
+    vrai = montage.images
+    appels = []
+
+    def compte(chemin):
+        appels.append(chemin.name)
+        n = vrai(chemin)
+        return n - 1 if chemin.name == "ab.mp4" else n
+    monkeypatch.setattr(montage, "images", compte)
+    with pytest.raises(montage.MontageImpossible) as refus:
+        montage.recoller(a, b)
+    assert "32 images au lieu de 33" in str(refus.value)
+    assert appels == ["a.mp4", "b.mp4", "ab.mp4"]
+
+
+@AVEC_FFMPEG
+def test_le_recollage_garde_la_cadence_du_clip(sandbox, tmp_path):
+    import montage
+
+    a = clip(tmp_path, "a.mp4", "red")
+    sortie = tmp_path / "ab.mp4"
+    sortie.write_bytes(montage.recoller(a, clip(tmp_path, "b.mp4", "blue")))
+    assert montage._cadence(sortie) == (16, 1)
+
+
 def test_sans_ffmpeg_la_brique_le_dit(sandbox, monkeypatch):
     import montage
 
@@ -113,6 +144,49 @@ def test_prolonger_est_une_brique_du_loueur_seul(composite):
     assert "video_prolonger" in composite.LOUEUR_SEUL
     assert composite.BUDGET_PAR_BRIQUE["video_prolonger"] == "video"
     assert composite.donnees_de("video_prolonger")["sort"] == "oui"
+
+
+def test_prolonger_reprend_la_description_deja_preparee(composite, monkeypatch):
+    """24/09, course 3f2a75ba : deux descriptions du meme phare de part et d'autre
+    de la jointure. La suite reprend celle du debut, sans rappeler le chat."""
+    appels = []
+    monkeypatch.setattr(composite, "appeler_le_modele",
+                        lambda c: appels.append(c) or "A lighthouse in the rain, waves, beam turning.")
+    c = composite.chaine_depuis_briques(["video_rapide", "video_prolonger"],
+                                        composite.charger_registre())
+    c["phrase"] = "un phare breton sous la pluie"
+    vus = []
+
+    def lancer(etape, entree):
+        vus.append(etape.get("texte_prepare"))
+        return b"\x00\x00\x00\x18ftypmp42"
+
+    trace = composite.executer(c, lancer, None, garde_budget=lambda _e: None,
+                               pretraiter=composite.pretraiter_par_le_chat)
+    assert trace["resultat"] == "rendu", trace
+    assert len(appels) == 1, "un seul appel au chat pour les deux clips"
+    assert vus[0] == vus[1] == "A lighthouse in the rain, waves, beam turning."
+    assert trace["etapes"][1]["pretraitement"]["reprise"] is True
+    assert "reprise" not in trace["etapes"][0]["pretraitement"]
+
+
+def test_prolonger_redemande_si_la_consigne_ou_le_reglage_change(composite, monkeypatch):
+    nuit = "a white lighthouse at night in the rain"
+    monkeypatch.setattr(composite, "appeler_le_modele", lambda _c: nuit)
+    precedent = {"avant": "un phare", "apres": "A lighthouse.", "enrichie": True}
+    etape = dict(etape_prolonger(composite), demande="un phare la nuit",
+                 pretraitement_precedent=precedent)
+    assert composite.pretraiter_par_le_chat(etape, b"x")["apres"] == nuit
+    etape = dict(etape_prolonger(composite, enrichir="non"), pretraitement_precedent=precedent)
+    assert "reprise" not in composite.pretraiter_par_le_chat(etape, b"x")
+
+
+def test_la_page_dit_quand_la_description_est_reprise(sandbox):
+    from fastapi.testclient import TestClient
+
+    page = TestClient(sandbox.app, base_url="http://127.0.0.1:8020").get(
+        "/composite", headers={"Authorization": "Bearer cle-sandbox-de-test"}).text
+    assert "(p.reprise ?" in page and "même description que l’étape précédente" in page
 
 
 def test_le_pretraitement_prepare_la_consigne_d_une_etape_qui_recoit_une_video(
