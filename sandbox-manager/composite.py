@@ -1121,7 +1121,8 @@ def _verdict(etat, motifs, pourquoi, chaine, total, faits):
             {"brique": e["brique"], "fonction": e["fonction"],
              "entrees": e["entrees"], "sorties": e["sorties"],
              "cout_max_usd": e["cout_max_usd"],
-             "donnees": donnees_de(e["brique"]),
+             "donnees": (dict(DONNEES_LOUEES_D_OFFICE) if e.get("loue_d_office")
+                         else donnees_de(e["brique"])),
              **({"prolonge": True} if e["brique"] in PROLONGENT else {}),
              **({"loue": True} if loue_chez_modal(e) else {}),
              **({"consigne": e.get("consigne")} if lit_une_consigne(e["brique"]) else {})}
@@ -1205,6 +1206,15 @@ DONNEES = {
 DONNEES_INCONNUES = {
     "sort": "inconnu", "vers": [],
     "phrase": "Où vont les données de cette étape n’est pas encore écrit."}
+
+
+# Une video que « Prolonger » continue part chez le loueur d'office
+# (`_suivie_d_une_prolongation`) : « sur votre carte si elle est libre »
+# serait faux. Releve sur la page le 24/09.
+DONNEES_LOUEES_D_OFFICE = {
+    "sort": "oui", "vers": ["Modal"],
+    "phrase": "Votre description part chez le loueur choisi (Modal, ou Kaggle) : "
+              "une vidéo prolongée se fait chez lui du début à la fin."}
 
 
 def donnees_de(brique: str) -> dict:

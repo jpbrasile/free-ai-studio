@@ -327,3 +327,13 @@ def test_la_page_montre_le_cout_estime_et_la_suite_par_defaut(sandbox):
         "/composite", headers={"Authorization": "Bearer cle-sandbox-de-test"}).text
     assert "function coutEstime(v)" in page and "Coût estimé" in page
     assert "function suiteParDefaut(v, i)" in page and "Description de la suite" in page
+
+
+def test_le_premier_clip_prolonge_ne_promet_pas_la_carte_d_ici(composite):
+    """Releve sur la page le 24/09 : « Sur votre carte si elle est libre » pour un
+    clip qui part chez le loueur d'office."""
+    verdict = composite.verifier(chaine_10_s(composite), sonde_budget=lambda _e: None,
+                                 sonde_carte=lambda _m: (True, "", {}))
+    premier = verdict["etapes"][0]["donnees"]
+    assert premier["sort"] == "oui" and "carte" not in premier["phrase"]
+    assert verdict["etapes"][0]["loue"] and verdict["etapes"][1]["prolonge"]
