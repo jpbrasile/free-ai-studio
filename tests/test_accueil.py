@@ -61,6 +61,11 @@ def test_poser_une_seule_fois_et_sans_body(sandbox):
     # La cale vient juste apres <body ...> : le bouton ne cache pas le titre.
     avec = accueil.poser(b'<html><body class="x"><h1>T</h1></body></html>')
     assert avec.startswith(b'<html><body class="x">' + accueil.CALE.encode() + b"<h1>")
+    # Sans <body> (/ et /composite du bac a sable) : c'est le script qui pose
+    # la cale, sous le meme id, en tete du corps cree par le navigateur.
+    assert 'id="studio-cale"' in accueil.CALE
+    assert 'getElementById("studio-cale")' in accueil.BOUTON
+    assert "insertBefore(c,document.body.firstChild)" in accueil.BOUTON
 
 
 def test_le_meme_style_partout_chat_compris(sandbox):
@@ -86,5 +91,17 @@ def test_les_cartes_du_chat_restent_dans_le_meme_onglet():
     """« cliquer sur chat fait sortir du studio » : le chat s'ouvre a la place de
     la page, et « 🏠 Studio » y ramene."""
     app = (RACINE / "free-tier-manager" / "app.py").read_text(encoding="utf-8")
-    assert app.count('class="card" href="http://localhost:3000/"') == 5
-    assert 'class="card" href="http://localhost:3000/" target="_blank"' not in app
+    assert app.count('class="card" href="/chat"') == 5
+    assert 'class="card" href="http://localhost:3000/"' not in app
+
+
+def test_le_chat_s_ouvre_dans_une_page_du_studio(routeur):
+    """« on quitte studio on est sur web ui, ce n'est pas normal » (25/09/2026) :
+    /chat montre Open WebUI dans un cadre, sous le bouton « 🏠 Studio »."""
+    page = TestClient(routeur.app, base_url="http://localhost").get("/chat").text
+    assert page.count(MARQUE) == 1
+    assert '<iframe id="chat" src="http://localhost:3000/"' in page
+    assert "microphone" in page and "autoplay" in page   # dictee et voix lue
+    # Le loader du chat ne pose pas un second bouton dans le cadre.
+    loader = (RACINE / "open-webui" / "loader.js").read_text(encoding="utf-8")
+    assert "window.self !== window.top" in loader

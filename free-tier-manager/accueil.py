@@ -32,15 +32,22 @@ STYLE = ("position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:21
 
 # Le lien vise le port du routeur sur la MEME machine que la page : ouverte par
 # localhost, 127.0.0.1 ou le nom du poste, elle ramene au meme Studio.
+# Une marge en tete de page : le bouton ne cache jamais le titre.
+CALE = '<div id="studio-cale" aria-hidden="true" style="height:46px"></div>'
+# Une page sans balise <body> (HTML le permet : / et /composite du bac a sable)
+# n'a pas d'endroit ou poser la cale a l'envoi : le script la pose alors en
+# tete du corps, que le navigateur a cree de lui-meme. Vu en reel le 25/09 :
+# sans cela, le bouton couvrait le titre de ces deux pages.
 BOUTON = (
     '<a ' + MARQUE + ' href="http://127.0.0.1:8010/studio" title="Revenir à la page du Studio" '
     'style="' + STYLE + '">🏠 Studio</a>'
     '<script>(function(){var a=document.getElementById("studio-accueil");'
-    'if(a&&location.hostname){a.href=location.protocol+"//"+location.hostname+":8010/studio";}})();'
+    'if(a&&location.hostname){a.href=location.protocol+"//"+location.hostname+":8010/studio";}'
+    'if(!document.getElementById("studio-cale")&&document.body){'
+    'var c=document.createElement("div");c.id="studio-cale";c.setAttribute("aria-hidden","true");'
+    'c.style.height="46px";document.body.insertBefore(c,document.body.firstChild);}})();'
     '</script>'
 )
-# Une marge en tete de page : le bouton ne cache jamais le titre.
-CALE = '<div aria-hidden="true" style="height:46px"></div>'
 
 
 def poser(page: bytes) -> bytes:

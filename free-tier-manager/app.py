@@ -63,14 +63,17 @@ app = FastAPI(
 )
 # Les pages HTML de ce service, sauf /studio lui-meme : chacune recoit le
 # bouton « 🏠 Studio ». tests/test_accueil.py echoue si une page manque ici.
-PAGES_HTML = ("/cles", "/diagnostic", "/notebooklm", "/boost")
+PAGES_HTML = ("/cles", "/diagnostic", "/notebooklm", "/boost", "/chat")
 accueil.brancher(app, PAGES_HTML)
 
 # Une ligne de mesure par usage du chat, de l'image, de la dictee, de la voix
 # (demande du 25/09/2026). Prise ici, a l'entree, et non dans chaque route :
 # le chat a trois sorties (un bloc, un flux, un refus) et une seule serait
 # oubliee. Rien du corps n'est lu -- ni question, ni reponse, ni image. En
-# flux, la duree va jusqu'au premier octet.
+# flux, la duree va jusqu'au premier octet. Mesure en reel le 25/09 : UN message
+# du chat donne QUATRE lignes chat.reponse -- la reponse, en flux (flux: true),
+# et trois taches qu'Open WebUI lance derriere sans flux (titre, suggestions,
+# etiquettes). Compter les messages = compter flux: true.
 ROUTES_MESUREES = {
     "/v1/chat/completions": "chat.reponse",
     "/v1/images/generations": "image.creation",
@@ -2102,7 +2105,7 @@ async function charger(){
   const b = document.getElementById("banniere");
   if(d.chat_pret){
     b.className = "banniere pret";
-    b.innerHTML = 'Le chat fonctionne. <a href="http://localhost:3000/" target="_blank" rel="noopener">Ouvrir le chat</a>';
+    b.innerHTML = 'Le chat fonctionne. <a href="/chat">Ouvrir le chat</a>';
   }else{
     b.className = "banniere pasret";
     b.textContent = "Le chat ne peut pas encore repondre : aucune cle valide. Remplissez au moins la premiere carte ci-dessous.";
@@ -2782,16 +2785,16 @@ ul.quotas{margin:6px 0 8px;padding-left:20px} ul.quotas li{margin:5px 0}
 <div class="etat" id="quotas" hidden></div>
 <div class="grid">
 <a class="card" href="/cles"><h2>🔑 Vos clés</h2><p>Première étape : brancher un service gratuit, en trois clics et sans toucher à un fichier.</p></a>
-<a class="card" href="http://localhost:3000/"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation. Deux choix en haut du chat : <b>Free AI Auto</b> pour le courant, <b>Free AI Max</b> pour les questions difficiles (modèle plus fort, avec son propre quota).</p></a>
-<a class="card" href="http://localhost:3000/"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
-<a class="card" href="http://localhost:3000/"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
-<a class="card" href="http://localhost:3000/"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter : une voix française et une voix anglaise tournent sur votre ordinateur, sans clé, et la langue est reconnue phrase par phrase. Le texte ne quitte pas le PC. 🎙️ dans la barre de saisie pour dicter, en français comme en anglais : choisissez plus bas où votre voix est transcrite.</p><p class="muted">Voix : Piper (GPL-3.0) ; « siwis » entraînée sur la base SIWIS de l’université d’Édimbourg (CC BY 4.0), « norman » sur des enregistrements LibriVox (domaine public).</p></a>
+<a class="card" href="/chat"><h2>💬 Chat</h2><p>Questions, rédaction, raisonnement, vision et conversation. Deux choix en haut du chat : <b>Free AI Auto</b> pour le courant, <b>Free AI Max</b> pour les questions difficiles (modèle plus fort, avec son propre quota).</p></a>
+<a class="card" href="/chat"><h2>🎨 Image</h2><p>Dans le chat, ouvrez le rouage sous la zone de saisie, mettez <b>Image</b>, puis décrivez le dessin voulu. Utilise votre clé Google, comme le chat.</p></a>
+<a class="card" href="/chat"><h2>🔎 Recherche Web</h2><p>Même rouage, interrupteur <b>Recherche Web</b> : la réponse cite ses sources. Aucun compte ni clé supplémentaire.</p></a>
+<a class="card" href="/chat"><h2>🎤 Voix <span class="exp">expérimental</span></h2><p>🔊 sous chaque réponse pour l’écouter : une voix française et une voix anglaise tournent sur votre ordinateur, sans clé, et la langue est reconnue phrase par phrase. Le texte ne quitte pas le PC. 🎙️ dans la barre de saisie pour dicter, en français comme en anglais : choisissez plus bas où votre voix est transcrite.</p><p class="muted">Voix : Piper (GPL-3.0) ; « siwis » entraînée sur la base SIWIS de l’université d’Édimbourg (CC BY 4.0), « norman » sur des enregistrements LibriVox (domaine public).</p></a>
 <a class="card" href="http://localhost:8020/video" target="_blank"><h2>🎬 Vidéo <span class="exp">expérimental</span></h2><p>Décrivez une scène, ou donnez l’image de départ, celle d’arrivée, et une image de référence pour garder le même personnage. Le calcul tourne sur une machine Modal louée à la minute (Modal exige une carte bancaire). La page affiche la dépense estimée par le Studio, pas votre facture Modal.</p></a>
 <a class="card" href="http://localhost:8020/chanson" target="_blank"><h2>🎵 Chanson <span class="exp">expérimental</span></h2><p>Écrivez des paroles et un style : le modèle ouvert YuE2 compose la mélodie et la chante, jusqu’à 3 minutes. Sur Modal (loué, carte bancaire), Kaggle ou Colab (gratuits, plus lents). Licence non commerciale ; chante en anglais et en chinois.</p></a>
 <a class="card" href="http://localhost:8020/composite" target="_blank"><h2>🔗 Enchaîner <span class="exp">expérimental</span></h2><p>Demandez en une phrase plusieurs étapes à la suite (« résume ce PDF, puis fais-en un dialogue à deux voix »). Avant de lancer, la page dit ce que fait chaque étape, où partent vos données et ce que ça coûte au pire. C’est ici, pas dans le chat, que se demandent les chaînes.</p></a>
 <a class="card" href="http://localhost:8020/dialogue" target="_blank"><h2>🎙️ Dialogue <span class="exp">expérimental</span></h2><p>Un texte à deux voix, lu par le modèle ouvert FireRedTTS-2 : jusqu’à 35 répliques. Sur Modal (loué) ou Kaggle (gratuit, plus lent).</p></a>
 <a class="card" href="/notebooklm"><h2>📚 Étudier <span class="exp">expérimental</span></h2><p>Documents, sources, citations, quiz, cartes mentales et résumés avec NotebookLM.</p></a>
-<a class="card" href="http://localhost:3000/"><h2>💻 Code <span class="exp">expérimental</span></h2><p>Demander de l'aide pour coder ; les résultats Sandbox peuvent devenir des ressources de travail de l'agent.</p></a>
+<a class="card" href="/chat"><h2>💻 Code <span class="exp">expérimental</span></h2><p>Demander de l'aide pour coder ; les résultats Sandbox peuvent devenir des ressources de travail de l'agent.</p></a>
 <a class="card" href="http://localhost:8020/" target="_blank"><h2>🧪 Sandbox <span class="exp">expérimental</span></h2><p>Local isolé, Kaggle automatisable et Colab direct. Les sorties sont conservées comme artefacts réutilisables.</p></a>
 </div>
 <p class="muted">Chat, Image et Recherche Web sont les fonctions stabilisées. Les cartes marquées « expérimental » peuvent changer ou casser d’une version à l’autre.</p>
@@ -3109,6 +3112,29 @@ small{opacity:.75}
 </body></html>
 """
     return HTMLResponse(html)
+
+
+# Le chat DANS le Studio (demande du 25/09/2026 : « on quitte studio on est
+# sur web ui, ce n'est pas normal »). Open WebUI n'est pas a nous : il est
+# montre dans un cadre sous le bouton « 🏠 Studio », qui reste la. Le micro
+# (dictee), le son (voix lue) et le presse-papiers sont permis au cadre.
+CHAT_PAGE = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Free AI Studio — Chat</title>
+<style>html,body{margin:0;height:100%;background:#171717}
+iframe{display:block;width:100%;height:calc(100vh - 46px);border:0}</style>
+</head><body>
+<iframe id="chat" src="http://localhost:3000/" title="Chat du Studio"
+ allow="microphone; autoplay; clipboard-read; clipboard-write; fullscreen"></iframe>
+<script>(function(){var f=document.getElementById("chat");
+if(location.hostname){f.src=location.protocol+"//"+location.hostname+":3000/"+location.hash.replace(/^#/,"");}})();</script>
+</body></html>
+"""
+
+
+@app.get("/chat", response_class=HTMLResponse)
+async def chat_page():
+    return HTMLResponse(CHAT_PAGE)
 
 
 @app.get("/boost", response_class=HTMLResponse)

@@ -7,6 +7,9 @@
 // docker-compose.yml le monte en lecture seule. Rien d'autre ici : pas de
 // lecture des conversations, pas d'appel réseau.
 (function () {
+  // Dans la page /chat du Studio, le bouton est deja au-dessus du cadre :
+  // on n'en pose pas un second. Ouvert seul (port 3000), le chat a le sien.
+  if (window.self !== window.top) return;
   function poser() {
     if (document.getElementById("studio-accueil") || !document.body) return;
     var a = document.createElement("a");
