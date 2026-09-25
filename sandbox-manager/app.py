@@ -87,8 +87,10 @@ WORKER_GPU_URL = os.getenv("SANDBOX_WORKER_GPU_URL", "").rstrip("/")
 ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace"))
 JOBS = ROOT / "jobs"
 ART = ROOT / "artifacts"
-# La base de mesures (voir mesures.py) : hors git, sur ce poste.
-MESURES = ROOT / "mesures"
+# La base de mesures (voir mesures.py) : hors git, sur ce poste, dans le
+# dossier config/ du Studio, a cote de celle du routeur (config/mesures/routeur)
+# -- un dossier chacun, jamais le meme fichier ecrit par deux services.
+MESURES = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config")) / "mesures" / "bac-a-sable"
 JOBS.mkdir(parents=True, exist_ok=True)
 ART.mkdir(parents=True, exist_ok=True)
 

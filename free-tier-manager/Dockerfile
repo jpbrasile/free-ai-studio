@@ -12,6 +12,8 @@ COPY coffre.py .
 # Le bouton << Studio >> des pages. Meme raison : deux exemplaires identiques,
 # verifies par tests/test_accueil.py.
 COPY accueil.py .
+# La base de mesures. Meme raison : deux exemplaires identiques.
+COPY mesures.py .
 COPY app.py .
 EXPOSE 8000
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

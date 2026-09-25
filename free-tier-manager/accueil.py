@@ -20,24 +20,40 @@ from starlette.responses import Response
 
 MARQUE = 'id="studio-accueil"'
 
+# Le MEME style partout, chat compris (open-webui/loader.js en porte une copie
+# mot pour mot, verifiee par tests/test_accueil.py) : demande du 25/09/2026,
+# « garde un même style sur toutes les pages ». En haut au milieu, parce que
+# les coins du chat sont a Open WebUI ; bleu borde de blanc, lisible sur fond
+# clair comme sur le chat sombre.
+STYLE = ("position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:2147483000;"
+         "padding:6px 16px;border-radius:999px;background:#2563eb;color:#fff;"
+         "border:2px solid #fff;font:600 14px/1.2 system-ui,sans-serif;text-decoration:none;"
+         "box-shadow:0 2px 8px rgba(0,0,0,.35)")
+
 # Le lien vise le port du routeur sur la MEME machine que la page : ouverte par
 # localhost, 127.0.0.1 ou le nom du poste, elle ramene au meme Studio.
 BOUTON = (
     '<a ' + MARQUE + ' href="http://127.0.0.1:8010/studio" title="Revenir à la page du Studio" '
-    'style="position:fixed;left:12px;bottom:12px;z-index:2147483000;padding:8px 14px;'
-    'border-radius:999px;background:#1f2937;color:#fff;font:600 14px/1.2 system-ui,sans-serif;'
-    'text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3)">🏠 Studio</a>'
+    'style="' + STYLE + '">🏠 Studio</a>'
     '<script>(function(){var a=document.getElementById("studio-accueil");'
     'if(a&&location.hostname){a.href=location.protocol+"//"+location.hostname+":8010/studio";}})();'
     '</script>'
 )
+# Une marge en tete de page : le bouton ne cache jamais le titre.
+CALE = '<div aria-hidden="true" style="height:46px"></div>'
 
 
 def poser(page: bytes) -> bytes:
-    """Ajoute le bouton juste avant la derniere balise </body> (une seule fois)."""
+    """Ajoute la cale juste apres <body ...> et le bouton juste avant la
+    derniere balise </body> (une seule fois)."""
     if MARQUE.encode() in page:
         return page
     bouton = BOUTON.encode("utf-8")
+    debut = page.find(b"<body")
+    if debut >= 0:
+        ouvre = page.find(b">", debut)
+        if ouvre >= 0:
+            page = page[:ouvre + 1] + CALE.encode() + page[ouvre + 1:]
     fin = page.rfind(b"</body>")
     if fin < 0:
         return page + bouton

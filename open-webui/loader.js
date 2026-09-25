@@ -15,10 +15,9 @@
     a.title = "Revenir à la page du Studio";
     a.href = location.protocol + "//" + (location.hostname || "127.0.0.1") + ":8010/studio";
     // En haut, au milieu : les coins sont pris par Open WebUI (menu, profil,
-    // envoi du message).
-    a.style.cssText = "position:fixed;top:10px;left:50%;transform:translateX(-50%);" +
-      "z-index:2147483000;padding:6px 14px;border-radius:999px;background:#1f2937;color:#fff;" +
-      "font:600 14px/1.2 system-ui,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3)";
+    // envoi du message). Style copie mot pour mot de accueil.STYLE, le meme
+    // sur toutes les pages (tests/test_accueil.py le verifie).
+    a.style.cssText = "position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:2147483000;padding:6px 16px;border-radius:999px;background:#2563eb;color:#fff;border:2px solid #fff;font:600 14px/1.2 system-ui,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.35)";
     document.body.appendChild(a);
   }
   if (document.readyState === "loading") {

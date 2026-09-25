@@ -21,6 +21,8 @@ import garde_exposition
 import coffre
 # Le bouton « 🏠 Studio » pose sur chaque page (voir PAGES_HTML).
 import accueil
+# La base de mesures : une ligne par usage, jamais le texte (voir mesures.py).
+import mesures
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Response
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -63,6 +65,56 @@ app = FastAPI(
 # bouton « 🏠 Studio ». tests/test_accueil.py echoue si une page manque ici.
 PAGES_HTML = ("/cles", "/diagnostic", "/notebooklm", "/boost")
 accueil.brancher(app, PAGES_HTML)
+
+# Une ligne de mesure par usage du chat, de l'image, de la dictee, de la voix
+# (demande du 25/09/2026). Prise ici, a l'entree, et non dans chaque route :
+# le chat a trois sorties (un bloc, un flux, un refus) et une seule serait
+# oubliee. Rien du corps n'est lu -- ni question, ni reponse, ni image. En
+# flux, la duree va jusqu'au premier octet.
+ROUTES_MESUREES = {
+    "/v1/chat/completions": "chat.reponse",
+    "/v1/images/generations": "image.creation",
+    "/v1/audio/transcriptions": "dictee.transcription",
+    "/v1/audio/speech": "voix.lecture",
+}
+
+
+def motif_http(statut: int) -> str:
+    if statut < 400:
+        return ""
+    if statut == 429:
+        return "quota"
+    if statut in (401, 403):
+        return "refus"
+    return "echec"
+
+
+@app.middleware("http")
+async def mesurer_usage(request: Request, suite):
+    fonction = ROUTES_MESUREES.get(request.url.path) if request.method == "POST" else None
+    if not fonction:
+        return await suite(request)
+    debut = time.monotonic()
+    statut, entetes = 500, {}
+    try:
+        reponse = await suite(request)
+        statut, entetes = reponse.status_code, reponse.headers
+        return reponse
+    finally:
+        # 401 : un appel sans la cle du Studio, pas un usage.
+        if statut != 401:
+            champs = {"duree_s": time.monotonic() - debut, "ok": statut < 400,
+                      "motif": motif_http(statut),
+                      "interne": bool(request.headers.get("x-studio-interne")),
+                      "flux": "text/event-stream" in entetes.get("content-type", "")}
+            if entetes.get("x-free-ai-provider") in mesures.TEXTES["endroit"]:
+                champs["endroit"] = entetes["x-free-ai-provider"]
+            if "x-free-ai-secours" in entetes:
+                champs["secours"] = entetes["x-free-ai-secours"] == "oui"
+            try:
+                mesures.ecrire(MESURES, fonction, **champs)
+            except Exception:  # noqa: BLE001 -- une mesure ratee ne casse jamais l'usage
+                log.exception("Mesure non ecrite")
 
 INTERNAL_KEY = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
 FREE_ONLY = os.getenv("FREE_ONLY", "true").lower() == "true"
@@ -129,6 +181,9 @@ PROVIDERS = {
 # dernier mot pour qui sait s'en servir.
 CONFIG_DIR = Path(os.getenv("FREE_AI_CONFIG_DIR", "/config"))
 KEYS_FILE = CONFIG_DIR / "keys.json"
+# La base de mesures du routeur (mesures.py, 25/09/2026) : ce que fait la
+# personne dans le chat, sans un mot de ce qu'elle ecrit.
+MESURES = CONFIG_DIR / "mesures" / "routeur"
 
 # Le drapeau que ce service ne lisait PAS jusqu'au 19/09/2026, alors qu'il le
 # recevait bien par env_file. Le seul a le lire etait le bac a sable, qui ne

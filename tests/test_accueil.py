@@ -58,6 +58,16 @@ def test_poser_une_seule_fois_et_sans_body(sandbox):
     une = accueil.poser(b"<html><body><p>x</p></body></html>")
     assert accueil.poser(une) == une and une.count(MARQUE.encode()) == 1
     assert accueil.poser(b"<p>sans body</p>").endswith(b"</script>")
+    # La cale vient juste apres <body ...> : le bouton ne cache pas le titre.
+    avec = accueil.poser(b'<html><body class="x"><h1>T</h1></body></html>')
+    assert avec.startswith(b'<html><body class="x">' + accueil.CALE.encode() + b"<h1>")
+
+
+def test_le_meme_style_partout_chat_compris(sandbox):
+    """« garde un même style sur toutes les pages » (25/09/2026)."""
+    loader = (RACINE / "open-webui" / "loader.js").read_text(encoding="utf-8")
+    assert 'a.style.cssText = "' + sandbox.accueil.STYLE + '";' in loader
+    assert 'style="' + sandbox.accueil.STYLE + '"' in sandbox.accueil.BOUTON
 
 
 def test_le_chat_a_son_bouton_par_le_loader_d_open_webui():

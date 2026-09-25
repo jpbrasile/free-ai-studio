@@ -53,7 +53,7 @@ il vit : c'est l'état de départ, pas un acquis.
 | Les conversations et les comptes du chat | le volume Docker `open-webui-data` | le volume est supprimé — c'est le geste de dépannage documenté, il efface l'historique |
 | Les travaux des bacs à sable | le volume Docker `sandbox-data` | idem |
 | La base de mesures du registre | **n'existe pas encore** (registre non commencé) | — |
-| La base de mesures des usages (depuis le 25/09/2026) | le volume Docker `sandbox-data`, dossier `mesures/`, un fichier par mois (`AAAA-MM.jsonl`) ; aujourd'hui une seule fonction l'écrit, la question à NotebookLM (`sandbox-manager/mesures.py`) | le volume est supprimé — et elle ne se reconstruit pas : c'est l'historique des usages |
+| La base de mesures des usages (depuis le 25/09/2026) | le dossier `config/mesures/` du Studio (hors des volumes Docker), un sous-dossier par service : `routeur/` (réponses du chat, images, dictée, voix lue) et `bac-a-sable/` (questions à NotebookLM) ; un fichier par mois (`AAAA-MM.jsonl`), jamais le texte de la personne (`mesures.py`, deux exemplaires identiques). Jusqu'au 25/09/2026 elle vivait dans le volume `sandbox-data`, dossier `mesures/` | le dossier `config/` est effacé — et elle ne se reconstruit pas : c'est l'historique des usages |
 | L'historique des questions NotebookLM | même volume, `jobs/<résumé>/questions.jsonl` — le texte des questions et des réponses, qui **reste sur ce poste** (décision du 25/09, PLAN-PLATEFORME) | idem, ou quand on supprime le résumé : c'est voulu |
 
 Deux remarques qui changent la procédure à écrire :
