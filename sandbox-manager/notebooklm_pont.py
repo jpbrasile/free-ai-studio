@@ -670,14 +670,43 @@ function montrer(j){
   texte("reponse", "");
   el("resultat").scrollIntoView({behavior: "smooth"});
 }
+// Supprimer un résumé : le son, sa copie, vos documents et la fiche, ici.
+// Le carnet chez Google reste (« Faire de la place » le supprime). Deux clics,
+// comme sur /video : le premier demande, le second efface.
+function boutonSupprimer(j){
+  const b = document.createElement("button");
+  const sage = "🗑️ Supprimer du Studio";
+  b.textContent = sage;
+  b.onclick = async () => {
+    if(b.dataset.arme !== "1"){
+      b.dataset.arme = "1";
+      b.textContent = "Confirmer : effacer pour de bon";
+      setTimeout(() => { b.dataset.arme = ""; b.textContent = sage; }, 5000);
+      return;
+    }
+    b.disabled = true;
+    const r = await fetch("/notebooklm/jobs/" + encodeURIComponent(j.id), {method: "DELETE", headers: H});
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok){ b.disabled = false; b.textContent = "✖ " + (d.detail || ("HTTP " + r.status)); return; }
+    if(CARNET && CARNET === j.carnet_id){ el("resultat").hidden = true; CARNET = null; }
+    await listerResumes();
+  };
+  return b;
+}
+
 let SUIVI = false;
 async function listerResumes(){
   const r = await fetch("/notebooklm/resumes", {headers: H});
   if(!r.ok) return;
   const liste = (await r.json()).resumes || [];
   const boite = el("resumes");
-  if(!liste.length) return;
   boite.textContent = "";
+  if(!liste.length){
+    const vide = document.createElement("p");
+    vide.className = "avert"; vide.textContent = "Aucun résumé pour l’instant.";
+    boite.appendChild(vide);
+    return;
+  }
   for(const j of liste){
     const c = document.createElement("div");
     c.className = "carte";
@@ -686,6 +715,8 @@ async function listerResumes(){
       : " — en cours : " + (j.etape || "en file");
     t.textContent = (j.titre || "Résumé") + " — " + quandFr(j.created_at) + etat;
     c.appendChild(t);
+    const l = document.createElement("div");
+    l.className = "ligne";
     if(j.audio_url){
       const a = document.createElement("audio");
       // « metadata » : la durée s'affiche tout de suite, dès que le navigateur
@@ -693,8 +724,6 @@ async function listerResumes(){
       a.controls = true; a.preload = "metadata";
       brancherSon(a, j.audio_url);
       c.appendChild(a);
-      const l = document.createElement("div");
-      l.className = "ligne";
       const dl = document.createElement("a");
       dl.href = j.audio_url + "&telecharger=1"; dl.textContent = "Enregistrer le fichier audio";
       const nb = document.createElement("a");
@@ -704,8 +733,11 @@ async function listerResumes(){
       q.textContent = "Poser une question";
       q.onclick = () => montrer(j);
       l.append(dl, nb, q);
-      c.appendChild(l);
     }
+    if(j.status !== "queued" && j.status !== "running"){
+      l.appendChild(boutonSupprimer(j));
+    }
+    c.appendChild(l);
     boite.appendChild(c);
     // Un résumé encore en cours après un rechargement : on le suit de nouveau.
     if(!SUIVI && (j.status === "queued" || j.status === "running")){

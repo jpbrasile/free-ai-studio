@@ -35,6 +35,22 @@ from typing import Callable, Optional
 
 EN_COURS = ("queued", "routing", "preparing", "submitting", "running")
 USAGES = ("video", "chanson", "dialogue")
+# 25/09/2026, le proprietaire : « on devrait pouvoir supprimer les resumes
+# audio (generalise a tout ce qui est cree par studio) ». Les resumes
+# NotebookLM et le code lance depuis /essai ou l'accueil n'ont pas de cle
+# d'usage dans leur fiche : `appartient` les reconnait autrement.
+SUPPRIMABLES = USAGES + ("notebooklm", "essai")
+
+
+def appartient(job: dict, usage: str) -> bool:
+    """Ce travail est-il de cette page ? /video n'efface pas une chanson."""
+    if not isinstance(job, dict):
+        return False
+    if usage == "notebooklm":
+        return job.get("provider") == "notebooklm"
+    if usage == "essai":
+        return job.get("provider") != "notebooklm" and not any(u in job for u in USAGES)
+    return usage in USAGES and usage in job
 NOMBRE = 20
 # Les fiches lues au plus : les plus recentes d'abord. Les autres usages
 # (bac a sable, carnets) partagent le dossier, d'ou une marge.
@@ -138,6 +154,34 @@ def lister(dossier: Path, usage: str, nombre: int = NOMBRE,
     return sortie
 
 
+def lister_essais(dossier: Path, nombre: int = NOMBRE) -> list[dict]:
+    """Les derniers codes lances depuis /essai (ou par l'agent), le plus recent
+    d'abord. Leur fiche n'a ni titre tape ni cle d'usage : la ligne dit donc
+    quand, ou, et combien de fichiers le code a rendus."""
+    fiches = sorted(dossier.glob("*/job.json"), key=lambda p: p.stat().st_mtime,
+                    reverse=True)[:FICHES_LUES]
+    sortie = []
+    for chemin in fiches:
+        try:
+            job = json.loads(chemin.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not appartient(job, "essai"):
+            continue
+        statut = str(job.get("status") or "")
+        sortie.append({
+            "id": str(job.get("id") or chemin.parent.name),
+            "status": statut,
+            "en_cours": statut in EN_COURS,
+            "created_at": job.get("created_at"),
+            "ou": str(job.get("provider_effective") or job.get("provider") or ""),
+            "fichiers": len([a for a in job.get("artifacts") or [] if a.get("path")]),
+            "libelle": _une_ligne(job.get("title") or "Essai", 60),
+        })
+    sortie.sort(key=lambda t: t["created_at"] or 0, reverse=True)
+    return sortie[:nombre]
+
+
 class TravailEnCours(Exception):
     """Le service arrete un travail AVANT de l'effacer. Effacer la fiche d'un
     travail qui tourne laisserait une machine louee facturee sans personne pour
@@ -159,7 +203,7 @@ def supprimer(jobs: Path, artefacts: Path, usage: str, jid: str) -> list[str]:
     pas de cette page -- /video n'efface pas une chanson --, `TravailEnCours`
     s'il tourne encore. Les noms de fichier viennent de la fiche : un nom qui
     sortirait du dossier des artefacts est ignore, jamais suivi."""
-    if usage not in USAGES:
+    if usage not in SUPPRIMABLES:
         raise ValueError("usage inconnu : %s" % usage)
     if not id_sur(jid):
         raise LookupError(jid)
@@ -168,13 +212,16 @@ def supprimer(jobs: Path, artefacts: Path, usage: str, jid: str) -> list[str]:
         job = json.loads((dossier / "job.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise LookupError(jid) from None
-    if not isinstance(job, dict) or usage not in job:
+    if not appartient(job, usage):
         raise LookupError(jid)
     if str(job.get("status") or "") in EN_COURS:
         raise TravailEnCours(jid)
     effaces = []
     for art in job.get("artifacts") or []:
         noms = [str(art.get("path") or "")]
+        if noms[0]:
+            # La copie Opus d'un resume NotebookLM, faite a la premiere ecoute.
+            noms.append(str(Path(noms[0]).with_suffix(".opus")))
         if art.get("id"):
             noms.append("%s.json" % art["id"])
         for nom in noms:

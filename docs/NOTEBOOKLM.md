@@ -22,7 +22,10 @@ Free AI Studio le propose de **deux façons** :
    facultative, la forme (discussion approfondie, bref, critique, débat) et la durée.
 4. « Fabriquer le résumé audio ». Comptez souvent 5 à 10 minutes.
 5. Le résumé s’écoute dans la page et s’enregistre (`.m4a`). Un navigateur qui ne lirait pas l’AAC
-   reçoit la même chose en Opus, fabriquée à la première écoute. Dans VS Code, ouvrez la page
+   reçoit la même chose en Opus, fabriquée à la première écoute. « 🗑️ Supprimer du Studio »
+   (deux clics) efface le son, sa copie, vos documents et la fiche gardés par le Studio ; le
+   carnet chez Google reste, et se supprime par « Faire de la place ». Un résumé encore en
+   fabrication ne se supprime pas : rien ne l’arrête chez Google. Dans VS Code, ouvrez la page
    après avoir cliqué « Go Live ». Le carnet reste dans votre
    NotebookLM : « Ouvrir le carnet » ou « Poser une question à vos documents ».
 

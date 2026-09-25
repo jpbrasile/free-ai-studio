@@ -642,6 +642,11 @@ def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
     # Repli : chaque lecteur porte aussi la source Opus.
     assert '"&format=opus", \'audio/ogg; codecs="opus"\'' in html
     assert html.count("brancherSon(") == 3
+    # 25/09 : « on devrait pouvoir supprimer les résumés audio ». Deux clics ;
+    # le carnet chez Google reste, « Faire de la place » le supprime.
+    for morceau in ("🗑️ Supprimer du Studio", "Confirmer : effacer pour de bon",
+                    '"/notebooklm/jobs/" + encodeURIComponent(j.id), {method: "DELETE"'):
+        assert morceau in html, morceau
     # « pas clair » (25/09) : le chemin premier est un double-clic, l'extension
     # de cookies passe en repli replié.
     assert "brancher-notebooklm.cmd" in html and "J’ai fini, vérifier" in html

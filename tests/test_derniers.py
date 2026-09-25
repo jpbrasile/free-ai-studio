@@ -259,6 +259,85 @@ def test_le_fil_qui_suivait_ne_fait_pas_revenir_un_fantome(sandbox, monkeypatch,
     assert not (jobs / "v2").exists()
 
 
+def _resume_nlm(jobs, jid="n1", status="succeeded"):
+    """Un resume NotebookLM range comme le Studio le range : pas de cle d'usage,
+    provider « notebooklm », vos documents dans sources/, l'Opus a cote du m4a."""
+    art = jobs.parent / ("art-" + jobs.name)
+    art.mkdir(exist_ok=True)
+    for nom in ("a9--resume-notebooklm.m4a", "a9--resume-notebooklm.opus"):
+        (art / nom).write_bytes(b"son")
+    (art / "a9.json").write_text("{}", encoding="utf-8")
+    fiche(jobs, jid, provider="notebooklm", status=status, artifacts=[
+        {"id": "a9", "name": "resume-notebooklm.m4a", "path": "a9--resume-notebooklm.m4a"}])
+    (jobs / jid / "sources").mkdir()
+    (jobs / jid / "sources" / "cours.pdf").write_bytes(b"%PDF")
+    return art
+
+
+def test_appartient_reconnait_chaque_page_meme_sans_cle_d_usage(jobs):
+    """25/09 : « supprimer les resumes audio (generalise a tout ce qui est cree
+    par studio) ». Resumes et code n'ont pas de cle d'usage dans leur fiche."""
+    lire = lambda jid: json.loads((jobs / jid / "job.json").read_text(encoding="utf-8"))  # noqa: E731
+    _resume_nlm(jobs)
+    assert derniers.appartient(lire("n1"), "notebooklm")
+    assert not derniers.appartient(lire("n1"), "essai")
+    assert derniers.appartient(lire("autre"), "essai")          # le bac a sable
+    for jid in ("v1", "c1", "d1"):
+        assert not derniers.appartient(lire(jid), "essai")
+        assert not derniers.appartient(lire(jid), "notebooklm")
+    assert derniers.appartient(lire("c1"), "chanson") and not derniers.appartient(lire("c1"), "video")
+    assert not derniers.appartient(lire("v1"), "inconnu")
+
+
+def test_supprimer_un_resume_efface_son_opus_documents_et_fiche(sandbox, monkeypatch, jobs):
+    art = _resume_nlm(jobs)
+    monkeypatch.setattr(sandbox, "JOBS", jobs)
+    monkeypatch.setattr(sandbox, "ART", art)
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    assert client.delete("/notebooklm/jobs/n1").status_code == 401
+    # Une autre page n'efface pas un resume, et la page des resumes n'efface pas une chanson.
+    assert client.delete("/video/jobs/n1", headers=CLE).status_code == 404
+    assert client.delete("/notebooklm/jobs/c1", headers=CLE).status_code == 404
+    r = client.delete("/notebooklm/jobs/n1", headers=CLE)
+    assert r.status_code == 200 and r.json()["supprime"], r.text
+    assert not (jobs / "n1").exists()                  # fiche ET vos documents
+    assert list(art.iterdir()) == []                   # m4a, opus, fiche de l'artefact
+    assert (jobs / "c1").exists()
+
+
+def test_un_resume_en_fabrication_chez_google_n_est_pas_efface(sandbox, monkeypatch, jobs):
+    art = _resume_nlm(jobs, status="running")
+    monkeypatch.setattr(sandbox, "JOBS", jobs)
+    monkeypatch.setattr(sandbox, "ART", art)
+    r = TestClient(sandbox.app, base_url=LOCAL).delete("/notebooklm/jobs/n1", headers=CLE)
+    assert r.status_code == 409 and "encore en fabrication" in r.json()["detail"]
+    assert (jobs / "n1").exists() and len(list(art.iterdir())) == 3
+
+
+def test_supprimer_un_essai_de_code_et_pas_un_clip(sandbox, monkeypatch, jobs):
+    monkeypatch.setattr(sandbox, "JOBS", jobs)
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    assert client.delete("/essai/jobs/v1", headers=CLE).status_code == 404
+    assert client.delete("/essai/jobs/autre", headers=CLE).status_code == 200
+    assert not (jobs / "autre").exists() and (jobs / "v1").exists()
+
+
+def test_vos_essais_liste_le_code_seulement_et_la_page_sait_supprimer(sandbox, monkeypatch, jobs):
+    _resume_nlm(jobs)
+    fiche(jobs, "e2", created_at=5000.0, provider="auto", provider_effective="local",
+          title="Essai depuis la page Sandbox", artifacts=[{"id": "b1", "path": "b1--sortie.txt"}])
+    monkeypatch.setattr(sandbox, "JOBS", jobs)
+    client = TestClient(sandbox.app, base_url=LOCAL)
+    assert client.get("/essai/derniers").status_code == 401
+    liste = client.get("/essai/derniers", headers=CLE).json()
+    assert [t["id"] for t in liste] == ["e2", "autre"]      # ni clip, ni chanson, ni resume
+    assert liste[0]["ou"] == "local" and liste[0]["fichiers"] == 1
+    assert liste[0]["libelle"] == "Essai depuis la page Sandbox"
+    page = client.get("/essai").text
+    for morceau in ("Vos essais", "chargerEssais()", '"/essai/jobs/"', "Confirmer : effacer pour de bon"):
+        assert morceau in page, morceau
+
+
 def test_derniers_refuse_d_effacer_un_travail_en_cours_s_il_n_a_pas_ete_arrete(jobs):
     with pytest.raises(derniers.TravailEnCours):
         derniers.supprimer(jobs, jobs, "video", "v2")

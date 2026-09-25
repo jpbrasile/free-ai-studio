@@ -2054,6 +2054,9 @@ backend choisi, la reponse revient ici.</p>
 <pre id="sortie" hidden></pre>
 <div id="artefacts" class="ligne"></div>
 
+<h2 style="font-size:1.15rem;margin:26px 0 6px">Vos essais</h2>
+<div id="essais"><p class="avert">Aucun essai pour l’instant.</p></div>
+
 <div class="pied">Le code part au service local sur 127.0.0.1 ; il ne quitte votre machine
 que si vous choisissez un backend distant.
 <br><a href="/">Retour au Sandbox</a> &nbsp; <a href="/cles">Brancher Modal ou Kaggle</a></div>
@@ -2244,8 +2247,76 @@ document.getElementById("lancer").addEventListener("click", async () => {
     etat.textContent = "Le Sandbox local n'a pas repondu : " + e;
   }finally{
     bouton.disabled = false;
+    chargerEssais();
   }
 });
+
+// --- Vos essais : revoir ou supprimer ce qui a deja tourne (25/09/2026) -----
+// « on devrait pouvoir supprimer ... tout ce qui est cree par studio ».
+// textContent seulement : la sortie d'un code n'est jamais ecrite en HTML.
+const ETATS_ESSAI = {queued:"en attente", routing:"en attente", running:"en cours",
+  succeeded:"fini", failed:"échec", cancelled:"arrêté", handoff_ready:"à lancer vous-même",
+  needs_configuration:"à configurer"};
+function quandEssai(ts){
+  if(!ts) return "";
+  const d = new Date(ts * 1000), z = n => (n < 10 ? "0" : "") + n;
+  return z(d.getDate()) + "/" + z(d.getMonth() + 1) + "/" + d.getFullYear()
+    + " " + z(d.getHours()) + ":" + z(d.getMinutes());
+}
+function boutonSupprimerEssai(t){
+  const b = document.createElement("button");
+  const sage = t.en_cours ? "⛔ Arrêter et supprimer" : "🗑️ Supprimer";
+  b.textContent = sage;
+  // Deux clics, comme sur /video : le premier demande, le second efface.
+  b.addEventListener("click", async () => {
+    if(b.dataset.arme !== "1"){
+      b.dataset.arme = "1";
+      b.textContent = t.en_cours ? "Confirmer : arrêter et effacer" : "Confirmer : effacer pour de bon";
+      setTimeout(() => { b.dataset.arme = ""; b.textContent = sage; }, 5000);
+      return;
+    }
+    b.disabled = true;
+    const r = await fetch("/essai/jobs/" + encodeURIComponent(t.id),
+                          {method: "DELETE", headers: {"Authorization": "Bearer " + CLE}});
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok){ b.disabled = false; b.textContent = "✖ " + (d.detail || ("HTTP " + r.status)); return; }
+    chargerEssais();
+  });
+  return b;
+}
+async function chargerEssais(){
+  const boite = document.getElementById("essais");
+  let liste = [];
+  try{
+    const r = await fetch("/essai/derniers", {headers: ENTETES});
+    if(!r.ok) return;
+    liste = await r.json();
+  }catch(e){ return; }
+  boite.textContent = "";
+  if(!liste.length){
+    const p = document.createElement("p");
+    p.className = "avert"; p.textContent = "Aucun essai pour l’instant.";
+    boite.appendChild(p);
+    return;
+  }
+  for(const t of liste){
+    const l = document.createElement("div");
+    l.className = "ligne";
+    const s = document.createElement("span");
+    s.textContent = quandEssai(t.created_at) + " — " + t.libelle + " — "
+      + (ETATS_ESSAI[t.status] || t.status) + (t.ou ? " (" + (OU[t.ou] || t.ou) + ")" : "")
+      + (t.fichiers ? " — " + t.fichiers + " fichier(s)" : "");
+    const voir = document.createElement("button");
+    voir.textContent = "Revoir";
+    voir.addEventListener("click", async () => {
+      const q = await fetch("/jobs/" + encodeURIComponent(t.id), {headers: ENTETES});
+      if(q.ok){ afficher(await q.json()); document.getElementById("etat").scrollIntoView({behavior: "smooth"}); }
+    });
+    l.append(s, voir, boutonSupprimerEssai(t));
+    boite.appendChild(l);
+  }
+}
+chargerEssais();
 </script>
 </body></html>
 """
@@ -2282,6 +2353,13 @@ def essai_carte(authorization: Optional[str] = Header(default=None)):
         "bac_a_sable_gpu": bool(WORKER_GPU_URL),
         "utilisee_par_cette_page": bool(WORKER_GPU_URL),
     }
+
+
+@app.get("/essai/derniers")
+def essai_derniers(authorization: Optional[str] = Header(default=None)):
+    """« Vos essais » : les codes deja lances, a revoir ou a supprimer (25/09/2026)."""
+    auth(authorization)
+    return derniers.lister_essais(JOBS)
 
 
 @app.get("/essai", response_class=HTMLResponse)
@@ -2490,10 +2568,15 @@ def _route_suppression(usage: str):
         if not derniers.id_sur(jid):
             raise HTTPException(404, "Travail inconnu.")
         job = read_job(jid)
-        if usage not in job:
+        if not derniers.appartient(job, usage):
             raise HTTPException(404, "Ce travail n'est pas de cette page.")
         arret = ""
         if str(job.get("status") or "") in derniers.EN_COURS:
+            if usage == "notebooklm":
+                # Rien n'arrete un resume chez Google : effacer la fiche
+                # laisserait le Studio ecrire un son que personne ne verrait.
+                raise HTTPException(409, "Ce résumé est encore en fabrication chez Google : "
+                                         "supprimez-le quand il sera fini.")
             arret = arreter_job(jid, authorization).get("detail", "")
         SUPPRIMES.add(jid)
         try:
@@ -2509,6 +2592,9 @@ def _route_suppression(usage: str):
 
 for _usage in derniers.USAGES:
     app.get("/%s/derniers" % _usage, name="derniers_" + _usage)(_route_derniers(_usage))
+    app.delete("/%s/jobs/{jid}" % _usage, name="supprimer_" + _usage)(_route_suppression(_usage))
+# Les resumes NotebookLM et le code des pages /essai et d'accueil (25/09/2026).
+for _usage in ("notebooklm", "essai"):
     app.delete("/%s/jobs/{jid}" % _usage, name="supprimer_" + _usage)(_route_suppression(_usage))
 
 
