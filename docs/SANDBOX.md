@@ -91,7 +91,7 @@ Même sur votre machine, le mode `auto` n'envoie sur Kaggle que les jobs `gpu=tr
 
 Colab n'a pas d'API d'exécution ouverte à tous, et sa FAQ interdit, sur l'offre gratuite, de contourner l'interface du carnet. Le Studio passe donc **par** le carnet, avec le protocole de `googlecolab/colab-mcp` (Apache-2.0, Google), réimplémenté dans `sandbox-manager/colab_pont.py` :
 
-1. `GET /colab/etat` donne une adresse `https://colab.research.google.com/notebooks/empty.ipynb#mcpProxyToken=…&mcpProxyPort=8020`. La page vidéo l'affiche dans le bouton « Ouvrir Colab ».
+1. `GET /colab/etat` donne une adresse `https://colab.research.google.com/github/jpbrasile/free-ai-studio/blob/main/notebooks/carnet-studio-colab.ipynb#mcpProxyToken=…&mcpProxyPort=8020`. La page vidéo l'affiche dans le bouton « Ouvrir Colab ». Ce carnet du dépôt demande la carte T4 dans ses métadonnées : Colab s'y branche d'emblée avec elle, sans réglage à la main (`COLAB_CARNET` en met un autre).
 2. La personne l'ouvre dans **son** navigateur, avec **son** compte Google, et accepte la boîte « Connect to a local Colab MCP server ». L'onglet se branche sur `ws://localhost:8020`.
 3. Le Studio ajoute ses cellules dans le carnet, sous les yeux de la personne. Le script tourne en arrière-plan dans la machine Colab. Une petite cellule le suit toutes les 10 s, puis les fichiers de `FREE_AI_OUTPUT_DIR` reviennent par morceaux de 256 Kio, avec contrôle de l'empreinte SHA-256. À la fin, les cellules du Studio sont retirées.
 
@@ -104,7 +104,7 @@ Les gardes du branchement :
 Rien ne s'exécute sur cet ordinateur : il envoie du texte de cellule et relit des sorties.
 
 Où ça sert :
-- **Vidéo :** « Si on loue » › « Colab ». Pour une vidéo, la carte du carnet doit être réglée sur GPU T4 (menu « Exécution » › « Modifier le type d'exécution ») ; sans carte, le travail ne part pas et la page le dit.
+- **Vidéo :** « Si on loue » › « Colab ». Le carnet s'ouvre réglé sur GPU T4 ; si Colab ne donne pas de carte, le travail ne part pas et la page le dit.
 - **`POST /jobs` avec `provider=colab` :** le travail va au carnet s'il est branché.
 - **Mode `auto` :** le carnet branché passe avant le fichier `.ipynb` à importer.
 - **Arrêt d'urgence :** il tue vraiment le calcul dans le carnet, dans les 10 s.
@@ -115,7 +115,7 @@ Sans carnet branché, le comportement d'avant reste : `auto` prépare un `.ipynb
 - sur un faux carnet qui parle le même protocole et exécute les cellules (`tests/test_colab_pont.py`) ;
 - sur de vraies websockets (uvicorn, 24/09/2026) : 403 pour une mauvaise origine ou un mauvais jeton, et un travail avec fichier de 700 Ko rapatrié intact.
 
-**Non vérifié sur le vrai Colab** : voir `PLAN.md`, point 17.4.
+**Vu sur le vrai Colab le 25/09/2026** : le branchement (carnet vide). **Non vérifié** : un travail rendu par le vrai Colab, et le carnet du dépôt réglé sur T4 ; voir `PLAN.md`, point 17.4.
 
 ## API pour l'agent
 

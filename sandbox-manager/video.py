@@ -1337,9 +1337,9 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
   <div id="colabEtat">Carnet Colab : vérification…</div>
   <ol id="colabEtapes">
     <li><a id="colabOuvrir" href="#" target="_blank" rel="noopener">Ouvrir Colab ↗</a> (votre compte Google).</li>
-    <li>Dans Colab, acceptez la boîte « Connect to a local Colab MCP server ».</li>
-    <li>Menu « Exécution » › « Modifier le type d’exécution » › « GPU T4 », puis « Enregistrer ».</li>
+    <li>Dans Colab, cliquez « Connect » dans la boîte « Connect to a local Colab MCP server ». Si Chrome demande l’accès au réseau local, autorisez-le (une seule fois).</li>
   </ol>
+  <div>Le carnet s’ouvre déjà réglé sur la carte graphique gratuite (GPU T4) : rien d’autre à régler.</div>
   <div>Gardez l’onglet Colab ouvert pendant le calcul : le Studio y ajoute ses cellules sous vos yeux, puis les retire.</div>
 </div>
 

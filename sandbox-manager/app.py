@@ -68,6 +68,25 @@ import video
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("sandbox-manager")
 
+
+class MasquerJeton(logging.Filter):
+    """uvicorn ecrit l'adresse entiere de chaque requete, question comprise :
+    le jeton du carnet Colab (?access_token=...) s'y lisait en clair, vu dans
+    le journal le 25/09/2026. Il est remplace par *** avant l'ecriture."""
+    MOTIF = re.compile(r"(access_token=)[^&\s\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(self.MOTIF.sub(r"\1***", a) if isinstance(a, str) else a
+                                for a in record.args)
+        if isinstance(record.msg, str):
+            record.msg = self.MOTIF.sub(r"\1***", record.msg)
+        return True
+
+
+for _nom in ("uvicorn.access", "uvicorn.error"):
+    logging.getLogger(_nom).addFilter(MasquerJeton())
+
 app = FastAPI(title="Free AI Studio Sandbox Manager", version="2.0.0")
 # Les pages HTML de ce service : chacune recoit le bouton « 🏠 Studio ».
 # tests/test_accueil.py echoue si une page HTML manque ici.

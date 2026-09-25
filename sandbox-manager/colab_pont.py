@@ -16,8 +16,9 @@ dependance (il exige Python 3.13, l'image est en 3.12) :
     et les outils (add_code_cell, run_code_cell, update_cell, delete_cell,
     get_cells...) viennent de Colab. Leurs noms et reponses sont ceux que le
     fork xynogen a releves sur le vrai Colab (CHANGELOG, 19/06/2026).
-**Non verifie de bout en bout** : l'essai du 24/09 a vu la boite de Colab
-s'ouvrir sur l'adresse ci-dessus ; le branchement lui-meme n'a pas ete fait.
+Branchement vu en reel le 25/09/2026 (journal : << carnet Colab branche >>,
+carnet vide, compte du proprietaire). **Non verifie de bout en bout** : un
+travail rendu par le vrai Colab.
 
 Rien de ce module n'execute de code sur CET ordinateur : il envoie du texte de
 cellule a un carnet que la personne a ouvert et accepte, et relit des sorties.
@@ -28,6 +29,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import secrets
 import threading
 import time
@@ -35,7 +37,16 @@ from pathlib import Path
 from typing import Callable, Optional
 
 ORIGINES = ("https://colab.research.google.com", "https://colab.google.com")
-CARNET = "https://colab.research.google.com/notebooks/empty.ipynb"
+# Le carnet ouvert est celui du depot (notebooks/carnet-studio-colab.ipynb),
+# pas un carnet vide : ses metadonnees demandent la carte T4 (accelerator GPU,
+# gpuType T4), et Colab s'y branche d'emblee avec elle. Demande du 25/09/2026,
+# « trop de réglage colab manuel » : la personne n'a plus a passer par
+# « Exécution › Modifier le type d'exécution ». COLAB_CARNET remet un autre
+# carnet (l'ancien : .../notebooks/empty.ipynb) si celui-ci venait a manquer.
+CARNET = os.getenv(
+    "COLAB_CARNET",
+    "https://colab.research.google.com/github/jpbrasile/free-ai-studio/blob/main/"
+    "notebooks/carnet-studio-colab.ipynb")
 PROTOCOLE = "2025-06-18"
 MARQUE = "@@FAIS@@"
 # Un morceau de fichier par execution de cellule. 256 Kio bruts, 342 Kio en

@@ -298,7 +298,8 @@ def test_un_second_carnet_est_refuse_et_le_jeton_change_au_debranchement(banc):
 def test_l_adresse_du_carnet_porte_le_jeton_et_le_port_publie():
     pont = colab_pont.Pont()
     a = pont.adresse(8020)
-    assert a.startswith("https://colab.research.google.com/notebooks/empty.ipynb#")
+    assert a.startswith("https://colab.research.google.com/github/jpbrasile/free-ai-studio/blob/main/"
+                        "notebooks/carnet-studio-colab.ipynb#")
     assert "mcpProxyToken=%s" % pont.jeton in a and a.endswith("mcpProxyPort=8020")
 
 
@@ -461,3 +462,34 @@ def test_la_page_video_propose_colab_et_sa_boite(sandbox):
     assert "Connect to a local Colab MCP server" in page
     # On ne << loue >> rien chez Colab : le bouton de la boite carte-prise le dit.
     assert "Envoyer à votre carnet Colab" in page
+
+
+
+def test_le_carnet_ouvert_est_deja_regle_sur_la_carte_t4():
+    """« trop de réglage colab manuel » (25/09/2026) : le carnet ouvert est
+    celui du depot, dont les metadonnees demandent la T4."""
+    assert colab_pont.CARNET.endswith("/notebooks/carnet-studio-colab.ipynb")
+    assert colab_pont.CARNET.startswith(
+        "https://colab.research.google.com/github/jpbrasile/free-ai-studio/blob/main/")
+    carnet = json.loads((RACINE / "notebooks" / "carnet-studio-colab.ipynb").read_text(encoding="utf-8"))
+    assert carnet["metadata"]["accelerator"] == "GPU"
+    assert carnet["metadata"]["colab"]["gpuType"] == "T4"
+    assert colab_pont.PONT.adresse(8020).startswith(colab_pont.CARNET + "#mcpProxyToken=")
+    # La page ne demande plus de regler la carte a la main.
+    page = (RACINE / "sandbox-manager" / "video.py").read_text(encoding="utf-8")
+    assert "Modifier le type d’exécution » › « GPU T4 », puis « Enregistrer »" not in page
+
+
+def test_le_jeton_du_carnet_ne_s_ecrit_pas_dans_le_journal(sandbox):
+    """Vu le 25/09/2026 : uvicorn ecrivait « WebSocket /?access_token=... » en clair."""
+    import logging
+    filtre = sandbox.MasquerJeton()
+    for nom, msg, args in [
+        ("uvicorn.error", '%s - "WebSocket %s" [accepted]', ("172.25.0.1:1", "/?access_token=SECRET-1")),
+        ("uvicorn.access", '%s - "%s %s HTTP/%s" %d', ("172.25.0.1:1", "GET", "/x?a=1&access_token=SECRET-2", "1.1", 200)),
+    ]:
+        rec = logging.LogRecord(nom, logging.INFO, __file__, 1, msg, args, None)
+        assert filtre.filter(rec)
+        assert "SECRET" not in rec.getMessage() and "access_token=***" in rec.getMessage()
+    assert any(isinstance(f, sandbox.MasquerJeton) for f in logging.getLogger("uvicorn.error").filters)
+    assert any(isinstance(f, sandbox.MasquerJeton) for f in logging.getLogger("uvicorn.access").filters)
