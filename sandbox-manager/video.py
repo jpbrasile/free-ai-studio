@@ -630,8 +630,19 @@ QUALITE_LOUEE_PAR_DEFAUT = "rapide"
 MANQUE_DE_MEMOIRE = ("OutOfMemoryError", "CUDA out of memory")
 
 
+PHRASE_TUE_COLAB = (
+    "Colab a arrêté le calcul net : sa version gratuite n'a qu'environ 12,7 Go de "
+    "mémoire vive, et ce modèle en demande davantage au chargement. Relancez une fois "
+    "(le Studio y charge le modèle en mode économe), ou choisissez Kaggle, gratuit "
+    "lui aussi, qui a plus de mémoire.")
+PHRASE_TUE = (
+    "La machine a arrêté le calcul net, sans message : le plus souvent, la mémoire "
+    "vive a manqué. Essayez une durée plus courte, ou une autre machine.")
+
+
 def phrase_d_echec(stderr: str, maison: bool = False,
-                   voisins: list[str] | None = None) -> str:
+                   voisins: list[str] | None = None,
+                   code: int | None = None, fournisseur: str = "") -> str:
     """Une phrase pour le client, ou "" quand la cause n'est pas reconnue.
 
     `maison` : le clip tournait sur la carte d'ici, donc rien n'a ete paye.
@@ -650,6 +661,12 @@ def phrase_d_echec(stderr: str, maison: bool = False,
                 "clip est trop lourd pour elle. Essayez une durée plus courte."
                 + ("" if maison else " Le temps déjà passé sur la machine louée "
                                      "est compté dans la dépense du mois."))
+    # Tue par le systeme (SIGKILL : -9, ou 137 vu par un shell), sans un mot
+    # dans le journal. Vu le 25/09/2026 sur Colab gratuit, a 98 % du chargement
+    # du modele : la page n'affichait RIEN. L'arret demande par la personne ne
+    # passe pas ici (statut « cancelled », pas « failed »).
+    if code in (-9, 137):
+        return PHRASE_TUE_COLAB if fournisseur == "colab" else PHRASE_TUE
     return ""
 
 
@@ -919,13 +936,65 @@ reference = charger("image_reference")
 print("Chargement du modele %s ..." % D["modele"], flush=True)
 t0 = time.time()
 vae = AutoencoderKLWan.from_pretrained(D["modele"], subfolder="vae", torch_dtype=torch.float32)
+
+# PEU DE MEMOIRE VIVE (Colab gratuit, environ 12,7 Go). MESURE DU 25/09 : le
+# chargement ordinaire passait le lecteur de texte (umt5-xxl, 11,4 Go) par la
+# memoire vive, et le calcul etait tue (code -9) a 98 % du chargement. Ici, le
+# lecteur va DIRECTEMENT sur la carte (device_map), lit la description et la
+# consigne negative, puis on le libere avant de charger le reste : la carte
+# (14,6 Go sur un T4) le porte seul, la memoire vive ne le voit jamais entier.
+# C'est ce que font, autrement, les carnets qui y parviennent sur Colab gratuit
+# (lecteur en fp8 sous ComfyUI). Seul Colab passe ici : Modal, Kaggle et la
+# maison gardent le chemin deja mesure.
+PEU_DE_RAM = bool(D.get("peu_de_ram"))
+lectures = None
+if PEU_DE_RAM:
+    import gc
+    from transformers import AutoTokenizer, UMT5EncoderModel
+    print("Peu de memoire vive : lecteur de texte charge directement sur la carte.", flush=True)
+    lecteur_seul = UMT5EncoderModel.from_pretrained(
+        D["modele"], subfolder="text_encoder", torch_dtype=dtype,
+        device_map="cuda", low_cpu_mem_usage=True)
+    # Meme table des mots a rattacher que plus bas (mesure du 23/09).
+    if getattr(lecteur_seul, "shared", None) is not None and \
+            getattr(lecteur_seul.encoder, "embed_tokens", None) is not lecteur_seul.shared:
+        lecteur_seul.encoder.embed_tokens = lecteur_seul.shared
+        print("Table des mots du lecteur de texte rattachee a celle du modele.", flush=True)
+    decoupe = AutoTokenizer.from_pretrained(D["modele"], subfolder="tokenizer")
+    # Le meme nettoyage du texte que le pipeline (ftfy, espaces) ; absent d'une
+    # version de diffusers, le texte part tel quel.
+    try:
+        from diffusers.pipelines.wan.pipeline_wan import prompt_clean
+    except ImportError:
+        def prompt_clean(texte):
+            return texte
+    lectures = []
+    with torch.no_grad():
+        for texte in (prompt_clean(D["description"]), prompt_clean(D["negatif"])):
+            jetons = decoupe([texte], padding="max_length", max_length=512, truncation=True,
+                             add_special_tokens=True, return_attention_mask=True,
+                             return_tensors="pt")
+            masque_j = jetons.attention_mask.to("cuda")
+            etats = lecteur_seul(jetons.input_ids.to("cuda"), masque_j).last_hidden_state
+            # Comme WanPipeline._get_t5_prompt_embeds : les jetons de remplissage
+            # sont remis a zero, sur la longueur complete de 512.
+            longueur = int(masque_j.gt(0).sum())
+            etats = torch.cat([etats[0, :longueur],
+                               etats.new_zeros(512 - longueur, etats.size(2))]).unsqueeze(0)
+            lectures.append(etats.to(dtype))
+    del lecteur_seul, decoupe
+    gc.collect()
+    torch.cuda.empty_cache()
+    print("Description lue ; lecteur de texte libere (%.0f s)." % (time.time() - t0), flush=True)
+
+extra = {"text_encoder": None, "tokenizer": None} if PEU_DE_RAM else {}
 if FAMILLE == "ti2v":
     # Le modele de la maison. Sa configuration porte son propre ordonnanceur et
     # son propre `expand_timesteps` : on ne lui impose PAS de flow_shift, qui
     # est un reglage de la 2.1.
-    pipe = WanPipeline.from_pretrained(D["modele"], vae=vae, torch_dtype=dtype)
+    pipe = WanPipeline.from_pretrained(D["modele"], vae=vae, torch_dtype=dtype, **extra)
 else:
-    pipe = WanVACEPipeline.from_pretrained(D["modele"], vae=vae, torch_dtype=dtype)
+    pipe = WanVACEPipeline.from_pretrained(D["modele"], vae=vae, torch_dtype=dtype, **extra)
     pipe.scheduler = UniPCMultistepScheduler.from_config(
         pipe.scheduler.config, flow_shift=float(D["flow_shift"])
     )
@@ -979,6 +1048,11 @@ print("Memoire de la carte libre avant calcul : %.1f Go sur %.1f Go"
 kwargs = dict(
     prompt=D["description"],
     negative_prompt=D["negatif"],
+) if lectures is None else dict(
+    prompt_embeds=lectures[0],
+    negative_prompt_embeds=lectures[1],
+)
+kwargs.update(
     height=H,
     width=L,
     num_frames=IMAGES,
@@ -1783,7 +1857,9 @@ function majNoteLoueur(){
           + "« À la maison si la carte est libre » passe avant.";
   } else if(loueur === "colab"){
     texte = "Colab repart d’une machine vide à chaque clip : le modèle s’y télécharge "
-          + "à chaque fois, comptez comme Kaggle. La carte gratuite n’est pas garantie.";
+          + "à chaque fois (environ 5 min). La carte gratuite n’est pas garantie. "
+          + "Colab gratuit a peu de mémoire vive (12,7 Go) : le Studio y charge le modèle "
+          + "en mode économe, essai pas encore réussi ; Kaggle, gratuit aussi, a plus de marge.";
   }
   note.textContent = texte;
   note.hidden = !texte;

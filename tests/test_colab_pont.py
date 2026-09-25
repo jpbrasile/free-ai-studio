@@ -493,3 +493,42 @@ def test_le_jeton_du_carnet_ne_s_ecrit_pas_dans_le_journal(sandbox):
         assert "SECRET" not in rec.getMessage() and "access_token=***" in rec.getMessage()
     assert any(isinstance(f, sandbox.MasquerJeton) for f in logging.getLogger("uvicorn.error").filters)
     assert any(isinstance(f, sandbox.MasquerJeton) for f in logging.getLogger("uvicorn.access").filters)
+
+
+def test_seul_colab_charge_le_modele_en_mode_econome(client, monkeypatch):
+    """Vu le 25/09/2026 : le clip Colab tue (-9) a 98 % du chargement, faute de
+    memoire vive (12,7 Go). Le lecteur de texte (11,4 Go) va alors droit sur la carte."""
+    c, sb = client
+    demandes = []
+    vrai = sb.video.construire_script
+    monkeypatch.setattr(sb.video, "construire_script", lambda d: demandes.append(dict(d)) or vrai(d))
+    monkeypatch.setattr(sb, "run_video", lambda *a, **k: None)
+    monkeypatch.setattr(sb.colab_pont.PONT, "branche", lambda: True)
+    monkeypatch.setattr(sb, "WORKER_GPU_URL", "")
+    monkeypatch.setattr(sb, "modal_configured", lambda: True)
+    for ou in ("colab", "modal"):
+        r = c.post("/video/creer", headers=ENTETE, json={"description": "un phare", "ou": ou, "duree": "1"})
+        assert r.status_code == 200, r.text
+    assert [d.get("peu_de_ram", False) for d in demandes] == [True, False]
+    script = vrai(demandes[0])
+    assert 'device_map="cuda"' in script and "prompt_embeds=lectures[0]" in script
+    compile(script, "clip.py", "exec")
+
+
+def test_un_clip_colab_tue_dit_pourquoi_et_propose_kaggle(client):
+    c, sb = client
+    jid = "colabtue00001"
+    sb.write_job(jid, {"id": jid, "status": "failed", "provider_effective": "colab", "exit_code": -9,
+                       "stderr": "Loading checkpoint shards:  98%", "artifacts": [], "video": {}})
+    d = c.get("/video/jobs/" + jid, headers=ENTETE).json()
+    assert "mémoire vive" in d["message"] and "Kaggle" in d["message"]
+    # Ailleurs, le meme arret net recoit une phrase, sans parler de Colab.
+    sb.write_job(jid, {"id": jid, "status": "failed", "provider_effective": "modal", "exit_code": -9,
+                       "stderr": "", "artifacts": [], "video": {}})
+    d = c.get("/video/jobs/" + jid, headers=ENTETE).json()
+    assert "mémoire vive" in d["message"] and "Colab" not in d["message"]
+
+
+def test_la_page_previent_avant_un_clip_colab():
+    page = (RACINE / "sandbox-manager" / "video.py").read_text(encoding="utf-8")
+    assert "Colab gratuit a peu de mémoire vive (12,7 Go)" in page

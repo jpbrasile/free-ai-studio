@@ -3588,6 +3588,12 @@ async def video_creer(request: Request, authorization: Optional[str] = Header(de
         raise HTTPException(503, "Kaggle n'est pas branche. Ouvrez la page « Brancher Modal "
                                  "ou Kaggle » et collez votre nom d'utilisateur et votre cle Kaggle.")
 
+    if ou == "colab":
+        # Colab gratuit : environ 12,7 Go de memoire vive. Le lecteur de texte
+        # de Wan (umt5-xxl, 11,4 Go) y passait et le calcul etait tue (-9) au
+        # chargement, vu le 25/09/2026. Le script le charge alors directement
+        # sur la carte (voir PEU_DE_RAM dans video._SCRIPT).
+        plan["demande"]["peu_de_ram"] = True
     code = video.construire_script(plan["demande"])
     fiche = dict(plan["resume_public"])
     if ou == "kaggle":
@@ -3635,7 +3641,9 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "message": job.get("error") or (
             video.phrase_d_echec(job.get("stderr", ""),
                                  maison=bool((job.get("video") or {}).get("maison")),
-                                 voisins=job.get("voisins_a_l_echec"))
+                                 voisins=job.get("voisins_a_l_echec"),
+                                 code=job.get("exit_code"),
+                                 fournisseur=job.get("provider_effective") or "")
             if job.get("status") == "failed" else ""),
         # Ce que le bouton d'arret a vraiment fait, dit par la page vidéo.
         "arret_detail": job.get("arret_detail") or "",
