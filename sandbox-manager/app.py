@@ -41,6 +41,8 @@ import dialogue
 # jour/mois/annee -- des deux cotes : ici en Python, et dans le JavaScript des
 # pages via `format_fr.avec_formateurs`.
 import format_fr
+# Le bouton « 🏠 Studio » pose sur chaque page (voir PAGES_HTML).
+import accueil
 import garde_exposition
 # Que faire d'un travail qu'un redemarrage a laisse sans personne
 # derriere lui. Le raisonnement y est pur : il se teste sans reseau.
@@ -67,6 +69,10 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("sandbox-manager")
 
 app = FastAPI(title="Free AI Studio Sandbox Manager", version="2.0.0")
+# Les pages HTML de ce service : chacune recoit le bouton « 🏠 Studio ».
+# tests/test_accueil.py echoue si une page HTML manque ici.
+PAGES_HTML = ("/", "/notebooklm", "/cles", "/essai", "/video", "/chanson", "/dialogue", "/composite")
+accueil.brancher(app, PAGES_HTML)
 
 KEY = os.getenv("SANDBOX_MANAGER_KEY", "").strip()
 WORKER_KEY = os.getenv("SANDBOX_WORKER_KEY", "").strip()

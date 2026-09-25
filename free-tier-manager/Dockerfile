@@ -9,6 +9,9 @@ COPY garde_exposition.py .
 # Le coffre des secrets. Meme raison que ci-dessus : le bac a sable en a besoin
 # aussi, et tests/test_coffre.py echoue si les deux exemplaires divergent.
 COPY coffre.py .
+# Le bouton << Studio >> des pages. Meme raison : deux exemplaires identiques,
+# verifies par tests/test_accueil.py.
+COPY accueil.py .
 COPY app.py .
 EXPOSE 8000
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -19,6 +19,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 import garde_exposition
 # Le magasin de cles garde les NOMS en clair et les VALEURS non (22/09/2026).
 import coffre
+# Le bouton « 🏠 Studio » pose sur chaque page (voir PAGES_HTML).
+import accueil
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, Response
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -57,6 +59,10 @@ app = FastAPI(
     docs_url="/docs",
     lifespan=demarrage_et_arret,
 )
+# Les pages HTML de ce service, sauf /studio lui-meme : chacune recoit le
+# bouton « 🏠 Studio ». tests/test_accueil.py echoue si une page manque ici.
+PAGES_HTML = ("/cles", "/diagnostic", "/notebooklm", "/boost")
+accueil.brancher(app, PAGES_HTML)
 
 INTERNAL_KEY = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
 FREE_ONLY = os.getenv("FREE_ONLY", "true").lower() == "true"
