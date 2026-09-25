@@ -144,7 +144,11 @@ def faux_module(sc: Scenario) -> types.ModuleType:
         async def __aexit__(self, *exc):
             return False
 
-    m.NotebookLMClient = types.SimpleNamespace(from_storage=lambda path: Client(path))
+    def ouvrir(path, keepalive=None):
+        sc.keepalive = keepalive
+        return Client(path)
+
+    m.NotebookLMClient = types.SimpleNamespace(from_storage=ouvrir)
     return m
 
 
@@ -220,6 +224,106 @@ def test_l_export_passe_par_la_commande_de_la_bibliotheque_puis_le_dossier_part(
     assert not vu["export"].exists() and not Path(vu["home"]).exists()
     assert "PISTEUR" not in pont._lire() and "valeur-sid-secrete" in pont._lire()
     assert "valeur-sid-secrete" not in pont.FICHIER.read_text(encoding="utf-8")
+
+
+# --- 1 bis. L'entretien : la session reste vivante sans reconnexion ---------------
+
+def faux_refresh(sortie=0, message="", tourner=True):
+    """`notebooklm --storage F auth refresh --verify --quiet` : fait tourner
+    __Secure-1PSIDTS dans F, comme la bibliotheque. Rend ce qu'il a vu."""
+    vu = {}
+
+    def run(argv, capture_output, text, env, timeout):
+        vu.update(argv=list(argv), fichier=Path(argv[2]), clair=Path(argv[2]).read_text(encoding="utf-8"))
+        if tourner:
+            neuf = json.loads(vu["clair"])
+            neuf["cookies"][1]["value"] = "valeur-psidts-entretenue"
+            Path(argv[2]).write_text(json.dumps(neuf), encoding="utf-8")
+        return types.SimpleNamespace(returncode=sortie, stdout="", stderr=message)
+    return run, vu
+
+
+def test_l_entretien_fait_tourner_la_session_et_la_referme_dans_le_coffre(nlm, monkeypatch, caplog):
+    pont, _ = nlm
+    brancher(pont)
+    run, vu = faux_refresh()
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    with caplog.at_level("INFO", logger="sandbox-manager.notebooklm"):
+        r = pont.entretenir()
+    assert r["fait"] and r["ok"]
+    assert vu["argv"] == ["notebooklm", "--storage", str(vu["fichier"]), "auth", "refresh",
+                          "--verify", "--quiet"]
+    # La copie en clair n'a vecu que le temps de l'appel ; le coffre a la neuve.
+    assert not vu["fichier"].exists() and not vu["fichier"].parent.exists()
+    assert "valeur-psidts-entretenue" in pont._lire()
+    # Le journal dit QUEL cookie a tourne, jamais sa valeur.
+    assert "tournes : __Secure-1PSIDTS" in caplog.text
+    assert "valeur-" not in caplog.text
+
+
+def test_un_entretien_echoue_se_journalise_et_garde_quand_meme_la_rotation(nlm, monkeypatch, caplog):
+    pont, _ = nlm
+    brancher(pont)
+    run, _vu = faux_refresh(sortie=1, message="Error: Authentication expired")
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    with caplog.at_level("INFO", logger="sandbox-manager.notebooklm"):
+        r = pont.entretenir()
+    assert r["fait"] and not r["ok"]
+    assert "valeur-psidts-entretenue" in pont._lire()
+    assert "ECHEC (code 1) Error: Authentication expired" in caplog.text and "valeur-" not in caplog.text
+
+
+def test_sans_session_l_entretien_ne_lance_rien(nlm, monkeypatch):
+    pont, _ = nlm
+    monkeypatch.setattr(pont.subprocess, "run", lambda *a, **k: pytest.fail("rien a entretenir"))
+    assert pont.entretenir() == {"fait": False}
+
+
+def test_le_fil_d_entretien_survit_a_une_erreur_et_attend_entre_deux(nlm, monkeypatch):
+    pont, _ = nlm
+    tours, attentes = [], []
+
+    def entretenir():
+        tours.append(1)
+        if len(tours) == 1:
+            raise RuntimeError("panne")
+
+    class Fin(Exception):
+        pass
+
+    def attente(s):
+        attentes.append(s)
+        if len(attentes) == 2:
+            raise Fin
+    monkeypatch.setattr(pont, "entretenir", entretenir)
+    with pytest.raises(Fin):
+        pont.entretenir_sans_fin(attente)
+    assert len(tours) == 2 and attentes == [pont.ENTRETIEN_S] * 2
+    assert 900 <= pont.ENTRETIEN_S <= 1200   # 15 a 20 min, conseil de la bibliotheque
+
+
+def test_les_changements_disent_des_noms_et_les_doublons_jamais_une_valeur(nlm):
+    pont, _ = nlm
+    apres = json.loads(json.dumps(ETAT))
+    apres["cookies"][1]["value"] = "valeur-neuve"
+    apres["cookies"].append({"name": "__Secure-1PSIDTS", "value": "valeur-vieille",
+                             "domain": "accounts.google.com", "path": "/"})
+    d = pont.changements(json.dumps(ETAT), json.dumps(apres))
+    assert d.startswith("2 -> 3 cookies ; tournes : __Secure-1PSIDTS ;")
+    assert "ajoutes : __Secure-1PSIDTS@accounts.google.com" in d
+    assert d.endswith("doublons : __Secure-1PSIDTS") and "valeur" not in d
+    assert pont.changements("pas du json", "{}") == "session illisible"
+
+
+def test_le_client_tourne_seul_pendant_un_appel_long_et_le_journalise(nlm, caplog):
+    pont, sc = nlm
+    brancher(pont)
+    sc.tourner = True
+    with caplog.at_level("INFO", logger="sandbox-manager.notebooklm"):
+        lancer(pont, pont.verifier)
+    assert sc.keepalive == pont.ENTRETIEN_CLIENT_S
+    assert "NotebookLM appel : 2 -> 2 cookies ; tournes : __Secure-1PSIDTS" in caplog.text
+    assert "valeur-" not in caplog.text
 
 
 @pytest.mark.parametrize("export, attendu", [

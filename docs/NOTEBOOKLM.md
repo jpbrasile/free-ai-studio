@@ -75,6 +75,15 @@ sans ouvrir de fenêtre ni rien envoyer.
 Seuls les cookies de Google sont gardés : c’est la commande publique de la bibliothèque,
 `notebooklm auth import-cookies`, qui fait le tri et vérifie que les cookies requis sont là.
 
+**Une fois branchée, la session s’entretient seule.** Google périme un cookie de session
+(`__Secure-1PSIDTS`) s’il ne tourne pas ; la bibliothèque conseille de le faire tourner toutes les
+15 à 20 minutes. Le Studio le fait toutes les 15 minutes (`NOTEBOOKLM_ENTRETIEN_SECONDES`, 900
+par défaut), au démarrage compris, et pendant un résumé long le client le fait lui-même toutes les
+10 minutes. La session tournée revient dans le coffre ; le journal du Studio dit quels cookies ont
+tourné (des noms, jamais une valeur) et si Google a accepté (`NotebookLM entretien : ok` ou
+`ECHEC`). Studio arrêté longtemps (PC éteint) : la session peut être périmée au redémarrage, il
+faut alors se rebrancher.
+
 ### Les carnets du Studio, et quand NotebookLM est plein
 
 Chaque résumé crée un carnet au nom clair : **« Studio · <titre> · <date et heure> »**, par exemple

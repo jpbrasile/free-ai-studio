@@ -2924,6 +2924,11 @@ if REPRISE_AU_DEMARRAGE:
     # n'attend jamais un service distant.
     threading.Thread(target=reprise_au_demarrage, name="reprise-travaux",
                      daemon=True).start()
+    # La session NotebookLM s'entretient seule : sans cela Google la perime et
+    # la personne devrait se reconnecter (25/09/2026). Meme drapeau : les tests
+    # ne lancent pas ce fil.
+    threading.Thread(target=notebooklm_pont.entretenir_sans_fin, name="entretien-notebooklm",
+                     daemon=True).start()
 
 
 def arreter_maison(jid: str) -> dict:

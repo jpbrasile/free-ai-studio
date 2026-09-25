@@ -24,12 +24,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -57,6 +59,15 @@ PHRASE_EXPIREE = ("La session NotebookLM a expiré ou a été refusée par Googl
 PHRASE_QUOTA = ("Google refuse pour l’instant : le quota de NotebookLM est atteint (l’offre "
                 "gratuite annonce 3 résumés audio par jour). Réessayez demain.")
 
+# Google perime __Secure-1PSIDTS s'il ne tourne pas : la bibliotheque conseille
+# un `auth refresh` toutes les 15 a 20 minutes (docstring de la commande, 0.8.2).
+# Vu en reel le 25/09/2026 : session du matin morte avant 08:33 sans entretien.
+ENTRETIEN_S = int(os.getenv("NOTEBOOKLM_ENTRETIEN_SECONDES", "900"))
+# Pendant un appel long (un resume attend jusqu'a 20 min), le client fait
+# tourner lui-meme les cookies a ce rythme ; ecrits dans son fichier a la sortie.
+ENTRETIEN_CLIENT_S = 600.0
+
+log = logging.getLogger("sandbox-manager.notebooklm")
 _verrou = threading.Lock()
 
 
@@ -112,6 +123,81 @@ def _sceller(storage_state: str) -> None:
     tmp = FICHIER.with_suffix(".tmp")
     tmp.write_text(coffre.chiffrer(storage_state), encoding="utf-8")
     os.replace(tmp, FICHIER)
+
+
+def changements(avant: str, apres: str) -> str:
+    """Ce qui a change dans la session, pour le journal : des NOMS de cookies
+    et des nombres, jamais une valeur. Les doublons (meme nom sur deux
+    domaines) sont signales : une ancienne valeur renvoyee apres une rotation
+    peut faire fermer la session par Google (hypothese du 25/09, non verifiee)."""
+    def carte(texte):
+        try:
+            cookies = json.loads(texte).get("cookies") or []
+        except (ValueError, AttributeError):
+            return None
+        return {(c.get("name"), c.get("domain")): c.get("value") for c in cookies}
+    a, b = carte(avant), carte(apres)
+    if a is None or b is None:
+        return "session illisible"
+    tournes = sorted({n for (n, dom) in a.keys() & b.keys() if a[(n, dom)] != b[(n, dom)]})
+    ajoutes = sorted({"%s@%s" % k for k in b.keys() - a.keys()})
+    retires = sorted({"%s@%s" % k for k in a.keys() - b.keys()})
+    noms = [n for (n, _dom) in b]
+    doublons = sorted({n for n in noms if noms.count(n) > 1})
+    return "%d -> %d cookies ; tournes : %s ; ajoutes : %s ; retires : %s ; doublons : %s" % (
+        len(a), len(b), ", ".join(tournes) or "aucun", ", ".join(ajoutes) or "aucun",
+        ", ".join(retires) or "aucun", ", ".join(doublons) or "aucun")
+
+
+def entretenir(commande: str = "notebooklm") -> dict:
+    """Garde la session vivante sans que la personne se reconnecte : la
+    commande publique de la bibliotheque (`auth refresh --verify`) sur une
+    copie en clair le temps de l'appel, puis la session tournee revient
+    dans le coffre. Meme verrou que les appels : jamais deux rotations a la fois."""
+    if not FICHIER.exists():
+        return {"fait": False}
+    with _verrou:
+        etat = _lire()
+        d = Path(tempfile.mkdtemp(prefix="nlm-entretien-"))
+        try:
+            chemin = d / "storage_state.json"
+            chemin.write_text(etat, encoding="utf-8")
+            os.chmod(chemin, 0o600)
+            env = dict(os.environ, NOTEBOOKLM_HOME=str(d / "home"))
+            env.pop("NOTEBOOKLM_AUTH_JSON", None)
+            try:
+                r = subprocess.run([commande, "--storage", str(chemin), "auth", "refresh",
+                                    "--verify", "--quiet"],
+                                   capture_output=True, text=True, env=env, timeout=120)
+                code, message = r.returncode, " ".join((r.stderr or r.stdout or "").split())[-200:]
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                code, message = -1, type(exc).__name__
+            nouveau = chemin.read_text(encoding="utf-8") if chemin.exists() else etat
+            # Ce qui a tourne chez Google est la seule version valable, meme si
+            # la verification echoue ensuite : on garde toujours la plus neuve.
+            with contextlib.suppress(ValueError):
+                if nouveau != etat and json.loads(nouveau).get("cookies"):
+                    _sceller(nouveau)
+            diff = changements(etat, nouveau)
+            if code:
+                log.warning("NotebookLM entretien : ECHEC (code %s) %s ; %s", code, message, diff)
+            else:
+                log.info("NotebookLM entretien : ok ; %s", diff)
+            return {"fait": True, "ok": code == 0, "changements": diff}
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def entretenir_sans_fin(attente=None) -> None:
+    """Le fil du Studio : un entretien au demarrage (la machine a pu dormir),
+    puis toutes les ENTRETIEN_S secondes. Ne s'arrete jamais sur une erreur."""
+    attente = attente or time.sleep
+    while True:
+        try:
+            entretenir()
+        except Exception as exc:  # noqa: BLE001 -- le fil ne doit pas mourir
+            log.warning("NotebookLM entretien : erreur %s", type(exc).__name__)
+        attente(ENTRETIEN_S)
 
 
 def oublier() -> bool:
@@ -216,7 +302,8 @@ async def client():
         chemin.write_text(etat, encoding="utf-8")
         os.chmod(chemin, 0o600)
         try:
-            async with notebooklm.NotebookLMClient.from_storage(path=str(chemin)) as c:
+            async with notebooklm.NotebookLMClient.from_storage(
+                    path=str(chemin), keepalive=ENTRETIEN_CLIENT_S) as c:
                 yield c
         except Exception as exc:  # noqa: BLE001
             dite = traduire(exc)
@@ -228,6 +315,7 @@ async def client():
                 nouveau = chemin.read_text(encoding="utf-8")
                 if nouveau != etat and json.loads(nouveau).get("cookies"):
                     _sceller(nouveau)
+                log.info("NotebookLM appel : %s", changements(etat, nouveau))
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
