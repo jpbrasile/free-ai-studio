@@ -708,12 +708,49 @@ async function charger(){
 // La réponse de NotebookLM est en Markdown (25/09/2026 : « l'affichage de la
 // réponse est en markdown brut »). Titres, listes, gras, italique, code : des
 // NŒUDS créés un à un, jamais de HTML injecté -- le texte vient de Google.
+// Les formules LaTeX de NotebookLM, \(H_2S\) ou \[...\] (25/09/2026 : « il reste
+// \(H_2S\) ») : indices, exposants et symboles courants, en texte -- pas de
+// moteur de formules (le Studio marche sans Internet).
+const SYMBOLES = {rightarrow: "→", to: "→", leftarrow: "←", leftrightarrow: "↔",
+  rightleftharpoons: "⇌", longrightarrow: "⟶", times: "×", cdot: "·", approx: "≈", sim: "∼",
+  le: "≤", leq: "≤", ge: "≥", geq: "≥", neq: "≠", pm: "±", infty: "∞", circ: "°", degree: "°",
+  alpha: "α", beta: "β", gamma: "γ", delta: "δ", Delta: "Δ", epsilon: "ε", varepsilon: "ε",
+  eta: "η", theta: "θ", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν", pi: "π", rho: "ρ",
+  sigma: "σ", Sigma: "Σ", tau: "τ", phi: "φ", varphi: "φ", chi: "χ", psi: "ψ", omega: "ω",
+  Omega: "Ω", sum: "∑", partial: "∂", nabla: "∇", propto: "∝", quad: " ", qquad: "  ",
+  ",": " ", ";": " ", ":": " ", "!": ""};
+function formule(parent, f){
+  f = f.replace(/\\(?:text|mathrm|mathbf|mathit|operatorname|ce)\s*\{([^{}]*)\}/g, "$1")
+       .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)")
+       .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)")
+       .replace(/\\([A-Za-z]+|[,;:!])/g, (m, n) => n in SYMBOLES ? SYMBOLES[n] : m);
+  const span = document.createElement("span");
+  span.className = "formule";
+  const motif = /([_^])(?:\{([^{}]*)\}|(.))/g;
+  let i = 0, m;
+  const texteBrut = s => document.createTextNode(s.replace(/[{}]/g, ""));
+  while((m = motif.exec(f))){
+    if(m.index > i) span.appendChild(texteBrut(f.slice(i, m.index)));
+    const n = document.createElement(m[1] === "_" ? "sub" : "sup");
+    n.textContent = m[2] !== undefined ? m[2] : m[3];
+    span.appendChild(n);
+    i = m.index + m[0].length;
+  }
+  if(i < f.length) span.appendChild(texteBrut(f.slice(i)));
+  parent.appendChild(span);
+}
 function enLigne(parent, t){
-  const motif = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\s][^*]*\*|`[^`]+`)/g;
+  const motif = /(\\{1,2}[(\[][\s\S]+?\\{1,2}[)\]]|\*\*[^*]+\*\*|__[^_]+__|\*[^*\s][^*]*\*|`[^`]+`)/g;
   let i = 0, m;
   while((m = motif.exec(t))){
     if(m.index > i) parent.appendChild(document.createTextNode(t.slice(i, m.index)));
-    const s = m[0], gras = s.startsWith("**") || s.startsWith("__");
+    const s = m[0];
+    if(s[0] === "\\"){
+      formule(parent, s.replace(/^\\{1,2}[(\[]/, "").replace(/\\{1,2}[)\]]$/, ""));
+      i = m.index + s.length;
+      continue;
+    }
+    const gras = s.startsWith("**") || s.startsWith("__");
     const n = document.createElement(gras ? "strong" : s.startsWith("`") ? "code" : "em");
     n.textContent = gras ? s.slice(2, -2) : s.slice(1, -1);
     parent.appendChild(n);

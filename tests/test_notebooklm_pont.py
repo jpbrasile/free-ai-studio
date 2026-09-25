@@ -822,7 +822,7 @@ def _rendre_markdown(pont, texte: str, tmp_path) -> str:
     if not shutil.which("node"):
         pytest.skip("node absent")
     page = pont.PAGE_HTML
-    code = page[page.index("function enLigne("):page.index("// Après brancher-notebooklm.cmd")]
+    code = page[page.index("const SYMBOLES = "):page.index("// Après brancher-notebooklm.cmd")]
     programme = r"""
 function esc(t){ return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function noeud(tag){ return {tagName: tag.toUpperCase(), enfants: [], _t: "",
@@ -853,6 +853,20 @@ def test_la_reponse_markdown_devient_titres_listes_et_gras(nlm, tmp_path):
     assert html == ("<h4>Le phare</h4><p>Il fut <strong>allumé</strong> en <em>1611</em> [1]."
                     "<br>Suite.</p><ul><li>premier</li><li>second <code>code</code></li></ul>"
                     "<ol><li>un</li><li>deux</li></ol>")
+
+
+def test_les_formules_latex_deviennent_indices_exposants_et_symboles(nlm, tmp_path):
+    pont, _ = nlm
+    # Vu en reel le 25/09 : « \(H_2S\) » affiche brut dans une reponse.
+    html = _rendre_markdown(pont, r"Le \(H_2S\;\) se dissocie : \(H_{2}S \rightarrow H_2 + S\), "
+                                  r"à \(10^{-3}\,\text{mbar}\) et \[\Delta H \approx 20\]", tmp_path)
+    assert html == ("<p>Le <span>H<sub>2</sub>S </span> se dissocie : "
+                    "<span>H<sub>2</sub>S → H<sub>2</sub> + S</span>, à "
+                    "<span>10<sup>-3</sup> mbar</span> et <span>Δ H ≈ 20</span></p>")
+    # Double barre oblique (reponse echappee une fois de trop) : meme rendu.
+    assert _rendre_markdown(pont, r"\\(H_2S\\)", tmp_path) == "<p><span>H<sub>2</sub>S</span></p>"
+    # Une formule ne laisse pas passer de HTML non plus.
+    assert "<img" not in _rendre_markdown(pont, r"\(<img src=x onerror=alert(1)>_2\)", tmp_path)
 
 
 def test_la_reponse_markdown_n_injecte_jamais_de_html(nlm, tmp_path):
