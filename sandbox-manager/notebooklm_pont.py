@@ -51,8 +51,9 @@ TEXTE_MAX = 500_000   # signes colles dans la page ; NotebookLM borne une source
 
 PHRASE_ABSENTE = ("NotebookLM n’est pas encore branché : suivez « Brancher NotebookLM » "
                   "sur cette page (une seule fois).")
-PHRASE_EXPIREE = ("La session NotebookLM a expiré ou a été refusée par Google. Refaites "
-                  "« Brancher NotebookLM » avec un nouvel export des cookies.")
+PHRASE_EXPIREE = ("La session NotebookLM a expiré ou a été refusée par Google. Double-cliquez "
+                  "de nouveau sur brancher-notebooklm.cmd (dossier du Studio), puis « J’ai fini, "
+                  "vérifier ». Vos résumés déjà faits restent ci-dessous.")
 PHRASE_QUOTA = ("Google refuse pour l’instant : le quota de NotebookLM est atteint (l’offre "
                 "gratuite annonce 3 résumés audio par jour). Réessayez demain.")
 
@@ -501,8 +502,6 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
       <button id="btDemander">Demander</button></div>
     <div id="reponse"></div>
   </div>
-  <h2>Vos résumés</h2>
-  <div id="resumes"><p class="avert">Aucun résumé pour l’instant.</p></div>
   <div id="place" class="carte" hidden>
     <h2>Faire de la place dans NotebookLM</h2>
     <p id="placeTexte"></p>
@@ -524,6 +523,14 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
     <button id="btOublier">Oublier la session NotebookLM</button></p>
 </div>
 
+<!-- Hors de « travail » : les résumés sont sur le disque du Studio, pas chez
+     Google. Session expirée le 25/09/2026 : la page les cachait, on ne pouvait
+     plus ni les écouter ni les supprimer. -->
+<div id="historique">
+  <h2>Vos résumés</h2>
+  <div id="resumes"><p class="avert">Aucun résumé pour l’instant.</p></div>
+</div>
+
 <div class="pied">Bibliothèque : notebooklm-py 0.8.2 (licence MIT), qui pilote des accès non documentés
 de Google. <a href="/">Retour au Sandbox</a></div>
 
@@ -531,6 +538,7 @@ de Google. <a href="/">Retour au Sandbox</a></div>
 const CLE = "__CLE__";
 const H = {"Authorization": "Bearer " + CLE};
 let CARNET = "";
+let SESSION_OK = false;
 function el(i){ return document.getElementById(i); }
 function texte(i, t, classe){ const e = el(i); e.textContent = t; e.className = classe || ""; }
 
@@ -544,7 +552,9 @@ async function charger(){
   }
   el("brancher").hidden = !!(e.branchee && e.ok);
   el("travail").hidden = !(e.branchee && e.ok);
-  if(e.branchee && e.ok){ listerResumes(); }
+  SESSION_OK = !!(e.branchee && e.ok);
+  // Branché ou non : les résumés déjà faits s'écoutent et se suppriment.
+  listerResumes();
   // textContent seulement : le message peut porter un texte venu de Google.
   b.className = "banniere";
   if(!e.branchee){
@@ -732,7 +742,9 @@ async function listerResumes(){
       const q = document.createElement("button");
       q.textContent = "Poser une question";
       q.onclick = () => montrer(j);
-      l.append(dl, nb, q);
+      // Une question passe par Google : sans session, le bouton n'aboutirait pas.
+      l.append(dl, nb);
+      if(SESSION_OK){ l.appendChild(q); }
     }
     if(j.status !== "queued" && j.status !== "running"){
       l.appendChild(boutonSupprimer(j));

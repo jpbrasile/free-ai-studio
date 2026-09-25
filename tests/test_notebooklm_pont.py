@@ -624,7 +624,7 @@ def test_oublier_efface_la_session(client):
 
 
 def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
-    c, _, _ = client
+    c, pont, _ = client
     html = c.get("/notebooklm").text
     assert "__CLE__" not in html and '"cle-sandbox-de-test"' in html
     for morceau in ("ouvre votre compte Google entier", "navigation privée",
@@ -644,6 +644,12 @@ def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
     assert html.count("brancherSon(") == 3
     # 25/09 : « on devrait pouvoir supprimer les résumés audio ». Deux clics ;
     # le carnet chez Google reste, « Faire de la place » le supprime.
+    # Session expirée en réel le 25/09 : la page cachait alors les résumés, que
+    # le Studio garde sur son disque. Ils sont hors du bloc « travail ».
+    travail = html.split('<div id="travail"')[1].split('<div id="historique">')[0]
+    assert 'id="resumes"' not in travail and 'id="resumes"' in html.split('<div id="historique">')[1]
+    assert "if(e.branchee && e.ok){ listerResumes(); }" not in html
+    assert "brancher-notebooklm.cmd" in pont.PHRASE_EXPIREE
     for morceau in ("🗑️ Supprimer du Studio", "Confirmer : effacer pour de bon",
                     '"/notebooklm/jobs/" + encodeURIComponent(j.id), {method: "DELETE"'):
         assert morceau in html, morceau
