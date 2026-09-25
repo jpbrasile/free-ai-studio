@@ -273,6 +273,9 @@ services:
       WHISPER_MODEL: ${WHISPER_MODEL:-small}
     volumes:
       - open-webui-data:/app/backend/data
+      # Le bouton « 🏠 Studio » dans le chat (open-webui/loader.js, 25/09/2026).
+      # Open WebUI recopie ce fichier au démarrage vers ce qu'il sert.
+      - ./open-webui/loader.js:/app/build/static/loader.js:ro
 
 volumes:
   open-webui-data:

@@ -58,3 +58,23 @@ def test_poser_une_seule_fois_et_sans_body(sandbox):
     une = accueil.poser(b"<html><body><p>x</p></body></html>")
     assert accueil.poser(une) == une and une.count(MARQUE.encode()) == 1
     assert accueil.poser(b"<p>sans body</p>").endswith(b"</script>")
+
+
+def test_le_chat_a_son_bouton_par_le_loader_d_open_webui():
+    """Le chat (Open WebUI) n'est pas a nous : son loader.js, vide d'origine,
+    est remplace par le notre, monte en lecture seule."""
+    loader = (RACINE / "open-webui" / "loader.js").read_text(encoding="utf-8")
+    assert MARQUE.split("=")[1].strip('"') in loader and ":8010/studio" in loader
+    # Rien d'autre : ni appel reseau, ni lecture de ce qui s'ecrit dans le chat.
+    for interdit in ("fetch(", "XMLHttpRequest", "localStorage", "WebSocket", "innerHTML"):
+        assert interdit not in loader, interdit
+    compose = (RACINE / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "- ./open-webui/loader.js:/app/build/static/loader.js:ro" in compose
+
+
+def test_les_cartes_du_chat_restent_dans_le_meme_onglet():
+    """« cliquer sur chat fait sortir du studio » : le chat s'ouvre a la place de
+    la page, et « 🏠 Studio » y ramene."""
+    app = (RACINE / "free-tier-manager" / "app.py").read_text(encoding="utf-8")
+    assert app.count('class="card" href="http://localhost:3000/"') == 5
+    assert 'class="card" href="http://localhost:3000/" target="_blank"' not in app
