@@ -85,8 +85,10 @@ Seuls les cookies de Google sont gardés : c’est la commande publique de la bi
 par défaut), au démarrage compris, et pendant un résumé long le client le fait lui-même toutes les
 10 minutes. La session tournée revient dans le coffre ; le journal du Studio dit quels cookies ont
 tourné (des noms, jamais une valeur) et si Google a accepté (`NotebookLM entretien : ok` ou
-`ECHEC`). Studio arrêté longtemps (PC éteint) : la session peut être périmée au redémarrage, il
-faut alors se rebrancher.
+`ECHEC`). Studio arrêté longtemps (PC éteint, en veille) : la session peut être refusée au
+redémarrage. La page montre alors **« Réparer la session »** : le même entretien, à la demande,
+depuis le coffre, sans se reconnecter. Si Google refuse encore, il faut se rebrancher avec
+`brancher-notebooklm.cmd`. Combien de temps une session tient Studio arrêté : pas encore mesuré.
 
 ### Les carnets du Studio, et quand NotebookLM est plein
 
@@ -107,7 +109,7 @@ Le même bouton est disponible à tout moment, sous le formulaire.
 
 | La page dit | Ce qui se passe | Quoi faire |
 |---|---|---|
-| « La session NotebookLM a expiré… » | Google refuse la session | relancer `brancher-notebooklm.cmd` (ou un nouvel export) |
+| « La session NotebookLM a expiré… » | Google refuse la session | « Réparer la session » ; sinon relancer `brancher-notebooklm.cmd` (ou un nouvel export) |
 | « …le quota de NotebookLM est atteint… » | 3 résumés du jour faits | réessayer demain |
 | « Votre NotebookLM est plein… » | nombre maximal de carnets atteint | choisir les anciens carnets à supprimer dans la page |
 | « Google a changé NotebookLM… » | l’accès non documenté a changé | mettre le Studio à jour |

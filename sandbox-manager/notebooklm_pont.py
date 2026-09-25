@@ -57,9 +57,13 @@ TEXTE_MAX = 500_000   # signes colles dans la page ; NotebookLM borne une source
 
 PHRASE_ABSENTE = ("NotebookLM n’est pas encore branché : suivez « Brancher NotebookLM » "
                   "sur cette page (une seule fois).")
-PHRASE_EXPIREE = ("La session NotebookLM a expiré ou a été refusée par Google. Double-cliquez "
-                  "de nouveau sur brancher-notebooklm.cmd (dossier du Studio), puis « J’ai fini, "
-                  "vérifier ». Vos résumés déjà faits restent ci-dessous.")
+PHRASE_EXPIREE = ("La session NotebookLM a expiré ou a été refusée par Google. Essayez d’abord "
+                  "« Réparer la session » ; si Google refuse encore, double-cliquez de nouveau sur "
+                  "brancher-notebooklm.cmd (dossier du Studio), puis « J’ai fini, vérifier ». "
+                  "Vos résumés déjà faits restent ci-dessous.")
+PHRASE_IRREPARABLE = ("Google refuse encore la session gardée : il faut se reconnecter. "
+                      "Double-cliquez sur brancher-notebooklm.cmd (dossier du Studio), puis "
+                      "« J’ai fini, vérifier ».")
 PHRASE_QUOTA = ("Google refuse pour l’instant : le quota de NotebookLM est atteint (l’offre "
                 "gratuite annonce 3 résumés audio par jour). Réessayez demain.")
 
@@ -552,6 +556,15 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
 
 <div id="banniere" class="banniere">Vérification en cours…</div>
 
+<!-- Session dans le coffre mais refusée (Studio arrêté longtemps, PC en veille) :
+     d'abord réparer depuis le coffre, sans se reconnecter (demande du 25/09/2026). -->
+<div id="reparer" class="carte" hidden>
+  <p>Une session est gardée dans le coffre du Studio. Le Studio peut essayer de la
+  <b>réparer auprès de Google, sans vous reconnecter</b>.</p>
+  <div class="ligne"><button id="btReparer" class="primaire">Réparer la session</button>
+    <span id="etatReparer"></span></div>
+</div>
+
 <div id="brancher" class="carte" hidden>
   <h2>Brancher NotebookLM (une seule fois)</h2>
   <p class="donnees"><b>À savoir avant de commencer.</b> NotebookLM n’a pas d’accès officiel pour les
@@ -675,6 +688,7 @@ async function charger(){
   el("brancher").hidden = !!(e.branchee && e.ok);
   el("travail").hidden = !(e.branchee && e.ok);
   SESSION_OK = !!(e.branchee && e.ok);
+  el("reparer").hidden = !(e.branchee && !e.ok);
   // Branché ou non : les résumés déjà faits s'écoutent et se suppriment.
   listerResumes();
   // textContent seulement : le message peut porter un texte venu de Google.
@@ -695,6 +709,20 @@ async function charger(){
 el("btRevoir").onclick = async () => {
   el("btRevoir").disabled = true;
   try { await charger(); } finally { el("btRevoir").disabled = false; }
+};
+
+el("btReparer").onclick = async () => {
+  el("btReparer").disabled = true;
+  texte("etatReparer", "Réparation auprès de Google…");
+  let d = {};
+  try {
+    const r = await fetch("/notebooklm/reparer", {method: "POST", headers: H});
+    d = await r.json();
+    if(!r.ok){ d = {ok: false, message: d.detail}; }
+  } catch(e) { d = {ok: false, message: "Le Studio ne répond pas."}; }
+  el("btReparer").disabled = false;
+  if(d.ok){ texte("etatReparer", "Réparée.", "ok"); await charger(); return; }
+  texte("etatReparer", d.message || "Google refuse encore.", "ko");
 };
 
 el("btBrancher").onclick = async () => {

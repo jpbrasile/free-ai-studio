@@ -791,6 +791,31 @@ def test_poser_une_question_et_la_refuser_vide(client):
                   json={"carnet_id": "carnet-42", "question": " "}).status_code == 400
 
 
+def test_reparer_depuis_le_coffre_sans_reconnexion(client, monkeypatch):
+    c, pont, _ = client
+    r = c.post("/notebooklm/reparer", headers=ENTETE)
+    assert r.status_code == 409 and "pas encore branché" in r.json()["detail"]
+    brancher(pont)
+    run, vu = faux_refresh()
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    assert c.post("/notebooklm/reparer", headers=ENTETE).json() == {"ok": True}
+    assert vu["argv"][3:5] == ["auth", "refresh"] and "valeur-psidts-entretenue" in pont._lire()
+    run, _vu = faux_refresh(sortie=1, tourner=False)
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    d = c.post("/notebooklm/reparer", headers=ENTETE).json()
+    assert d["ok"] is False and "brancher-notebooklm.cmd" in d["message"]
+    assert c.post("/notebooklm/reparer", headers=dict(ENTETE, **AUTRE_SITE)).status_code == 403
+    assert c.post("/notebooklm/reparer").status_code == 401
+
+
+def test_la_page_montre_reparer_seulement_si_le_coffre_a_une_session_refusee(client):
+    c, _pont, _ = client
+    html = c.get("/notebooklm").text
+    assert '<div id="reparer" class="carte" hidden>' in html
+    assert 'el("reparer").hidden = !(e.branchee && !e.ok);' in html
+    assert 'fetch("/notebooklm/reparer", {method: "POST", headers: H})' in html
+
+
 def test_oublier_efface_la_session(client):
     c, pont, _ = client
     brancher(pont)

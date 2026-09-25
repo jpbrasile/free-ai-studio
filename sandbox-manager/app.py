@@ -1632,6 +1632,22 @@ def notebooklm_audio(jid: str, cle: str = Query(default=""), telecharger: int = 
     return FileResponse(chemin, media_type="audio/mp4")
 
 
+@app.post("/notebooklm/reparer")
+async def notebooklm_reparer(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le bouton « Réparer la session » : l'entretien, a la demande, sur la
+    session deja dans le coffre -- sans reconnexion. S'il echoue, la page dit
+    de relancer brancher-notebooklm.cmd."""
+    auth(authorization)
+    exiger_page_du_studio(request)
+    _nlm_coupe(request)
+    if not notebooklm_pont.branchee():
+        raise HTTPException(409, notebooklm_pont.PHRASE_ABSENTE)
+    r = await asyncio.to_thread(notebooklm_pont.entretenir)
+    if r.get("ok"):
+        return {"ok": True}
+    return {"ok": False, "message": notebooklm_pont.PHRASE_IRREPARABLE}
+
+
 @app.post("/notebooklm/demander")
 async def notebooklm_demander(request: Request, authorization: Optional[str] = Header(default=None)):
     """Une question aux sources d'un carnet que le Studio a fabrique."""
