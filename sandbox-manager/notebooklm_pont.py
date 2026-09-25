@@ -633,7 +633,9 @@ async function listerResumes(){
     c.appendChild(t);
     if(j.audio_url){
       const a = document.createElement("audio");
-      a.controls = true; a.preload = "none"; a.src = j.audio_url;
+      // « metadata » : la durée s'affiche tout de suite ; avec « none », le
+      // lecteur montrait 0:00 et le résumé semblait vide.
+      a.controls = true; a.preload = "metadata"; a.src = j.audio_url;
       c.appendChild(a);
       const l = document.createElement("div");
       l.className = "ligne";

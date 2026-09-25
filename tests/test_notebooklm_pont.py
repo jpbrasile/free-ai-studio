@@ -585,6 +585,9 @@ def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
     for morceau in ("Faire de la place dans NotebookLM", "La suppression est <b>définitive</b>",
                     "Je comprends que c’est définitif.", "commence par « Studio · »"):
         assert morceau in html, morceau
+    # « Vos résumés » : la durée s'affiche d'emblée ; avec preload « none » le
+    # lecteur montrait 0:00 et le propriétaire a lu le résumé comme vide (25/09).
+    assert 'a.preload = "metadata"' in html and 'preload = "none"' not in html
 
 
 # --- 6. Carnets : noms clairs, et la place faite par la personne (25/09/2026) -----

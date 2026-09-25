@@ -29,6 +29,7 @@ fichier de frictions entre ses deux étapes.
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
 | 25/09/2026 | `/notebooklm` | « pas clair » : le branchement (extension de cookies, fenêtre privée, export, collage) est trop long à suivre. Ce qui a marché : un `.cmd` sur le Bureau qui lance `notebooklm login --browser chrome`, puis coller le fichier. Il laisse un dossier `nlm.json.browser_profile` (profil Chrome encore connecté) que la page ne dit pas de supprimer | oui | le propriétaire |
+| 25/09/2026 | `/notebooklm` | « est vide » : le résumé du PDF, dans « Vos résumés ». Le fichier ne l'est pas (85,1 s en français sur le PDF, relu par Whisper ; le navigateur le reçoit en 206). Le lecteur était créé en `preload="none"` et montrait 0:00 sans durée. Passé en `preload="metadata"` ; à revoir après reconstruction | non | le propriétaire |
 
 ## Levées
 
