@@ -705,6 +705,55 @@ async function charger(){
   }
 }
 
+// La réponse de NotebookLM est en Markdown (25/09/2026 : « l'affichage de la
+// réponse est en markdown brut »). Titres, listes, gras, italique, code : des
+// NŒUDS créés un à un, jamais de HTML injecté -- le texte vient de Google.
+function enLigne(parent, t){
+  const motif = /(\*\*[^*]+\*\*|__[^_]+__|\*[^*\s][^*]*\*|`[^`]+`)/g;
+  let i = 0, m;
+  while((m = motif.exec(t))){
+    if(m.index > i) parent.appendChild(document.createTextNode(t.slice(i, m.index)));
+    const s = m[0], gras = s.startsWith("**") || s.startsWith("__");
+    const n = document.createElement(gras ? "strong" : s.startsWith("`") ? "code" : "em");
+    n.textContent = gras ? s.slice(2, -2) : s.slice(1, -1);
+    parent.appendChild(n);
+    i = m.index + s.length;
+  }
+  if(i < t.length) parent.appendChild(document.createTextNode(t.slice(i)));
+}
+function markdown(div, texte){
+  let liste = null, para = null;
+  for(const brute of String(texte || "").split("\n")){
+    const l = brute.replace(/\s+$/, "");
+    if(!l.trim()){ liste = null; para = null; continue; }
+    const titre = l.match(/^\s*(#{1,6})\s+(.*)$/);
+    if(titre){
+      liste = null; para = null;
+      const h = document.createElement("h" + Math.min(6, titre[1].length + 2));
+      enLigne(h, titre[2]);
+      div.appendChild(h);
+      continue;
+    }
+    const puce = l.match(/^\s*(?:[-*+•]|(\d+)[.)])\s+(.*)$/);
+    if(puce){
+      para = null;
+      const sorte = puce[1] ? "ol" : "ul";
+      if(!liste || liste.tagName.toLowerCase() !== sorte){
+        liste = document.createElement(sorte);
+        div.appendChild(liste);
+      }
+      const li = document.createElement("li");
+      enLigne(li, puce[2]);
+      liste.appendChild(li);
+      continue;
+    }
+    liste = null;
+    if(para){ para.appendChild(document.createElement("br")); }
+    else { para = document.createElement("p"); div.appendChild(para); }
+    enLigne(para, l);
+  }
+}
+
 // Après brancher-notebooklm.cmd : la session est déjà dans le coffre, on relit l'état.
 el("btRevoir").onclick = async () => {
   el("btRevoir").disabled = true;
@@ -808,9 +857,7 @@ el("btDemander").onclick = async () => {
     n.textContent = d.note;
     div.appendChild(n);
   }
-  const p = document.createElement("p");
-  p.textContent = d.reponse;
-  div.appendChild(p);
+  markdown(div, d.reponse);
   for(const c of d.citations || []){
     const q2 = document.createElement("p");
     q2.className = "avert";

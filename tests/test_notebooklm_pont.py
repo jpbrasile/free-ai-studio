@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import types
@@ -814,6 +815,53 @@ def test_la_page_montre_reparer_seulement_si_le_coffre_a_une_session_refusee(cli
     assert '<div id="reparer" class="carte" hidden>' in html
     assert 'el("reparer").hidden = !(e.branchee && !e.ok);' in html
     assert 'fetch("/notebooklm/reparer", {method: "POST", headers: H})' in html
+
+
+def _rendre_markdown(pont, texte: str, tmp_path) -> str:
+    """markdown() de la page, sous node, sur un faux DOM qui se relit en HTML."""
+    if not shutil.which("node"):
+        pytest.skip("node absent")
+    page = pont.PAGE_HTML
+    code = page[page.index("function enLigne("):page.index("// Après brancher-notebooklm.cmd")]
+    programme = r"""
+function esc(t){ return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function noeud(tag){ return {tagName: tag.toUpperCase(), enfants: [], _t: "",
+  set textContent(v){ this._t = String(v); this.enfants = []; },
+  appendChild(n){ this.enfants.push(n); return n; },
+  html(){ if(this.tagName === "BR") return "<br>";
+    const t = this.tagName.toLowerCase();
+    return "<" + t + ">" + esc(this._t) + this.enfants.map(e => e.html()).join("") + "</" + t + ">"; }}; }
+const document = {createElement: noeud,
+  createTextNode: t => ({html: () => esc(String(t))})};
+""" + code + """
+const div = noeud("div");
+markdown(div, %s);
+console.log(div.enfants.map(e => e.html()).join(""));
+""" % json.dumps(texte)
+    fichier = tmp_path / "markdown.js"
+    fichier.write_text(programme, encoding="utf-8")
+    fait = subprocess.run(["node", str(fichier)], capture_output=True, text=True,
+                          encoding="utf-8", timeout=20)
+    assert fait.returncode == 0, fait.stderr
+    return fait.stdout.strip()
+
+
+def test_la_reponse_markdown_devient_titres_listes_et_gras(nlm, tmp_path):
+    pont, _ = nlm
+    html = _rendre_markdown(pont, "## Le phare\n\nIl fut **allumé** en *1611* [1].\nSuite.\n\n"
+                                  "* premier\n* second `code`\n\n1. un\n2. deux", tmp_path)
+    assert html == ("<h4>Le phare</h4><p>Il fut <strong>allumé</strong> en <em>1611</em> [1]."
+                    "<br>Suite.</p><ul><li>premier</li><li>second <code>code</code></li></ul>"
+                    "<ol><li>un</li><li>deux</li></ol>")
+
+
+def test_la_reponse_markdown_n_injecte_jamais_de_html(nlm, tmp_path):
+    pont, _ = nlm
+    html = _rendre_markdown(pont, '<img src=x onerror=alert(1)> **<b>gras</b>**', tmp_path)
+    assert "<img" not in html and "&lt;img src=x onerror=alert(1)&gt;" in html
+    assert "<strong>&lt;b&gt;gras&lt;/b&gt;</strong>" in html
+    # Et la page n'utilise innerHTML nulle part.
+    assert "innerHTML" not in pont.PAGE_HTML
 
 
 def test_oublier_efface_la_session(client):
