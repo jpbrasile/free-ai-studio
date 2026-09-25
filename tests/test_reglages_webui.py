@@ -144,7 +144,9 @@ def test_installation_existante_recoit_le_reglage(routeur, monkeypatch):
     # Meme chemin pour l'interpreteur de code : c'est celui de ce PC et de
     # l'autre ordinateur, qui ont tous deux le temoin des reglages.
     assert webui.execution["ENABLE_CODE_INTERPRETER"] is False
-    assert [v for v in webui.vus if v[0] == "POST"] == [("POST", EVALUATIONS), ("POST", CODE)]
+    # Et la fenetre « Quoi de neuf » (25/09/2026), par le meme chemin.
+    assert [v for v in webui.vus if v[0] == "POST"] == [
+        ("POST", EVALUATIONS), ("POST", CODE), ("POST", "/api/v1/users/user/settings/update")]
 
 
 # --- L'interpreteur de code, coupe une fois (15/09/2026) ---
@@ -380,3 +382,47 @@ def test_le_demarrage_ne_passe_plus_par_on_event(routeur):
     decorateurs = [l for l in source.splitlines() if l.startswith("@app.on_event")]
     assert decorateurs == [], decorateurs
     assert "lifespan=demarrage_et_arret" in source
+
+
+def couper_changelog(routeur, reglages, panne=False):
+    """Rejoue couper_quoi_de_neuf contre un Open WebUI 0.11.4 simule : les
+    reglages d'interface s'y fusionnent champ par champ (models/users.py)."""
+    vus = []
+
+    def webui(requete):
+        vus.append((requete.method, requete.url.path))
+        if panne:
+            return httpx.Response(500)
+        for cle, valeur in json.loads(requete.content)["ui"].items():
+            reglages["ui"][cle] = valeur
+        return httpx.Response(200, json=reglages)
+
+    async def une_fois():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(webui)) as client:
+            await routeur.couper_quoi_de_neuf(client, {"Authorization": "Bearer t"})
+    asyncio.run(une_fois())
+    return vus
+
+
+def test_quoi_de_neuf_coupe_une_fois_sans_toucher_au_reste(routeur):
+    # « la fenêtre Quoi de neuf en anglais » puis « switch it off » (25/09/2026).
+    reglages = {"ui": {"showChangelog": True, "version": "0.11.3", "theme": "dark"}}
+    vus = couper_changelog(routeur, reglages)
+    assert vus == [("POST", "/api/v1/users/user/settings/update")]
+    assert reglages["ui"] == {"showChangelog": False, "version": "0.11.3", "theme": "dark"}
+    assert routeur.QUOI_DE_NEUF_FAIT.exists()
+    # L'utilisateur la remet (Parametres, Interface) : le Studio n'y touche plus.
+    reglages["ui"]["showChangelog"] = True
+    assert couper_changelog(routeur, reglages) == []
+    assert reglages["ui"]["showChangelog"] is True
+
+
+def test_quoi_de_neuf_en_panne_pas_de_temoin(routeur):
+    couper_changelog(routeur, {"ui": {}}, panne=True)
+    assert not routeur.QUOI_DE_NEUF_FAIT.exists()
+
+
+def test_quoi_de_neuf_fait_partie_des_reglages_du_demarrage():
+    source = (RACINE / "free-tier-manager" / "app.py").read_text(encoding="utf-8")
+    debut = source.index("async def poser_reglages_webui")
+    assert "await couper_quoi_de_neuf(client, entetes)" in source[debut:source.index("if REGLAGES_FAITS.exists()", debut)]

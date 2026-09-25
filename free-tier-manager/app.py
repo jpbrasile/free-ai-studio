@@ -1188,6 +1188,45 @@ async def masquer_arena(client: httpx.AsyncClient, entetes: Dict[str, str]) -> N
     log.info("%s", etat)
 
 
+QUOI_DE_NEUF_FAIT = CONFIG_DIR / "open-webui-quoi-de-neuf.json"
+
+
+async def couper_quoi_de_neuf(client: httpx.AsyncClient, entetes: Dict[str, str]) -> None:
+    """Coupe la fenetre << Quoi de neuf >> d'Open WebUI, une seule fois.
+
+    A chaque nouvelle version, Open WebUI montre ses notes de version, en
+    anglais, a tout administrateur -- et sans compte (WEBUI_AUTH=false), la
+    personne EST l'administrateur (admin@localhost, le compte de ce jeton).
+    Vu le 25/09/2026 au passage a 0.11.4 ; l'utilisateur : << switch it off >>.
+    C'est le reglage << What's new >> de l'interface (showChangelog). Depuis
+    0.11.4, Open WebUI fusionne les reglages d'interface champ par champ : on
+    n'envoie que celui-la, les autres restent. Ensuite, si l'utilisateur le
+    remet (Parametres, Interface), il reste."""
+    if QUOI_DE_NEUF_FAIT.exists():
+        return
+    try:
+        r = await client.post(f"{WEBUI_URL}/api/v1/users/user/settings/update",
+                              headers=entetes, json={"ui": {"showChangelog": False}})
+        r.raise_for_status()
+        if (r.json().get("ui") or {}).get("showChangelog") is not False:
+            raise ValueError("reglage non garde par Open WebUI")
+    except (httpx.HTTPError, ValueError) as exc:
+        # Pas de temoin : nouvel essai au prochain demarrage.
+        log.warning("Fenetre << Quoi de neuf >> non coupee : %s", exc)
+        return
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        QUOI_DE_NEUF_FAIT.write_text(json.dumps({
+            "pose_le": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "etat": "fenetre << Quoi de neuf >> coupee",
+            "note": "Tant que ce fichier existe, Free AI Studio ne touche plus a ce reglage. "
+                    "Pour la remettre : chat, Parametres, Interface, What's new.",
+        }, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        log.warning("Temoin << Quoi de neuf >> non ecrit (%s) : %s", QUOI_DE_NEUF_FAIT, exc)
+    log.info("Fenetre << Quoi de neuf >> d'Open WebUI coupee")
+
+
 INTERPRETEUR_FAIT = CONFIG_DIR / "open-webui-interpreteur.json"
 
 
@@ -1674,6 +1713,7 @@ async def poser_reglages_webui() -> None:
         # Avant le temoin, lui aussi : il a son propre temoin (voir masquer_arena).
         await masquer_arena(client, entetes)
         await couper_interpreteur(client, entetes)
+        await couper_quoi_de_neuf(client, entetes)
         # A chaque demarrage : une cle Groq a pu arriver ou partir entre-temps.
         await aligner_dictee(client, entetes)
         # Apres la dictee : elle relit les reglages audio que la dictee vient d'ecrire.
