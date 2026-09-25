@@ -903,9 +903,9 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
          - routes `/notebooklm/carnets` et `/notebooklm/carnets/supprimer` (confirmation exigée, carnets possédés seulement, relus chez Google avant la suppression) ;
          - boîte « Faire de la place » dans la page ;
          - `CarnetsPleins` sur `NotebookLimitError`.
-         Testé sur la fausse bibliothèque ; pas encore en réel.
+         En réel le 25/09 : 20 « Untitled notebook » supprimés sur accord du propriétaire (liste relue avant ; 20 supprimés, 0 refusé ; 99 carnets avant, 80 après, dont 1 créé entre-temps). Le refus « compte plein » n'a pas été vu en réel.
        - `login` laisse à côté du fichier un dossier `<fichier>.browser_profile`, profil Chrome encore connecté. La page doit dire de le supprimer aussi.
-       Non vérifié en réel : l'envoi d'un PDF (seul un texte collé est passé) ; la page elle-même dans le navigateur (l'essai est passé par les routes).
+       Vu en réel le 25/09, par le propriétaire, depuis la page : un PDF (article sur la dissociation de H2S) a donné un résumé de 2,7 Mo, lu dans « Vos résumés ». Le carnet s'appelle « Studio · Dissociation_of_H2S….pdf · 25/09/2026 08:54 ».
 
 ## Détail par tâche
 
