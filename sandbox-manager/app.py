@@ -1568,12 +1568,38 @@ async def notebooklm_resume(request: Request, authorization: Optional[str] = Hea
     return read_job(jid)
 
 
+@app.get("/notebooklm/resumes")
+def notebooklm_resumes(authorization: Optional[str] = Header(default=None)):
+    """Les resumes NotebookLM deja faits, du plus recent au plus ancien.
+
+    25/09/2026, le proprietaire : « toujours pas de son ». Le seul resume
+    existant avait ete lance hors de la page ; la page ne montrait que le son
+    d'un resume lance par elle, et le perdait au rechargement."""
+    auth(authorization)
+    sortie = []
+    for p in sorted(JOBS.glob("*/job.json"), key=lambda x: x.stat().st_mtime, reverse=True):
+        try:
+            job = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 -- une fiche illisible ne vide pas la liste
+            continue
+        if job.get("provider") == "notebooklm":
+            sortie.append(_fiche_nlm(job))
+            if len(sortie) >= 30:
+                break
+    return {"resumes": sortie}
+
+
 @app.get("/notebooklm/jobs/{jid}")
 def notebooklm_job(jid: str, authorization: Optional[str] = Header(default=None)):
     auth(authorization)
     job = read_job(jid)
     if job.get("provider") != "notebooklm":
         raise HTTPException(404, "Ce travail n'est pas un résumé NotebookLM")
+    return _fiche_nlm(job)
+
+
+def _fiche_nlm(job: dict) -> dict:
+    jid = job.get("id") or ""
     sortie = {"id": jid, "status": job.get("status"), "etape": job.get("etape") or "",
               "created_at": job.get("created_at"), "titre": job.get("titre") or "",
               "message": job.get("error") or "", "carnet_url": job.get("carnet_url") or "",

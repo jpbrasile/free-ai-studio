@@ -28,6 +28,7 @@ fichier de frictions entre ses deux étapes.
 
 | Date | Page | Ce qui gêne | Bloque ? | Vue par |
 |---|---|---|---|---|
+| 25/09/2026 | `/notebooklm` | « toujours pas de son » : la page ne montrait que le son d'un résumé lancé par elle, perdu au rechargement ; le seul résumé fait (par les routes) y était invisible. Corrigé en code (« Vos résumés », reprise du suivi au rechargement), pas encore vu dans la page | oui | le propriétaire |
 | 25/09/2026 | `/notebooklm` | « pas clair » : le branchement (extension de cookies, fenêtre privée, export, collage) est trop long à suivre. Ce qui a marché : un `.cmd` sur le Bureau qui lance `notebooklm login --browser chrome`, puis coller le fichier. Il laisse un dossier `nlm.json.browser_profile` (profil Chrome encore connecté) que la page ne dit pas de supprimer | oui | le propriétaire |
 | 25/09/2026 | `/notebooklm` | un carnet neuf par résumé, jamais supprimé : le compte d'essai en avait 99 avant le premier résumé, le plafond gratuit sera atteint | oui | une mesure sur le vrai compte |
 

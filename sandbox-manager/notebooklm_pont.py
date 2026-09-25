@@ -466,6 +466,8 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
       <button id="btDemander">Demander</button></div>
     <div id="reponse"></div>
   </div>
+  <h2>Vos résumés</h2>
+  <div id="resumes"><p class="avert">Aucun résumé pour l’instant.</p></div>
   <div id="place" class="carte" hidden>
     <h2>Faire de la place dans NotebookLM</h2>
     <p id="placeTexte"></p>
@@ -507,6 +509,7 @@ async function charger(){
   }
   el("brancher").hidden = !!(e.branchee && e.ok);
   el("travail").hidden = !(e.branchee && e.ok);
+  if(e.branchee && e.ok){ listerResumes(); }
   // textContent seulement : le message peut porter un texte venu de Google.
   b.className = "banniere";
   if(!e.branchee){
@@ -545,18 +548,16 @@ function suivre(id){
   fetch("/notebooklm/jobs/" + id, {headers: H}).then(r => r.json()).then(j => {
     if(j.status === "succeeded"){
       texte("etat", "✅ Résumé prêt.", "ok");
-      el("resultat").hidden = false;
-      el("lecteur").src = j.audio_url;
-      el("telecharger").href = j.audio_url + "&telecharger=1";
-      el("carnet").href = j.carnet_url;
-      CARNET = j.carnet_id;
+      montrer(j);
       el("btFabriquer").disabled = false;
+      listerResumes();
       return;
     }
     if(j.status === "failed" || j.status === "cancelled"){
       texte("etat", "Échec : " + (j.message || "sans détail."), "ko");
       el("btFabriquer").disabled = false;
       if(j.plein){ ouvrirPlace(true); }
+      listerResumes();
       return;
     }
     const t = Math.round(Date.now()/1000 - (j.created_at || Date.now()/1000));
@@ -603,6 +604,59 @@ el("btDemander").onclick = async () => {
     div.appendChild(q2);
   }
 };
+
+// --- Vos résumés : ils restent là après un rechargement ---------------------
+function montrer(j){
+  el("resultat").hidden = false;
+  el("lecteur").src = j.audio_url;
+  el("telecharger").href = j.audio_url + "&telecharger=1";
+  el("carnet").href = j.carnet_url;
+  CARNET = j.carnet_id;
+  texte("reponse", "");
+  el("resultat").scrollIntoView({behavior: "smooth"});
+}
+let SUIVI = false;
+async function listerResumes(){
+  const r = await fetch("/notebooklm/resumes", {headers: H});
+  if(!r.ok) return;
+  const liste = (await r.json()).resumes || [];
+  const boite = el("resumes");
+  if(!liste.length) return;
+  boite.textContent = "";
+  for(const j of liste){
+    const c = document.createElement("div");
+    c.className = "carte";
+    const t = document.createElement("div");
+    const etat = j.status === "succeeded" ? "" : j.status === "failed" ? " — échec : " + (j.message || "")
+      : " — en cours : " + (j.etape || "en file");
+    t.textContent = (j.titre || "Résumé") + " — " + quandFr(j.created_at) + etat;
+    c.appendChild(t);
+    if(j.audio_url){
+      const a = document.createElement("audio");
+      a.controls = true; a.preload = "none"; a.src = j.audio_url;
+      c.appendChild(a);
+      const l = document.createElement("div");
+      l.className = "ligne";
+      const dl = document.createElement("a");
+      dl.href = j.audio_url + "&telecharger=1"; dl.textContent = "Enregistrer le fichier audio";
+      const nb = document.createElement("a");
+      nb.href = j.carnet_url; nb.target = "_blank"; nb.rel = "noopener noreferrer";
+      nb.textContent = "Ouvrir le carnet dans NotebookLM ↗";
+      const q = document.createElement("button");
+      q.textContent = "Poser une question";
+      q.onclick = () => montrer(j);
+      l.append(dl, nb, q);
+      c.appendChild(l);
+    }
+    boite.appendChild(c);
+    // Un résumé encore en cours après un rechargement : on le suit de nouveau.
+    if(!SUIVI && (j.status === "queued" || j.status === "running")){
+      SUIVI = true;
+      el("btFabriquer").disabled = true;
+      suivre(j.id);
+    }
+  }
+}
 
 // --- Faire de la place : la personne choisit, rien ne part seul --------------
 function deux(n){ return (n < 10 ? "0" : "") + n; }

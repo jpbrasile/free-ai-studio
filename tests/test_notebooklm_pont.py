@@ -521,6 +521,24 @@ def test_un_resume_complet_par_la_page_puis_l_audio_par_son_jeton(client):
     assert c.get(j["audio_url"] + "&telecharger=1").headers["content-disposition"].startswith("attachment")
 
 
+def test_les_resumes_faits_restent_ecoutables_apres_un_rechargement(client, sandbox):
+    """25/09 : « toujours pas de son ». Un resume lance hors de la page, ou
+    avant un rechargement, doit s'y retrouver avec son lecteur."""
+    c, pont, _ = client
+    brancher(pont)
+    assert c.get("/notebooklm/resumes").status_code == 401
+    sandbox.write_job("pas-nlm", {"id": "pas-nlm", "provider": "modal", "status": "succeeded", "artifacts": []})
+    j = _attendre_fin(c, c.post("/notebooklm/resume", headers=ENTETE,
+                                data={"texte": "Les phares.", "titre": "Phares"}).json()["id"])
+    liste = c.get("/notebooklm/resumes", headers=ENTETE).json()["resumes"]
+    # Le dossier des travaux est commun a la suite : les resumes des tests
+    # d'avant y sont aussi. Le plus recent passe devant, et aucun autre travail.
+    assert liste[0]["id"] == j["id"] and "pas-nlm" not in [r["id"] for r in liste]
+    assert liste[0]["titre"] == "Phares" and liste[0]["carnet_url"].endswith("carnet-42")
+    son = c.get(liste[0]["audio_url"])
+    assert son.status_code == 200 and son.content.startswith(b"\x00\x00\x00\x20ftyp")
+
+
 def test_un_resume_qui_echoue_chez_google_finit_en_echec_dit(client):
     c, pont, sc = client
     brancher(pont)
