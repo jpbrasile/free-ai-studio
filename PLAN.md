@@ -899,7 +899,11 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
        - Audio : m4a (AAC), **108,9 s**, 3 504 163 octets. Les 30 premières secondes, transcrites par la dictée LOCALE, sont en **français** et fidèles au texte.
        - Question : réponse juste en 8,9 s, avec citation [1] du texte source.
        Deux défauts relevés :
-       - **Le Studio crée un carnet par résumé et n'en supprime aucun.** Le compte en avait 99 avant l'essai. Le plafond de l'offre gratuite (100 selon Google, non relu) sera atteint et refusé avec sa phrase. À faire : réutiliser un carnet « Free AI Studio », ou proposer de supprimer les anciens.
+       - **Le Studio crée un carnet par résumé et n'en supprime aucun.** Le compte en avait 99 avant l'essai. Décision du propriétaire, 25/09 : la page DEMANDE quoi supprimer quand le compte est plein, et les carnets s'appellent « Studio · <titre> · <heure> ». Écrit le 25/09 :
+         - routes `/notebooklm/carnets` et `/notebooklm/carnets/supprimer` (confirmation exigée, carnets possédés seulement, relus chez Google avant la suppression) ;
+         - boîte « Faire de la place » dans la page ;
+         - `CarnetsPleins` sur `NotebookLimitError`.
+         Testé sur la fausse bibliothèque ; pas encore en réel.
        - `login` laisse à côté du fichier un dossier `<fichier>.browser_profile`, profil Chrome encore connecté. La page doit dire de le supprimer aussi.
        Non vérifié en réel : l'envoi d'un PDF (seul un texte collé est passé) ; la page elle-même dans le navigateur (l'essai est passé par les routes).
 

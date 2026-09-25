@@ -25,11 +25,11 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import threading
-import time
 from pathlib import Path
 from typing import Callable
 
@@ -80,6 +80,18 @@ class QuotaAtteint(Exception):
 
 class NotebookLMEchec(Exception):
     pass
+
+
+class CarnetsPleins(NotebookLMEchec):
+    """Le compte a atteint le nombre maximal de carnets. La page propose alors
+    de supprimer les plus anciens -- la personne choisit, rien ne part seul."""
+
+
+# Decision du proprietaire, 25/09/2026 : un nom clair pour les carnets du
+# Studio, et quand le compte est plein, la page DEMANDE lesquels supprimer.
+PREFIXE = "Studio"
+PHRASE_PLEIN = ("Votre NotebookLM est plein : Google n’accepte plus de nouveau carnet. "
+                "Choisissez ci-dessous les anciens carnets à supprimer, puis relancez.")
 
 
 # --- La session : fermee dans le coffre, ouverte le temps d'un appel ---------
@@ -171,8 +183,7 @@ def traduire(exc: BaseException) -> Exception:
     if "RateLimitError" in noms:
         return QuotaAtteint(PHRASE_QUOTA)
     if "NotebookLimitError" in noms:
-        return NotebookLMEchec("Votre compte a atteint le nombre maximal de carnets NotebookLM : "
-                               "supprimez-en un dans NotebookLM, puis recommencez.")
+        return CarnetsPleins(PHRASE_PLEIN)
     if "SourceProcessingError" in noms or "SourceAddError" in noms:
         return NotebookLMEchec("NotebookLM n’a pas su lire un des documents : %s" % texte[:300])
     if "WaitTimeoutError" in noms or "SourceTimeoutError" in noms:
@@ -241,8 +252,61 @@ def _statut(s) -> str:
     return str(getattr(s, "status", "") or "")
 
 
+def nom_du_carnet(titre: str = "", quand: str = "") -> str:
+    """« Studio · Phares · 25/09/2026 08:40 ». L'heure vient de la page : le
+    conteneur est a l'heure UTC, et un nom decale de deux heures tromperait."""
+    quand = quand if re.fullmatch(r"\d{2}/\d{2}/\d{4} \d{2}:\d{2}", quand or "") else ""
+    morceaux = [PREFIXE, " ".join((titre or "Résumé").split())[:70], quand]
+    return " · ".join(m for m in morceaux if m)[:100]
+
+
+def _horodatage(d) -> float | None:
+    try:
+        return d.timestamp() if d else None
+    except (AttributeError, OSError, OverflowError, ValueError):
+        return None
+
+
+async def carnets() -> list[dict]:
+    """Les carnets du compte, du PLUS ANCIEN au plus recent. Un carnet sans
+    date connue va en fin de liste : on ne propose pas de supprimer ce qu'on ne
+    sait pas dater. Les carnets partages par d'autres ne sont pas a nous."""
+    async with client() as c:
+        tous = await c.notebooks.list()
+    sortie = [{"id": n.id, "titre": getattr(n, "title", "") or "(sans titre)",
+               "cree": _horodatage(getattr(n, "created_at", None)),
+               "sources": getattr(n, "sources_count", 0) or 0,
+               "du_studio": (getattr(n, "title", "") or "").startswith(PREFIXE + " · ")}
+              for n in tous if getattr(n, "is_owner", True)]
+    sortie.sort(key=lambda n: (n["cree"] is None, n["cree"] or 0))
+    return sortie
+
+
+async def supprimer(ids: list[str]) -> dict:
+    """Supprime ces carnets, DEFINITIVEMENT. Seuls ceux que la personne possede,
+    relus chez Google au moment de supprimer : un identifiant venu de la page
+    qui ne figure plus dans la liste n'est pas touche."""
+    fait, refuse = [], []
+    async with client() as c:
+        possedes = {n.id for n in await c.notebooks.list() if getattr(n, "is_owner", True)}
+        for i in ids:
+            if i not in possedes:
+                refuse.append(i)
+                continue
+            try:
+                await c.notebooks.delete(i)
+                fait.append(i)
+            except Exception as exc:  # noqa: BLE001 -- un echec n'arrete pas les suivants
+                dite = traduire(exc)
+                if isinstance(dite, SessionExpiree):
+                    raise dite from exc
+                refuse.append(i)
+    return {"supprimes": fait, "refuses": refuse}
+
+
 async def resume_audio(sources: list[dict], dossier: Path, titre: str = "", consigne: str = "",
                        format_: str = "approfondi", longueur: str = "normal", langue: str = "fr",
+                       quand: str = "",
                        progres: Callable[[str], None] = lambda t: None) -> dict:
     """Carnet neuf + sources + resume audio en francais, rapatrie dans `dossier`.
 
@@ -257,7 +321,7 @@ async def resume_audio(sources: list[dict], dossier: Path, titre: str = "", cons
     lon = getattr(notebooklm.AudioLength, LONGUEURS.get(longueur, "DEFAULT"))
     async with client() as c:
         progres("Création du carnet dans NotebookLM…")
-        carnet = await c.notebooks.create(("Free AI Studio — " + (titre or time.strftime("%d/%m/%Y %H:%M")))[:100])
+        carnet = await c.notebooks.create(nom_du_carnet(titre, quand))
         ids = []
         for i, s in enumerate(sources, 1):
             progres("Envoi du document %d sur %d, puis lecture par NotebookLM…" % (i, len(sources)))
@@ -402,7 +466,25 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
       <button id="btDemander">Demander</button></div>
     <div id="reponse"></div>
   </div>
-  <p class="ligne"><button id="btOublier">Oublier la session NotebookLM</button></p>
+  <div id="place" class="carte" hidden>
+    <h2>Faire de la place dans NotebookLM</h2>
+    <p id="placeTexte"></p>
+    <div class="ligne">
+      <label>Cocher les <input id="nbAnciens" type="number" min="1" max="200" value="10" style="width:5em">
+        plus anciens</label>
+      <button id="btCocher">Cocher</button>
+      <button id="btDecocher">Tout décocher</button>
+    </div>
+    <div id="listeCarnets" style="max-height:360px;overflow:auto;border:1px solid #ddd;border-radius:10px;padding:6px 10px"></div>
+    <p class="donnees">La suppression est <b>définitive</b> : le carnet, ses sources, ses notes et ses
+    résumés disparaissent de NotebookLM. Les carnets dont le nom commence par « Studio · » ont été créés
+    par le Studio.</p>
+    <label><input id="confirmeSuppr" type="checkbox"> Je comprends que c’est définitif.</label>
+    <div class="ligne"><button id="btSupprimer" class="primaire" disabled>Supprimer les carnets cochés</button>
+      <span id="etatSuppr"></span></div>
+  </div>
+  <p class="ligne"><button id="btPlace">Faire de la place dans NotebookLM</button>
+    <button id="btOublier">Oublier la session NotebookLM</button></p>
 </div>
 
 <div class="pied">Bibliothèque : notebooklm-py 0.8.2 (licence MIT), qui pilote des accès non documentés
@@ -474,6 +556,7 @@ function suivre(id){
     if(j.status === "failed" || j.status === "cancelled"){
       texte("etat", "Échec : " + (j.message || "sans détail."), "ko");
       el("btFabriquer").disabled = false;
+      if(j.plein){ ouvrirPlace(true); }
       return;
     }
     const t = Math.round(Date.now()/1000 - (j.created_at || Date.now()/1000));
@@ -489,6 +572,7 @@ el("btFabriquer").onclick = async () => {
   f.append("consigne", el("consigne").value);
   f.append("format", el("format").value);
   f.append("longueur", el("longueur").value);
+  f.append("quand", quandFr(Date.now() / 1000));   // l'heure d'ici, pour le nom du carnet
   el("btFabriquer").disabled = true;
   el("resultat").hidden = true;
   texte("etat", "Envoi…");
@@ -518,6 +602,74 @@ el("btDemander").onclick = async () => {
     q2.textContent = "[" + c.numero + "] « " + c.extrait + " »";
     div.appendChild(q2);
   }
+};
+
+// --- Faire de la place : la personne choisit, rien ne part seul --------------
+function deux(n){ return (n < 10 ? "0" : "") + n; }
+function quandFr(ts){
+  if(!ts) return "";
+  const d = new Date(ts * 1000);
+  return deux(d.getDate()) + "/" + deux(d.getMonth() + 1) + "/" + d.getFullYear()
+    + " " + deux(d.getHours()) + ":" + deux(d.getMinutes());
+}
+let CARNETS = [];
+function coches(){ return Array.from(document.querySelectorAll("#listeCarnets input:checked")).map(x => x.value); }
+function majSuppr(){
+  const n = coches().length;
+  el("btSupprimer").textContent = "Supprimer " + n + " carnet" + (n > 1 ? "s" : "") + " coché" + (n > 1 ? "s" : "");
+  el("btSupprimer").disabled = !(n && el("confirmeSuppr").checked);
+}
+async function ouvrirPlace(plein){
+  el("place").hidden = false;
+  el("confirmeSuppr").checked = false;
+  texte("etatSuppr", "");
+  texte("placeTexte", "Lecture de vos carnets…");
+  const r = await fetch("/notebooklm/carnets", {headers: H});
+  const d = await r.json();
+  if(!r.ok){ texte("placeTexte", d.detail || "Lecture impossible.", "ko"); return; }
+  CARNETS = d.carnets;
+  texte("placeTexte", (plein ? "Votre NotebookLM est plein. " : "")
+    + CARNETS.length + " carnets à vous, du plus ancien au plus récent. Cochez ceux à supprimer.");
+  const liste = el("listeCarnets");
+  liste.textContent = "";
+  for(const c of CARNETS){
+    const l = document.createElement("label");
+    l.style.display = "block";
+    const b = document.createElement("input");
+    b.type = "checkbox"; b.value = c.id; b.onchange = majSuppr;
+    l.appendChild(b);
+    l.appendChild(document.createTextNode(" " + c.titre + " — "
+      + (c.cree ? quandFr(c.cree) : "date inconnue") + " — " + c.sources + " source(s)"));
+    liste.appendChild(l);
+  }
+  if(plein){ el("nbAnciens").value = 10; cocherAnciens(); }
+  majSuppr();
+  el("place").scrollIntoView({behavior: "smooth"});
+}
+function cocherAnciens(){
+  const n = Math.max(0, parseInt(el("nbAnciens").value, 10) || 0);
+  // Seuls les carnets DATES : on ne propose pas ce qu'on ne sait pas dater.
+  const boites = document.querySelectorAll("#listeCarnets input");
+  boites.forEach((b, i) => { b.checked = i < n && !!CARNETS[i].cree; });
+  majSuppr();
+}
+el("btPlace").onclick = () => ouvrirPlace(false);
+el("btCocher").onclick = cocherAnciens;
+el("btDecocher").onclick = () => { document.querySelectorAll("#listeCarnets input").forEach(b => b.checked = false); majSuppr(); };
+el("confirmeSuppr").onchange = majSuppr;
+el("btSupprimer").onclick = async () => {
+  const ids = coches();
+  if(!ids.length || !el("confirmeSuppr").checked) return;
+  el("btSupprimer").disabled = true;
+  texte("etatSuppr", "Suppression de " + ids.length + " carnet(s)…");
+  const r = await fetch("/notebooklm/carnets/supprimer", {method: "POST",
+    headers: Object.assign({"Content-Type": "application/json"}, H),
+    body: JSON.stringify({ids: ids, confirme: true})});
+  const d = await r.json();
+  if(!r.ok){ texte("etatSuppr", d.detail || "Refusé.", "ko"); majSuppr(); return; }
+  await ouvrirPlace(false);
+  texte("etatSuppr", d.supprimes.length + " carnet(s) supprimé(s)"
+    + (d.refuses.length ? ", " + d.refuses.length + " non supprimé(s)" : "") + ".", d.refuses.length ? "ko" : "ok");
 };
 
 charger();

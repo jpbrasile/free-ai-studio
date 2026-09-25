@@ -1502,6 +1502,11 @@ def run_notebooklm(jid: str, sources: list, reglages: dict) -> None:
             sources, JOBS / jid / "output", progres=progres, **reglages))
     except NLM_ERREURS as exc:
         terminer_en_echec(jid, str(exc)[:1000])
+        if isinstance(exc, notebooklm_pont.CarnetsPleins):
+            # La page ouvre alors la boite des anciens carnets a supprimer.
+            job = read_job(jid)
+            job["plein"] = True
+            write_job(jid, job)
         return
     except Exception as exc:  # noqa: BLE001 -- jamais un fil mort sur une fiche << running >>
         log.exception("notebooklm")
@@ -1548,11 +1553,13 @@ async def notebooklm_resume(request: Request, authorization: Optional[str] = Hea
         raise HTTPException(400, "Donnez au moins un document ou un texte.")
     titre = str(f.get("titre") or "").strip()[:80]
     reglages = {
-        "titre": titre,
         "consigne": str(f.get("consigne") or "").strip()[:2000],
         "format_": str(f.get("format") or "approfondi"),
         "longueur": str(f.get("longueur") or "normal"),
         "langue": "fr",
+        # Le nom du carnet : « Studio · <titre> · <heure de la page> ».
+        "titre": titre or sources[0]["titre"],
+        "quand": str(f.get("quand") or "")[:20],
     }
     write_job(jid, {"id": jid, "provider": "notebooklm", "title": "NotebookLM", "status": "queued",
                     "created_at": time.time(), "artifacts": [], "titre": titre or sources[0]["titre"],
@@ -1570,7 +1577,7 @@ def notebooklm_job(jid: str, authorization: Optional[str] = Header(default=None)
     sortie = {"id": jid, "status": job.get("status"), "etape": job.get("etape") or "",
               "created_at": job.get("created_at"), "titre": job.get("titre") or "",
               "message": job.get("error") or "", "carnet_url": job.get("carnet_url") or "",
-              "carnet_id": job.get("carnet_id") or ""}
+              "carnet_id": job.get("carnet_id") or "", "plein": bool(job.get("plein"))}
     if any(a.get("path") for a in job.get("artifacts", [])):
         sortie["audio_url"] = "/notebooklm/jobs/%s/audio?cle=%s" % (jid, jeton_video(jid))
     return sortie
@@ -1606,6 +1613,39 @@ async def notebooklm_demander(request: Request, authorization: Optional[str] = H
     try:
         return await asyncio.to_thread(notebooklm_pont.executer,
                                        lambda: notebooklm_pont.demander(carnet, question[:4000]))
+    except NLM_ERREURS as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/notebooklm/carnets")
+def notebooklm_carnets(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Les carnets du compte, du plus ancien au plus recent (titre, date, sources)."""
+    auth(authorization)
+    _nlm_coupe(request)
+    try:
+        return {"carnets": notebooklm_pont.executer(notebooklm_pont.carnets)}
+    except NLM_ERREURS as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/notebooklm/carnets/supprimer")
+async def notebooklm_carnets_supprimer(request: Request,
+                                       authorization: Optional[str] = Header(default=None)):
+    """Supprime DEFINITIVEMENT les carnets choisis dans la page. Exige
+    {"ids": [...], "confirme": true} : la case cochee par la personne."""
+    auth(authorization)
+    exiger_page_du_studio(request)
+    exiger_json(request)
+    _nlm_coupe(request)
+    p = await request.json()
+    ids = [str(i) for i in (p.get("ids") or []) if str(i).strip()][:200]
+    if p.get("confirme") is not True:
+        raise HTTPException(400, "Rien n'est supprimé sans votre confirmation.")
+    if not ids:
+        raise HTTPException(400, "Aucun carnet choisi.")
+    try:
+        return await asyncio.to_thread(notebooklm_pont.executer,
+                                       lambda: notebooklm_pont.supprimer(ids))
     except NLM_ERREURS as exc:
         raise HTTPException(502, str(exc)) from exc
 

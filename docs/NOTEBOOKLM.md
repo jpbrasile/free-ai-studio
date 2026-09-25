@@ -58,12 +58,28 @@ coller le contenu du `storage_state.json` qu’il indique.
 Seuls les cookies de Google sont gardés : c’est la commande publique de la bibliothèque,
 `notebooklm auth import-cookies`, qui fait le tri et vérifie que les cookies requis sont là.
 
+### Les carnets du Studio, et quand NotebookLM est plein
+
+Chaque résumé crée un carnet au nom clair : **« Studio · <titre> · <date et heure> »**, par exemple
+`Studio · Phares · 25/09/2026 08:40`.
+
+Le Studio ne supprime **jamais rien tout seul**. Quand Google refuse un nouveau carnet parce que le
+compte est plein, la page ouvre « Faire de la place dans NotebookLM » :
+
+- la liste de **vos** carnets, du plus ancien au plus récent (les carnets partagés par d’autres
+  n’y figurent pas) ;
+- « Cocher les N plus anciens » ; un carnet sans date connue n’est jamais coché d’office ;
+- une case « Je comprends que c’est définitif », sans laquelle le bouton reste grisé.
+
+Le même bouton est disponible à tout moment, sous le formulaire.
+
 ### Quand ça casse
 
 | La page dit | Ce qui se passe | Quoi faire |
 |---|---|---|
 | « La session NotebookLM a expiré… » | Google refuse la session | refaire « Brancher » avec un nouvel export |
 | « …le quota de NotebookLM est atteint… » | 3 résumés du jour faits | réessayer demain |
+| « Votre NotebookLM est plein… » | nombre maximal de carnets atteint | choisir les anciens carnets à supprimer dans la page |
 | « Google a changé NotebookLM… » | l’accès non documenté a changé | mettre le Studio à jour |
 | « La bibliothèque notebooklm-py manque… » | image pas reconstruite | relancer `demarrer.cmd` |
 

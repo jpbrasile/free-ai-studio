@@ -50,6 +50,17 @@ class Scenario:
         self.erreur_source: Exception | None = None
         self.appels: list = []
         self.chemins: list = []                   # fichiers de session vus par le client
+        self.plein = False                        # create leve NotebookLimitError
+        self.supprimes: list = []
+        self.carnets = [carnet("a", "Mes notes", 2024, 3), carnet("b", "Studio · Phares · 01/09/2026 10:00", 2026, 9),
+                        carnet("c", "Cours", 2025, 1)]
+
+
+def carnet(ident, titre, annee, mois, proprio=True, date=True):
+    import datetime as dt
+    return types.SimpleNamespace(
+        id=ident, title=titre, sources_count=2, is_owner=proprio,
+        created_at=dt.datetime(annee, mois, 1, tzinfo=dt.timezone.utc) if date else None)
 
 
 def faux_module(sc: Scenario) -> types.ModuleType:
@@ -75,10 +86,17 @@ def faux_module(sc: Scenario) -> types.ModuleType:
 
             async def lister():
                 sc.appels.append(("lister",))
-                return ["a", "b", "c"]
+                return list(sc.carnets)
+
+            async def effacer(ident):
+                sc.appels.append(("supprimer", ident))
+                sc.supprimes.append(ident)
+                sc.carnets = [n for n in sc.carnets if n.id != ident]
 
             async def creer(titre):
                 sc.appels.append(("creer", titre))
+                if sc.plein:
+                    raise erreur("NotebookLimitError", texte="Notebook quota appears to be exhausted")
                 return types.SimpleNamespace(id="carnet-42")
 
             async def ajouter_texte(carnet, titre, contenu, wait=False, wait_timeout=None):
@@ -115,7 +133,7 @@ def faux_module(sc: Scenario) -> types.ModuleType:
                 return types.SimpleNamespace(answer="Il parle des phares.", references=[
                     types.SimpleNamespace(citation_number=1, cited_text="Le phare de Cordouan…")])
 
-            c.notebooks = types.SimpleNamespace(list=lister, create=creer)
+            c.notebooks = types.SimpleNamespace(list=lister, create=creer, delete=effacer)
             c.sources = types.SimpleNamespace(add_text=ajouter_texte, add_file=ajouter_fichier)
             c.artifacts = types.SimpleNamespace(generate_audio=generer, wait_for_completion=attendre,
                                                 list_audio=lister_audio, download_audio=rapatrier)
@@ -251,7 +269,7 @@ def test_la_vraie_commande_d_import_garde_les_cookies_google_seulement(nlm):
             "Authentication expired or invalid. Redirected to: https://accounts.google.com/"),
      "SessionExpiree", "a expiré"),
     (erreur("RateLimitError"), "QuotaAtteint", "3 résumés audio par jour"),
-    (erreur("NotebookLimitError"), "NotebookLMEchec", "nombre maximal de carnets"),
+    (erreur("NotebookLimitError"), "CarnetsPleins", "Votre NotebookLM est plein"),
     (erreur("SourceProcessingError", texte="PDF chiffre"), "NotebookLMEchec", "PDF chiffre"),
     (erreur("WaitTimeoutError"), "NotebookLMEchec", "pas fini à temps"),
     (erreur("UnknownRPCMethodError"), "NotebookLMEchec", "mettre le Studio à jour"),
@@ -334,7 +352,7 @@ def test_le_resume_fabrique_un_carnet_en_francais_et_rapporte_l_audio(nlm, tmp_p
     noms = [a[0] for a in sc.appels]
     assert noms == ["ouvrir", "creer", "fichier", "texte", "generer", "attendre", "rapatrier"]
     creer, fichier, _, generer, attendre = (sc.appels[i] for i in range(1, 6))
-    assert creer[1] == "Free AI Studio — Phares"
+    assert creer[1] == "Studio · Phares"
     assert fichier[2] == b"%PDF-1.4 faux" and fichier[3] == "cours.pdf" and fichier[4] is True
     assert generer[2:] == (["src-fichier", "src-texte"], "fr", "pour des lyceens", "debate", "short")
     assert attendre[2] == pont.AUDIO_DELAI_S == 1200
@@ -546,3 +564,89 @@ def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
         assert morceau in html, morceau
     # Un message venu de Google ne s'ecrit jamais en HTML dans la page.
     assert "innerHTML" not in html
+    for morceau in ("Faire de la place dans NotebookLM", "La suppression est <b>définitive</b>",
+                    "Je comprends que c’est définitif.", "commence par « Studio · »"):
+        assert morceau in html, morceau
+
+
+# --- 6. Carnets : noms clairs, et la place faite par la personne (25/09/2026) -----
+
+@pytest.mark.parametrize("titre, quand, attendu", [
+    ("Phares", "25/09/2026 08:40", "Studio · Phares · 25/09/2026 08:40"),
+    ("", "", "Studio · Résumé"),
+    ("  cours   de\nmaths ", "2026-09-25", "Studio · cours de maths"),   # heure pas francaise : ecartee
+])
+def test_le_nom_d_un_carnet_du_studio_se_lit(nlm, titre, quand, attendu):
+    pont, _ = nlm
+    assert pont.nom_du_carnet(titre, quand) == attendu
+
+
+def test_la_liste_va_du_plus_ancien_au_plus_recent_sans_les_carnets_des_autres(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    sc.carnets += [carnet("d", "Partagé par un collègue", 2020, 1, proprio=False),
+                   carnet("e", "Sans date", 2020, 1, date=False)]
+    liste = lancer(pont, pont.carnets)
+    assert [n["id"] for n in liste] == ["a", "c", "b", "e"]
+    assert liste[0]["cree"] < liste[1]["cree"] < liste[2]["cree"] and liste[3]["cree"] is None
+    assert [n["du_studio"] for n in liste] == [False, False, True, False]
+
+
+def test_supprimer_ne_touche_que_les_carnets_possedes_et_encore_la(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    sc.carnets.append(carnet("d", "Partagé", 2020, 1, proprio=False))
+    r = lancer(pont, lambda: pont.supprimer(["a", "d", "inconnu", "c"]))
+    assert r == {"supprimes": ["a", "c"], "refuses": ["d", "inconnu"]}
+    assert sc.supprimes == ["a", "c"]
+
+
+def test_un_compte_plein_se_dit_et_rien_n_est_envoye(nlm, tmp_path):
+    pont, sc = nlm
+    brancher(pont)
+    sc.plein = True
+    with pytest.raises(pont.CarnetsPleins, match="Votre NotebookLM est plein"):
+        _resume(pont, tmp_path)
+    assert not any(a[0] in ("texte", "fichier", "generer") for a in sc.appels)
+    assert sc.supprimes == [], "plein ne supprime JAMAIS rien tout seul"
+
+
+def test_un_resume_refuse_pour_compte_plein_ouvre_la_boite_des_carnets(client):
+    c, pont, sc = client
+    brancher(pont)
+    sc.plein = True
+    r = c.post("/notebooklm/resume", headers=ENTETE,
+               data={"texte": "x", "titre": "Phares", "quand": "25/09/2026 08:40"})
+    j = _attendre_fin(c, r.json()["id"])
+    assert j["status"] == "failed" and j["plein"] is True and "plein" in j["message"]
+    assert ("creer", "Studio · Phares · 25/09/2026 08:40") in sc.appels
+    assert sc.supprimes == []
+
+
+def test_les_routes_des_carnets_lisent_puis_suppriment_sur_confirmation(client):
+    c, pont, sc = client
+    brancher(pont)
+    assert c.get("/notebooklm/carnets").status_code == 401
+    liste = c.get("/notebooklm/carnets", headers=ENTETE).json()["carnets"]
+    assert [n["id"] for n in liste] == ["a", "c", "b"]
+    chemin = "/notebooklm/carnets/supprimer"
+    assert c.post(chemin, headers=ENTETE, json={"ids": ["a"]}).status_code == 400
+    assert c.post(chemin, headers=ENTETE, json={"ids": ["a"], "confirme": "oui"}).status_code == 400
+    assert c.post(chemin, headers=ENTETE, json={"ids": [], "confirme": True}).status_code == 400
+    assert c.post(chemin, headers=dict(ENTETE, **AUTRE_SITE),
+                  json={"ids": ["a"], "confirme": True}).status_code == 403
+    assert sc.supprimes == []
+    r = c.post(chemin, headers=ENTETE, json={"ids": ["a", "c"], "confirme": True})
+    assert r.json() == {"supprimes": ["a", "c"], "refuses": []}
+    assert [n["id"] for n in c.get("/notebooklm/carnets", headers=ENTETE).json()["carnets"]] == ["b"]
+
+
+def test_en_studio_partage_les_carnets_ne_se_lisent_ni_ne_se_suppriment(sandbox, nlm):
+    from fastapi.testclient import TestClient
+    pont, sc = nlm
+    brancher(pont)
+    c = TestClient(sandbox.app, base_url="http://192.168.1.20")
+    assert c.get("/notebooklm/carnets", headers=ENTETE).status_code == 403
+    assert c.post("/notebooklm/carnets/supprimer", headers=ENTETE,
+                  json={"ids": ["a"], "confirme": True}).status_code == 403
+    assert sc.supprimes == []
