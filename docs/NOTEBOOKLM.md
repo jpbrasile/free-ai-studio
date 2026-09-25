@@ -21,8 +21,9 @@ Free AI Studio le propose de **deux façons** :
 3. Donnez des fichiers (PDF, `.txt`, `.md`, `.docx`) et/ou collez un texte, une consigne
    facultative, la forme (discussion approfondie, bref, critique, débat) et la durée.
 4. « Fabriquer le résumé audio ». Comptez souvent 5 à 10 minutes.
-5. Le résumé s’écoute dans la page et s’enregistre (`.m4a`). Un navigateur qui ne lit pas l’AAC
-   (celui de VS Code) reçoit la même chose en Opus, fabriquée à la première écoute. Le carnet reste dans votre
+5. Le résumé s’écoute dans la page et s’enregistre (`.m4a`). Un navigateur qui ne lirait pas l’AAC
+   reçoit la même chose en Opus, fabriquée à la première écoute. Dans VS Code, ouvrez la page
+   après avoir cliqué « Go Live ». Le carnet reste dans votre
    NotebookLM : « Ouvrir le carnet » ou « Poser une question à vos documents ».
 
 L’offre gratuite de Google annonce **3 résumés audio par jour**. Au-delà, la page le dit et il faut

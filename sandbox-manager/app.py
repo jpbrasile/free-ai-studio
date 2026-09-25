@@ -1622,7 +1622,7 @@ def notebooklm_audio(jid: str, cle: str = Query(default=""), telecharger: int = 
     if not chemin.exists() or chemin.is_symlink():
         raise HTTPException(404, "Fichier absent")
     if format == "opus":
-        # Pour les navigateurs sans AAC, dont celui de VS Code (25/09/2026).
+        # Repli pour un navigateur sans AAC (voir notebooklm_pont.version_opus).
         opus = notebooklm_pont.version_opus(chemin)
         if not opus:
             raise HTTPException(404, "Version Opus indisponible")

@@ -522,9 +522,9 @@ def test_un_resume_complet_par_la_page_puis_l_audio_par_son_jeton(client):
     assert c.get(j["audio_url"] + "&telecharger=1").headers["content-disposition"].startswith("attachment")
 
 
-def test_la_version_opus_pour_vs_code_passe_par_le_meme_jeton(client, monkeypatch, tmp_path):
-    """25/09 : la page marche dans Chrome, pas dans VS Code, dont le navigateur
-    ne lit pas l'AAC. La route rend la meme chose en Opus, sous le meme jeton."""
+def test_la_version_opus_de_repli_passe_par_le_meme_jeton(client, monkeypatch, tmp_path):
+    """Repli pour un navigateur sans AAC (la piste VS Code du 25/09 a ete
+    dementie : « Go Live »). La route rend la meme chose en Opus, meme jeton."""
     c, pont, _ = client
     brancher(pont)
     j = _attendre_fin(c, c.post("/notebooklm/resume", headers=ENTETE, data={"texte": "x"}).json()["id"])
@@ -639,7 +639,7 @@ def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
     # « Vos résumés » : la durée s'affiche d'emblée ; avec preload « none » le
     # lecteur montrait 0:00 et le propriétaire a lu le résumé comme vide (25/09).
     assert 'a.preload = "metadata"' in html and 'preload = "none"' not in html
-    # VS Code ne lit pas l'AAC : chaque lecteur porte aussi la source Opus.
+    # Repli : chaque lecteur porte aussi la source Opus.
     assert '"&format=opus", \'audio/ogg; codecs="opus"\'' in html
     assert html.count("brancherSon(") == 3
     # « pas clair » (25/09) : le chemin premier est un double-clic, l'extension

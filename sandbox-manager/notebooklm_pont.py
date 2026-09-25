@@ -368,9 +368,10 @@ async def resume_audio(sources: list[dict], dossier: Path, titre: str = "", cons
 def version_opus(m4a: Path, commande: str = "ffmpeg") -> Path | None:
     """Le meme resume en Opus (Ogg), fabrique a la premiere ecoute puis garde.
 
-    NotebookLM rend de l'AAC. Chrome le lit ; le navigateur integre de VS Code
-    (Electron, sans codecs brevetes) non : le lecteur y restait a 0:00 et le
-    proprietaire a vu le resume << vide >> (25/09/2026). Opus se lit partout.
+    NotebookLM rend de l'AAC, qu'un navigateur sans codecs brevetes ne lit pas ;
+    Opus se lit partout. Ajoute le 25/09/2026 sur la piste « VS Code ne lit pas
+    l'AAC », que le proprietaire a dementie le meme jour (il fallait cliquer
+    « Go Live ») : un repli, sans cas reel connu ou il serve.
     None si ffmpeg manque ou echoue : la page garde alors l'AAC seul."""
     cible = m4a.with_suffix(".opus")
     if cible.exists() and cible.stat().st_size:
@@ -645,8 +646,8 @@ el("btDemander").onclick = async () => {
   }
 };
 
-// Deux sources : l'AAC de NotebookLM, puis la même chose en Opus. Le navigateur
-// de VS Code ne lit pas l'AAC (25/09/2026) ; il passe alors à la seconde.
+// Deux sources : l'AAC de NotebookLM, puis la même chose en Opus. Un navigateur
+// qui ne lirait pas l'AAC passe à la seconde (repli, voir version_opus).
 function brancherSon(a, url){
   a.removeAttribute("src");
   a.textContent = "";
