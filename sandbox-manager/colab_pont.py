@@ -80,6 +80,10 @@ PHRASE_SANS_CARTE = (
     "« Exécution » › « Modifier le type d’exécution » › « GPU T4 », "
     "enregistrez, puis relancez depuis le Studio. La carte gratuite n’est pas "
     "garantie : Colab la refuse parfois, surtout l’après-midi.")
+PHRASE_PAS_PRET = (
+    "Votre carnet Colab n’a pas répondu en 5 minutes. Regardez l’onglet Colab : "
+    "s’il affiche « Ce notebook n’a pas été créé par Google », cliquez « Exécuter "
+    "quand même », puis relancez depuis le Studio.")
 PHRASE_ABSENT = (
     "Aucun carnet Colab n’est branché. Cliquez « Ouvrir Colab », acceptez la "
     "boîte « Connect to a local Colab MCP server », puis relancez.")
@@ -268,6 +272,16 @@ PONT = Pont()
 # sur un `run_code_cell` de dix minutes n'est pas connu, et elle rendait
 # l'arret impossible : aucun outil de Colab n'interrompt une cellule.
 
+# Vu le 25/09/2026 : la PREMIERE cellule lancee dans un carnet venu de GitHub
+# attend que la personne clique « Exécuter quand même » (avertissement de
+# Colab), et la machine peut encore demarrer ; run_code_cell rend alors une
+# reponse VIDE. Une cellule sans effet est donc relancee jusqu'a ce qu'elle
+# reponde, avant d'envoyer le travail.
+_PRET = r'''
+print("%(marque)s" + "{}")
+'''
+PRET_S = 300.0
+
 _LANCER = r'''
 import base64, json, os, shutil, subprocess, sys, time
 from pathlib import Path
@@ -386,6 +400,19 @@ def executer(pont: Pont, code: str, sortie: Path, delai_s: int, gpu: bool = Fals
         index = len(cellules)
         faites: list[Cellule] = []
         try:
+            pret = Cellule(pont, _PRET % vars_, index)
+            faites.append(pret)
+            fin = time.time() + PRET_S
+            while True:
+                try:
+                    pret.lancer(delai=60)
+                    break
+                except ColabErreur as exc:
+                    if "rien rendu de lisible" not in str(exc) or time.time() > fin or arret():
+                        raise ColabErreur(PHRASE_PAS_PRET) from exc
+                    progres({"etape": "attente"})
+                    time.sleep(SUIVI_S)
+            index += 1
             lancer = Cellule(pont, _LANCER % dict(vars_, code=base64.b64encode(code.encode("utf-8")).decode(),
                                                   gpu="True" if gpu else "False"), index)
             faites.append(lancer)

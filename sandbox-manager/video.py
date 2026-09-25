@@ -1412,6 +1412,7 @@ celle d’arrivée, et une image de référence pour garder le même personnage.
   <ol id="colabEtapes">
     <li><a id="colabOuvrir" href="#" target="_blank" rel="noopener">Ouvrir Colab ↗</a> (votre compte Google).</li>
     <li>Dans Colab, cliquez « Connect » dans la boîte « Connect to a local Colab MCP server ». Si Chrome demande l’accès au réseau local, autorisez-le (une seule fois).</li>
+    <li>Au premier clip, Colab prévient « Ce notebook n’a pas été créé par Google » : c’est le carnet du Studio, cliquez « Exécuter quand même ». Le Studio attend ce clic 5 minutes.</li>
   </ol>
   <div>Le carnet s’ouvre déjà réglé sur la carte graphique gratuite (GPU T4) : rien d’autre à régler.</div>
   <div>Gardez l’onglet Colab ouvert pendant le calcul : le Studio y ajoute ses cellules sous vos yeux, puis les retire.</div>

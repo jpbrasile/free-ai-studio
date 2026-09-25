@@ -40,6 +40,7 @@ class FauxCarnet:
         self.cellules: dict[str, str] = {}
         self.ordre: list[str] = []
         self.lancees: list[str] = []
+        self.muettes = 0
         self._n = 0
 
     def _code(self, code: str) -> str:
@@ -66,6 +67,10 @@ class FauxCarnet:
             return {}
         if nom == "run_code_cell":
             self.lancees.append(a["cellId"])
+            if self.muettes:
+                # L'avertissement « pas créé par Google » attend un clic : rien ne tourne.
+                self.muettes -= 1
+                return {"outputs": []}
             sortie = io.StringIO()
             try:
                 with contextlib.redirect_stdout(sortie):
@@ -189,6 +194,28 @@ def test_un_travail_tourne_et_ses_fichiers_reviennent_intacts(banc, tmp_path):
     assert (256 * 2400) // colab_pont.MORCEAU + 1 == 3
     # Le carnet est rendu propre : toutes les cellules du Studio sont retirees.
     assert b.carnet.ordre == []
+
+
+def test_le_travail_attend_le_clic_sur_l_avertissement_de_colab(banc, tmp_path):
+    """Vu le 25/09/2026 : carnet venu de GitHub, premiere cellule sans reponse
+    tant que « Exécuter quand même » n'est pas clique -> clip en echec a 55 s."""
+    b = banc()
+    b.carnet.muettes = 3
+    etapes = []
+    r = colab_pont.executer(b.pont, "print('ok')\n", tmp_path / "sortie", 60, progres=etapes.append)
+    assert r["exit_code"] == 0 and "ok" in r["stdout"]
+    assert [e["etape"] for e in etapes[:3]] == ["attente"] * 3
+    assert b.carnet.ordre == []
+
+
+def test_sans_clic_en_5_minutes_le_studio_dit_quoi_faire(banc, tmp_path, monkeypatch):
+    b = banc()
+    b.carnet.muettes = 10 ** 6
+    monkeypatch.setattr(colab_pont, "PRET_S", 0.2)
+    with pytest.raises(colab_pont.ColabErreur) as e:
+        colab_pont.executer(b.pont, "open('/tmp/jamais', 'w')\n", tmp_path / "sortie", 60)
+    assert "Exécuter quand même" in str(e.value)
+    assert "_free_ai_studio" not in b.carnet.noyau and b.carnet.ordre == []
 
 
 def test_un_code_qui_echoue_rend_son_code_de_retour_et_son_erreur(banc, tmp_path):
