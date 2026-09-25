@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -521,6 +522,56 @@ def test_un_resume_complet_par_la_page_puis_l_audio_par_son_jeton(client):
     assert c.get(j["audio_url"] + "&telecharger=1").headers["content-disposition"].startswith("attachment")
 
 
+def test_la_version_opus_pour_vs_code_passe_par_le_meme_jeton(client, monkeypatch, tmp_path):
+    """25/09 : la page marche dans Chrome, pas dans VS Code, dont le navigateur
+    ne lit pas l'AAC. La route rend la meme chose en Opus, sous le meme jeton."""
+    c, pont, _ = client
+    brancher(pont)
+    j = _attendre_fin(c, c.post("/notebooklm/resume", headers=ENTETE, data={"texte": "x"}).json()["id"])
+    vus = []
+
+    def faux_opus(m4a):
+        vus.append(m4a)
+        o = tmp_path / "resume.opus"
+        o.write_bytes(b"OggS" + b"\x00" * 60)
+        return o
+    monkeypatch.setattr(pont, "version_opus", faux_opus)
+    son = c.get(j["audio_url"] + "&format=opus")
+    assert son.status_code == 200 and son.headers["content-type"] == "audio/ogg"
+    assert son.content.startswith(b"OggS") and vus[0].name.endswith("resume-notebooklm.m4a")
+    assert c.get(j["audio_url"].split("cle=")[0] + "cle=faux&format=opus").status_code == 401
+    monkeypatch.setattr(pont, "version_opus", lambda m4a: None)
+    assert c.get(j["audio_url"] + "&format=opus").status_code == 404
+    # Sans le paramètre, rien ne change : l'AAC d'origine.
+    assert c.get(j["audio_url"]).headers["content-type"] == "audio/mp4"
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg absent")
+def test_version_opus_vraie_conversion_gardee_ensuite(nlm, tmp_path):
+    import subprocess
+    pont, _ = nlm
+    m4a = tmp_path / "resume-notebooklm.m4a"
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "sine=frequency=440:duration=2", "-c:a", "aac", str(m4a)], check=True)
+    opus = pont.version_opus(m4a)
+    assert opus == m4a.with_suffix(".opus")
+    tete = opus.read_bytes()[:64]
+    assert tete.startswith(b"OggS") and b"OpusHead" in tete
+    avant = opus.stat().st_mtime_ns
+    assert pont.version_opus(m4a) == opus and opus.stat().st_mtime_ns == avant
+    assert not list(tmp_path.glob("*.partiel"))
+
+
+def test_version_opus_sans_ffmpeg_ou_sur_un_faux_fichier_rend_none(nlm, tmp_path):
+    pont, _ = nlm
+    m4a = tmp_path / "resume-notebooklm.m4a"
+    m4a.write_bytes(b"pas de l'audio")
+    assert pont.version_opus(m4a, commande="ffmpeg-introuvable-xyz") is None
+    if shutil.which("ffmpeg"):
+        assert pont.version_opus(m4a) is None
+    assert not list(tmp_path.glob("*.opus*"))
+
+
 def test_les_resumes_faits_restent_ecoutables_apres_un_rechargement(client, sandbox):
     """25/09 : « toujours pas de son ». Un resume lance hors de la page, ou
     avant un rechargement, doit s'y retrouver avec son lecteur."""
@@ -588,6 +639,34 @@ def test_la_page_avertit_avant_de_brancher_et_porte_la_cle(client):
     # « Vos résumés » : la durée s'affiche d'emblée ; avec preload « none » le
     # lecteur montrait 0:00 et le propriétaire a lu le résumé comme vide (25/09).
     assert 'a.preload = "metadata"' in html and 'preload = "none"' not in html
+    # VS Code ne lit pas l'AAC : chaque lecteur porte aussi la source Opus.
+    assert '"&format=opus", \'audio/ogg; codecs="opus"\'' in html
+    assert html.count("brancherSon(") == 3
+    # « pas clair » (25/09) : le chemin premier est un double-clic, l'extension
+    # de cookies passe en repli replié.
+    assert "brancher-notebooklm.cmd" in html and "J’ai fini, vérifier" in html
+    assert html.index("brancher-notebooklm.cmd") < html.index("<details>") < html.index("Cookie-Editor")
+
+
+def test_le_brancheur_suit_l_epingle_ne_montre_pas_la_cle_et_efface_tout():
+    racine = Path(__file__).resolve().parents[1]
+    ps1 = (racine / "scripts" / "brancher-notebooklm.ps1").read_text(encoding="utf-8")
+    cmd = (racine / "brancher-notebooklm.cmd").read_text(encoding="utf-8")
+    assert r"scripts\brancher-notebooklm.ps1" in cmd
+    # Une seule vérité pour la version : l'épingle du Studio, relue par le script.
+    epingle = re.search(r"^notebooklm-py==(\S+)", (racine / "sandbox-manager" / "requirements.txt")
+                        .read_text(encoding="utf-8"), re.M)
+    assert epingle and '"^notebooklm-py==(\\S+)"' in ps1
+    assert not re.search(r"notebooklm-py\S*==\d", ps1) and epingle.group(1) not in ps1
+    # La clé ne s'écrit nulle part, la session non plus.
+    for ligne in ps1.splitlines():
+        if "Write-Host" in ligne:
+            assert "$cle" not in ligne and "$corps" not in ligne and "$entetes" not in ligne, ligne
+    # Le dossier de travail (session + profil du navigateur) part dans un finally.
+    fin = ps1.split("} finally {")[1]
+    assert "Remove-Item -Recurse -Force -LiteralPath $travail" in fin
+    # PowerShell 5.1 lit un .ps1 sans BOM en ANSI : le script reste en ASCII.
+    assert ps1.isascii() and cmd.isascii()
 
 
 # --- 6. Carnets : noms clairs, et la place faite par la personne (25/09/2026) -----

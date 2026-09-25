@@ -1610,7 +1610,8 @@ def _fiche_nlm(job: dict) -> dict:
 
 
 @app.get("/notebooklm/jobs/{jid}/audio")
-def notebooklm_audio(jid: str, cle: str = Query(default=""), telecharger: int = Query(default=0)):
+def notebooklm_audio(jid: str, cle: str = Query(default=""), telecharger: int = Query(default=0),
+                     format: str = Query(default="")):
     attendu = jeton_video(jid)
     if not attendu or not hmac.compare_digest(cle, attendu):
         raise HTTPException(401, "Unauthorized")
@@ -1620,6 +1621,12 @@ def notebooklm_audio(jid: str, cle: str = Query(default=""), telecharger: int = 
     chemin = ART / arts[0]["path"]
     if not chemin.exists() or chemin.is_symlink():
         raise HTTPException(404, "Fichier absent")
+    if format == "opus":
+        # Pour les navigateurs sans AAC, dont celui de VS Code (25/09/2026).
+        opus = notebooklm_pont.version_opus(chemin)
+        if not opus:
+            raise HTTPException(404, "Version Opus indisponible")
+        return FileResponse(opus, media_type="audio/ogg")
     if telecharger:
         return FileResponse(chemin, media_type="audio/mp4", filename="resume-notebooklm.m4a")
     return FileResponse(chemin, media_type="audio/mp4")

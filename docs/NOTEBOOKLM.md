@@ -21,7 +21,8 @@ Free AI Studio le propose de **deux façons** :
 3. Donnez des fichiers (PDF, `.txt`, `.md`, `.docx`) et/ou collez un texte, une consigne
    facultative, la forme (discussion approfondie, bref, critique, débat) et la durée.
 4. « Fabriquer le résumé audio ». Comptez souvent 5 à 10 minutes.
-5. Le résumé s’écoute dans la page et s’enregistre (`.m4a`). Le carnet reste dans votre
+5. Le résumé s’écoute dans la page et s’enregistre (`.m4a`). Un navigateur qui ne lit pas l’AAC
+   (celui de VS Code) reçoit la même chose en Opus, fabriquée à la première écoute. Le carnet reste dans votre
    NotebookLM : « Ouvrir le carnet » ou « Poser une question à vos documents ».
 
 L’offre gratuite de Google annonce **3 résumés audio par jour**. Au-delà, la page le dit et il faut
@@ -43,7 +44,22 @@ libre [notebooklm-py](https://github.com/teng-lin/notebooklm-py) (licence MIT, v
 - dans un Studio partagé (plusieurs personnes, ou ouvert depuis une autre machine), le branchement
   est **coupé** : la session serait celle d’une seule personne.
 
-La méthode proposée dans la page :
+**Le chemin conseillé : un double-clic.** Le Studio doit tourner (`demarrer.cmd`).
+
+1. Dans le dossier du Studio, double-cliquez sur **`brancher-notebooklm.cmd`**. La première fois,
+   il installe son outil (notebooklm-py, **la version épinglée par le Studio**) dans
+   `%LOCALAPPDATA%\FreeAIStudio\notebooklm` : 1 à 3 minutes.
+2. Une fenêtre Chrome (Edge si Chrome manque) s’ouvre : connectez-vous à Google et attendez que
+   NotebookLM s’affiche. Elle se ferme seule.
+3. Le script envoie la session au Studio, puis **efface ce qui a servi** : le fichier de session et
+   le profil de navigateur ouvert pour l’occasion (il restait connecté à Google). Il écrit
+   « OK : NotebookLM est branché », et la page le montre avec « J’ai fini, vérifier ».
+
+Rien à copier ni à coller, et la session ne s’affiche jamais. Il faut Python 3.10 ou plus ; le
+script le dit s’il manque. `scripts\brancher-notebooklm.ps1 -Verifier` fait toute la préparation
+sans ouvrir de fenêtre ni rien envoyer.
+
+**Sans Python**, la page propose, replié, un autre chemin :
 
 1. une extension qui exporte les cookies en JSON (par exemple « Cookie-Editor »), autorisée en
    navigation privée ;
@@ -51,9 +67,6 @@ La méthode proposée dans la page :
 3. « Exporter » › « JSON » dans l’extension ;
 4. fermer la fenêtre privée **sans se déconnecter** (se déconnecter tuerait la session) ;
 5. coller l’export dans la page, puis « Brancher ».
-
-Autre chemin, si vous avez Python : `pip install "notebooklm-py[browser]"`, `notebooklm login`, puis
-coller le contenu du `storage_state.json` qu’il indique.
 
 Seuls les cookies de Google sont gardés : c’est la commande publique de la bibliothèque,
 `notebooklm auth import-cookies`, qui fait le tri et vérifie que les cookies requis sont là.
@@ -77,7 +90,7 @@ Le même bouton est disponible à tout moment, sous le formulaire.
 
 | La page dit | Ce qui se passe | Quoi faire |
 |---|---|---|
-| « La session NotebookLM a expiré… » | Google refuse la session | refaire « Brancher » avec un nouvel export |
+| « La session NotebookLM a expiré… » | Google refuse la session | relancer `brancher-notebooklm.cmd` (ou un nouvel export) |
 | « …le quota de NotebookLM est atteint… » | 3 résumés du jour faits | réessayer demain |
 | « Votre NotebookLM est plein… » | nombre maximal de carnets atteint | choisir les anciens carnets à supprimer dans la page |
 | « Google a changé NotebookLM… » | l’accès non documenté a changé | mettre le Studio à jour |

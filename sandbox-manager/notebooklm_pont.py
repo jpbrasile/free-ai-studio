@@ -365,6 +365,29 @@ async def resume_audio(sources: list[dict], dossier: Path, titre: str = "", cons
             "sources": len(ids)}
 
 
+def version_opus(m4a: Path, commande: str = "ffmpeg") -> Path | None:
+    """Le meme resume en Opus (Ogg), fabrique a la premiere ecoute puis garde.
+
+    NotebookLM rend de l'AAC. Chrome le lit ; le navigateur integre de VS Code
+    (Electron, sans codecs brevetes) non : le lecteur y restait a 0:00 et le
+    proprietaire a vu le resume << vide >> (25/09/2026). Opus se lit partout.
+    None si ffmpeg manque ou echoue : la page garde alors l'AAC seul."""
+    cible = m4a.with_suffix(".opus")
+    if cible.exists() and cible.stat().st_size:
+        return cible
+    if not shutil.which(commande):
+        return None
+    brouillon = cible.with_name(cible.name + ".partiel")
+    r = subprocess.run([commande, "-nostdin", "-y", "-loglevel", "error", "-i", str(m4a), "-vn",
+                        "-c:a", "libopus", "-b:a", "64k", "-f", "ogg", str(brouillon)],
+                       capture_output=True, timeout=300)
+    if r.returncode or not brouillon.exists() or not brouillon.stat().st_size:
+        brouillon.unlink(missing_ok=True)
+        return None
+    os.replace(brouillon, cible)
+    return cible
+
+
 async def demander(carnet_id: str, question: str) -> dict:
     """Une question aux sources d'un carnet ; la reponse et ses citations."""
     async with client() as c:
@@ -417,20 +440,31 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
   « Oublier » l’efface. Si vous le pouvez, utilisez un compte Google réservé à cet usage.
   Google peut changer NotebookLM sans prévenir : le Studio le vérifie à chaque ouverture de la page.</p>
   <ol>
-    <li>Ajoutez à votre navigateur une extension qui exporte les cookies en JSON
-      (par exemple « Cookie-Editor »), et autorisez-la en navigation privée.</li>
-    <li>Ouvrez une <b>fenêtre de navigation privée</b>, connectez-vous à Google, puis ouvrez
-      <a href="https://notebook.google.com/" target="_blank" rel="noopener noreferrer">notebook.google.com</a>.</li>
-    <li>Dans l’extension : « Exporter » › « JSON ». L’export est copié.</li>
-    <li>Fermez la fenêtre privée <b>sans vous déconnecter</b> (se déconnecter tuerait la session).
-      La fenêtre privée sert à ça : votre navigateur habituel ne remplace pas cette session.</li>
-    <li>Collez l’export ici, puis « Brancher ».</li>
+    <li>Dans le dossier du Studio, double-cliquez sur <b><code>brancher-notebooklm.cmd</code></b>
+      (à côté de <code>demarrer.cmd</code>). La première fois, il installe son outil : 1 à 3 minutes.</li>
+    <li>Une fenêtre Chrome (ou Edge) s’ouvre : <b>connectez-vous à Google</b> et attendez que
+      NotebookLM s’affiche. Elle se ferme seule.</li>
+    <li>La fenêtre noire écrit « OK : NotebookLM est branché ». Revenez ici :
+      <button id="btRevoir">J’ai fini, vérifier</button></li>
   </ol>
-  <textarea id="export" spellcheck="false" placeholder="[{&quot;domain&quot;: &quot;.google.com&quot;, &quot;name&quot;: &quot;SID&quot;, …}]"></textarea>
-  <p class="avert">Vous avez Python ? Autre chemin : <code>pip install "notebooklm-py[browser]"</code>,
-  puis <code>notebooklm login</code>, et collez le contenu du fichier
-  <code>storage_state.json</code> qu’il indique.</p>
-  <div class="ligne"><button id="btBrancher" class="primaire">Brancher</button><span id="etatBrancher"></span></div>
+  <p class="avert">Rien à copier ni à coller : le fichier envoie la session au Studio, puis efface
+  lui-même ce qui a servi (le fichier de session et la fenêtre de navigateur restée connectée).
+  Il demande Python 3.10 ou plus ; sans Python, prenez l’autre chemin ci-dessous.</p>
+  <details>
+    <summary>Autre chemin, sans Python : une extension de cookies</summary>
+    <ol>
+      <li>Ajoutez à votre navigateur une extension qui exporte les cookies en JSON
+        (par exemple « Cookie-Editor »), et autorisez-la en navigation privée.</li>
+      <li>Ouvrez une <b>fenêtre de navigation privée</b>, connectez-vous à Google, puis ouvrez
+        <a href="https://notebook.google.com/" target="_blank" rel="noopener noreferrer">notebook.google.com</a>.</li>
+      <li>Dans l’extension : « Exporter » › « JSON ». L’export est copié.</li>
+      <li>Fermez la fenêtre privée <b>sans vous déconnecter</b> (se déconnecter tuerait la session).
+        La fenêtre privée sert à ça : votre navigateur habituel ne remplace pas cette session.</li>
+      <li>Collez l’export ici, puis « Brancher ».</li>
+    </ol>
+    <textarea id="export" spellcheck="false" placeholder="[{&quot;domain&quot;: &quot;.google.com&quot;, &quot;name&quot;: &quot;SID&quot;, …}]"></textarea>
+    <div class="ligne"><button id="btBrancher" class="primaire">Brancher</button><span id="etatBrancher"></span></div>
+  </details>
 </div>
 
 <div id="travail" hidden>
@@ -524,6 +558,12 @@ async function charger(){
   }
 }
 
+// Après brancher-notebooklm.cmd : la session est déjà dans le coffre, on relit l'état.
+el("btRevoir").onclick = async () => {
+  el("btRevoir").disabled = true;
+  try { await charger(); } finally { el("btRevoir").disabled = false; }
+};
+
 el("btBrancher").onclick = async () => {
   el("btBrancher").disabled = true;
   texte("etatBrancher", "Vérification auprès de Google…");
@@ -605,10 +645,24 @@ el("btDemander").onclick = async () => {
   }
 };
 
+// Deux sources : l'AAC de NotebookLM, puis la même chose en Opus. Le navigateur
+// de VS Code ne lit pas l'AAC (25/09/2026) ; il passe alors à la seconde.
+function brancherSon(a, url){
+  a.removeAttribute("src");
+  a.textContent = "";
+  for(const [suffixe, type] of [["", 'audio/mp4; codecs="mp4a.40.2"'],
+                                ["&format=opus", 'audio/ogg; codecs="opus"']]){
+    const s = document.createElement("source");
+    s.src = url + suffixe; s.type = type;
+    a.appendChild(s);
+  }
+  a.load();
+}
+
 // --- Vos résumés : ils restent là après un rechargement ---------------------
 function montrer(j){
   el("resultat").hidden = false;
-  el("lecteur").src = j.audio_url;
+  brancherSon(el("lecteur"), j.audio_url);
   el("telecharger").href = j.audio_url + "&telecharger=1";
   el("carnet").href = j.carnet_url;
   CARNET = j.carnet_id;
@@ -633,9 +687,10 @@ async function listerResumes(){
     c.appendChild(t);
     if(j.audio_url){
       const a = document.createElement("audio");
-      // « metadata » : la durée s'affiche tout de suite ; avec « none », le
-      // lecteur montrait 0:00 et le résumé semblait vide.
-      a.controls = true; a.preload = "metadata"; a.src = j.audio_url;
+      // « metadata » : la durée s'affiche tout de suite, dès que le navigateur
+      // a trouvé une source qu'il sait lire (voir brancherSon).
+      a.controls = true; a.preload = "metadata";
+      brancherSon(a, j.audio_url);
       c.appendChild(a);
       const l = document.createElement("div");
       l.className = "ligne";

@@ -904,7 +904,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
          - boîte « Faire de la place » dans la page ;
          - `CarnetsPleins` sur `NotebookLimitError`.
          En réel le 25/09 : 20 « Untitled notebook » supprimés sur accord du propriétaire (liste relue avant ; 20 supprimés, 0 refusé ; 99 carnets avant, 80 après, dont 1 créé entre-temps). Le refus « compte plein » n'a pas été vu en réel.
-       - `login` laisse à côté du fichier un dossier `<fichier>.browser_profile`, profil Chrome encore connecté. La page doit dire de le supprimer aussi.
+       - `login` laisse à côté du fichier un dossier `<fichier>.browser_profile`, profil Chrome encore connecté. La page doit dire de le supprimer aussi. **Remplacé le 25/09** (friction « pas clair ») : `brancher-notebooklm.cmd` installe l'outil à la version épinglée, lance `login`, envoie la session au Studio et efface le fichier ET le profil dans un `finally` ; l'extension de cookies passe en repli replié. Vérifié en réel : `-Verifier` (installation, Studio joint, Chrome trouvé ; 1,2 s au second passage). **Non vérifié** : le parcours complet avec une vraie connexion Google — c'est le propriétaire qui la fait.
        Vu en réel le 25/09, par le propriétaire, depuis la page : un PDF (article sur la dissociation de H2S) a donné un résumé de 2,7 Mo, lu dans « Vos résumés ». Le carnet s'appelle « Studio · Dissociation_of_H2S….pdf · 25/09/2026 08:54 ».
 
 ## Détail par tâche
