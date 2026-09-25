@@ -1013,6 +1013,9 @@ def test_les_formules_latex_deviennent_indices_exposants_et_symboles(nlm, tmp_pa
     assert _rendre_markdown(pont, r"\\(H_2S\\)", tmp_path) == "<p><span>H<sub>2</sub>S</span></p>"
     # Une formule ne laisse pas passer de HTML non plus.
     assert "<img" not in _rendre_markdown(pont, r"\(<img src=x onerror=alert(1)>_2\)", tmp_path)
+    # Formule DANS le gras (historique reel du 25/09) ; le code reste brut.
+    assert _rendre_markdown(pont, r"**sulfure (\\(H_2S\\))** et `\(x_2\)`", tmp_path) == (
+        r"<p><strong>sulfure (<span>H<sub>2</sub>S</span>)</strong> et <code>\(x_2\)</code></p>")
 
 
 def test_la_reponse_markdown_n_injecte_jamais_de_html(nlm, tmp_path):

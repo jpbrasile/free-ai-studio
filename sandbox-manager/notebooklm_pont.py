@@ -809,7 +809,11 @@ function enLigne(parent, t){
     }
     const gras = s.startsWith("**") || s.startsWith("__");
     const n = document.createElement(gras ? "strong" : s.startsWith("`") ? "code" : "em");
-    n.textContent = gras ? s.slice(2, -2) : s.slice(1, -1);
+    // Le gras et l'italique peuvent porter une formule : « **sulfure
+    // d'hydrogène (\\(H_2S\\))** » restait brut (vu en réel le 25/09/2026).
+    // Le code, lui, reste tel quel.
+    const dedans = gras ? s.slice(2, -2) : s.slice(1, -1);
+    if(s.startsWith("`")){ n.textContent = dedans; } else { enLigne(n, dedans); }
     parent.appendChild(n);
     i = m.index + s.length;
   }
