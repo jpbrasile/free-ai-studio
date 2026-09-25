@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -56,6 +57,7 @@ import gpu_local
 import nettoyage_dialogue
 # NotebookLM par notebooklm-py : session Google fermee dans le coffre
 # (PLAN.md 17.6). La bibliotheque elle-meme n'est chargee qu'a l'usage.
+import mesures
 import notebooklm_pont
 import ou_calculer
 import poids_video
@@ -79,6 +81,8 @@ WORKER_GPU_URL = os.getenv("SANDBOX_WORKER_GPU_URL", "").rstrip("/")
 ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace"))
 JOBS = ROOT / "jobs"
 ART = ROOT / "artifacts"
+# La base de mesures (voir mesures.py) : hors git, sur ce poste.
+MESURES = ROOT / "mesures"
 JOBS.mkdir(parents=True, exist_ok=True)
 ART.mkdir(parents=True, exist_ok=True)
 
@@ -1659,12 +1663,88 @@ async def notebooklm_demander(request: Request, authorization: Optional[str] = H
     carnet, question = str(p.get("carnet_id") or ""), str(p.get("question") or "").strip()
     if not carnet or not question:
         raise HTTPException(400, "Il faut un carnet et une question.")
+    question, web, debut = question[:4000], bool(p.get("web")), time.monotonic()
     try:
-        return await asyncio.to_thread(notebooklm_pont.executer,
-                                       lambda: notebooklm_pont.demander(carnet, question[:4000],
-                                                                        web=bool(p.get("web"))))
+        r = await asyncio.to_thread(notebooklm_pont.executer,
+                                    lambda: notebooklm_pont.demander(carnet, question, web=web))
     except NLM_ERREURS as exc:
+        _mesurer_question(debut, web, motif=_motif_nlm(exc))
         raise HTTPException(502, str(exc)) from exc
+    _mesurer_question(debut, web, pages_web=len(r.get("web") or []),
+                      citations=len(r.get("citations") or []))
+    # L'historique ecrit reste dans le Studio, avec le resume (effacé avec lui).
+    jid = _job_du_carnet(carnet)
+    if jid:
+        with contextlib.suppress(OSError):
+            with (JOBS / jid / FICHIER_QUESTIONS).open("a", encoding="utf-8") as f:
+                f.write(json.dumps({"quand": time.time(), "question": question, **r},
+                                   ensure_ascii=False) + "\n")
+    return r
+
+
+# L'historique des questions d'un resume, dans son dossier : il reste lisible
+# session refusee, et part avec le resume quand on le supprime.
+FICHIER_QUESTIONS = "questions.jsonl"
+
+
+def _job_du_carnet(carnet: str) -> str:
+    """Le resume NotebookLM qui a cree ce carnet, ou ""."""
+    for p in JOBS.glob("*/job.json"):
+        with contextlib.suppress(Exception):
+            job = json.loads(p.read_text(encoding="utf-8"))
+            if job.get("provider") == "notebooklm" and job.get("carnet_id") == carnet:
+                return p.parent.name
+    return ""
+
+
+def _motif_nlm(exc: BaseException) -> str:
+    """Le motif d'un refus, pris dans la liste fermee de mesures.py."""
+    if isinstance(exc, (notebooklm_pont.SessionAbsente, notebooklm_pont.SessionExpiree)):
+        return "session"
+    if isinstance(exc, notebooklm_pont.QuotaAtteint):
+        return "quota"
+    if isinstance(exc, notebooklm_pont.CarnetsPleins):
+        return "plein"
+    return "echec"
+
+
+def _mesurer_question(debut: float, web: bool, motif: str = "", **nombres) -> None:
+    """Une ligne dans la base de mesures, SANS le texte de la question
+    (decision du 25/09/2026). Une mesure ratee ne fait pas echouer la question."""
+    with contextlib.suppress(OSError):
+        mesures.ecrire(MESURES, "notebooklm.question", endroit="notebooklm", ok=not motif,
+                       motif=motif, web=web, duree_s=time.monotonic() - debut, **nombres)
+
+
+@app.get("/notebooklm/historique")
+async def notebooklm_historique(request: Request, carnet_id: str,
+                                authorization: Optional[str] = Header(default=None)):
+    """Les questions d'un carnet : celles posees depuis le Studio (gardees ici,
+    avec citations et pages du web), puis celles posees directement dans
+    NotebookLM (relues chez Google si la session est valide)."""
+    auth(authorization)
+    _nlm_coupe(request)   # Studio partage : l'historique d'une personne ne se montre pas
+    studio = []
+    jid = _job_du_carnet(carnet_id)
+    if jid and (JOBS / jid / FICHIER_QUESTIONS).exists():
+        for ligne in (JOBS / jid / FICHIER_QUESTIONS).read_text(encoding="utf-8").splitlines():
+            with contextlib.suppress(ValueError):
+                studio.append(json.loads(ligne))
+    sortie = {"studio": studio, "notebooklm": [], "distant": ""}
+    if not notebooklm_pont.branchee():
+        sortie["distant"] = notebooklm_pont.PHRASE_ABSENTE
+        return sortie
+    try:
+        paires = await asyncio.to_thread(notebooklm_pont.executer,
+                                         lambda: notebooklm_pont.historique(carnet_id))
+    except NLM_ERREURS as exc:
+        sortie["distant"] = str(exc)
+        return sortie
+    # Une question posee depuis le Studio est aussi dans NotebookLM : on ne
+    # garde de NotebookLM que celles qui n'y sont pas deja.
+    deja = {e.get("question", "").strip() for e in studio}
+    sortie["notebooklm"] = [x for x in paires if x["question"].strip() not in deja]
+    return sortie
 
 
 @app.get("/notebooklm/carnets")

@@ -54,6 +54,9 @@ class Scenario:
         self.chemins: list = []                   # fichiers de session vus par le client
         self.plein = False                        # create leve NotebookLimitError
         self.supprimes: list = []
+        # chat.get_history : (question, reponse), de la plus ancienne a la plus recente.
+        self.historique = [("Quoi ?", "Il parle des phares."),
+                           ("Posée dans NotebookLM ?", "Oui, directement.")]
         # La recherche web rapide : statut final et pages trouvees.
         self.recherche_statut = "completed"
         self.recherche_pages = [("https://fr.wikipedia.org/wiki/Phare", "Phare — Wikipédia"),
@@ -165,7 +168,11 @@ def faux_module(sc: Scenario) -> types.ModuleType:
                                                import_sources=importer)
             c.artifacts = types.SimpleNamespace(generate_audio=generer, wait_for_completion=attendre,
                                                 list_audio=lister_audio, download_audio=rapatrier)
-            c.chat = types.SimpleNamespace(ask=demander)
+            async def historique(carnet, limit=100):
+                sc.appels.append(("historique", carnet, limit))
+                return list(sc.historique)
+
+            c.chat = types.SimpleNamespace(ask=demander, get_history=historique)
             return c
 
         async def __aexit__(self, *exc):
@@ -790,6 +797,96 @@ def test_poser_une_question_et_la_refuser_vide(client):
     assert "web: web" in html and "/^https?:\\/\\//i.test(s.url)" in html
     assert c.post("/notebooklm/demander", headers=ENTETE,
                   json={"carnet_id": "carnet-42", "question": " "}).status_code == 400
+
+
+# --- L'historique ecrit reste dans le Studio ; la mesure, sans le texte --------
+
+@pytest.fixture
+def resume_42(sandbox, monkeypatch, tmp_path):
+    """Un resume NotebookLM dont le carnet est carnet-42, et une base de mesures neuve."""
+    jobs, base = tmp_path / "jobs", tmp_path / "mesures"
+    (jobs / "n42").mkdir(parents=True)
+    (jobs / "n42" / "job.json").write_text(json.dumps(
+        {"id": "n42", "provider": "notebooklm", "status": "succeeded", "carnet_id": "carnet-42"}),
+        encoding="utf-8")
+    monkeypatch.setattr(sandbox, "JOBS", jobs)
+    monkeypatch.setattr(sandbox, "MESURES", base)
+    return jobs / "n42", base
+
+
+def lignes(dossier: Path) -> list:
+    return [json.loads(x) for f in sorted(dossier.glob("*.jsonl"))
+            for x in f.read_text(encoding="utf-8").splitlines()]
+
+
+def test_une_question_reste_dans_le_studio_et_se_mesure_sans_son_texte(client, resume_42):
+    c, pont, _ = client
+    dossier, base = resume_42
+    brancher(pont)
+    r = c.post("/notebooklm/demander", headers=ENTETE,
+               json={"carnet_id": "carnet-42", "question": "Quoi ? secret-client", "web": True})
+    assert r.status_code == 200
+    garde = [json.loads(x) for x in (dossier / "questions.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert garde[0]["question"] == "Quoi ? secret-client" and garde[0]["reponse"] == "Il parle des phares."
+    assert garde[0]["web"] and garde[0]["citations"] and garde[0]["quand"] > 0
+    # La mesure : fonction, endroit, duree, succes, web -- et PAS le texte.
+    (m,) = lignes(base)
+    assert m["fonction"] == "notebooklm.question" and m["endroit"] == "notebooklm"
+    assert m["ok"] is True and m["motif"] == "" and m["web"] is True
+    assert m["pages_web"] == 2 and m["citations"] == 1 and m["duree_s"] >= 0
+    assert "secret-client" not in json.dumps(m) and "phares" not in json.dumps(m)
+    assert list(base.glob("*.jsonl"))[0].name == m["date"][:7] + ".jsonl"
+
+
+def test_une_question_refusee_se_mesure_avec_son_motif(client, resume_42):
+    c, pont, sc = client
+    dossier, base = resume_42
+    brancher(pont)
+    sc.ouverture = erreur("AuthError")
+    r = c.post("/notebooklm/demander", headers=ENTETE, json={"carnet_id": "carnet-42", "question": "Q"})
+    assert r.status_code == 502
+    (m,) = lignes(base)
+    assert m["ok"] is False and m["motif"] == "session"
+    assert not (dossier / "questions.jsonl").exists()
+
+
+def test_l_historique_montre_le_studio_puis_ce_qui_a_ete_pose_dans_notebooklm(client, resume_42):
+    c, pont, sc = client
+    dossier, _ = resume_42
+    brancher(pont)
+    c.post("/notebooklm/demander", headers=ENTETE, json={"carnet_id": "carnet-42", "question": "Quoi ?"})
+    d = c.get("/notebooklm/historique?carnet_id=carnet-42", headers=ENTETE).json()
+    assert [e["question"] for e in d["studio"]] == ["Quoi ?"]
+    # « Quoi ? » est aussi chez NotebookLM : on ne la montre pas deux fois.
+    assert d["notebooklm"] == [{"question": "Posée dans NotebookLM ?", "reponse": "Oui, directement."}]
+    assert d["distant"] == "" and ("historique", "carnet-42", 50) in sc.appels
+    # Session refusee : l'historique du Studio reste lisible, et la page dit pourquoi le reste manque.
+    sc.ouverture = erreur("AuthError")
+    d = c.get("/notebooklm/historique?carnet_id=carnet-42", headers=ENTETE).json()
+    assert [e["question"] for e in d["studio"]] == ["Quoi ?"] and d["notebooklm"] == []
+    assert "expiré" in d["distant"]
+    assert c.get("/notebooklm/historique?carnet_id=carnet-42").status_code == 401
+
+
+def test_la_page_montre_l_historique_et_renvoie_a_notebooklm_pour_le_reste(client):
+    c, _pont, _ = client
+    html = c.get("/notebooklm").text
+    assert '<div id="fil"></div>' in html and "📜 Questions posées" in html
+    assert "chargerFil(CARNET, el(\"fil\"));" in html
+    assert "Vidéo, diapositives, infographie : ouvrez le carnet dans NotebookLM" in html
+
+
+def test_la_base_de_mesures_refuse_tout_texte_libre(tmp_path):
+    import mesures
+    m = mesures.ecrire(tmp_path, "notebooklm.question", endroit="notebooklm", ok=True, duree_s=1.23456)
+    assert m["duree_s"] == 1.235
+    for mauvais in ({"question": "texte du client"}, {"motif": "phrase libre"},
+                    {"endroit": "chez moi"}, {"ok": "oui"}, {"duree_s": True}):
+        with pytest.raises(ValueError):
+            mesures.ecrire(tmp_path, "notebooklm.question", **mauvais)
+    with pytest.raises(ValueError):
+        mesures.ecrire(tmp_path, "fonction.inventee")
+    assert len(lignes(tmp_path)) == 1
 
 
 def test_reparer_depuis_le_coffre_sans_reconnexion(client, monkeypatch):

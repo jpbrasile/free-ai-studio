@@ -523,6 +523,15 @@ async def demander(carnet_id: str, question: str, web: bool = False) -> dict:
             "web": ajoutees, "note": note}
 
 
+async def historique(carnet_id: str, nombre: int = 50) -> list:
+    """Les questions posees dans ce carnet chez NotebookLM, de la plus
+    ancienne a la plus recente (`chat.get_history`, « oldest-first » dans la
+    0.8.2) -- celles posees directement dans NotebookLM comprises."""
+    async with client() as c:
+        paires = await c.chat.get_history(carnet_id, limit=nombre)
+    return [{"question": q or "", "reponse": r or ""} for q, r in paires or []]
+
+
 PAGE_HTML = r"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NotebookLM — Free AI Studio</title>
@@ -629,6 +638,8 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
     <audio id="lecteur" controls></audio>
     <div class="ligne"><a id="telecharger" href="#">Enregistrer le fichier audio</a>
       <a id="carnet" href="#" target="_blank" rel="noopener noreferrer">Ouvrir le carnet dans NotebookLM ↗</a></div>
+    <p class="donnees">Vidéo, diapositives, infographie : ouvrez le carnet dans NotebookLM, le Studio
+    ne les refait pas.</p>
     <h2>Poser une question à vos documents</h2>
     <div class="ligne"><input id="question" style="flex:1" placeholder="Que dit le document sur… ?">
       <button id="btDemander">Demander</button></div>
@@ -636,6 +647,8 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
       ajoute à ce carnet les pages qu’il trouve (10 au plus, elles y restent), puis répond.
       Compter 1 à 3 minutes.</label>
     <div id="reponse"></div>
+    <h2>Questions déjà posées sur ce carnet</h2>
+    <div id="fil"></div>
   </div>
   <div id="place" class="carte" hidden>
     <h2>Faire de la place dans NotebookLM</h2>
@@ -888,6 +901,21 @@ el("btDemander").onclick = async () => {
   if(!r.ok){ texte("reponse", d.detail || "Refusé.", "ko"); return; }
   const div = el("reponse");
   div.textContent = "";
+  rendreEchange(div, d);
+  chargerFil(CARNET, el("fil"));
+};
+
+// Une réponse (et, dans l'historique, sa question) : note, texte rendu,
+// citations, pages du web ajoutées. Même rendu à chaud et dans l'historique.
+function rendreEchange(div, d, question){
+  if(question){
+    const q = document.createElement("p");
+    const b = document.createElement("strong");
+    b.textContent = "❓ " + question;
+    q.appendChild(b);
+    if(d.quand){ q.appendChild(document.createTextNode(" — " + quandFr(d.quand))); }
+    div.appendChild(q);
+  }
   if(d.note){
     const n = document.createElement("p");
     n.className = "avert";
@@ -917,7 +945,53 @@ el("btDemander").onclick = async () => {
     }
     div.appendChild(ul);
   }
-};
+}
+
+// L'historique d'un carnet : d'abord les questions posées depuis le Studio
+// (gardées ici, lisibles même session refusée), puis celles posées
+// directement dans NotebookLM. Le plus récent en haut.
+async function chargerFil(carnet, boite){
+  if(!carnet || !boite) return;
+  boite.textContent = "Chargement de l’historique…";
+  let d;
+  try {
+    const r = await fetch("/notebooklm/historique?carnet_id=" + encodeURIComponent(carnet), {headers: H});
+    d = await r.json();
+    if(!r.ok){ boite.textContent = d.detail || "Historique indisponible."; return; }
+  } catch(e) { boite.textContent = "Le Studio ne répond pas."; return; }
+  boite.textContent = "";
+  const studio = (d.studio || []).slice().reverse();
+  const direct = (d.notebooklm || []).slice().reverse();
+  if(!studio.length && !direct.length){
+    const p = document.createElement("p");
+    p.className = "avert";
+    p.textContent = "Aucune question posée sur ce carnet pour l’instant.";
+    boite.appendChild(p);
+  }
+  for(const e of studio){
+    const c = document.createElement("div");
+    c.className = "carte";
+    rendreEchange(c, e, e.question);
+    boite.appendChild(c);
+  }
+  if(direct.length){
+    const t = document.createElement("h3");
+    t.textContent = "Posées directement dans NotebookLM";
+    boite.appendChild(t);
+    for(const e of direct){
+      const c = document.createElement("div");
+      c.className = "carte";
+      rendreEchange(c, e, e.question);
+      boite.appendChild(c);
+    }
+  }
+  if(d.distant){
+    const p = document.createElement("p");
+    p.className = "avert";
+    p.textContent = "Questions posées dans NotebookLM : non relues (" + d.distant + ")";
+    boite.appendChild(p);
+  }
+}
 
 // Deux sources : l'AAC de NotebookLM, puis la même chose en Opus. Un navigateur
 // qui ne lirait pas l'AAC passe à la seconde (repli, voir version_opus).
@@ -941,6 +1015,7 @@ function montrer(j){
   el("carnet").href = j.carnet_url;
   CARNET = j.carnet_id;
   texte("reponse", "");
+  chargerFil(CARNET, el("fil"));
   el("resultat").scrollIntoView({behavior: "smooth"});
 }
 // Supprimer un résumé : le son, sa copie, vos documents et la fiche, ici.
@@ -1009,10 +1084,23 @@ async function listerResumes(){
       l.append(dl, nb);
       if(SESSION_OK){ l.appendChild(q); }
     }
+    // L'historique écrit se lit même session refusée : il est gardé ici.
+    const fil = document.createElement("div");
+    if(j.carnet_id){
+      const h = document.createElement("button");
+      h.textContent = "📜 Questions posées";
+      h.onclick = () => {
+        if(fil.dataset.ouvert === "1"){ fil.textContent = ""; fil.dataset.ouvert = ""; return; }
+        fil.dataset.ouvert = "1";
+        chargerFil(j.carnet_id, fil);
+      };
+      l.appendChild(h);
+    }
     if(j.status !== "queued" && j.status !== "running"){
       l.appendChild(boutonSupprimer(j));
     }
     c.appendChild(l);
+    c.appendChild(fil);
     boite.appendChild(c);
     // Un résumé encore en cours après un rechargement : on le suit de nouveau.
     if(!SUIVI && (j.status === "queued" || j.status === "running")){

@@ -32,6 +32,13 @@ Free AI Studio le propose de **deux façons** :
    recherche web rapide de NotebookLM ajoute au carnet les pages qu’elle trouve (10 au plus ;
    elles y restent, comme dans NotebookLM), puis répond. Compter 1 à 3 minutes. La page liste les
    pages ajoutées ; si rien n’est trouvé, elle le dit et répond avec vos seuls documents.
+   **L’historique reste dans le Studio** : sous chaque résumé, « 📜 Questions posées » montre les
+   questions posées depuis le Studio (avec citations et pages du web, lisibles même session
+   refusée), puis celles posées directement dans NotebookLM. Vidéo, diapositives et infographie
+   se font dans NotebookLM (« Ouvrir le carnet ») : le Studio ne les refait pas.
+   Chaque question écrit aussi une ligne dans la base de mesures du poste — date, durée,
+   succès ou motif du refus, recherche web ou non — **sans le texte de la question** ; rien ne
+   part vers l’éditeur (PLAN-PLATEFORME, décision du 25/09/2026).
 
 L’offre gratuite de Google annonce **3 résumés audio par jour**. Au-delà, la page le dit et il faut
 attendre le lendemain. Google peut changer ce quota : le Studio ne promet jamais d’illimité.
