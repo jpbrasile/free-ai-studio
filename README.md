@@ -254,7 +254,7 @@ La section **Étudier** ouvre NotebookLM de deux façons :
   chiffrée par le coffre du Studio, et vos documents partent alors chez Google.
 
 Le niveau gratuit n'est jamais présenté comme illimité (3 résumés audio par jour annoncés par Google).
-Pas encore essayé sur un vrai compte Google au 24/09/2026 : voir PLAN.md 17.6.
+Essayé en réel le 25/09/2026 : résumé audio en français en 228 s, question avec citation (PLAN.md 17.6).
 
 Voir `docs/NOTEBOOKLM.md`.
 

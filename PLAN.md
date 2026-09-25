@@ -884,7 +884,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
 
          Mesurer le temps, le pic mémoire et le chemin du fichier rendu.
     5. **NotebookLM : `notebooklm-py`** (`teng-lin/notebooklm-py`, MIT, sur PyPI). Il pilote les API **non documentées** de Google : carnets, sources (URL, PDF, YouTube, Drive, audio), questions avec citations, et fabrication de résumés audio, quiz, fiches, cartes mentales, rapports. Connexion par le navigateur une fois, ou par un « master token » qui tourne sans surveillance, donc dans un conteneur. Ses auteurs le disent eux-mêmes : les API peuvent changer sans préavis, et il est fait pour des prototypes et un usage personnel. Google a renommé NotebookLM « Gemini Notebook » en juillet 2026 ; la bibliothèque dit marcher sans changement.
-    6. **SP-NOTEBOOKLM-PAR-API (décidé par le propriétaire le 24/09 ; page écrite, PAS essayée sur un vrai compte).** Ce que ça change : `http://localhost:8020/notebooklm` (`sandbox-manager/notebooklm_pont.py`) crée un carnet dans le compte de la personne, y verse ses fichiers ou son texte, demande un résumé audio en français, le rapporte (`.m4a`), et répond aux questions avec citations. La page du routeur garde le lien « vous-même » et renvoie vers celle-ci. `notebooklm-py==0.8.2` épinglé. Les trois conditions :
+    6. **SP-NOTEBOOKLM-PAR-API (décidé par le propriétaire le 24/09 ; essayé en réel le 25/09 : réussi).** Ce que ça change : `http://localhost:8020/notebooklm` (`sandbox-manager/notebooklm_pont.py`) crée un carnet dans le compte de la personne, y verse ses fichiers ou son texte, demande un résumé audio en français, le rapporte (`.m4a`), et répond aux questions avec citations. La page du routeur garde le lien « vous-même » et renvoie vers celle-ci. `notebooklm-py==0.8.2` épinglé. Les trois conditions :
        - **Secret de compte entier** : tenu. La session est un export de cookies (fenêtre privée, puis Cookie-Editor) ou le `storage_state.json` de `notebooklm login`. Elle est triée par la commande publique `notebooklm auth import-cookies`, puis fermée par `coffre.chiffrer` dans `config/notebooklm/session.coffre`. Elle n'est ouverte, dans un dossier temporaire, que le temps d'un appel ; les cookies que la bibliothèque fait tourner sont refermés. La page prévient avant (« ouvre votre compte Google entier », compte dédié conseillé). Le branchement est coupé dans un Studio partagé.
        - **Brique `composite.DONNEES`** : **PAS faite**, reportée en **17.6b**. `DONNEES` doit avoir exactement les clés de `ROUTES` (test_donnees). Une brique demande une route d'enchaînement (envoi en plusieurs parties, suivi de `/notebooklm/jobs`), une ligne de registre, une page de branchement et un type `audio/mp4`. C'est trop pour la nuit d'avant l'essai client, sur une chaîne qui marche. En attendant, aucune chaîne ne peut atteindre NotebookLM, et la page dit elle-même « Vos documents partent chez Google (NotebookLM) ».
        - **Fumée quotidienne (16.5)** : toujours ouverte. À la place, la page vérifie la session à chaque ouverture (`/notebooklm/etat?verifier=1` : liste des carnets, rien de fabriqué).
@@ -893,13 +893,15 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
        - 39 tests (`tests/test_notebooklm_pont.py`) sur une fausse bibliothèque aux noms de la 0.8.2 : coffre jamais en clair, erreurs traduites, ticket #2432 (audio fini dit « removed »), quota, routes et leurs refus (autre site, Studio partagé) ;
        - la **vraie** commande d'import, hors réseau, sur des cookies faux (6 cookies donnés, les 5 de Google gardés) ;
        - une session fausse face au vrai Google, qui lève `ValueError` « Authentication expired or invalid », reconnue comme session expirée.
-       **Non vérifié : un vrai compte.** Aucun carnet ni audio n'a été fabriqué. Essai du propriétaire, 0 $ :
-         1. `demarrer.cmd` ;
-         2. `/notebooklm` du bac à sable ;
-         3. brancher (export en fenêtre privée) ;
-         4. un PDF court, forme « Bref », durée « Courte » ;
-         5. mesurer la durée, écouter (le français ?), poser une question, « Oublier ».
-       Un essai consomme 1 des 3 résumés du jour.
+       **Essai RÉEL du 25/09, compte du propriétaire, par le Studio reconstruit : réussi.**
+       - Session : obtenue par `notebooklm login --browser chrome --storage …` lancé par le propriétaire ; il a collé le fichier dans la page. 41 cookies gardés ; vérification en 0,8 s.
+       - Résumé : texte de 1 200 signes environ, forme « Bref », durée « Courte ». Succès en **227,8 s** du lancement au fichier : génération de 107 s à 221 s, rapatriement 7 s.
+       - Audio : m4a (AAC), **108,9 s**, 3 504 163 octets. Les 30 premières secondes, transcrites par la dictée LOCALE, sont en **français** et fidèles au texte.
+       - Question : réponse juste en 8,9 s, avec citation [1] du texte source.
+       Deux défauts relevés :
+       - **Le Studio crée un carnet par résumé et n'en supprime aucun.** Le compte en avait 99 avant l'essai. Le plafond de l'offre gratuite (100 selon Google, non relu) sera atteint et refusé avec sa phrase. À faire : réutiliser un carnet « Free AI Studio », ou proposer de supprimer les anciens.
+       - `login` laisse à côté du fichier un dossier `<fichier>.browser_profile`, profil Chrome encore connecté. La page doit dire de le supprimer aussi.
+       Non vérifié en réel : l'envoi d'un PDF (seul un texte collé est passé) ; la page elle-même dans le navigateur (l'essai est passé par les routes).
 
 ## Détail par tâche
 
