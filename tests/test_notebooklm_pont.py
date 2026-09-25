@@ -673,6 +673,11 @@ def test_le_brancheur_suit_l_epingle_ne_montre_pas_la_cle_et_efface_tout():
     for ligne in ps1.splitlines():
         if "Write-Host" in ligne:
             assert "$cle" not in ligne and "$corps" not in ligne and "$entetes" not in ligne, ligne
+    # 25/09, en réel : Google n'a pas donné __Secure-1PSIDTS à la connexion et
+    # l'import du Studio a refusé. La réparation de la bibliothèque passe AVANT
+    # l'envoi, tant que le profil du navigateur existe encore.
+    reparation = ps1.index("auth refresh --verify --allow-headless")
+    assert ps1.index("login --browser") < reparation < ps1.index("/notebooklm/session")
     # Le dossier de travail (session + profil du navigateur) part dans un finally.
     fin = ps1.split("} finally {")[1]
     assert "Remove-Item -Recurse -Force -LiteralPath $travail" in fin

@@ -110,6 +110,18 @@ try {
     & $nlm login --browser $Navigateur --storage $session --browser-timeout 600 | Out-Null
     if (-not (Test-Path $session)) { Arret "la connexion n'a pas abouti (fenetre fermee trop tot ?). Relancez ce fichier." }
 
+    # Google ne donne pas toujours __Secure-1PSIDTS a la connexion (issue #865 de
+    # notebooklm-py) : login enregistre quand meme, et c'est la commande SUIVANTE
+    # qui repare. L'import du Studio, lui, refuse une session incomplete. Vu en
+    # reel le 25/09/2026 : "Missing required cookies: __Secure-1PSIDTS". On
+    # repare donc ici, tant que le profil du navigateur existe encore.
+    Write-Host "Verification de la session aupres de Google..."
+    & $nlm --storage $session auth refresh --verify --allow-headless --quiet
+    if ($LASTEXITCODE) {
+        Arret ("Google n'a pas donne une session complete, meme apres reparation. " +
+               "Relancez ce fichier ; si cela se repete, prenez l'autre chemin de la page NotebookLM.")
+    }
+
     $corps = @{ export = [System.IO.File]::ReadAllText($session, $utf8) } | ConvertTo-Json -Compress
     try {
         $r = Invoke-RestMethod -Uri "$Studio/notebooklm/session" -Method Post -Headers $entetes `
