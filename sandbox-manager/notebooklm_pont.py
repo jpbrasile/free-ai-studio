@@ -48,6 +48,10 @@ LONGUEURS = {"court": "SHORT", "normal": "DEFAULT", "long": "LONG"}
 # defaut Python (300 s) est trop court.
 AUDIO_DELAI_S = int(os.getenv("NOTEBOOKLM_AUDIO_TIMEOUT_SECONDS", "1200"))
 SOURCE_DELAI_S = 300.0
+# Recherche web rapide de NotebookLM (research.start, mode fast) : son delai, et
+# combien de pages trouvees entrent au plus dans le carnet.
+RECHERCHE_DELAI_S = 300.0
+RECHERCHE_MAX = 10
 EXTENSIONS = (".pdf", ".txt", ".md", ".docx")
 TEXTE_MAX = 500_000   # signes colles dans la page ; NotebookLM borne une source a 500 000 mots
 
@@ -273,6 +277,9 @@ def traduire(exc: BaseException) -> Exception:
         return CarnetsPleins(PHRASE_PLEIN)
     if "SourceProcessingError" in noms or "SourceAddError" in noms:
         return NotebookLMEchec("NotebookLM n’a pas su lire un des documents : %s" % texte[:300])
+    if "ResearchError" in noms or "ResearchTimeoutError" in noms:
+        return NotebookLMEchec("La recherche web de NotebookLM a échoué ou n’a pas fini à temps. "
+                               "Réessayez, ou décochez « Chercher aussi sur le web ».")
     if "WaitTimeoutError" in noms or "SourceTimeoutError" in noms:
         return NotebookLMEchec("NotebookLM n’a pas fini à temps. Le travail continue peut-être "
                                "chez Google : ouvrez le carnet dans NotebookLM.")
@@ -478,14 +485,38 @@ def version_opus(m4a: Path, commande: str = "ffmpeg") -> Path | None:
     return cible
 
 
-async def demander(carnet_id: str, question: str) -> dict:
-    """Une question aux sources d'un carnet ; la reponse et ses citations."""
+async def demander(carnet_id: str, question: str, web: bool = False) -> dict:
+    """Une question aux sources d'un carnet ; la reponse et ses citations.
+
+    web=True (demande du proprietaire, 25/09/2026 : « il n'a pas la reponse
+    dans la source ») : d'abord la recherche web RAPIDE de NotebookLM sur la
+    question (`research.start`, mode fast), puis les pages trouvees entrent
+    dans le carnet (RECHERCHE_MAX au plus) avant la question. Elles y restent,
+    comme dans NotebookLM ; la page le dit avant qu'on coche."""
+    ajoutees, note = [], ""
     async with client() as c:
+        if web:
+            depart = await c.research.start(carnet_id, question, source="web", mode="fast")
+            tache = await c.research.wait_for_completion(carnet_id, depart.task_id,
+                                                         timeout=RECHERCHE_DELAI_S)
+            statut = getattr(tache.status, "value", tache.status)
+            trouvees = [s for s in (tache.sources or ()) if getattr(s, "url", "")][:RECHERCHE_MAX]
+            if statut != "completed" or not trouvees:
+                note = "La recherche web n’a rien trouvé : réponse avec les seules sources du carnet."
+            else:
+                importees = await c.research.import_sources(carnet_id, depart.task_id, trouvees)
+                # Une page encore en lecture chez Google ne compterait pas dans
+                # la reponse ; une page illisible n'empeche pas les autres.
+                for s in importees or []:
+                    with contextlib.suppress(Exception):
+                        await c.sources.wait_until_ready(carnet_id, s["id"], timeout=SOURCE_DELAI_S)
+                ajoutees = [{"titre": (s.title or s.url)[:200], "url": s.url} for s in trouvees]
         r = await c.chat.ask(carnet_id, question)
     return {"reponse": r.answer,
             "citations": [{"numero": getattr(x, "citation_number", None),
                            "extrait": (getattr(x, "cited_text", "") or "")[:500]}
-                          for x in (getattr(r, "references", None) or [])]}
+                          for x in (getattr(r, "references", None) or [])],
+            "web": ajoutees, "note": note}
 
 
 PAGE_HTML = r"""<!doctype html><html lang="fr"><head><meta charset="utf-8">
@@ -588,6 +619,9 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
     <h2>Poser une question à vos documents</h2>
     <div class="ligne"><input id="question" style="flex:1" placeholder="Que dit le document sur… ?">
       <button id="btDemander">Demander</button></div>
+    <label class="avert"><input type="checkbox" id="web"> Chercher aussi sur le web : NotebookLM
+      ajoute à ce carnet les pages qu’il trouve (10 au plus, elles y restent), puis répond.
+      Compter 1 à 3 minutes.</label>
     <div id="reponse"></div>
   </div>
   <div id="place" class="carte" hidden>
@@ -725,14 +759,27 @@ el("btFabriquer").onclick = async () => {
 el("btDemander").onclick = async () => {
   const q = el("question").value.trim();
   if(!q || !CARNET) return;
-  texte("reponse", "NotebookLM lit vos documents…");
-  const r = await fetch("/notebooklm/demander", {method: "POST",
-    headers: Object.assign({"Content-Type": "application/json"}, H),
-    body: JSON.stringify({carnet_id: CARNET, question: q})});
-  const d = await r.json();
+  const web = el("web").checked;
+  texte("reponse", web ? "NotebookLM cherche sur le web, ajoute les pages trouvées au carnet, puis répond (1 à 3 minutes)…"
+                       : "NotebookLM lit vos documents…");
+  el("btDemander").disabled = true;
+  let r, d;
+  try {
+    r = await fetch("/notebooklm/demander", {method: "POST",
+      headers: Object.assign({"Content-Type": "application/json"}, H),
+      body: JSON.stringify({carnet_id: CARNET, question: q, web: web})});
+    d = await r.json();
+  } catch(e) { d = {detail: "Le Studio ne répond pas."}; r = {ok: false}; }
+  el("btDemander").disabled = false;
   if(!r.ok){ texte("reponse", d.detail || "Refusé.", "ko"); return; }
   const div = el("reponse");
   div.textContent = "";
+  if(d.note){
+    const n = document.createElement("p");
+    n.className = "avert";
+    n.textContent = d.note;
+    div.appendChild(n);
+  }
   const p = document.createElement("p");
   p.textContent = d.reponse;
   div.appendChild(p);
@@ -741,6 +788,22 @@ el("btDemander").onclick = async () => {
     q2.className = "avert";
     q2.textContent = "[" + c.numero + "] « " + c.extrait + " »";
     div.appendChild(q2);
+  }
+  if((d.web || []).length){
+    const t = document.createElement("p");
+    t.textContent = "Pages du web ajoutées au carnet :";
+    div.appendChild(t);
+    const ul = document.createElement("ul");
+    for(const s of d.web){
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      a.textContent = s.titre;
+      // Seules les adresses web deviennent des liens (jamais javascript: ou autre).
+      if(/^https?:\/\//i.test(s.url)){ a.href = s.url; a.target = "_blank"; a.rel = "noopener noreferrer"; }
+      li.appendChild(a);
+      ul.appendChild(li);
+    }
+    div.appendChild(ul);
   }
 };
 

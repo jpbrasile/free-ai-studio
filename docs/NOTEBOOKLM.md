@@ -28,6 +28,10 @@ Free AI Studio le propose de **deux façons** :
    fabrication ne se supprime pas : rien ne l’arrête chez Google. Dans VS Code, ouvrez la page
    après avoir cliqué « Go Live ». Le carnet reste dans votre
    NotebookLM : « Ouvrir le carnet » ou « Poser une question à vos documents ».
+   Quand la réponse n’est pas dans vos documents, cochez **« Chercher aussi sur le web »** : la
+   recherche web rapide de NotebookLM ajoute au carnet les pages qu’elle trouve (10 au plus ;
+   elles y restent, comme dans NotebookLM), puis répond. Compter 1 à 3 minutes. La page liste les
+   pages ajoutées ; si rien n’est trouvé, elle le dit et répond avec vos seuls documents.
 
 L’offre gratuite de Google annonce **3 résumés audio par jour**. Au-delà, la page le dit et il faut
 attendre le lendemain. Google peut changer ce quota : le Studio ne promet jamais d’illimité.

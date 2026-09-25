@@ -53,6 +53,10 @@ class Scenario:
         self.chemins: list = []                   # fichiers de session vus par le client
         self.plein = False                        # create leve NotebookLimitError
         self.supprimes: list = []
+        # La recherche web rapide : statut final et pages trouvees.
+        self.recherche_statut = "completed"
+        self.recherche_pages = [("https://fr.wikipedia.org/wiki/Phare", "Phare — Wikipédia"),
+                                ("javascript:alert(1)", "Piège")]
         self.carnets = [carnet("a", "Mes notes", 2024, 3), carnet("b", "Studio · Phares · 01/09/2026 10:00", 2026, 9),
                         carnet("c", "Cours", 2025, 1)]
 
@@ -134,8 +138,30 @@ def faux_module(sc: Scenario) -> types.ModuleType:
                 return types.SimpleNamespace(answer="Il parle des phares.", references=[
                     types.SimpleNamespace(citation_number=1, cited_text="Le phare de Cordouan…")])
 
+            async def chercher(carnet, question, source="web", mode="fast"):
+                sc.appels.append(("chercher", carnet, question, source, mode))
+                return types.SimpleNamespace(task_id="recherche-1")
+
+            async def attendre_recherche(carnet, tache, timeout=None):
+                sc.appels.append(("attendre_recherche", tache, timeout))
+                return types.SimpleNamespace(
+                    status=types.SimpleNamespace(value=sc.recherche_statut),
+                    sources=tuple(types.SimpleNamespace(url=u, title=t) for u, t in sc.recherche_pages))
+
+            async def importer(carnet, tache, pages):
+                sc.appels.append(("importer", tache, [p.url for p in pages]))
+                return [{"id": "web-%d" % i, "title": p.title} for i, p in enumerate(pages)]
+
+            async def pret(carnet, ident, timeout=None):
+                sc.appels.append(("pret", ident))
+                if ident == "web-1":
+                    raise erreur("SourceProcessingError")
+
             c.notebooks = types.SimpleNamespace(list=lister, create=creer, delete=effacer)
-            c.sources = types.SimpleNamespace(add_text=ajouter_texte, add_file=ajouter_fichier)
+            c.sources = types.SimpleNamespace(add_text=ajouter_texte, add_file=ajouter_fichier,
+                                              wait_until_ready=pret)
+            c.research = types.SimpleNamespace(start=chercher, wait_for_completion=attendre_recherche,
+                                               import_sources=importer)
             c.artifacts = types.SimpleNamespace(generate_audio=generer, wait_for_completion=attendre,
                                                 list_audio=lister_audio, download_audio=rapatrier)
             c.chat = types.SimpleNamespace(ask=demander)
@@ -515,7 +541,44 @@ def test_une_question_rend_la_reponse_et_ses_citations(nlm):
     brancher(pont)
     r = lancer(pont, lambda: pont.demander("carnet-42", "De quoi parle-t-il ?"))
     assert r == {"reponse": "Il parle des phares.",
-                 "citations": [{"numero": 1, "extrait": "Le phare de Cordouan…"}]}
+                 "citations": [{"numero": 1, "extrait": "Le phare de Cordouan…"}],
+                 "web": [], "note": ""}
+    assert not [a for a in sc.appels if a[0] in ("chercher", "importer")]
+
+
+def test_avec_le_web_la_recherche_rapide_ajoute_les_pages_avant_la_question(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    r = lancer(pont, lambda: pont.demander("carnet-42", "Quand fut-il allumé ?", web=True))
+    noms = [a[0] for a in sc.appels]
+    # Chercher, attendre, importer, attendre chaque page, PUIS demander.
+    assert noms[1:] == ["chercher", "attendre_recherche", "importer", "pret", "pret", "demander"]
+    assert sc.appels[1] == ("chercher", "carnet-42", "Quand fut-il allumé ?", "web", "fast")
+    assert sc.appels[2][2] == pont.RECHERCHE_DELAI_S
+    # Une page illisible (web-1) n'empeche pas la reponse.
+    assert r["reponse"] == "Il parle des phares." and r["note"] == ""
+    assert r["web"][0] == {"titre": "Phare — Wikipédia", "url": "https://fr.wikipedia.org/wiki/Phare"}
+
+
+def test_avec_le_web_au_plus_dix_pages_et_rien_trouve_se_dit(nlm):
+    pont, sc = nlm
+    brancher(pont)
+    sc.recherche_pages = [("https://exemple.org/%d" % i, "Page %d" % i) for i in range(14)] + [("", "Sans adresse")]
+    r = lancer(pont, lambda: pont.demander("carnet-42", "Q", web=True))
+    assert len(r["web"]) == pont.RECHERCHE_MAX == 10
+    importe = [a for a in sc.appels if a[0] == "importer"][0][2]
+    assert len(importe) == 10 and "" not in importe
+    sc.appels.clear()
+    sc.recherche_statut = "failed"
+    r = lancer(pont, lambda: pont.demander("carnet-42", "Q", web=True))
+    assert r["web"] == [] and "rien trouvé" in r["note"] and r["reponse"]
+    assert "importer" not in [a[0] for a in sc.appels]
+
+
+def test_une_recherche_web_en_panne_est_dite(nlm):
+    pont, _ = nlm
+    e = pont.traduire(erreur("ResearchTimeoutError"))
+    assert isinstance(e, pont.NotebookLMEchec) and "décochez" in str(e)
 
 
 # --- 5. Les routes ---------------------------------------------------------------
@@ -716,6 +779,14 @@ def test_poser_une_question_et_la_refuser_vide(client):
     brancher(pont)
     r = c.post("/notebooklm/demander", headers=ENTETE, json={"carnet_id": "carnet-42", "question": "Quoi ?"})
     assert r.status_code == 200 and r.json()["reponse"] == "Il parle des phares."
+    assert r.json()["web"] == []
+    r = c.post("/notebooklm/demander", headers=ENTETE,
+               json={"carnet_id": "carnet-42", "question": "Quoi ?", "web": True})
+    assert r.status_code == 200 and r.json()["web"][0]["url"].startswith("https://")
+    # La page : la case, et seules les adresses http(s) deviennent des liens.
+    html = c.get("/notebooklm").text
+    assert 'id="web"' in html and "elles y restent" in html
+    assert "web: web" in html and "/^https?:\\/\\//i.test(s.url)" in html
     assert c.post("/notebooklm/demander", headers=ENTETE,
                   json={"carnet_id": "carnet-42", "question": " "}).status_code == 400
 

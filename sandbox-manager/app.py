@@ -1645,7 +1645,8 @@ async def notebooklm_demander(request: Request, authorization: Optional[str] = H
         raise HTTPException(400, "Il faut un carnet et une question.")
     try:
         return await asyncio.to_thread(notebooklm_pont.executer,
-                                       lambda: notebooklm_pont.demander(carnet, question[:4000]))
+                                       lambda: notebooklm_pont.demander(carnet, question[:4000],
+                                                                        web=bool(p.get("web"))))
     except NLM_ERREURS as exc:
         raise HTTPException(502, str(exc)) from exc
 
