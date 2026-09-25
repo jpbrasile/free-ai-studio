@@ -954,6 +954,30 @@ reward »), complétée par « Never covert » — qui est en **l. 19**, dans le
   confiance du contributeur que le plan prévoit (l. 13, 97). Deux régimes distincts, et
   c'est délibéré : **contributions signées, mesures anonymes.**
 
+> **Décision du 25/09/2026 — le contenu des clients.** Constat de l'utilisateur : « mon but
+> est d'enrichir la partie administrateur en faisant travailler mes clients sur leurs API ;
+> s'ils sont en direct sur NotebookLM, je perds ces données qui constituent ma richesse
+> finale ». Tranché, sur proposition, en trois niveaux :
+>
+> 1. **Les usages restent dans le Studio.** Une fonction dont on se sert souvent (pour
+>    NotebookLM : historique, sources, documents écrits) est branchée dans le Studio plutôt
+>    que laissée derrière un lien ; chaque usage y écrit sa ligne de mesure, sans aucun texte
+>    du client. Le lien « Ouvrir le carnet » reste — cacher NotebookLM abîmerait la confiance —
+>    et sert pour ce que le Studio ne refait pas (vidéo, diapositives, infographie).
+> 2. **Pas de collecte générale du contenu.** À la place, un bouton **« Partager cet exemple
+>    avec l'éditeur »**, question par question : le client voit exactement ce qui part, peut le
+>    corriger avant l'envoi et le retirer après. C'est l'écran d'accord et l'effacement propres
+>    que la puce « Contenu » ci-dessus exigeait. Ces exemples réels nourrissent le jeu privé,
+>    qui doit se renouveler.
+> 3. **Jamais** : les documents du client, son historique en bloc, sa session Google.
+>
+> Motifs : un contenu client porte secrets d'affaires, noms, parfois santé — le stocker en
+> masse fait de l'administrateur un responsable de traitement (RGPD) et une cible ; un
+> débutant refuserait une collecte générale, et avec elle l'accord aux mesures, qui est ce qui
+> rapporte ; quelques centaines d'exemples choisis valent mieux que des millions de
+> conversations qu'on ne relira pas. **Le texte d'accord est à faire relire par un juriste ou
+> un DPO avant le premier client.**
+
 #### Ce qui va dans git, ce qui reste ignoré
 
 Règle à écrire, motivée par un défaut réel du dépôt (la CI rouge pendant des jours, masquée
