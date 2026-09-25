@@ -94,8 +94,12 @@ par défaut), au démarrage compris, et pendant un résumé long le client le fa
 tourné (des noms, jamais une valeur) et si Google a accepté (`NotebookLM entretien : ok` ou
 `ECHEC`). Studio arrêté longtemps (PC éteint, en veille) : la session peut être refusée au
 redémarrage. La page montre alors **« Réparer la session »** : le même entretien, à la demande,
-depuis le coffre, sans se reconnecter. Si Google refuse encore, il faut se rebrancher avec
-`brancher-notebooklm.cmd`. Combien de temps une session tient Studio arrêté : pas encore mesuré.
+depuis le coffre, sans se reconnecter. Si Google refuse encore, il faut se rebrancher :
+**« 🔑 Me reconnecter à Google »** sur la page ouvre `brancher-notebooklm.cmd` à votre place, et
+la page se met à jour seule quand la nouvelle session arrive. Ce bouton passe par le veilleur de
+mise à jour (lancé par `demarrer.cmd`, il tourne sous votre compte) : sans lui, la page ne montre
+pas le bouton et le double-clic reste le chemin. Combien de temps une session tient Studio
+arrêté : pas encore mesuré.
 
 ### Les carnets du Studio, et quand NotebookLM est plein
 
@@ -116,7 +120,7 @@ Le même bouton est disponible à tout moment, sous le formulaire.
 
 | La page dit | Ce qui se passe | Quoi faire |
 |---|---|---|
-| « La session NotebookLM a expiré… » | Google refuse la session | « Réparer la session » ; sinon relancer `brancher-notebooklm.cmd` (ou un nouvel export) |
+| « La session NotebookLM a expiré… » | Google refuse la session | « Réparer la session » ; sinon « Me reconnecter à Google » (ou `brancher-notebooklm.cmd`, ou un nouvel export) |
 | « …le quota de NotebookLM est atteint… » | 3 résumés du jour faits | réessayer demain |
 | « Votre NotebookLM est plein… » | nombre maximal de carnets atteint | choisir les anciens carnets à supprimer dans la page |
 | « Google a changé NotebookLM… » | l’accès non documenté a changé | mettre le Studio à jour |

@@ -58,12 +58,12 @@ TEXTE_MAX = 500_000   # signes colles dans la page ; NotebookLM borne une source
 PHRASE_ABSENTE = ("NotebookLM n’est pas encore branché : suivez « Brancher NotebookLM » "
                   "sur cette page (une seule fois).")
 PHRASE_EXPIREE = ("La session NotebookLM a expiré ou a été refusée par Google. Essayez d’abord "
-                  "« Réparer la session » ; si Google refuse encore, double-cliquez de nouveau sur "
-                  "brancher-notebooklm.cmd (dossier du Studio), puis « J’ai fini, vérifier ». "
+                  "« Réparer la session » ; si Google refuse encore, « Me reconnecter à Google » "
+                  "(ou double-cliquez sur brancher-notebooklm.cmd, dans le dossier du Studio). "
                   "Vos résumés déjà faits restent ci-dessous.")
 PHRASE_IRREPARABLE = ("Google refuse encore la session gardée : il faut se reconnecter. "
-                      "Double-cliquez sur brancher-notebooklm.cmd (dossier du Studio), puis "
-                      "« J’ai fini, vérifier ».")
+                      "Cliquez « Me reconnecter à Google » ci-dessous (ou double-cliquez sur "
+                      "brancher-notebooklm.cmd, dans le dossier du Studio).")
 PHRASE_QUOTA = ("Google refuse pour l’instant : le quota de NotebookLM est atteint (l’offre "
                 "gratuite annonce 3 résumés audio par jour). Réessayez demain.")
 
@@ -84,6 +84,42 @@ def regler(dossier_config: Path) -> None:
     global DOSSIER, FICHIER
     DOSSIER = Path(dossier_config) / "notebooklm"
     FICHIER = DOSSIER / "session.coffre"
+
+
+# Le bouton « Me reconnecter à Google » (demande de l'utilisateur du 25/09/2026 :
+# « un bouton à cliquer serait plus simple »). Un conteneur ne peut pas ouvrir
+# une fenetre sur Windows : il laisse un mot dans config/, et le veilleur de mise
+# a jour (scripts/maj-veilleuse.ps1), qui tourne sous le compte de la personne,
+# lance brancher-notebooklm.cmd. Le veilleur annonce qu'il sait le faire par
+# "brancher": true dans son signe de vie ; un veilleur plus ancien ne le dit pas,
+# et la page garde alors le double-clic.
+DEMANDE_BRANCHER = "brancher-demandee.json"
+VEILLEUSE = "maj-veilleuse.json"
+VEILLEUSE_FRAICHE_S = 30
+VEILLEUSE_AVANCE_S = 120   # horloges Windows et Docker ecartees : voir free-tier-manager
+
+
+def veilleur_sait_brancher() -> bool:
+    signe = DOSSIER.parent / VEILLEUSE
+    try:
+        age = time.time() - signe.stat().st_mtime
+        # utf-8-sig : PowerShell 5.1 pose trois octets en tete de ce fichier.
+        etat = json.loads(signe.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return False
+    return (-VEILLEUSE_AVANCE_S < age < VEILLEUSE_FRAICHE_S) and etat.get("brancher") is True
+
+
+def demander_branchement() -> bool:
+    """Laisse le mot au veilleur. Faux si aucun veilleur capable ne tourne."""
+    if not veilleur_sait_brancher():
+        return False
+    demande = DOSSIER.parent / DEMANDE_BRANCHER
+    tmp = demande.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"quand": time.time()}), encoding="utf-8")
+    os.replace(tmp, demande)
+    log.info("NotebookLM : connexion Google demandee au veilleur")
+    return True
 
 
 class SessionAbsente(Exception):
@@ -582,12 +618,15 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
   Le Studio le garde chiffré sur cet ordinateur, ne l’affiche jamais et ne l’envoie qu’à Google.
   « Oublier » l’efface. Si vous le pouvez, utilisez un compte Google réservé à cet usage.
   Google peut changer NotebookLM sans prévenir : le Studio le vérifie à chaque ouverture de la page.</p>
+  <div id="lancer" class="ligne" hidden><button id="btLancer" class="primaire">🔑 Me reconnecter à Google</button>
+    <span id="etatLancer"></span></div>
   <ol>
-    <li>Dans le dossier du Studio, double-cliquez sur <b><code>brancher-notebooklm.cmd</code></b>
+    <li><span id="parBouton" hidden>Cliquez le bouton ci-dessus, ou, </span>dans le dossier du Studio,
+      double-cliquez sur <b><code>brancher-notebooklm.cmd</code></b>
       (à côté de <code>demarrer.cmd</code>). La première fois, il installe son outil : 1 à 3 minutes.</li>
     <li>Une fenêtre Chrome (ou Edge) s’ouvre : <b>connectez-vous à Google</b> et attendez que
       NotebookLM s’affiche. Elle se ferme seule.</li>
-    <li>La fenêtre noire écrit « OK : NotebookLM est branché ». Revenez ici :
+    <li>La fenêtre noire écrit « OK : NotebookLM est branché ». La page le voit seule ; sinon :
       <button id="btRevoir">J’ai fini, vérifier</button></li>
   </ol>
   <p class="avert">Rien à copier ni à coller : le fichier envoie la session au Studio, puis efface
@@ -702,6 +741,9 @@ async function charger(){
   el("travail").hidden = !(e.branchee && e.ok);
   SESSION_OK = !!(e.branchee && e.ok);
   el("reparer").hidden = !(e.branchee && !e.ok);
+  el("lancer").hidden = !e.veilleur;
+  el("parBouton").hidden = !e.veilleur;
+  DEPUIS = e.depuis || 0;
   // Branché ou non : les résumés déjà faits s'écoutent et se suppriment.
   listerResumes();
   // textContent seulement : le message peut porter un texte venu de Google.
@@ -808,6 +850,44 @@ function markdown(div, texte){
 el("btRevoir").onclick = async () => {
   el("btRevoir").disabled = true;
   try { await charger(); } finally { el("btRevoir").disabled = false; }
+};
+
+// « Me reconnecter à Google » : le veilleur ouvre brancher-notebooklm.cmd ; la
+// page guette ensuite la session neuve dans le coffre (sa date change) et se
+// relit seule. Sans appel à Google pendant l'attente : l'état sans vérification.
+var DEPUIS = 0, GUET = null;  // var : charger() peut tourner avant cette ligne
+el("btLancer").onclick = async () => {
+  el("btLancer").disabled = true;
+  let d = {};
+  try {
+    const r = await fetch("/notebooklm/connexion", {method: "POST", headers: H});
+    d = await r.json();
+    if(!r.ok){ d = {ok: false, message: d.detail}; }
+  } catch(e) { d = {ok: false, message: "Le Studio ne répond pas."}; }
+  if(!d.ok){
+    el("btLancer").disabled = false;
+    texte("etatLancer", d.message || "Le bouton n’a pas pu agir : double-cliquez sur brancher-notebooklm.cmd.", "ko");
+    return;
+  }
+  texte("etatLancer", "Une fenêtre noire s’ouvre, puis Chrome : connectez-vous à Google. "
+    + "La page se met à jour seule quand c’est fait.");
+  const avant = DEPUIS, fin = Date.now() + 10 * 60 * 1000;
+  clearInterval(GUET);
+  GUET = setInterval(async () => {
+    if(Date.now() > fin){
+      clearInterval(GUET); el("btLancer").disabled = false;
+      texte("etatLancer", "Rien reçu en 10 minutes. Si la fenêtre noire dit « OK », cliquez « J’ai fini, vérifier ».", "ko");
+      return;
+    }
+    try {
+      const e = await (await fetch("/notebooklm/etat", {headers: H})).json();
+      if(e.branchee && (e.depuis || 0) !== avant){
+        clearInterval(GUET); el("btLancer").disabled = false;
+        texte("etatLancer", "Session reçue.", "ok");
+        await charger();
+      }
+    } catch(e) { /* le Studio redémarre : on réessaie au tour suivant */ }
+  }, 5000);
 };
 
 el("btReparer").onclick = async () => {

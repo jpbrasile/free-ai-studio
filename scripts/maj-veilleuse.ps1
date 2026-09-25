@@ -33,6 +33,12 @@ $Config  = Join-Path $Racine 'config'
 $Demande = Join-Path $Config 'maj-demandee.json'
 $Script  = Join-Path $PSScriptRoot 'mettre-a-jour.ps1'
 $Vivant  = Join-Path $Config 'maj-veilleuse.json'
+# Deuxieme service, demande de l'utilisateur du 25/09/2026 : le bouton
+# << Me reconnecter a Google >> de la page NotebookLM laisse ce mot, et le
+# veilleur ouvre brancher-notebooklm.cmd dans une fenetre visible. Rien d'autre :
+# le mot ne porte aucune commande, seulement l'envie d'ouvrir ce fichier-la.
+$DemandeBrancher = Join-Path $Config 'brancher-demandee.json'
+$Brancher        = Join-Path $Racine 'brancher-notebooklm.cmd'
 
 if (-not (Test-Path $Config)) { New-Item -ItemType Directory -Path $Config | Out-Null }
 
@@ -82,6 +88,19 @@ try { Poser-Raccourci } catch { Write-Warning "Raccourci de demarrage non pose :
 # Empreinte du veilleur lui-meme : si une mise a jour le change, il se relance
 # avec la nouvelle version au lieu de garder l'ancienne en memoire.
 $Empreinte = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+$Tours = 0
+$DernierBrancher = [datetime]::MinValue
+
+function Se-Relancer {
+    Write-Host "Le veilleur lui-meme a change : il se relance avec la nouvelle version."
+    $Verrou.ReleaseMutex()
+    $Verrou.Dispose()
+    Start-Process -FilePath 'powershell' -WindowStyle Hidden -WorkingDirectory $Racine `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                        '-File', ('"' + $PSCommandPath + '"'),
+                        '-DossierDemarrage', ('"' + $DossierDemarrage + '"')) | Out-Null
+    exit 0
+}
 
 Write-Host "Veilleur de mise a jour actif. Le bouton << Mettre a jour >> de la page Studio fonctionne."
 
@@ -91,9 +110,33 @@ while ($true) {
     # un instant par un autre programme) ne doit pas arreter le veilleur : hors
     # de ce try, elle le tuait sans un mot.
     try {
-        [ordered]@{ vivant = $true; horodate = (Get-Date).ToString('s'); pid = $PID } |
+        [ordered]@{ vivant = $true; horodate = (Get-Date).ToString('s'); pid = $PID; brancher = $true } |
             ConvertTo-Json | Out-File -FilePath $Vivant -Encoding utf8
     } catch { }
+
+    if (Test-Path $DemandeBrancher) {
+        Remove-Item $DemandeBrancher -Force -ErrorAction SilentlyContinue
+        # Deux clics rapides ne font qu'une fenetre : la derniere a 60 s pres.
+        if ((Test-Path $Brancher) -and (((Get-Date) - $DernierBrancher).TotalSeconds -gt 60)) {
+            $DernierBrancher = Get-Date
+            Write-Host "Demande recue : ouverture de brancher-notebooklm.cmd"
+            try {
+                Start-Process -FilePath $Brancher -WorkingDirectory $Racine | Out-Null
+            } catch {
+                Write-Warning "brancher-notebooklm.cmd n'a pas pu s'ouvrir : $($_.Exception.Message)"
+            }
+        }
+    }
+
+    # Le veilleur lui-meme a change (git pull, copie d'une version neuve) : il se
+    # relance, sinon le nouveau service n'existerait qu'au prochain redemarrage
+    # de Windows. Regarde toutes les 30 s environ, pas a chaque tour.
+    $Tours++
+    if ($Tours % 15 -eq 0) {
+        $nouvelle = $null
+        try { $nouvelle = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash } catch { }
+        if ($nouvelle -and $nouvelle -ne $Empreinte) { Se-Relancer }
+    }
 
     if (Test-Path $Demande) {
         Remove-Item $Demande -Force -ErrorAction SilentlyContinue
@@ -105,16 +148,7 @@ while ($true) {
         }
         $nouvelle = $null
         try { $nouvelle = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash } catch { }
-        if ($nouvelle -and $nouvelle -ne $Empreinte) {
-            Write-Host "Le veilleur lui-meme a change : il se relance avec la nouvelle version."
-            $Verrou.ReleaseMutex()
-            $Verrou.Dispose()
-            Start-Process -FilePath 'powershell' -WindowStyle Hidden -WorkingDirectory $Racine `
-                -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
-                                '-File', ('"' + $PSCommandPath + '"'),
-                                '-DossierDemarrage', ('"' + $DossierDemarrage + '"')) | Out-Null
-            exit 0
-        }
+        if ($nouvelle -and $nouvelle -ne $Empreinte) { Se-Relancer }
         Write-Host "Retour en veille.`n"
     }
 

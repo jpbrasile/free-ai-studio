@@ -1456,6 +1456,7 @@ def notebooklm_etat(request: Request, verifier: int = Query(default=0),
         return {"branchee": False, "coupe": raison}
     etat = notebooklm_pont.compte()
     etat["coupe"] = None
+    etat["veilleur"] = notebooklm_pont.veilleur_sait_brancher()
     if verifier and etat.get("branchee"):
         try:
             etat.update(notebooklm_pont.executer(notebooklm_pont.verifier))
@@ -1650,6 +1651,20 @@ async def notebooklm_reparer(request: Request, authorization: Optional[str] = He
     if r.get("ok"):
         return {"ok": True}
     return {"ok": False, "message": notebooklm_pont.PHRASE_IRREPARABLE}
+
+
+@app.post("/notebooklm/connexion")
+async def notebooklm_connexion(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le bouton « Me reconnecter à Google » : un mot au veilleur, qui ouvre
+    brancher-notebooklm.cmd sur Windows. Coupe en Studio partage, comme le
+    branchement lui-meme : la session serait celle d'une seule personne."""
+    auth(authorization)
+    exiger_page_du_studio(request)
+    _nlm_coupe(request)
+    if not await asyncio.to_thread(notebooklm_pont.demander_branchement):
+        return {"ok": False, "message": "Le veilleur du Studio ne tourne pas (ou il est trop ancien) : "
+                "relancez demarrer.cmd, ou double-cliquez sur brancher-notebooklm.cmd."}
+    return {"ok": True}
 
 
 @app.post("/notebooklm/demander")

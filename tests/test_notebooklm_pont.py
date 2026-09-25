@@ -600,7 +600,8 @@ def client(sandbox, nlm):
 def test_l_etat_contre_la_cle_seulement_puis_la_verification(client):
     c, pont, sc = client
     assert c.get("/notebooklm/etat").status_code == 401
-    assert c.get("/notebooklm/etat?verifier=1", headers=ENTETE).json() == {"branchee": False, "coupe": None}
+    assert c.get("/notebooklm/etat?verifier=1", headers=ENTETE).json() == {
+        "branchee": False, "coupe": None, "veilleur": False}
     brancher(pont)
     e = c.get("/notebooklm/etat?verifier=1", headers=ENTETE).json()
     assert e["branchee"] and e["ok"] and e["carnets"] == 3 and e["compte"] == "personne@exemple.com"
@@ -912,6 +913,52 @@ def test_la_page_montre_reparer_seulement_si_le_coffre_a_une_session_refusee(cli
     assert '<div id="reparer" class="carte" hidden>' in html
     assert 'el("reparer").hidden = !(e.branchee && !e.ok);' in html
     assert 'fetch("/notebooklm/reparer", {method: "POST", headers: H})' in html
+
+
+def _signe_de_vie(pont, age_s: float = 0.0, **etat):
+    """Ce qu'ecrit scripts/maj-veilleuse.ps1 : PowerShell 5.1 pose un BOM."""
+    signe = pont.DOSSIER.parent / pont.VEILLEUSE
+    signe.parent.mkdir(parents=True, exist_ok=True)
+    signe.write_text(json.dumps(dict({"vivant": True, "pid": 1}, **etat)), encoding="utf-8-sig")
+    quand = time.time() - age_s
+    os.utime(signe, (quand, quand))
+
+
+def test_me_reconnecter_laisse_un_mot_au_veilleur_capable_seulement(client):
+    c, pont, _ = client
+    demande = pont.DOSSIER.parent / pont.DEMANDE_BRANCHER
+    # Pas de veilleur, un veilleur d'avant (sans "brancher"), un veilleur muet
+    # depuis une minute : le bouton ne ment pas, il renvoie au double-clic.
+    for etat, age in (({}, None), ({}, 0.0), ({"brancher": True}, 60.0)):
+        if age is not None:
+            _signe_de_vie(pont, age, **etat)
+        assert c.get("/notebooklm/etat", headers=ENTETE).json()["veilleur"] is False
+        d = c.post("/notebooklm/connexion", headers=ENTETE).json()
+        assert d["ok"] is False and "brancher-notebooklm.cmd" in d["message"]
+        assert not demande.exists()
+    _signe_de_vie(pont, 0.0, brancher=True)
+    assert c.get("/notebooklm/etat", headers=ENTETE).json()["veilleur"] is True
+    assert c.post("/notebooklm/connexion", headers=ENTETE).json() == {"ok": True}
+    # Le mot ne porte aucune commande : seulement l'heure de la demande.
+    assert list(json.loads(demande.read_text(encoding="utf-8"))) == ["quand"]
+    assert c.post("/notebooklm/connexion", headers=dict(ENTETE, **AUTRE_SITE)).status_code == 403
+    assert c.post("/notebooklm/connexion").status_code == 401
+
+
+def test_la_page_propose_le_bouton_seulement_avec_le_veilleur(client):
+    html = client[0].get("/notebooklm").text
+    assert '<div id="lancer" class="ligne" hidden>' in html
+    assert 'el("lancer").hidden = !e.veilleur;' in html
+    assert 'fetch("/notebooklm/connexion", {method: "POST", headers: H})' in html
+    # L'attente guette la date du coffre, sans vérification chez Google.
+    assert 'fetch("/notebooklm/etat", {headers: H})' in html
+
+
+def test_le_veilleur_ouvre_brancher_sur_demande_et_l_annonce():
+    ps1 = (Path(__file__).resolve().parents[1] / "scripts" / "maj-veilleuse.ps1").read_text(encoding="utf-8")
+    assert "'brancher-demandee.json'" in ps1 and "'brancher-notebooklm.cmd'" in ps1
+    assert "brancher = $true" in ps1
+    assert "Start-Process -FilePath $Brancher -WorkingDirectory $Racine" in ps1
 
 
 def _rendre_markdown(pont, texte: str, tmp_path) -> str:
