@@ -580,6 +580,8 @@ h2{font-size:1.15rem;margin:26px 0 6px}
 .banniere{padding:14px 16px;border-radius:14px;margin:16px 0;border:1px solid #bbb;background:#eef4fb}
 .carte{padding:14px 16px;border-radius:14px;margin:14px 0;border:1px solid #bbb}
 .ligne{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:14px 0}
+/* display:flex passait avant l'attribut hidden : bouton montré sans veilleur (25/09/2026). */
+[hidden]{display:none !important}
 select,button,input{font:inherit;padding:9px 12px;border-radius:10px;border:1px solid #666;background:#fff}
 button.primaire{background:#222;color:#fff;border-color:#222;cursor:pointer}
 button[disabled]{opacity:.5;cursor:default}

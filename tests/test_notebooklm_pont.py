@@ -948,6 +948,8 @@ def test_me_reconnecter_laisse_un_mot_au_veilleur_capable_seulement(client):
 def test_la_page_propose_le_bouton_seulement_avec_le_veilleur(client):
     html = client[0].get("/notebooklm").text
     assert '<div id="lancer" class="ligne" hidden>' in html
+    # .ligne est en display:flex, qui passait avant hidden (vu en réel le 25/09).
+    assert "[hidden]{display:none !important}" in html
     assert 'el("lancer").hidden = !e.veilleur;' in html
     assert 'fetch("/notebooklm/connexion", {method: "POST", headers: H})' in html
     # L'attente guette la date du coffre, sans vérification chez Google.

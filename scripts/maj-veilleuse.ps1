@@ -55,6 +55,26 @@ $cle = -join ($octets[0..7] | ForEach-Object { $_.ToString('x2') })
 $Verrou = New-Object System.Threading.Mutex($false, ('Local\FreeAIStudio-veilleur-' + $cle))
 $aLaMain = $false
 try { $aLaMain = $Verrou.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $aLaMain = $true }
+# Un veilleur d'avant le 25/09/2026 ne sait pas ouvrir brancher-notebooklm.cmd
+# et ne se relance pas quand son fichier change : il resterait en place jusqu'au
+# prochain redemarrage de Windows. Le neuf le remplace -- seulement si son signe
+# de vie ne dit pas "brancher", et seulement le processus qui y est nomme, s'il
+# execute bien ce fichier-ci.
+if (-not $aLaMain) {
+    try {
+        $etat = Get-Content -LiteralPath $Vivant -Raw | ConvertFrom-Json
+        if ($etat.brancher -ne $true -and $etat.pid) {
+            $ancien = Get-CimInstance Win32_Process -Filter ("ProcessId = " + [int]$etat.pid)
+            # IndexOf plutot que -like : un [ dans le chemin serait un joker.
+            if ($ancien -and $ancien.CommandLine -and
+                $ancien.CommandLine.ToLowerInvariant().IndexOf($PSCommandPath.ToLowerInvariant()) -ge 0) {
+                Write-Host "Un veilleur plus ancien tourne : il est remplace."
+                Stop-Process -Id ([int]$etat.pid) -Force
+                try { $aLaMain = $Verrou.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { $aLaMain = $true }
+            }
+        }
+    } catch { }
+}
 if (-not $aLaMain) {
     Write-Host "Un veilleur tourne deja pour ce dossier : rien a faire."
     exit 0

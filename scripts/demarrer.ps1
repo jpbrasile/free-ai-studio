@@ -535,7 +535,11 @@ $veilleuse = Join-Path $Racine "config\maj-veilleuse.json"
 $vivante = $false
 if (Test-Path $veilleuse) {
     $age = (Get-Date) - (Get-Item $veilleuse).LastWriteTime
-    if ($age.TotalSeconds -lt 30) { $vivante = $true }
+    # Un veilleur d'avant le 25/09/2026 (sans "brancher") compte pour absent :
+    # le neuf, lance ci-dessous, le remplace.
+    $capable = $false
+    try { $capable = ((Get-Content -LiteralPath $veilleuse -Raw | ConvertFrom-Json).brancher -eq $true) } catch { }
+    if ($age.TotalSeconds -lt 30 -and $capable) { $vivante = $true }
 }
 if ($vivante) {
     Bon "Veilleur de mise a jour deja en marche"
