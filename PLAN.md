@@ -888,7 +888,15 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
          - un avertissement avant de lancer sur Colab ;
          - un chargement économe, pour Colab seulement : le lecteur de texte va droit sur la carte, lit la description, puis est libéré avant le modèle vidéo (`peu_de_ram`).
 
-         **Non vérifié en réel** : que ce chargement économe tienne dans les 12,7 Go. D'autres y parviennent avec un lecteur fp8 sous ComfyUI, en environ 20 min par clip sur T4.
+         D'autres y parviennent avec un lecteur fp8 sous ComfyUI, en environ 20 min par clip sur T4.
+       - **Essai réel du 26/09 : RÉUSSI, à 0 $.** Deux échecs d'abord, en 55 puis 60 s : l'avertissement de Colab « Ce notebook n'a pas été créé par Google » bloquait la première cellule. Le Studio attend désormais ce clic, 5 min au plus. Le troisième essai (travail `6420a95c`) :
+         - carte Tesla T4, choisie d'emblée par le carnet du dépôt ;
+         - chargement économe utilisé : description lue et lecteur libéré à 180 s, modèle prêt à 301 s, 14,4 Go libres sur la carte avant calcul ;
+         - calcul de 17 images en 30 étapes : 328 s ;
+         - `video.mp4` de 832 × 480, 1,06 s, 85 568 octets, rapatrié dans le Studio ; une image regardée : un phare dans la tempête ;
+         - 689 s de bout en bout.
+
+         Pour la personne, il reste 3 clics : « Ouvrir Colab », « Connect », puis « Exécuter quand même ».
     5. **NotebookLM : `notebooklm-py`** (`teng-lin/notebooklm-py`, MIT, sur PyPI). Il pilote les API **non documentées** de Google : carnets, sources (URL, PDF, YouTube, Drive, audio), questions avec citations, et fabrication de résumés audio, quiz, fiches, cartes mentales, rapports. Connexion par le navigateur une fois, ou par un « master token » qui tourne sans surveillance, donc dans un conteneur. Ses auteurs le disent eux-mêmes : les API peuvent changer sans préavis, et il est fait pour des prototypes et un usage personnel. Google a renommé NotebookLM « Gemini Notebook » en juillet 2026 ; la bibliothèque dit marcher sans changement.
     6. **SP-NOTEBOOKLM-PAR-API (décidé par le propriétaire le 24/09 ; essayé en réel le 25/09 : réussi).** Ce que ça change : `http://localhost:8020/notebooklm` (`sandbox-manager/notebooklm_pont.py`) crée un carnet dans le compte de la personne, y verse ses fichiers ou son texte, demande un résumé audio en français, le rapporte (`.m4a`), et répond aux questions avec citations. La page du routeur garde le lien « vous-même » et renvoie vers celle-ci. `notebooklm-py==0.8.2` épinglé. Les trois conditions :
        - **Secret de compte entier** : tenu. La session est un export de cookies (fenêtre privée, puis Cookie-Editor) ou le `storage_state.json` de `notebooklm login`. Elle est triée par la commande publique `notebooklm auth import-cookies`, puis fermée par `coffre.chiffrer` dans `config/notebooklm/session.coffre`. Elle n'est ouverte, dans un dossier temporaire, que le temps d'un appel ; les cookies que la bibliothèque fait tourner sont refermés. La page prévient avant (« ouvre votre compte Google entier », compte dédié conseillé). Le branchement est coupé dans un Studio partagé.

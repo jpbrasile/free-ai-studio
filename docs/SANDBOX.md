@@ -115,7 +115,7 @@ Sans carnet branché, le comportement d'avant reste : `auto` prépare un `.ipynb
 - sur un faux carnet qui parle le même protocole et exécute les cellules (`tests/test_colab_pont.py`) ;
 - sur de vraies websockets (uvicorn, 24/09/2026) : 403 pour une mauvaise origine ou un mauvais jeton, et un travail avec fichier de 700 Ko rapatrié intact.
 
-**Vu sur le vrai Colab le 25/09/2026** : le branchement (carnet vide). **Non vérifié** : un travail rendu par le vrai Colab, et le carnet du dépôt réglé sur T4 ; voir `PLAN.md`, point 17.4. Un clip vidéo y a été tué net le 25/09 (code -9, mémoire vive de 12,7 Go dépassée au chargement) : sur Colab, le Studio charge désormais le modèle en mode économe (lecteur de texte droit sur la carte, puis libéré), non vérifié en réel ; la page conseille Kaggle.
+**Vu sur le vrai Colab le 26/09/2026** : un clip vidéo d’1 s rendu et rapatrié (T4 choisie d’emblée par le carnet du dépôt, 689 s de bout en bout, 0 $) ; voir `PLAN.md`, point 17.4. Le 25/09, un premier clip y avait été tué net (code -9, mémoire vive de 12,7 Go dépassée au chargement) : sur Colab, le Studio charge le modèle en mode économe (lecteur de texte droit sur la carte, puis libéré). Le carnet venu de GitHub affiche « Ce notebook n’a pas été créé par Google » : le Studio attend le clic « Exécuter quand même », 5 min au plus.
 
 ## API pour l'agent
 
