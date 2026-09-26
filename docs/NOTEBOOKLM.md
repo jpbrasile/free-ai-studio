@@ -132,7 +132,11 @@ quotidienne automatique (PLAN.md 16.5) n’existe pas.
 
 ## Ce qui n’est pas fait
 
-- **Pas encore d’étape NotebookLM dans « Enchaîner »** : une chaîne ne peut pas finir par
-  « fais-en un résumé audio NotebookLM ». Voir PLAN.md 17.6.
+- ~~**Pas encore d’étape NotebookLM dans « Enchaîner »**~~ : **écrite le 26/09/2026** (PLAN.md
+  17.6b), brique `notebooklm_resume` — texte, PDF ou .docx → résumé audio `.m4a`
+  (`audio/mp4`), par la route de cette page. L’annonce de la chaîne dit « Vos documents partent
+  chez Google (NotebookLM) » ; coupée dans un Studio partagé ; sans session, elle renvoie ici
+  (« Me reconnecter à Google ») ou à `brancher-notebooklm.cmd`. Vérifiée sur la fausse
+  bibliothèque seulement : **non vue en réel**.
 - Seul le résumé audio est piloté. Quiz, cartes mentales, rapports : dans NotebookLM lui-même,
   depuis le carnet créé.

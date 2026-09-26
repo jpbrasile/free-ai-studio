@@ -503,7 +503,7 @@ def exige_une_cle(cout: str) -> bool:
 # et Kaggle dans le bac a sable (:8020). Jusqu'au 24/09 le verdict envoyait tout
 # le monde vers /cles du bac a sable, qui ne connait que Modal et Kaggle. Un
 # test epingle : toute brique qui exige une cle a sa ligne ici.
-COTE_ROUTEUR, COTE_SANDBOX = "routeur", "sandbox"
+COTE_ROUTEUR, COTE_SANDBOX, COTE_NOTEBOOKLM = "routeur", "sandbox", "notebooklm"
 TOUT_FOURNISSEUR = "*"
 CLE_DE_LA_BRIQUE = {
     # Le mode automatique passe d'un fournisseur a l'autre : un seul suffit.
@@ -519,11 +519,17 @@ CLE_DE_LA_BRIQUE = {
     "video_prolonger": (COTE_SANDBOX, None),
     "chanson": (COTE_SANDBOX, None),
     "dialogue": (COTE_SANDBOX, None),
+    # Pas une cle : une session Google, fermee dans le coffre par la page
+    # NotebookLM (PLAN 17.6b, 26/09/2026).
+    "notebooklm_resume": (COTE_NOTEBOOKLM, None),
 }
 PAGE_DES_CLES = {
     COTE_ROUTEUR: "la page « vos clés » du Studio (http://localhost:8010/cles)",
     COTE_SANDBOX: "la page « vos identifiants » du bac à sable "
                   "(http://localhost:8020/cles)",
+    COTE_NOTEBOOKLM: "la page NotebookLM du Studio (http://localhost:8020/notebooklm, "
+                     "bouton « Me reconnecter à Google »), ou en double-cliquant sur "
+                     "brancher-notebooklm.cmd dans le dossier du Studio",
 }
 
 
@@ -551,6 +557,11 @@ def cle_branchee(etape: dict, etat_cles: dict | None) -> bool | None:
     connus = (etat_cles or {}).get(cote) if cote else None
     if connus is None:
         return None
+    if cote == COTE_NOTEBOOKLM:
+        # `{"branchee": bool, "coupe": raison ou None}` (app.py, etat_des_cles).
+        # Branchee = une session dans le coffre ; qu'elle soit encore acceptee
+        # par Google ne se sait qu'au lancement (PHRASE_EXPIREE du pont).
+        return bool(connus.get("branchee"))
     if cote == COTE_SANDBOX:
         loueur = (etape.get("reglages") or {}).get(LOUEUR)
         pris = [connus.get(loueur)] if loueur in connus else list(connus.values())
@@ -669,6 +680,25 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
                       "consequence": "cette chaîne ne peut pas être lancée : "
                                      "ces applications ne se branchent pas "
                                      "encore dans un enchaînement"})
+        etat = NON
+
+    # --- NotebookLM dans un Studio partage : coupe, comme sa page -------------
+    # La session est le compte Google ENTIER d'une seule personne (PLAN 17.6).
+    # La route `/notebooklm/resume` se refuse deja (`_nlm_coupe`), mais la
+    # chaine l'appelle depuis 127.0.0.1 : les signes lus sur la requete (proxy,
+    # adresse) n'y seraient plus. Le refus se tient donc ICI, sur la requete du
+    # client, lue par `etat_des_cles(request)` (26/09/2026).
+    coupe = ((etat_cles or {}).get(COTE_NOTEBOOKLM) or {}).get("coupe")
+    nlm = [e for e in etapes if CLE_DE_LA_BRIQUE.get(e["brique"], ("",))[0] == COTE_NOTEBOOKLM]
+    if nlm and coupe:
+        motifs.append("notebooklm_coupe")
+        pourquoi.append(
+            "%s est coupé ici (%s) : la session NotebookLM est celle du compte "
+            "Google d'une seule personne. Ouvrez NotebookLM vous-même : "
+            "https://notebook.google.com/" % (nlm[0]["fonction"], coupe))
+        faits.append({"quoi": "notebooklm_coupe", "application": nlm[0]["fonction"],
+                      "raison": coupe,
+                      "consequence": "cette chaîne ne peut pas être lancée ici"})
         etat = NON
 
     # --- le budget : MESURE, au lieu d'etre refuse d'avance -------------------
@@ -880,7 +910,9 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
     # Et quand l'etat des cles est connu, on ne reclame que celles qui manquent
     # VRAIMENT. Mesure du 24/09 : Gemini, OpenRouter et Groq branches, et le
     # verdict disait encore << Chat, Free AI Auto necessite une cle >>.
-    avec_cle = [e for e in etapes if exige_une_cle(e["cout"])]
+    # NotebookLM coupe : le refus est deja dit, << reconnectez-vous >> serait faux.
+    avec_cle = [e for e in etapes if exige_une_cle(e["cout"])
+                and not (coupe and e in nlm)]
     branchee = {id(e): cle_branchee(e, etat_cles) for e in avec_cle}
     manquent = [e for e in avec_cle if branchee[id(e)] is False]
     avec_cle = [e for e in avec_cle if branchee[id(e)] is None]
@@ -959,6 +991,12 @@ def verifier(chaine: dict, *, besoin_mo: int = 0, sonde_carte=None,
     # Pour la ligne du cout que la page ecrit elle-meme, sans passer par le
     # chat : l'estimation a la duree reglee, et le pire des gardes.
     verdict["cout_pire_usd"] = pire_des_gardes
+    # Les fournisseurs du chat REELLEMENT branches, puis la ligne resumee
+    # (PLAN 16.2, reste fait le 26/09/2026).
+    branches = (etat_cles or {}).get(COTE_ROUTEUR)
+    for e in verdict["etapes"]:
+        e["donnees"] = donnees_branchees(e["donnees"], branches)
+    verdict["resume"] = ligne_resumee(verdict)
     return verdict
 
 
@@ -1201,6 +1239,12 @@ DONNEES = {
     "dialogue": {
         "sort": "oui", "vers": ["Modal"],
         "phrase": "Votre texte part chez Modal."},
+    # PLAN 17.6b, 26/09/2026 : la meme phrase que la page /notebooklm, qui dit
+    # << Vos documents partent chez Google (NotebookLM) >> depuis le 24/09.
+    "notebooklm_resume": {
+        "sort": "oui", "vers": ["Google"],
+        "phrase": "Vos documents partent chez Google (NotebookLM), dans un carnet "
+                  "neuf de votre compte Google ; le résumé audio en revient."},
 }
 
 DONNEES_INCONNUES = {
@@ -1221,6 +1265,71 @@ def donnees_de(brique: str) -> dict:
     """Ce qui sort de la machine pour cette brique -- une copie, jamais la table."""
     fiche = DONNEES.get(brique, DONNEES_INCONNUES)
     return dict(fiche, vers=list(fiche["vers"]))
+
+
+# Le nom montre -> le nom du fournisseur dans `/cles/etat` du routeur. PLAN 16.2,
+# reste du 23/09 fait le 26/09/2026 : la table nomme les TROIS services de la
+# chaine Auto ; un fournisseur sans cle est saute par le routeur et ne recoit
+# rien. Quand l'etat des cles est connu, on ne nomme que ceux qui sont branches.
+FOURNISSEURS_DU_CHAT = {"Google": "gemini", "OpenRouter": "openrouter", "Groq": "groq"}
+NOM_LONG_DU_FOURNISSEUR = {"Google": "Google (Gemini)"}
+
+
+def donnees_branchees(donnees: dict, branches: dict | None) -> dict:
+    """La fiche `donnees` d'une etape, reduite aux fournisseurs de chat BRANCHES.
+
+    `branches` : `{nom: actif}` lu dans le routeur, ou None (inconnu : la
+    fiche reste entiere, les trois possibles). Ne touche qu'une fiche dont tous
+    les destinataires sont des fournisseurs du chat et qui en nomme plus d'un
+    (une chaine de secours). Aucun branche : la fiche reste entiere, et c'est
+    `cle_manquante` qui parle.
+    """
+    vers = list(donnees.get("vers") or [])
+    if (not branches or len(vers) < 2
+            or not all(v in FOURNISSEURS_DU_CHAT for v in vers)):
+        return donnees
+    gardes = [v for v in vers if branches.get(FOURNISSEURS_DU_CHAT[v])]
+    if not gardes or gardes == vers:
+        return donnees
+    sujet = donnees["phrase"].split(" part chez ")[0]
+    noms = [NOM_LONG_DU_FOURNISSEUR.get(v, v) for v in gardes]
+    phrase = "%s part chez %s" % (sujet, noms[0])
+    if len(noms) > 1:
+        phrase += " ; s’il ne répond pas, chez %s" % " ou ".join(noms[1:])
+    return dict(donnees, vers=gardes,
+                phrase=phrase + " (seuls les services branchés reçoivent quelque chose).")
+
+
+def lieu_de_l_etape(donnees: dict) -> str:
+    """Ou calcule une etape, en quelques mots, lu dans sa fiche `donnees`."""
+    vers = donnees.get("vers") or []
+    if donnees.get("sort") == "non":
+        return "sur votre ordinateur"
+    if donnees.get("sort") == "selon la carte":
+        return "sur votre carte si elle est libre, sinon chez %s" % " ou ".join(vers)
+    if donnees.get("sort") == "oui" and vers:
+        return "chez %s" % vers[0] + (" (sinon %s)" % " ou ".join(vers[1:])
+                                      if len(vers) > 1 else "")
+    return "lieu pas encore écrit"
+
+
+def ligne_resumee(verdict: dict) -> str:
+    """La ligne << ou calcule chaque etape, et au pire combien >> (PLAN 16.2).
+
+    Le montant n'est pas recalcule : c'est celui du FAIT de cout que `verifier`
+    a etabli (pire des gardes compris), ou l'aveu qu'il n'y a pas de maximum.
+    """
+    etapes = " → ".join("%s %s" % (e["fonction"], lieu_de_l_etape(e.get("donnees") or {}))
+                        for e in verdict.get("etapes") or [])
+    cout = next((f for f in verdict.get("faits") or []
+                 if f.get("quoi") in ("cout_maximum", "gratuite", "cout_sans_nombre")), None)
+    if cout is None:
+        pire = "non établi"
+    elif cout["quoi"] == "cout_sans_nombre":
+        pire = "inconnu (au moins %s, une étape n’a pas de coût mesuré)" % cout["plancher"]
+    else:
+        pire = cout["montant"]
+    return "En bref : %s. Au pire : %s." % (etapes, pire)
 
 
 # ---------------------------------------------------------------------------
@@ -1567,6 +1676,11 @@ ROUTES = {
     "video_prolonger": ("travail", "video"),
     "chanson": ("travail", "chanson"),
     "dialogue": ("travail", "dialogue"),
+    # PLAN 17.6b, 26/09/2026. Un travail aussi, mais pas par `/<usage>/creer` :
+    # la route de la page NotebookLM prend un formulaire en plusieurs parties
+    # (fichiers + texte), et sa fiche se lit a `/notebooklm/jobs/<id>`, champ
+    # `audio_url`. Voir `lancer_un_resume_notebooklm`.
+    "notebooklm_resume": ("notebooklm", "/notebooklm/resume"),
 }
 
 
@@ -1648,8 +1762,13 @@ MIME_PAR_TYPE = {
 NOMS_PAR_MIME = {
     "image/png": "sortie.png", "image/jpeg": "sortie.jpg",
     "image/gif": "sortie.gif", "audio/wav": "sortie.wav",
-    "video/mp4": "sortie.mp4",
+    "video/mp4": "sortie.mp4", "audio/mp4": "sortie.m4a",
 }
+
+# Les marques << ftyp >> d'un fichier AUDIO seul (M4A, livre audio M4B). Le
+# resume NotebookLM est un .m4a (AAC, mesure du 25/09) ; son conteneur est
+# celui d'une video, et `ftyp` seul l'aurait annonce `video/mp4`.
+MARQUES_AUDIO_MP4 = (b"M4A ", b"M4B ")
 
 
 def type_de_sortie(octets, sorties=()) -> tuple[str, str]:
@@ -1668,6 +1787,11 @@ def type_de_sortie(octets, sorties=()) -> tuple[str, str]:
     if brut[:4] == b"RIFF" and brut[8:12] == b"WAVE":
         return "audio/wav", NOMS_PAR_MIME["audio/wav"]
     if brut[4:8] == b"ftyp":
+        # Un conteneur MP4 porte du son OU de l'image : sa marque le dit, et a
+        # defaut la brique qui ne rend que de l'audio (26/09/2026, PLAN 17.6b).
+        # La marque reelle du .m4a de Google n'a pas ete relevee : non vu en reel.
+        if brut[8:12] in MARQUES_AUDIO_MP4 or list(sorties)[:1] == ["audio"]:
+            return "audio/mp4", NOMS_PAR_MIME["audio/mp4"]
         return "video/mp4", NOMS_PAR_MIME["video/mp4"]
     # Rien de reconnu : on retombe sur ce que la derniere brique DECLARE
     # rendre, et a defaut sur le type le plus neutre. Jamais sur une supposition
@@ -1738,6 +1862,8 @@ def lancer_par_le_routeur(etape: dict, entree):
     # s'adressent au Studio lui-meme, avec sa propre cle.
     if genre == "travail":
         return lancer_un_travail(etape, entree)
+    if genre == "notebooklm":
+        return lancer_un_resume_notebooklm(etape, entree)
 
     # La lecture d'un document ne sort de nulle part. Elle est traitee AVANT
     # `_cle_du_routeur()` : reclamer une cle pour un travail qui n'appelle
@@ -2764,6 +2890,154 @@ def _un_travail(etape: dict, entree):
     return suite
 
 
+# --- Le resume audio NotebookLM dans une chaine (PLAN 17.6b, 26/09/2026) -------
+# Il passe par la route de SA page, comme les travaux par les leurs : le coffre,
+# la traduction des erreurs de Google, le quota et le nom du carnet ne sont pas
+# reecrits ici. Un resume a pris 227,8 s le 25/09 ; le pont attend Google
+# jusqu'a NOTEBOOKLM_AUDIO_TIMEOUT_SECONDS (1 200 s) : la chaine attend un peu
+# plus, pour lire l'echec que le pont ecrit au lieu de partir avant lui.
+NOTEBOOKLM_DELAI_S = int(os.getenv("COMPOSITE_NOTEBOOKLM_TIMEOUT_SECONDS", "1500"))
+PAGE_NOTEBOOKLM = "http://localhost:8020/notebooklm"
+# Les phrases du pont parlent de SA page (« ci-dessous ») : lues sur /composite,
+# elles mentiraient. On les retire, et on nomme la page.
+_PHRASES_DE_LA_PAGE_NLM = ("Vos résumés déjà faits restent ci-dessous.",)
+MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+def _envoi_notebooklm(etape: dict, entree) -> dict:
+    """Ce que la chaine envoie a `/notebooklm/resume` : `data` ou `files` de httpx.
+
+    Le type d'un fichier se LIT (comme `_data_uri`) : un PDF commence par
+    `%PDF`, un .docx est une archive qui contient `word/`. Du texte UTF-8 part
+    comme texte colle. Sans entree (premiere etape, rien de joint), c'est la
+    demande du client qui est resumee.
+    """
+    if isinstance(entree, (bytes, bytearray)):
+        brut = bytes(entree)
+        if brut.startswith(b"%PDF"):
+            return {"files": {"fichiers": ("document.pdf", brut, "application/pdf")}}
+        if brut.startswith(b"PK\x03\x04"):
+            import io
+            import zipfile
+
+            try:
+                noms = zipfile.ZipFile(io.BytesIO(brut)).namelist()
+            except zipfile.BadZipFile:
+                noms = []
+            if any(n.startswith("word/") for n in noms):
+                return {"files": {"fichiers": ("document.docx", brut, MIME_DOCX)}}
+        try:
+            texte = brut.decode("utf-8")
+        except UnicodeDecodeError:
+            raise CompositeRefuse(
+                "entree_du_mauvais_type",
+                "« %s » reçoit un PDF, un document Word (.docx) ou du texte ; ce "
+                "fichier n'est rien de cela." % etape["fonction"], ou=EXECUTION) from None
+    elif isinstance(entree, str):
+        texte = entree
+    elif entree is None:
+        texte = etape.get("demande") or ""
+    else:
+        raise CompositeRefuse(
+            "entree_du_mauvais_type",
+            "« %s » attend un document ou du texte et a reçu autre chose."
+            % etape["fonction"], ou=EXECUTION)
+    texte = texte.strip()
+    if not texte:
+        raise CompositeRefuse(
+            "noeud_sans_sortie",
+            "« %s » n'a reçu aucun texte à résumer." % etape["fonction"], ou=EXECUTION)
+    # En plusieurs parties, comme le FormData de la page : sans fichier, httpx
+    # enverrait un formulaire urlencode, que la route lit aussi, mais ce ne
+    # serait plus le chemin que la page emprunte.
+    return {"files": {"texte": (None, texte)}}
+
+
+def _phrase_nlm(message: str) -> str:
+    for phrase in _PHRASES_DE_LA_PAGE_NLM:
+        message = message.replace(phrase, "")
+    return ("%s Page NotebookLM du Studio : %s." % (message.strip(), PAGE_NOTEBOOKLM)).strip()
+
+
+def lancer_un_resume_notebooklm(etape: dict, entree):
+    """Envoyer (plusieurs parties), suivre `/notebooklm/jobs/<id>`, rapatrier le .m4a.
+
+    Meme discipline que `_un_travail` : tout statut >= 400 leve tout de suite,
+    seuls les etats que `run_notebooklm` ecrit font attendre. L'arret du client
+    arrete la CHAINE, pas Google : la bibliotheque n'a pas d'annulation d'un
+    resume commence, et la phrase le dit.
+    """
+    import httpx
+
+    envoi = _envoi_notebooklm(etape, entree)
+    entetes = {"Authorization": "Bearer " + _cle_du_sandbox()}
+    with httpx.Client(timeout=NOTEBOOKLM_DELAI_S) as client:
+        creation = client.post(SANDBOX + ROUTES[etape["brique"]][1], headers=entetes, **envoi)
+        if creation.status_code == 409:
+            # Session absente : la phrase du pont dit « sur cette page ».
+            raise CompositeRefuse(
+                "notebooklm_non_branche",
+                "NotebookLM n'est pas branché. Branchez-le dans %s, puis relancez."
+                % PAGE_DES_CLES[COTE_NOTEBOOKLM], ou=EXECUTION)
+        _ou_refus(creation, etape, "Le résumé NotebookLM n'a pas pu être lancé.")
+        jid = str((creation.json() or {}).get("id") or "")
+        if not jid:
+            raise CompositeRefuse(
+                "travail_sans_identifiant",
+                "« %s » a été accepté sans identifiant de travail : le Studio "
+                "ne saurait pas en récupérer le résultat." % etape["fonction"],
+                ou=EXECUTION)
+
+        fin = time.monotonic() + NOTEBOOKLM_DELAI_S
+        while True:
+            etat = client.get("%s/notebooklm/jobs/%s" % (SANDBOX, jid), headers=entetes)
+            _ou_refus(etat, etape, "L'état de ce résumé n'est pas lisible.")
+            corps = etat.json() or {}
+            statut = str(corps.get("status") or "")
+            if statut in TRAVAIL_RENDU:
+                break
+            if statut in TRAVAIL_PERDU:
+                # Session expiree, quota, compte plein : la phrase du pont, qui
+                # dit deja quoi faire (« Me reconnecter à Google »…).
+                raise CompositeRefuse(
+                    "travail_echoue",
+                    "« %s » s'est arrêté : %s"
+                    % (etape["fonction"],
+                       _phrase_nlm(str(corps.get("message") or statut))),
+                    ou=EXECUTION)
+            if time.monotonic() >= fin:
+                raise CompositeRefuse(
+                    "travail_trop_long",
+                    "« %s » n'a pas fini en %d secondes. Il continue peut-être chez "
+                    "Google ; s'il aboutit, il sera dans la liste de la page "
+                    "NotebookLM du Studio (%s). La chaîne, elle, s'arrête ici."
+                    % (etape["fonction"], NOTEBOOKLM_DELAI_S, PAGE_NOTEBOOKLM),
+                    ou=EXECUTION)
+            arret = etape.get("arret")
+            if arret is not None and arret.is_set():
+                raise CompositeRefuse(
+                    ARRETE_PAR_LE_CLIENT,
+                    "« %s » : la chaîne s'arrête à votre demande. Google ne sait pas "
+                    "interrompre un résumé commencé ; s'il aboutit, il sera dans la "
+                    "liste de la page NotebookLM du Studio (%s)."
+                    % (etape["fonction"], PAGE_NOTEBOOKLM), ou=EXECUTION)
+            if arret is not None:
+                arret.wait(ATTENTE_S)
+            else:
+                time.sleep(ATTENTE_S)
+
+        # L'adresse porte son jeton (`cle=`), lue dans la fiche, jamais fabriquee.
+        adresse = str(corps.get("audio_url") or "")
+        if not adresse:
+            raise CompositeRefuse(
+                "travail_sans_fichier",
+                "« %s » s'est terminé sans résumé audio : la chaîne n'a rien à "
+                "passer à l'étape suivante." % etape["fonction"], ou=EXECUTION)
+        fichier = client.get(SANDBOX + adresse, headers=entetes)
+        _ou_refus(fichier, etape, "Le résumé audio n'a pas pu être rapatrié.")
+    return fichier.content or None
+
+
 def _phrase_de_l_arbitrage(reponse, etape: dict) -> str:
     """Un 409 de `/creer` n'est pas une panne : c'est une question au client.
 
@@ -3043,7 +3317,8 @@ function bloc(v){
       "'>" + e.donnees.phrase + "</span>" : "") + "</li>").join("");
   return "<div class='bloc " + v.atteignable + "'>" +
     "<p class=etat>" + (noms[v.atteignable]||v.atteignable) + "</p>" +
-    "<p>" + (v.phrase || v.pourquoi) + "</p>" + coutEstime(v) +
+    "<p>" + (v.phrase || v.pourquoi) + "</p>" +
+    (v.resume ? "<p class=resume><strong>" + echapper(v.resume) + "</strong></p>" : "") + coutEstime(v) +
     (etapes ? "<ol>" + etapes + "</ol>" : "") + reglages(v) + "</div>";
 }
 

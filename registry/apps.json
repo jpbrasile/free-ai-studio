@@ -368,6 +368,26 @@
       "verifie_le": "2026-09-17",
       "code": "sandbox-manager/dialogue.py MODELE",
       "note": "RÉSERVE DES AUTEURS, qui n'est pas dans la licence : leur README écrit que cette capacité est « intended solely for academic research purposes ». Une licence Apache 2.0 et cette phrase ne disent pas la même chose ; le Studio affiche LES DEUX, là où le modèle se choisit. « Territoire : aucune restriction TROUVÉE » n'est pas « aucune restriction » : deux vérifications indépendantes n'ont rien montré, le fichier de licence brut n'a pas été lu ligne à ligne. Anglais, chinois, japonais, coréen, français, allemand et russe ; 4 locuteurs, 3 minutes au plus."
+    },
+    {
+      "id": "notebooklm_resume",
+      "fonction": "Résumé audio NotebookLM",
+      "capacite": "resume_audio_notebooklm",
+      "entrees": ["texte", "fichier"],
+      "sorties": ["audio"],
+      "fournisseur": "Google (NotebookLM), piloté par la bibliothèque notebooklm-py",
+      "modele": null,
+      "nature": "service propriétaire de Google, piloté par des API NON documentées ; vos documents partent chez Google, dans un carnet neuf de votre compte, et le résumé revient en .m4a",
+      "licence": "service : conditions de Google ; bibliothèque notebooklm-py 0.8.2 : MIT",
+      "territoire": "celui de NotebookLM (non relu)",
+      "vram_min_go": null,
+      "modes": ["api"],
+      "cout": "gratuit dans l'offre gratuite de NotebookLM (3 résumés audio par jour annoncés), avec un compte Google branché",
+      "cout_max_usd": 0,
+      "source": "https://github.com/teng-lin/notebooklm-py",
+      "verifie_le": "2026-09-24",
+      "code": "sandbox-manager/notebooklm_pont.py resume_audio",
+      "note": "Branchement une seule fois, page http://localhost:8020/notebooklm (« Me reconnecter à Google », ou brancher-notebooklm.cmd). Coupé dans un Studio partagé : la session est le compte Google entier d'une seule personne. Les API peuvent changer sans préavis (dit par les auteurs de la bibliothèque)."
     }
   ]
 }
