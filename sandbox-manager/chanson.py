@@ -70,6 +70,10 @@ MEMOIRE_MB = int(os.getenv("CHANSON_MEMORY_MB", "24576"))
 # Meme disque persistant que la video : un seul volume a surveiller chez Modal.
 VOLUME_MODELES = os.getenv("VIDEO_MODAL_VOLUME", "free-ai-studio-modeles")
 CACHE_MODAL = "/modeles/hf"
+# La carte de cet ordinateur (26/09/2026, chanson_maison.py) : le cache des
+# modeles de la personne, monte en lecture seule dans son bac a sable, qui n'a
+# pas Internet -- rien ne s'y installe, rien ne s'y telecharge.
+CACHE_MAISON = "/cache/huggingface"
 
 # Kaggle choisit la carte d'apres machine_shape. NvidiaTeslaT4 est l'exemple de
 # la documentation du CLI Kaggle ; qu'il donne une carte ou deux n'est pas dit.
@@ -603,8 +607,9 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
         "jetons": DUREES[duree]["jetons"],
         # Modal : bibliotheques dans l'image, poids sur le disque persistant.
         # Kaggle et Colab : tout s'installe et se telecharge a chaque fois.
-        "cache": CACHE_MODAL if pour_modal else "",
-        "installer": not pour_modal,
+        # Maison : tout doit DEJA etre la (bac a sable sans Internet).
+        "cache": CACHE_MODAL if pour_modal else (CACHE_MAISON if ou == "maison" else ""),
+        "installer": not pour_modal and ou != "maison",
         "lora": {
             "hf": LORA["hf"],
             "fichier": LORA["fichier"],
@@ -613,7 +618,8 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
             "echelle": LORA["echelle"],
         } if lora else None,
     }
-    carte = {"modal": GPU_MODAL + " (Modal)", "kaggle": "T4 (Kaggle)", "colab": "T4 (Colab)"}.get(ou, ou)
+    carte = {"modal": GPU_MODAL + " (Modal)", "kaggle": "T4 (Kaggle)", "colab": "T4 (Colab)",
+             "maison": "la carte de cet ordinateur"}.get(ou, ou)
     return {
         "duree": duree,
         "gpu": GPU_MODAL,

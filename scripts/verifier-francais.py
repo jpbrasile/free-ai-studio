@@ -91,6 +91,7 @@ MODULES = [
     "sandbox-manager/depenses.py",
     "sandbox-manager/video.py",
     "sandbox-manager/chanson.py",
+    "sandbox-manager/chanson_maison.py",
     "sandbox-manager/dialogue.py",
     "sandbox-manager/composite.py",
     # Il écrit quatre phrases de mémoire destinées au client et n'a jamais été

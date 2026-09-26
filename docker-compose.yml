@@ -41,6 +41,13 @@ services:
       SANDBOX_MANAGER_KEY: ${SANDBOX_MANAGER_KEY}
       SANDBOX_WORKER_KEY: ${SANDBOX_WORKER_KEY}
       SANDBOX_WORKER_URL: http://sandbox-worker:8000
+      # PAS la carte : seulement l'adresse ou le bac a sable de la carte
+      # repondrait s'il tournait. Ici et non dans la surcouche, justement pour
+      # qu'un `up -d` SANS la surcouche sache encore la chercher et dise << carte
+      # debranchee, relancez par demarrer.cmd >> au lieu de << pas de carte >>
+      # (SP-CARTE-DEBRANCHEE-AU-REDEMARRAGE, 26/09/2026). Sur une machine sans
+      # carte le nom ne se resout pas : une sonde perdue toutes les 30 s au plus.
+      SANDBOX_WORKER_GPU_CONNU: http://sandbox-worker-gpu:8000
       # La cle du ROUTEUR, pour une seule chose : faire transcrire un dialogue
       # rendu (/v1/audio/alignement) afin d'en retirer la parole que le modele a
       # ajoutee de lui-meme. Le Sandbox n'a pas de Whisper et n'en aura pas : le

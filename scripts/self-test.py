@@ -113,6 +113,30 @@ except Exception:
     pass
 all_ok &= check('Sandbox Manager /health', sandbox_ok, 'http://127.0.0.1:8020/health')
 
+# Carte débranchée (SP-CARTE-DEBRANCHEE-AU-REDEMARRAGE, 26/09/2026). Un
+# `docker compose up -d` sans la surcouche GPU laisse le bac à sable de la carte
+# debout mais le retire au gestionnaire : chaque clip part alors chez le loueur,
+# et rien ne le disait. Le gestionnaire le voit lui-même et le dit dans /health.
+def ligne_carte(sante):
+    """(ok, détail) pour une ligne rouge, ou None quand il n'y a rien à dire."""
+    vu = sante.get('carte_debranchee')
+    if vu is True:
+        return False, sante.get('alerte') or 'relancez le Studio par demarrer.cmd'
+    if vu is None:
+        return None
+    return True, 'aucun bac à sable de carte laissé sans branchement'
+
+if sandbox_ok:
+    try:
+        ligne = ligne_carte(json.loads(body))
+        if ligne is None:
+            print('[INFO] carte débranchée : non contrôlé (gestionnaire plus ancien, '
+                  'ou SANDBOX_WORKER_GPU_CONNU absent).')
+        else:
+            all_ok &= check('carte graphique branchée au Studio', *ligne)
+    except Exception as exc:
+        all_ok &= check('carte graphique branchée au Studio', False, str(exc))
+
 sandbox_key=vals.get('SANDBOX_MANAGER_KEY','')
 if sandbox_key:
     try:

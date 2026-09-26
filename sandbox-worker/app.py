@@ -1,4 +1,5 @@
 from __future__ import annotations
+import importlib.util
 import os, signal, subprocess, threading, uuid
 from pathlib import Path
 from typing import Optional
@@ -76,6 +77,10 @@ def health():
     if POIDS:
         etat["poids_chemin"] = POIDS
         etat["poids_presents"] = poids_complets()
+    # La chanson sur la carte d'ici (26/09/2026) : le gestionnaire n'y envoie
+    # YuE2 que si ce bac a sable a ses bibliotheques -- il n'a pas Internet
+    # pour les installer. Chercher le module ne l'importe pas : rien ne charge.
+    etat["yue2"] = importlib.util.find_spec("yue2") is not None
     return etat
 
 

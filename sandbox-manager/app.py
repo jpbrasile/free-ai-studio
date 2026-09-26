@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 import budget_modal
 import chanson
+import chanson_maison
 # Le magasin de secrets garde les NOMS en clair et les VALEURS non. Ce qui a
 # mordu le 22/09/2026 : un filtre de lecture sur la configuration a emporte les
 # jetons Modal. Ce que cela ne ferme PAS est dit en tete du module.
@@ -1834,7 +1835,14 @@ def notebooklm_page():
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "sandbox-manager", "version": "2.0.0"}
+    # `ok` dit que CE service repond, et reste vrai : une carte debranchee
+    # n'est pas une panne du gestionnaire. `carte_debranchee` (26/09/2026) est
+    # la ligne rouge que scripts/self-test.py lit ; `None` = non controle.
+    rendu = {"ok": True, "service": "sandbox-manager", "version": "2.0.0",
+             "carte_debranchee": carte_debranchee()}
+    if rendu["carte_debranchee"]:
+        rendu["alerte"] = PHRASE_CARTE_DEBRANCHEE
+    return rendu
 
 
 def verifier_modal(token_id: str, token_secret: str) -> Dict[str, object]:
@@ -2496,6 +2504,8 @@ def essai_carte(authorization: Optional[str] = Header(default=None)):
         "carte": gpu_local.releve(),
         "bac_a_sable_gpu": bool(WORKER_GPU_URL),
         "utilisee_par_cette_page": bool(WORKER_GPU_URL),
+        # Vrai = un bac a sable de carte tourne sans etre branche (26/09/2026).
+        "carte_debranchee": carte_debranchee(),
     }
 
 
@@ -3351,6 +3361,51 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
             write_job(jid, job)
 
 
+# Ou ce bac a sable repondrait S'IL tournait sans avoir ete branche
+# (SP-CARTE-DEBRANCHEE-AU-REDEMARRAGE, 26/09/2026). Un `docker compose up -d`
+# sans la surcouche recree le gestionnaire SANS `SANDBOX_WORKER_GPU_URL`, mais
+# laisse `sandbox-worker-gpu` debout sur le reseau `sandbox-internal` : le
+# Studio disait alors calmement << pas de carte >> et louait chaque clip
+# (0,24 $ mesure le 22/09). Posee par docker-compose.yml, donc presente meme
+# sans surcouche ; vide (tests, service lance hors conteneur) = controle
+# eteint, rendu `None` et jamais << faux >>. Le signal choisi est le /health
+# public du bac a sable, sans cle et sans socket Docker : le nom du service ne
+# se resout sur ce reseau que si le conteneur existe.
+WORKER_GPU_CONNU = os.getenv("SANDBOX_WORKER_GPU_CONNU", "").rstrip("/")
+DEBRANCHEE_CACHE_S = 30
+_debranchee: dict = {"le": 0.0, "vu": None}
+PHRASE_CARTE_DEBRANCHEE = (
+    "Une carte graphique est prête à côté du Studio (sandbox-worker-gpu répond), "
+    "mais le Studio a été relancé sans elle : chaque clip part chez le loueur et se paie. "
+    "Fermez le Studio et relancez-le par demarrer.cmd (ou ./start.sh), "
+    "qui rebranche la carte.")
+
+
+def carte_debranchee(maintenant: Optional[float] = None) -> Optional[bool]:
+    """Un bac a sable de la carte tourne-t-il sans que ce gestionnaire le sache ?
+
+    `False` quand la carte est branchee (rien a chercher), `None` quand le
+    controle est eteint (`SANDBOX_WORKER_GPU_CONNU` vide), sinon la reponse du
+    /health connu -- gardee 30 s pour que /health, que le conteneur interroge
+    lui-meme, ne fasse pas un appel reseau a chaque coup. Une panne de nom ou
+    de connexion = pas de bac a sable = `False` : c'est le cas de toute machine
+    sans carte, le plus courant."""
+    if WORKER_GPU_URL:
+        return False
+    if not WORKER_GPU_CONNU:
+        return None
+    t = time.time() if maintenant is None else maintenant
+    if _debranchee["vu"] is not None and t - _debranchee["le"] < DEBRANCHEE_CACHE_S:
+        return _debranchee["vu"]
+    try:
+        with httpx.Client(timeout=1.5) as c:
+            vu = c.get(WORKER_GPU_CONNU + "/health").json().get("ok") is True
+    except Exception:
+        vu = False
+    _debranchee.update(le=t, vu=vu)
+    return vu
+
+
 def maison_prete() -> tuple[bool, str, bool]:
     """Le bac a sable de la carte a-t-il de quoi travailler, a cette seconde ?
 
@@ -3367,6 +3422,10 @@ def maison_prete() -> tuple[bool, str, bool]:
     demarre par son telechargement >> -- et c'est ce qui rend le vidage de
     `scripts/ressources.*` sans danger."""
     if not WORKER_GPU_URL:
+        # Meme verdict (le clip part chez le loueur), mais plus muet : la
+        # phrase calme ne sert qu'a une machine VRAIMENT sans carte.
+        if carte_debranchee():
+            return False, PHRASE_CARTE_DEBRANCHEE, False
         return False, "Cet ordinateur n'a pas de carte branchee au Studio", False
     try:
         with httpx.Client(timeout=2.0) as c:
@@ -3384,6 +3443,29 @@ def maison_prete() -> tuple[bool, str, bool]:
                        "ordinateur. Une seule fois, dans le dossier du Studio : "
                        + video.commande_telechargement()), False
     return True, "", False
+
+
+def chanson_maison_prete() -> tuple[bool, str]:
+    """Le bac a sable de la carte peut-il faire une chanson, a cette seconde ?
+
+    Les memes questions que `maison_prete()` pour la video, sans le
+    telechargement automatique (pas encore ecrit pour YuE2) : une carte
+    branchee, un bac a sable qui repond ET qui a les bibliotheques de YuE2,
+    les poids epingles deja dans le cache. Tout << non >> envoie la chanson
+    chez le loueur, avec la raison ecrite dans sa fiche (26/09/2026)."""
+    if not WORKER_GPU_URL:
+        if carte_debranchee():
+            return False, PHRASE_CARTE_DEBRANCHEE
+        return False, "Cet ordinateur n'a pas de carte branchée au Studio."
+    try:
+        with httpx.Client(timeout=2.0) as c:
+            etat = c.get(WORKER_GPU_URL + "/health").json()
+    except Exception as exc:
+        return False, "Le bac à sable de la carte ne répond pas (%s)." % type(exc).__name__
+    if etat.get("yue2") is not True:
+        return False, ("Le bac à sable de la carte n'a pas les bibliothèques du modèle de "
+                       "chanson (YuE2) : son image ne les installe pas encore.")
+    return chanson_maison.poids_presents()
 
 
 def decider_ou_fabriquer(plan: dict, loueur: str, payload: dict) -> dict:
@@ -3776,6 +3858,16 @@ def run_chanson(jid: str, code: str, ou: str):
     job.update({"status": "running", "started_at": debut, "provider_effective": ou})
     write_job(jid, job)
     try:
+        if ou == "maison":
+            # La carte d'ici (26/09/2026) : rien a encaisser, le `finally` ne
+            # compte que Modal. Meme delai que chez Modal ; la duree reelle
+            # sur la 4090 n'a pas ete chronometree.
+            finish_execution(jid, "maison", maison_execute(jid, code, chanson.DUREE_MAX_S))
+            job = read_job(jid)
+            if job.get("status") == "failed":
+                job["voisins_a_l_echec"] = gpu_local.voisins()
+                write_job(jid, job)
+            return
         if ou == "kaggle":
             run_kaggle(jid, code, True, True, machine_shape=chanson.KAGGLE_MACHINE,
                        timeout_s=chanson.KAGGLE_DELAI_S)
@@ -3839,6 +3931,15 @@ async def chanson_creer(request: Request, authorization: Optional[str] = Header(
     ou = str(payload.get("ou") or "modal")
     if ou not in ("modal", "kaggle"):
         ou = "modal"
+    # La carte d'ici d'abord, si elle est prete et libre A CETTE SECONDE ;
+    # sinon le loueur choisi, comme avant (26/09/2026, chanson_maison.py).
+    duree = str(payload.get("duree") or "1")
+    placement = chanson_maison.decider(
+        duree if duree in chanson.DUREES else "1", bool(payload.get("lora")),
+        ou_calculer.reglage_lu(), chanson_maison_prete, gpu_local.utilisable,
+        loueur=ou.capitalize())
+    if placement["ou"] == chanson_maison.MAISON:
+        ou = "maison"
     if ou == "kaggle":
         raison = contexte_partage(request)
         if raison:
@@ -3847,7 +3948,9 @@ async def chanson_creer(request: Request, authorization: Optional[str] = Header(
         plan = chanson.preparer(payload, ou)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    plan["resume_public"]["ou_pourquoi"] = placement["pourquoi"]
 
+    # La carte d'ici ne demande ni jeton ni budget : aucune des deux gardes.
     if ou == "modal":
         if not modal_configured():
             raise HTTPException(503, "Modal n'est pas branché. Ouvrez la page « Brancher Modal "
@@ -3856,7 +3959,7 @@ async def chanson_creer(request: Request, authorization: Optional[str] = Header(
             chanson.budget_verifier(plan["gpu"], chanson.DUREE_MAX_S)
         except chanson.BudgetDepasse as exc:
             raise HTTPException(429, str(exc)) from exc
-    elif not kaggle_configured():
+    elif ou == "kaggle" and not kaggle_configured():
         raise HTTPException(503, "Kaggle n'est pas branché. Ouvrez la page « Brancher Modal "
                                  "ou Kaggle » et collez votre nom d'utilisateur et votre clé Kaggle.")
 
@@ -3867,7 +3970,8 @@ async def chanson_creer(request: Request, authorization: Optional[str] = Header(
         "provider": ou,
         "title": "Free AI Studio chanson",
         "gpu": True,
-        "internet": True,
+        # Le bac a sable de la carte n'a pas Internet : la fiche dit ce qui est.
+        "internet": ou != "maison",
         "status": "queued",
         "created_at": time.time(),
         "artifacts": [],
