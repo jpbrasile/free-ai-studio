@@ -1265,7 +1265,7 @@ def colab_execute(jid: str, code: str, gpu: bool, delai_s: int = COLAB_DELAI_S) 
 
     try:
         data = colab_pont.executer(colab_pont.PONT, code, od, delai_s, gpu=gpu,
-                                   arret=arret, progres=progres)
+                                   arret=arret, progres=progres, liberer=gpu)
     except (colab_pont.ColabAbsent, colab_pont.ColabOccupe,
             colab_pont.ColabSansCarte, colab_pont.ColabErreur) as exc:
         raise BackendUnavailable(str(exc)) from exc

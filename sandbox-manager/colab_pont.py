@@ -341,6 +341,16 @@ with open("/content/free_ai_studio/%(n)s/free_ai_output/" + %(nom)r, "rb") as _h
 '''
 
 
+# Rendre la machine a Colab une fois le travail rapatrie (demande du
+# proprietaire le 26/09/2026) : une T4 inactive use le quota gratuit. Le
+# noyau meurt avec elle, la reponse peut donc manquer ; l'onglet, lui, reste
+# branche. Le clip suivant repart d'une machine neuve (modele retelecharge).
+_LIBERER = r'''
+from google.colab import runtime
+runtime.unassign()
+'''
+
+
 def sortie_de(texte: str) -> str:
     """La derniere ligne marquee de la reponse de run_code_cell.
 
@@ -387,8 +397,10 @@ class Cellule:
 
 def executer(pont: Pont, code: str, sortie: Path, delai_s: int, gpu: bool = False,
              arret: Callable[[], bool] = lambda: False,
-             progres: Callable[[dict], None] = lambda e: None) -> dict:
+             progres: Callable[[dict], None] = lambda e: None, liberer: bool = False) -> dict:
     """Fait tourner `code` dans le carnet branche ; ecrit ses fichiers dans `sortie`.
+
+    `liberer` rend la machine a Colab a la fin, reussite ou echec.
 
     Rend la meme forme que les autres executeurs du Studio : exit_code, stdout,
     stderr, timed_out, et `fichiers` (les chemins ecrits). Leve ColabAbsent,
@@ -456,6 +468,22 @@ def executer(pont: Pont, code: str, sortie: Path, delai_s: int, gpu: bool = Fals
         finally:
             for c in faites:
                 c.effacer()
+            if liberer:
+                liberer_la_machine(pont, index)
+
+
+def liberer_la_machine(pont: Pont, index: int) -> bool:
+    """Rend la machine a Colab ; jamais une erreur pour le travail deja fait."""
+    try:
+        cellule = Cellule(pont, _LIBERER, index)
+    except Exception:  # noqa: BLE001 -- carnet debranche : rien a rendre d'ici
+        return False
+    try:
+        cellule.lancer(delai=30)
+    except Exception:  # noqa: BLE001 -- le noyau meurt avec la machine : reponse vide attendue
+        pass
+    cellule.effacer()
+    return True
 
 
 def rapatrier(pont: Pont, vars_: dict, fichiers: list[dict], sortie: Path, index: int,

@@ -41,6 +41,7 @@ class FauxCarnet:
         self.ordre: list[str] = []
         self.lancees: list[str] = []
         self.muettes = 0
+        self.lancees_codes: list[str] = []
         self._n = 0
 
     def _code(self, code: str) -> str:
@@ -67,6 +68,7 @@ class FauxCarnet:
             return {}
         if nom == "run_code_cell":
             self.lancees.append(a["cellId"])
+            self.lancees_codes.append(self.cellules[a["cellId"]])
             if self.muettes:
                 # L'avertissement « pas créé par Google » attend un clic : rien ne tourne.
                 self.muettes -= 1
@@ -470,8 +472,8 @@ def test_le_mode_auto_avec_carnet_y_fait_le_travail(sandbox, monkeypatch, tmp_pa
     sandbox.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
     vu = {}
 
-    def faux_executer(pont, code, sortie, delai, gpu=False, arret=None, progres=None):
-        vu.update(code=code, gpu=gpu, delai=delai)
+    def faux_executer(pont, code, sortie, delai, gpu=False, arret=None, progres=None, liberer=False):
+        vu.update(code=code, gpu=gpu, delai=delai, liberer=liberer)
         sortie.mkdir(parents=True, exist_ok=True)
         f = sortie / "r.txt"
         f.write_text("resultat")
@@ -487,6 +489,20 @@ def test_le_mode_auto_avec_carnet_y_fait_le_travail(sandbox, monkeypatch, tmp_pa
     assert job["remote_gpu"] == "Tesla T4"
     assert [(a["name"], a["source"]) for a in job["artifacts"]] == [("r.txt", "colab")]
     assert vu["gpu"] is True and vu["code"] == "print(1)"
+    # Un travail sur carte rend la machine a la fin (26/09/2026).
+    assert vu["liberer"] is True
+
+
+def test_la_machine_est_rendue_a_colab_apres_le_travail(banc, tmp_path):
+    b = banc(carte=True)
+    r = colab_pont.executer(b.pont, "print('ok')\n", tmp_path / "sortie", 60, gpu=True, liberer=True)
+    assert r["exit_code"] == 0
+    # Derniere cellule lancee : la liberation (le faux carnet n'a pas google.colab,
+    # l'erreur est avalee comme la reponse manquante du vrai), puis rien ne reste.
+    assert "runtime.unassign()" in b.carnet.lancees_codes[-1]
+    assert b.carnet.ordre == []
+    colab_pont.executer(b.pont, "print('ok')\n", tmp_path / "sortie2", 60, gpu=True)
+    assert "runtime.unassign()" not in b.carnet.lancees_codes[-1]
 
 
 def test_l_arret_d_un_travail_colab_dit_ce_qu_il_fait(client, monkeypatch):

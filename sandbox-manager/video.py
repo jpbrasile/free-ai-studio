@@ -1860,7 +1860,8 @@ function majNoteLoueur(){
     texte = "Colab repart d’une machine vide à chaque clip : le modèle s’y télécharge "
           + "à chaque fois (environ 5 min). La carte gratuite n’est pas garantie. "
           + "Colab gratuit a peu de mémoire vive (12,7 Go) : le Studio y charge le modèle "
-          + "en mode économe, essai pas encore réussi ; Kaggle, gratuit aussi, a plus de marge.";
+          + "en mode économe (un clip d’1 s : environ 11 min 30 au total). Kaggle, gratuit aussi, "
+          + "a plus de marge. La machine est rendue à Colab après chaque clip.";
   }
   note.textContent = texte;
   note.hidden = !texte;
