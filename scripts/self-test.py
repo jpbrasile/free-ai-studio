@@ -238,7 +238,10 @@ if sandbox_key:
     # quel calcul sur le compte de l'utilisateur. On vérifie ici que le
     # laissez-passer mis dans l'adresse n'est PAS cette clé.
     try:
-        status, body = get('http://127.0.0.1:8020/jobs',
+        # abrege=1 (26/09/2026) : sans stdout/stderr/code, qui n'ont pas de
+        # borne ; la liste reste sous LIMITE_LECTURE quelle que soit la taille
+        # des journaux. Un service plus ancien ignore le parametre.
+        status, body = get('http://127.0.0.1:8020/jobs?abrege=1',
                            {'Authorization': f'Bearer {sandbox_key}'}, timeout=10)
         jobs = json.loads(body) if status == 200 else []
         jids = [j.get('id') for j in jobs if j.get('video') and j.get('status') == 'succeeded']

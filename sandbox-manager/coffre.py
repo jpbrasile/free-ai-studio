@@ -65,6 +65,21 @@ PREFIXE = "coffre-v1:"
 # ne le ramene jamais.
 CLE_FICHIER_DEFAUT = "/secrets/coffre.cle"
 
+# CE QUI REND LA PHRASE CI-DESSUS VRAIE, ET ELLE NE L'ETAIT PAS TOUJOURS. Une cle
+# Fernet est 44 caracteres base64 tires au hasard ; lus en minuscules (comme le
+# fait un filtre qui ignore la casse), trois d'entre eux forment << key >> environ
+# une fois sur 730 (18 cles sur 20 000 engendrees par `_engendrer`, mesure du
+# 26/09/2026 ; << groq >> une fois sur ~40 000). C'etait l'echec intermittent de
+# `test_le_fichier_de_cle_ne_porte_AUCUN_nom_de_service` : le test avait raison,
+# le code non. `_engendrer` retire donc toute cle qui contient l'un de ces mots.
+# La liste couvre les noms de service ET les mots de leurs variables
+# (`MODAL_TOKEN_ID`, `KAGGLE_KEY`, `GEMINI_API_KEY`...) : ce sont eux qu'un filtre
+# de lecture cherche. Le rejet ecarte quelques tirages sur mille : il coute
+# moins d'un centieme de bit sur 256.
+MOTS_A_NE_JAMAIS_PORTER = ("modal", "kaggle", "gemini", "groq", "openrouter",
+                           "colab", "notebooklm", "huggingface", "token", "key",
+                           "secret", "api")
+
 
 class CoffreSansCle(RuntimeError):
     """Aucune cle lisible, et aucun endroit ou en poser une."""
@@ -112,7 +127,7 @@ def _engendrer(chemin: Path) -> bytes:
     ce fichier et demarrent dans la meme seconde. Sans lui, chacun engendrerait
     sa cle, la derniere ecrite gagnerait, et le magasin de l'autre deviendrait
     illisible -- une perte de cles silencieuse, au premier demarrage."""
-    nouvelle = Fernet.generate_key()
+    nouvelle = _cle_sans_nom_de_service()
 
     # Les deux gestes sont separes EXPRES. `mkdir(exist_ok=True)` leve
     # FileExistsError quand le parent existe en tant que FICHIER, et cette
@@ -141,6 +156,18 @@ def _engendrer(chemin: Path) -> bytes:
         # est ecrit, c'est ce qui compte ; ne pas echouer pour ca.
         pass
     return nouvelle
+
+
+def _cle_sans_nom_de_service() -> bytes:
+    """Une cle Fernet neuve dont le texte, en minuscules, ne contient aucun des
+    `MOTS_A_NE_JAMAIS_PORTER`. La boucle finit presque toujours au premier
+    tirage, mais elle n'a pas de plafond : rendre une cle qui porte un nom
+    << parce que c'etait long >> serait le defaut lui-meme."""
+    while True:
+        nouvelle = Fernet.generate_key()
+        texte = nouvelle.decode("ascii").lower()
+        if not any(mot in texte for mot in MOTS_A_NE_JAMAIS_PORTER):
+            return nouvelle
 
 
 def est_chiffre(garde: str) -> bool:

@@ -257,6 +257,33 @@ def test_le_fichier_de_cle_ne_porte_AUCUN_nom_de_service(sandbox):
         assert mot not in contenu.lower(), "la cle porte le mot << %s >>" % mot
 
 
+# Le test du dessus ne voit qu'UN tirage par session. Il echouait environ une
+# fois sur 730 (la cle tiree formait << key >> en minuscules : 18 sur 20 000
+# mesures le 26/09/2026), et le code avait tort, pas lui. Ces deux-ci imposent le
+# tirage malchanceux au lieu de l'attendre.
+
+
+def test_une_cle_tiree_qui_porte_un_nom_est_REJETEE(sandbox, tmp_path, monkeypatch):
+    """Premier tirage : 44 caracteres base64 valides qui commencent par << key >>.
+    Il ne doit jamais atteindre le disque."""
+    piege = b"key" + b"A" * 40 + b"="
+    propre = b"B" * 43 + b"="
+    tirages = iter([piege, propre])
+    monkeypatch.setattr(sandbox.coffre.Fernet, "generate_key", lambda: next(tirages))
+
+    chemin = tmp_path / "tiree.cle"
+    rendue = sandbox.coffre._engendrer(chemin)
+
+    assert rendue == propre
+    assert chemin.read_bytes() == propre
+
+
+def test_la_liste_du_coffre_couvre_les_noms_que_ce_fichier_cherche(sandbox):
+    """Le test de lecture large cherche ces mots ; le coffre doit les refuser tous."""
+    for mot in ("modal", "kaggle", "gemini", "groq", "openrouter", "token", "key"):
+        assert mot in sandbox.coffre.MOTS_A_NE_JAMAIS_PORTER, mot
+
+
 def test_deux_services_qui_demarrent_ENSEMBLE_ne_se_volent_pas_la_cle(sandbox,
                                                                       tmp_path):
     """Sans O_EXCL, chacun engendrerait la sienne, la derniere ecrite gagnerait,

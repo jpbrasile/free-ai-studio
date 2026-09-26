@@ -2663,15 +2663,47 @@ def create_job(req: JobRequest, request: Request, authorization: Optional[str] =
     return read_job(jid)
 
 
+# GET /jobs rendait les 100 fiches les plus recentes EN ENTIER. Le NOMBRE etait
+# donc deja borne (depuis l'import du 09/09/2026) ; ce qui ne l'etait pas, c'est
+# le POIDS d'une fiche : `stdout`, `stderr` et `code` y sont gardes sans coupe.
+# 67 fiches pesaient 203 262 octets le 18/09 (PLAN.md), et rien n'empechait
+# quelques journaux bavards de franchir les 2 000 000 d'octets de l'auto-test.
+# Correctif du 26/09/2026, compatible : sans parametre, la reponse est la meme
+# qu'avant (liste de 100 fiches entieres, la plus recente d'abord). `limite`
+# (1 a 100) raccourcit la liste ; `abrege=1` retire les champs sans borne, qui
+# restent lisibles fiche par fiche sur GET /jobs/{id}. Le total des fiches sur le
+# disque part dans l'en-tete `X-Total-Count` : le corps reste une liste, et
+# aucun lecteur existant n'a a changer.
+LISTE_TRAVAUX_MAX = 100
+CHAMPS_SANS_BORNE = ("stdout", "stderr", "code", "submit_log")
+
+
+def _date_de_fiche(p: Path) -> float:
+    # Une fiche effacee entre le parcours et la lecture ne doit pas rendre 500.
+    try:
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 @app.get("/jobs")
-def list_jobs(authorization: Optional[str] = Header(default=None)):
+def list_jobs(response: Response,
+              authorization: Optional[str] = Header(default=None),
+              limite: int = Query(default=LISTE_TRAVAUX_MAX, ge=1, le=LISTE_TRAVAUX_MAX),
+              abrege: int = Query(default=0)):
     auth(authorization)
+    fiches = sorted(JOBS.glob("*/job.json"), key=_date_de_fiche, reverse=True)
+    response.headers["X-Total-Count"] = str(len(fiches))
     out = []
-    for p in sorted(JOBS.glob("*/job.json"), key=lambda x: x.stat().st_mtime, reverse=True)[:100]:
+    for p in fiches[:limite]:
         try:
-            out.append(json.loads(p.read_text(encoding="utf-8")))
+            job = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
-            pass
+            continue
+        if abrege and isinstance(job, dict):
+            for champ in CHAMPS_SANS_BORNE:
+                job.pop(champ, None)
+        out.append(job)
     return out
 
 

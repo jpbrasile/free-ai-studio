@@ -949,6 +949,15 @@ reward »), complétée par « Never covert » — qui est en **l. 19**, dans le
   lieu de se déguiser en erreur de format. **Mais le journal laisse le point ouvert de sa
   propre main** : « la liste des travaux grossit sans limite, elle franchira la nouvelle
   borne à son tour » (`PLAN.md:278`). **Repousser une borne n'est pas une rotation.**
+  *Note du 26/09/2026 :* ~~le point reste ouvert~~ **fermé pour `GET /jobs`**, et le
+  constat était à moitié inexact : le **nombre** de fiches rendues était déjà borné à 100
+  depuis l'import du 09/09 ; c'est leur **poids** qui ne l'était pas (`stdout`, `stderr`,
+  `code` gardés entiers). `list_jobs` accepte désormais `limite` (1 à 100) et `abrege=1`
+  (sans ces champs), et dit le total dans l'en-tête `X-Total-Count` ; sans paramètre, la
+  réponse est la même qu'avant. L'auto-test lit la forme abrégée. Détail et tests en
+  `PLAN.md:278`. **Non vu en réel.** La leçon pour le journal anonyme tient toujours :
+  borner la lecture n'efface ni ne fait tourner ce qui est écrit sur le disque —
+  `/workspace/jobs` garde toutes ses fiches.
 - **Les contributions, elles, ne sont pas anonymes et ne doivent pas l'être** : elles
   arrivent par git, avec auteur, date et signature. C'est ce qui permet le score de
   confiance du contributeur que le plan prévoit (l. 13, 97). Deux régimes distincts, et
