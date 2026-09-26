@@ -1596,6 +1596,59 @@ def test_carte_libre_au_controle_PRISE_au_depart_d_un_seul_tenant(apps, sandbox,
     assert partis == []
 
 
+def test_deux_etapes_sur_la_CARTE_ne_se_suivent_dans_aucune_chaine_typee(apps):
+    """SP-FLOW-VRAM-ENTRE-ETAPES, ferme le 26/09/2026 par une mesure du graphe.
+
+    La crainte : deux etapes a la suite sur la carte d'ici, la seconde partant
+    avant que la premiere ait rendu sa memoire. Les etapes qui peuvent prendre
+    la carte sont lues dans le code et le registre, pas recopiees : un travail
+    que la chaine envoie a `/video/creer` (`composite.TRAVAUX`) et que le
+    registre dit `local` -- aujourd'hui `video_maison` et `video_rapide`.
+    Toutes prennent du TEXTE et rendent de la VIDEO, et la seule brique qui
+    prend de la video (la prolongation, louee d'office) rend de la video :
+    aucun chemin de types ne ramene au texte. Une etape carte ne peut donc etre
+    suivie, meme de loin, par une autre etape carte, et `verifier` refuse la
+    chaine qui l'essaierait.
+
+    Le jour ou une brique rendra du texte depuis une video (ou une brique carte
+    prendra de la video), ce test rougit. La garde existe deja pour ce jour-la
+    -- chaque etape rappelle `/video/creer`, qui sonde la carte a SON depart
+    (`test_carte_libre_au_controle_PRISE_au_depart_d_un_seul_tenant`) -- mais
+    il faudra alors la jouer sur deux etapes enchainees.
+    """
+    carte = sorted(b["id"] for b in apps
+                   if composite.TRAVAUX.get(b["id"], ("",))[0] == "video"
+                   and "local" in b["modes"])
+    assert carte == ["video_maison", "video_rapide"], carte
+
+    par_id = {b["id"]: b for b in apps}
+    for depart in carte:
+        # Les types qu'une chaine peut encore porter APRES cette etape.
+        atteints, a_voir = set(), list(par_id[depart]["sorties"])
+        while a_voir:
+            t = a_voir.pop()
+            if t in atteints:
+                continue
+            atteints.add(t)
+            for b in apps:
+                if t in b["entrees"]:
+                    a_voir.extend(b["sorties"])
+        suivantes = [b for b in carte if atteints & set(par_id[b]["entrees"])]
+        assert not suivantes, (
+            "apres %s, la chaine peut porter %s et relancer %s sur la carte : "
+            "il faut tester la memoire rendue entre deux etapes"
+            % (depart, sorted(atteints), suivantes))
+
+    for amont in carte:
+        for aval in carte:
+            verdict = composite.verifier(
+                composite.chaine_depuis_briques([amont, aval], apps),
+                sonde_carte=lambda _b, delai_s=None: (True, "", {}),
+                sonde_budget=lambda _e: None)
+            assert verdict["atteignable"] == composite.NON, (amont, aval, verdict)
+            assert "types_incompatibles" in verdict["motifs"], (amont, aval, verdict)
+
+
 def test_un_404_pendant_l_attente_ne_devient_PAS_pas_encore_pret(apps, monkeypatch):
     """Un sondeur separe << pas ENCORE >> de << JAMAIS >>.
 

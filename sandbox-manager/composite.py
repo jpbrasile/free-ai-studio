@@ -1245,10 +1245,11 @@ BUDGET_PAR_BRIQUE = {
 # le consulte AVANT (l. 2309) et ne verifie le budget que si la decision dit
 # << modal >> (l. 2333) -- un clip part alors sur la carte d'ici, gratuitement.
 #
-# Ce que le registre en dit DIVERGE, et c'est note plutot que corrige ici :
-# `video_rapide` porte `modes: [modal, kaggle, colab]` sans
-# `local`, alors que `app.py:2321` la prepare bel et bien en mode maison. Le
-# code fait foi ; la fiche du registre est en retard. Sous-plan, pas raccroc.
+# Le registre en DIVERGEAIT jusqu'au 26/09/2026 : `video_rapide` portait
+# `modes: [modal, kaggle, colab]` sans `local`, alors que `/video/creer` la
+# prepare bel et bien en mode maison. Corrige au registre (SP-MODES-DIVERGENTS),
+# et garde par `tests/test_registre.py`, qui appelle la route pour chaque
+# brique video et compare ou elle part a ce que dit `modes`.
 LOUEUR_SEUL = ("chanson", "dialogue", "video_prolonger")
 
 

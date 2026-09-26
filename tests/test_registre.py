@@ -28,6 +28,7 @@ import sys
 import unicodedata
 
 import pytest
+from fastapi.testclient import TestClient
 
 from conftest import RACINE
 
@@ -210,6 +211,92 @@ def test_le_prix_du_clip_loue_suit_le_TARIF_et_non_un_souvenir(sandbox, par_id):
     assert ecrit in par_id["video_rapide"]["cout"], (
         "le registre annonce %r, le code calcule %s $"
         % (par_id["video_rapide"]["cout"], ecrit))
+
+
+# --- 2 bis. `modes` dit OU le code fabrique -----------------------------------
+# SP-MODES-DIVERGENTS, ferme le 26/09/2026. `video_rapide` portait
+# `modes: [modal, kaggle, colab]` sans `local`, alors que `/video/creer` la
+# fabrique sur la carte d'ici quand `ou_calculer.decider()` le dit -- et
+# `composite.py` le notait en commentaire au lieu de le corriger. Rien ne
+# comparait `modes` au code : ces deux tests le font, EN APPELANT la route,
+# pas en recopiant une liste.
+
+sys.path.insert(0, str(RACINE / "sandbox-manager"))
+import composite  # noqa: E402
+
+CLE_SANDBOX = {"Authorization": "Bearer cle-sandbox-de-test"}
+LOCAL_SANDBOX = "http://127.0.0.1:8020"
+
+# Les briques video d'une chaine, lues dans la table du CODE : ce que la chaine
+# ajoute a la demande (`composite.TRAVAUX`) est exactement ce qu'elle enverra.
+BRIQUES_VIDEO = sorted(b for b, (route, _) in composite.TRAVAUX.items() if route == "video")
+
+
+def _carte_libre(besoin_mo, delai_s=None):
+    return True, "carte de test : libre", {"vue": True, "libre_mo": 24138, "marge_mo": 1024,
+                                            "motif": ""}
+
+
+def _ou_part_le_clip(sandbox, monkeypatch, brique, avec_carte):
+    """Le fournisseur que `/video/creer` retient, ou None s'il ne lance rien.
+
+    Rien ne part : `run_video` est remplace, la sonde de la carte aussi.
+    """
+    monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    monkeypatch.setattr(sandbox, "run_video", lambda *a, **k: None)
+    if avec_carte:
+        monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "http://sandbox-worker-gpu:8000")
+        monkeypatch.setattr(sandbox, "maison_prete", lambda: (True, "", False))
+        monkeypatch.setattr(sandbox.ou_calculer.gpu_local, "utilisable", _carte_libre)
+    else:
+        monkeypatch.setattr(sandbox, "WORKER_GPU_URL", "")
+    corps = {"description": "un phare dans la tempete", "duree": "3", "ou": "modal"}
+    corps.update(composite.TRAVAUX[brique][1])
+    r = TestClient(sandbox.app, base_url=LOCAL_SANDBOX).post(
+        "/video/creer", headers=CLE_SANDBOX, json=corps)
+    assert r.status_code in (200, 409), (brique, r.status_code, r.text[:300])
+    return r.json()["provider"] if r.status_code == 200 else None
+
+
+@pytest.mark.parametrize("brique", BRIQUES_VIDEO)
+def test_modes_local_et_modal_suivent_ce_que_la_route_video_FAIT(sandbox, monkeypatch,
+                                                                par_id, brique):
+    """Dans les deux sens : `local` present SI ET SEULEMENT SI la route fabrique ici.
+
+    Carte libre : la demande que la chaine enverrait part-elle sur la carte
+    (`provider == "maison"`) ? Sans carte : part-elle chez Modal ? Le registre
+    doit dire la meme chose. A rougi le 26/09/2026 sur l'ancien registre :
+    `video_rapide` partait a la maison sans porter `local`.
+
+    Kaggle et Colab ne sont pas joues ici : ils demandent un compte ou un
+    carnet branche, et le choix du loueur vient de la page, pas du code.
+    """
+    modes = set(par_id[brique]["modes"])
+    # Sans carte D'ABORD : le passage avec carte remplace `maison_prete` et la
+    # sonde, et ces remplacements tiennent jusqu'a la fin du test.
+    sans_carte = _ou_part_le_clip(sandbox, monkeypatch, brique, avec_carte=False)
+    ici = _ou_part_le_clip(sandbox, monkeypatch, brique, avec_carte=True)
+    assert ("local" in modes) == (ici == "maison"), (
+        "%s : carte libre, la route rend %r ; le registre dit %s"
+        % (brique, ici, sorted(modes)))
+    assert ("modal" in modes) == (sans_carte == "modal"), (
+        "%s : sans carte, la route rend %r ; le registre dit %s"
+        % (brique, sans_carte, sorted(modes)))
+
+
+def test_une_brique_que_SEUL_le_loueur_fabrique_ne_porte_pas_local(par_id):
+    """`composite.LOUEUR_SEUL` : chanson, dialogue, prolongation.
+
+    `/chanson/creer` et `/dialogue/creer` appellent `budget_verifier` sans
+    jamais consulter `ou_calculer.decider()`, et la prolongation impose
+    `toujours-modal` (la carte d'ici ne pose pas d'image de depart) : aucune
+    ne sait fabriquer ici. Un `local` au
+    registre y serait une promesse que le code ne tient pas.
+    """
+    for brique in composite.LOUEUR_SEUL:
+        assert "local" not in par_id[brique]["modes"], (
+            "%s : le code ne la fabrique que chez le loueur, le registre dit %s"
+            % (brique, par_id[brique]["modes"]))
 
 
 # --- 3. Rien ne se sert sans ligne au registre -------------------------------

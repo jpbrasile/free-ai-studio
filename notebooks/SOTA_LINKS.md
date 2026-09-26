@@ -71,7 +71,7 @@ Les sections ci-dessus listent des **candidats** pour les carnets Colab/Kaggle. 
 | Lire à haute voix, français | `fr_FR-siwis-medium` | local | **non mesurée** |
 | Lire à haute voix, anglais | `en_US-norman-medium` | local | **non mesurée** |
 | Dictée « sur cet ordinateur », et repli quand Groq refuse | `small` | local | **non mesurée** |
-| Vidéo, qualité « Rapide » (si on loue) | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | modal, kaggle, colab | **non mesurée** |
+| Vidéo, qualité « Rapide » (si on loue) | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | local, modal, kaggle, colab | **non mesurée** |
 | Prolonger la vidéo de quelques secondes (machine louée) | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | modal, kaggle | **non mesurée** |
 | Vidéo fabriquée À LA MAISON, sur la carte de ce PC | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | local | 14,4 Go mesurés |
 | Chanson | `m-a-p/YuE2-3B` | modal, kaggle, colab | **non mesurée** |

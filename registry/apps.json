@@ -283,7 +283,7 @@
       "licence": "Apache 2.0",
       "territoire": "aucune restriction de pays",
       "vram_min_go": null,
-      "modes": ["modal", "kaggle", "colab"],
+      "modes": ["local", "modal", "kaggle", "colab"],
       "cout": "Modal : de 0,056 $ le clip de 1 s à 0,277 $ le clip de 5 s (0,155 $ pour 3 s). Les durées de 1 et 3 et 5 s ont été chronométrées sur un vrai clip loué ; les autres sont la droite de ces mesures, relevée pour ne jamais promettre moins cher. Tarif relevé chez Modal le 20/09/2026 ; Kaggle et Colab : gratuit",
       "cout_max_usd": 0.277,
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B",
