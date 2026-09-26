@@ -5,7 +5,7 @@ feuille la met en cases, elle n'ajoute aucune règle. Écrite le 26/09/2026, ava
 Chaque renvoi `fichier:ligne` ci-dessous porte entre parenthèses le texte qu'on doit y lire.
 
 Date butoir : **31/10/2026** (`docs/ESSAI_MACHINE_NEUVE.md:20` (`butoir: 2026-10-31`),
-`docs/PLAN-PLATEFORME.md:1525` (`La date de l'essai machine neuve`)).
+`docs/PLAN-PLATEFORME.md:1534` (`La date de l'essai machine neuve`)).
 
 ---
 
@@ -320,6 +320,6 @@ la séance, et à écrire ici pour ne pas les décider en voyant le résultat.
    lire la carte est permis, rien d'autre. D'accord ? ______________________
 4. **La porte du portage.** `PLAN.md:811` (`Porte du portage`) pose : aucune friction bloquante
    ouverte avant le portage sur un poste client. Au 26/09, une reste ouverte
-   (`docs/FRICTIONS.md:35` (`24 h sans intervention`), session NotebookLM, verdict au plus tôt
-   le 27/09). NotebookLM n'est dans aucune des six tâches. L'essai attend-il sa levée ?
+   (`docs/FRICTIONS.md:33` (`24 h sans intervention`), session NotebookLM ; le critère des 24 h
+   a échoué le 26/09, session morte après environ 2 h). NotebookLM n'est dans aucune des six tâches. L'essai attend-il sa levée ?
    ______________________
