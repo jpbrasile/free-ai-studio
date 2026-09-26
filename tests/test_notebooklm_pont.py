@@ -354,6 +354,8 @@ def test_le_journal_d_entretien_vit_dans_config_et_garde_la_derniere_reussite(nl
     assert fichier.exists()                      # a cote du coffre, dans config/
     j = pont.journal_entretien()
     assert j["derniere_reussite"]["origine"] == "demarrage"
+    # L'heure dit son decalage : le conteneur est en UTC, la personne a Paris.
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}", j["derniere_reussite"]["heure"])
     assert "tournes : __Secure-1PSIDTS" in j["derniere_reussite"]["changements"]
     assert "echec_en_cours" not in j
     assert "valeur-" not in fichier.read_text(encoding="utf-8")
@@ -371,6 +373,12 @@ def test_le_premier_echec_reste_quand_les_suivants_s_ajoutent(nlm, monkeypatch):
     assert serie["premier"]["message"] == "Error: Authentication expired"
     assert serie["premier"]["origine"] == "fil" and serie["premier"]["code"] == 1
     assert serie["dernier"]["origine"] == "bouton"
+    # Un long message garde son debut, la ou la bibliotheque dit la cause.
+    long = "Error: Authentication expired or invalid. " + "x" * 300
+    _entretien(pont, monkeypatch, 1, message=long)
+    serie = pont.journal_entretien()["echec_en_cours"]
+    assert serie["dernier"]["message"] == long and serie["nombre"] == 3
+    assert serie["premier"]["message"] == "Error: Authentication expired"
     # La derniere reussite n'est pas effacee par les echecs.
     assert pont.journal_entretien()["derniere_reussite"]["heure"] == reussite
 

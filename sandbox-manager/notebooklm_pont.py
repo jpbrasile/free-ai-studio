@@ -203,7 +203,9 @@ JOURNAL_ENTRETIEN = "entretien.json"
 
 
 def _instant(t: float) -> dict:
-    return {"quand": t, "heure": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))}
+    # Le conteneur vit en UTC : l'heure porte son decalage, sinon 11:40 se lit
+    # comme l'heure de Paris (vu en reel le 26/09, il etait 13:40).
+    return {"quand": t, "heure": time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(t))}
 
 
 def journal_entretien() -> dict:
@@ -264,7 +266,9 @@ def entretenir(commande: str = "notebooklm", origine: str = "fil") -> dict:
                 r = subprocess.run([commande, "--storage", str(chemin), "auth", "refresh",
                                     "--verify", "--quiet"],
                                    capture_output=True, text=True, env=env, timeout=120)
-                code, message = r.returncode, " ".join((r.stderr or r.stdout or "").split())[-200:]
+                # 400 signes : a 200, le debut (« Authentication expired… ») etait
+                # coupe (vu en reel le 26/09).
+                code, message = r.returncode, " ".join((r.stderr or r.stdout or "").split())[-400:]
             except (OSError, subprocess.TimeoutExpired) as exc:
                 code, message = -1, type(exc).__name__
             nouveau = chemin.read_text(encoding="utf-8") if chemin.exists() else etat
