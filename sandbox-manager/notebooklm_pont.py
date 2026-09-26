@@ -783,6 +783,7 @@ carnet reste dans votre NotebookLM pour y poser vos questions.</p>
 </div>
 
 <div id="travail" hidden>
+  <p id="reconnecte" class="ok" hidden></p>
   <h2>Vos documents</h2>
   <label class="titre" for="fichiers">Fichiers (PDF, .txt, .md, .docx)</label>
   <input id="fichiers" type="file" multiple accept=".pdf,.txt,.md,.docx">
@@ -1028,7 +1029,14 @@ el("btLancer").onclick = async () => {
       if(e.branchee && (e.depuis || 0) !== avant){
         clearInterval(GUET); el("btLancer").disabled = false;
         texte("etatLancer", "Session reçue, après " + ecoule() + ".", "ok");
+        const duree = ecoule();
         await charger();
+        // charger() cache le bloc du bouton quand la session tient : le mot
+        // final y restait invisible (vu le 26/09). Il passe au-dessus du travail.
+        if(SESSION_OK){
+          texte("reconnecte", "✔ Reconnecté à Google, après " + duree + ".", "ok");
+          el("reconnecte").hidden = false;
+        }
       }
     } catch(e) { /* le Studio redémarre : on réessaie au tour suivant */ }
   }, 5000);

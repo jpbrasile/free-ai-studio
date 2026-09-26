@@ -1175,6 +1175,20 @@ def test_la_reponse_markdown_n_injecte_jamais_de_html(nlm, tmp_path):
     assert "innerHTML" not in pont.PAGE_HTML
 
 
+def test_le_mot_de_reconnexion_reste_visible_une_fois_branche_26_09(nlm):
+    """« le compteur s'affichait où ça ? » : le mot final était posé dans le bloc
+    du bouton, que la page cache dès que la session tient. Il va au-dessus du
+    travail, qui, lui, s'affiche."""
+    pont, _ = nlm
+    page = pont.PAGE_HTML
+    brancher_bloc = page.split('<div id="brancher"', 1)[1].split('<div id="travail"', 1)[0]
+    travail = page.split('<div id="travail"', 1)[1].split("<h2>", 1)[0]
+    assert 'id="reconnecte"' in travail and 'id="reconnecte"' not in brancher_bloc
+    assert 'id="etatLancer"' in brancher_bloc
+    assert "Cela peut prendre plusieurs minutes" in page and "En attente depuis" in page
+    assert 'texte("reconnecte", "✔ Reconnecté à Google, après "' in page
+
+
 def test_oublier_efface_la_session(client):
     c, pont, _ = client
     brancher(pont)
