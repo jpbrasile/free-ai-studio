@@ -1508,7 +1508,9 @@ async def notebooklm_session(request: Request, authorization: Optional[str] = He
     try:
         v = await asyncio.to_thread(notebooklm_pont.executer, notebooklm_pont.verifier)
     except NLM_ERREURS as exc:
+        await asyncio.to_thread(notebooklm_pont.noter_branchement, False, str(exc))
         return {"enregistree": True, "ok": False, "message": str(exc), **r}
+    await asyncio.to_thread(notebooklm_pont.noter_branchement, True)
     return {"enregistree": True, **r, **v}
 
 
@@ -1533,12 +1535,15 @@ def run_notebooklm(jid: str, sources: list, reglages: dict) -> None:
         r = notebooklm_pont.executer(lambda: notebooklm_pont.resume_audio(
             sources, JOBS / jid / "output", progres=progres, **reglages))
     except NLM_ERREURS as exc:
-        terminer_en_echec(jid, str(exc)[:1000])
         if isinstance(exc, notebooklm_pont.CarnetsPleins):
             # La page ouvre alors la boite des anciens carnets a supprimer.
+            # AVANT l'echec : ecrit apres, une page qui relisait entre les deux
+            # voyait « echoue » sans la boite (test intermittent, 26/09/2026).
+            # terminer_en_echec relit la fiche, il garde ce drapeau.
             job = read_job(jid)
             job["plein"] = True
             write_job(jid, job)
+        terminer_en_echec(jid, str(exc)[:1000])
         return
     except Exception as exc:  # noqa: BLE001 -- jamais un fil mort sur une fiche << running >>
         log.exception("notebooklm")

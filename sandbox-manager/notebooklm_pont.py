@@ -215,17 +215,32 @@ def journal_entretien() -> dict:
         return {}
 
 
-def _noter_entretien(ok: bool, origine: str, code: int, message: str, diff: str) -> None:
+def _ecrire_journal(changer: Callable[[dict], None]) -> None:
     """Jamais bloquant : un journal illisible ou un disque plein ne doit pas
-    empecher l'entretien lui-meme."""
+    empecher l'entretien ni le branchement."""
     try:
         j = journal_entretien()
+        changer(j)
+        DOSSIER.mkdir(parents=True, exist_ok=True)
+        tmp = (DOSSIER / JOURNAL_ENTRETIEN).with_suffix(".tmp")
+        tmp.write_text(json.dumps(j, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, DOSSIER / JOURNAL_ENTRETIEN)
+    except OSError as exc:
+        log.warning("NotebookLM entretien : journal non ecrit (%s)", type(exc).__name__)
+
+
+def _clore_serie(j: dict, fait: dict) -> None:
+    serie = j.pop("echec_en_cours", None)
+    if serie:
+        serie["retabli"] = fait
+        j["dernier_incident"] = serie
+
+
+def _noter_entretien(ok: bool, origine: str, code: int, message: str, diff: str) -> None:
+    def changer(j):
         fait = dict(_instant(time.time()), origine=origine, changements=diff)
         if ok:
-            serie = j.pop("echec_en_cours", None)
-            if serie:
-                serie["retabli"] = fait
-                j["dernier_incident"] = serie
+            _clore_serie(j, fait)
             j["derniere_reussite"] = fait
         else:
             fait.update(code=code, message=message)
@@ -237,12 +252,30 @@ def _noter_entretien(ok: bool, origine: str, code: int, message: str, diff: str)
                 j["echec_en_cours"] = {
                     "premier": fait, "dernier": fait, "nombre": 1,
                     "reussite_precedente": (j.get("derniere_reussite") or {}).get("heure")}
-        DOSSIER.mkdir(parents=True, exist_ok=True)
-        tmp = (DOSSIER / JOURNAL_ENTRETIEN).with_suffix(".tmp")
-        tmp.write_text(json.dumps(j, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, DOSSIER / JOURNAL_ENTRETIEN)
-    except OSError as exc:
-        log.warning("NotebookLM entretien : journal non ecrit (%s)", type(exc).__name__)
+    _ecrire_journal(changer)
+
+
+def noter_branchement(ok: bool, message: str = "") -> None:
+    """Une session neuve vient d'etre collee puis essayee chez Google. Vu en
+    reel le 26/09 : sans cette ligne, le journal disait encore « echec en
+    cours » un quart d'heure apres une reconnexion reussie, et le prochain
+    entretien aurait clos la serie a sa place. Les doublons de la session
+    neuve sont gardes : l'hypothese du 25/09 (une ancienne valeur renvoyee
+    ferme la session) se juge en comparant avec ceux du prochain lachage."""
+    try:
+        etat = _lire()
+    except Exception:  # noqa: BLE001 -- une session illisible se dit, sans detail
+        etat = ""
+    diff = changements('{"cookies": []}', etat)
+
+    def changer(j):
+        fait = dict(_instant(time.time()), origine="reconnexion", ok=ok, changements=diff)
+        if message:
+            fait["message"] = " ".join(message.split())[-400:]
+        j["dernier_branchement"] = fait
+        if ok:
+            _clore_serie(j, fait)
+    _ecrire_journal(changer)
 
 
 def entretenir(commande: str = "notebooklm", origine: str = "fil") -> dict:
@@ -498,6 +531,35 @@ async def supprimer(ids: list[str]) -> dict:
     return {"supprimes": fait, "refuses": refuse}
 
 
+# Pauses avant chaque essai de rapatriement. Le 26/09 a 14:00, un resume de
+# 8 min a ete perdu sur une « Network error » (httpx.RequestError) au
+# telechargement ; repris a la main peu apres, le meme fichier (35 Mo) est venu
+# du premier coup. L'erreur etait passagere, et le carnet n'etait plus cite.
+RAPATRIEMENT_PAUSES = (0, 10, 30)
+
+
+async def _rapatrier(c, carnet_id: str, cible: Path, artefact, progres) -> None:
+    """`download_audio`, repris sur erreur reseau. Un refus d'acces (401/403)
+    n'est pas repris : c'est la session, `traduire` le dit."""
+    pauses = RAPATRIEMENT_PAUSES
+    for n, pause in enumerate(pauses, 1):
+        if n > 1:
+            progres("Rapatriement du fichier audio : nouvel essai (%d sur %d)…" % (n, len(pauses)))
+            await asyncio.sleep(pause)
+        try:
+            await c.artifacts.download_audio(carnet_id, str(cible), artifact_id=artefact)
+            return
+        except Exception as exc:  # noqa: BLE001 -- trie par nom, comme `traduire`
+            noms = {k.__name__ for k in type(exc).__mro__}
+            if "ArtifactDownloadError" not in noms or getattr(exc, "status_code", None) in (401, 403):
+                raise
+            derniere = exc
+    raise NotebookLMEchec(
+        "Le résumé est prêt dans NotebookLM, mais son fichier n’a pas pu être rapatrié "
+        "(%d essais ; %s). Écoutez-le dans le carnet : %s"
+        % (len(pauses), " ".join(str(derniere).split())[:200], URL_CARNET % carnet_id)) from derniere
+
+
 async def resume_audio(sources: list[dict], dossier: Path, titre: str = "", consigne: str = "",
                        format_: str = "approfondi", longueur: str = "normal", langue: str = "fr",
                        quand: str = "",
@@ -552,7 +614,7 @@ async def resume_audio(sources: list[dict], dossier: Path, titre: str = "", cons
         progres("Rapatriement du fichier audio…")
         dossier.mkdir(parents=True, exist_ok=True)
         cible = dossier / "resume-notebooklm.m4a"
-        await c.artifacts.download_audio(carnet.id, str(cible), artifact_id=artefact)
+        await _rapatrier(c, carnet.id, cible, artefact, progres)
     if not cible.exists() or cible.stat().st_size == 0:
         raise NotebookLMEchec("NotebookLM a dit le résumé prêt, mais le fichier reçu est vide.")
     return {"audio": cible, "carnet_id": carnet.id, "carnet_url": URL_CARNET % carnet.id,
@@ -933,11 +995,18 @@ el("btLancer").onclick = async () => {
     texte("etatLancer", d.message || "Le bouton n’a pas pu agir : double-cliquez sur brancher-notebooklm.cmd.", "ko");
     return;
   }
-  texte("etatLancer", "Une fenêtre noire s’ouvre, puis Chrome : connectez-vous à Google. "
-    + "La page se met à jour seule quand c’est fait.");
-  const avant = DEPUIS, fin = Date.now() + 10 * 60 * 1000;
+  // Vu en réel le 26/09 : 3 min 45 s entre le clic et la session reçue, sans
+  // que la page dise que c'est normal (« l'attente peut être longue, prévenir »).
+  const attente = "Cela peut prendre plusieurs minutes (3 à 4 min mesurées le 26/09) : "
+    + "une fenêtre noire s’ouvre, puis Chrome — connectez-vous à Google et laissez faire. "
+    + "Ne fermez pas cette page ; elle se met à jour seule quand c’est fait.";
+  const debut = Date.now(), avant = DEPUIS, fin = debut + 10 * 60 * 1000;
+  const ecoule = () => { const s = Math.round((Date.now() - debut) / 1000);
+    return Math.floor(s / 60) + " min " + String(s % 60).padStart(2, "0") + " s"; };
+  texte("etatLancer", attente);
   clearInterval(GUET);
   GUET = setInterval(async () => {
+    texte("etatLancer", attente + " En attente depuis " + ecoule() + ".");
     if(Date.now() > fin){
       clearInterval(GUET); el("btLancer").disabled = false;
       texte("etatLancer", "Rien reçu en 10 minutes. Si la fenêtre noire dit « OK », cliquez « J’ai fini, vérifier ».", "ko");
@@ -947,7 +1016,7 @@ el("btLancer").onclick = async () => {
       const e = await (await fetch("/notebooklm/etat", {headers: H})).json();
       if(e.branchee && (e.depuis || 0) !== avant){
         clearInterval(GUET); el("btLancer").disabled = false;
-        texte("etatLancer", "Session reçue.", "ok");
+        texte("etatLancer", "Session reçue, après " + ecoule() + ".", "ok");
         await charger();
       }
     } catch(e) { /* le Studio redémarre : on réessaie au tour suivant */ }

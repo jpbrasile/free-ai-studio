@@ -926,7 +926,9 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
     0. **Licence MiniMax H3 — étape 0, bloquante.** Le sous-plan le pose lui-même (« step 0 of the plan », `SP:100`) : la licence communautaire par défaut exclut l'UE, le Royaume-Uni, la Corée du Sud et les États-Unis. `README.md:429-430` dit déjà que la licence de H3 exclut l'UE du déploiement local ; il ne cite pas les États-Unis — écart à trancher sur le texte même de la licence.
        - **Critère de feu vert** : le texte de la licence des poids lu, et l'usage en France **explicitement** permis par écrit. Un formulaire approuvé ne suffit pas : une autorisation individuelle peut ajouter des conditions (`SP:106`).
        - « Approbation en moins de dix minutes, apparemment automatique » : un seul témoignage cité par le sous-plan (`SP:105`). **Non vérifié.**
-       - Formulaire cité : https://platform.minimax.io/h3-license (`SP:104`). ~~**Pas encore rempli au 26/09.**~~ **Demande envoyée le 26/09/2026 par le propriétaire** ; accusé de réception à l'écran, réponse attendue par e-mail. Le contenu de la demande n'est pas recopié : le formulaire engage à le garder confidentiel. **Le feu vert n'est pas donné** : il attend la réponse écrite, relue contre le critère ci-dessus.
+       - Formulaire cité : https://platform.minimax.io/h3-license (`SP:104`). ~~**Pas encore rempli au 26/09.**~~ **Demande envoyée le 26/09/2026 par le propriétaire** ; accusé de réception à l'écran, réponse attendue par e-mail. Le contenu de la demande n'est pas recopié : le formulaire engage à le garder confidentiel. ~~**Le feu vert n'est pas donné** : il attend la réponse écrite, relue contre le critère ci-dessus.~~
+       - **Autorisation écrite reçue le 26/09/2026 à 13:30** (e-mail de MiniMax, transmis par le propriétaire) : MiniMax autorise la société du propriétaire à utiliser MiniMax H3 et MiniMax H3 Works, **sous condition du respect continu des engagements pris dans la demande**. Relue contre le critère : le mail **ne nomme pas la France ni l'UE**, il renvoie aux engagements de la demande (non recopiés). Le texte de la licence des poids **n'a pas été relu ici**. **Feu vert : à prononcer par le propriétaire**, non donné par moi.
+       - **Règle pour les clients — décision du propriétaire, 26/09/2026** : l'autorisation est nominative. **Un client n'accède à H3 par le Studio qu'après nous avoir remis une copie de sa propre autorisation MiniMax H3.** Pas de copie, pas d'accès ; notre autorisation ne couvre pas nos clients. *Non construit* : ni où la copie est gardée, ni qui la vérifie, ni quelle garde bloque l'accès.
        - **Refus, ou exclusion maintenue ⇒ point 18 fermé.** C'est écrit d'avance. Les replis du sous-plan (licence commerciale vendue par Comfy, API hébergées MiniMax ou fal, `SP:107`) sont payants : ils ne sont pas des replis du Studio (`PLAN.md:34`).
        - Le développement sur la 4090 est déjà un usage des poids : **aucun téléchargement, aucun essai avant le feu vert**. Le sous-plan dit la même chose (`SP:215`).
     1. **Ce que le sous-plan apporte.** Chaque fonctionnalité est une PR, fusionnée seulement si son test d'acceptation passe sur un jeu d'essai fixe (`SP:20`). Chiffres cités tels quels ; *estim.* marque une estimation du sous-plan, pas une mesure.
@@ -973,7 +975,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
     5. **Questions ouvertes au propriétaire.**
        - Même compte Modal que le Studio, ou un compte séparé ?
        - Qui paie au-delà du crédit de 30 $ ?
-       - Clients dans l'UE : la licence de H3 les exclut par défaut (`SP:130`) ; que leur propose-t-on ?
+       - ~~Clients dans l'UE : la licence de H3 les exclut par défaut (`SP:130`) ; que leur propose-t-on ?~~ **Répondu le 26/09** : chaque client fournit la copie de sa propre autorisation (18.0).
 
 ## Détail par tâche
 

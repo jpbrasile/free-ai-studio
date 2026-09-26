@@ -134,6 +134,8 @@ def faux_module(sc: Scenario) -> types.ModuleType:
 
             async def rapatrier(carnet, chemin, artifact_id=None):
                 sc.appels.append(("rapatrier", artifact_id))
+                if getattr(sc, "rapatrier_echecs", None):
+                    raise sc.rapatrier_echecs.pop(0)
                 Path(chemin).write_bytes(b"\x00\x00\x00\x20ftypM4A  faux-audio")
                 return chemin
 
@@ -407,6 +409,32 @@ def test_un_journal_impossible_a_ecrire_n_empeche_pas_l_entretien(nlm, monkeypat
     assert "valeur-psidts-entretenue" in pont._lire()
 
 
+def test_une_reconnexion_reussie_clot_la_serie_a_son_nom(nlm, monkeypatch):
+    """Vu en reel le 26/09 : reconnecte a 13:50, le journal disait encore
+    « echec en cours » ; le prochain entretien aurait clos la serie a sa place."""
+    pont, _ = nlm
+    brancher(pont)
+    _entretien(pont, monkeypatch, 2, origine="demarrage", message="Authentication expired")
+    pont.noter_branchement(True)
+    j = pont.journal_entretien()
+    assert "echec_en_cours" not in j
+    assert j["dernier_incident"]["retabli"]["origine"] == "reconnexion"
+    b = j["dernier_branchement"]
+    assert b["ok"] is True and b["changements"].startswith("0 -> 2 cookies")
+    assert "doublons :" in b["changements"] and "valeur-" not in json.dumps(j)
+
+
+def test_une_reconnexion_refusee_se_note_et_laisse_la_serie_ouverte(nlm, monkeypatch):
+    pont, _ = nlm
+    brancher(pont)
+    _entretien(pont, monkeypatch, 2, message="Authentication expired")
+    pont.noter_branchement(False, "Google refuse\n la session")
+    j = pont.journal_entretien()
+    assert j["echec_en_cours"]["nombre"] == 1
+    assert j["dernier_branchement"]["ok"] is False
+    assert j["dernier_branchement"]["message"] == "Google refuse la session"
+
+
 def test_un_journal_illisible_repart_de_zero(nlm, monkeypatch):
     pont, _ = nlm
     brancher(pont)
@@ -596,6 +624,44 @@ def test_un_resume_fini_mais_dit_removed_est_rapatrie_ticket_2432(nlm, tmp_path)
     assert ("rapatrier", "audio-9") in sc.appels
 
 
+def _echec_de_rapatriement(statut=None):
+    e = erreur("ArtifactDownloadError", texte="Network error downloading lh3.googleusercontent.com/x")
+    e.status_code = statut
+    return e
+
+
+def test_un_rapatriement_coupe_par_le_reseau_est_repris_26_09(nlm, tmp_path, monkeypatch):
+    pont, sc = nlm
+    brancher(pont)
+    monkeypatch.setattr(pont, "RAPATRIEMENT_PAUSES", (0, 0, 0))
+    sc.rapatrier_echecs = [_echec_de_rapatriement(), _echec_de_rapatriement()]
+    r, etapes = _resume(pont, tmp_path)
+    assert r["audio"].exists()
+    assert [a[0] for a in sc.appels].count("rapatrier") == 3
+    assert "Rapatriement du fichier audio : nouvel essai (3 sur 3)…" in etapes
+
+
+def test_un_rapatriement_perdu_dit_ou_ecouter_le_resume(nlm, tmp_path, monkeypatch):
+    pont, sc = nlm
+    brancher(pont)
+    monkeypatch.setattr(pont, "RAPATRIEMENT_PAUSES", (0, 0))
+    sc.rapatrier_echecs = [_echec_de_rapatriement() for _ in range(2)]
+    with pytest.raises(pont.NotebookLMEchec) as e:
+        _resume(pont, tmp_path)
+    assert "2 essais" in str(e.value) and "Network error" in str(e.value)
+    assert "https://notebook.google.com/notebook/carnet-42" in str(e.value)
+
+
+def test_un_rapatriement_refuse_401_n_est_pas_repris(nlm, tmp_path, monkeypatch):
+    pont, sc = nlm
+    brancher(pont)
+    monkeypatch.setattr(pont, "RAPATRIEMENT_PAUSES", (0, 0, 0))
+    sc.rapatrier_echecs = [_echec_de_rapatriement(401)]
+    with pytest.raises(Exception):
+        _resume(pont, tmp_path)
+    assert [a[0] for a in sc.appels].count("rapatrier") == 1
+
+
 def test_removed_sans_audio_pret_est_un_echec_dit(nlm, tmp_path):
     pont, sc = nlm
     brancher(pont)
@@ -698,6 +764,7 @@ def test_brancher_ferme_l_export_l_essaie_et_ne_le_renvoie_pas(client, monkeypat
     assert r.status_code == 200
     assert r.json() == {"enregistree": True, "cookies": 2, "ok": True, "carnets": 3}
     assert "valeur" not in r.text
+    assert pont.journal_entretien()["dernier_branchement"]["ok"] is True
     r = c.post("/notebooklm/session", headers=ENTETE, json={"export": "pas du json"})
     assert r.status_code == 400 and "pas un export JSON" in r.json()["detail"]
 
@@ -709,6 +776,8 @@ def test_brancher_une_session_que_google_refuse_la_garde_et_le_dit(client, monke
     sc.ouverture = erreur("_LoginRedirectError", ValueError, "Authentication expired or invalid.")
     d = c.post("/notebooklm/session", headers=ENTETE, json={"export": EXPORT}).json()
     assert d["enregistree"] and d["ok"] is False and "a expiré" in d["message"]
+    b = pont.journal_entretien()["dernier_branchement"]
+    assert b["ok"] is False and "a expiré" in b["message"]
 
 
 def test_un_autre_site_ne_peut_ni_brancher_ni_lancer_ni_oublier(client):
