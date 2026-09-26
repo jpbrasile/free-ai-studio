@@ -1585,7 +1585,7 @@ async def notebooklm_resume(request: Request, authorization: Optional[str] = Hea
     if texte:
         if len(texte) > notebooklm_pont.TEXTE_MAX:
             raise HTTPException(413, "Texte trop long (%d signes au plus)." % notebooklm_pont.TEXTE_MAX)
-        sources.append({"titre": "Texte collé", "texte": texte})
+        sources.append({"titre": notebooklm_pont.titre_du_texte(texte), "texte": texte})
     if not sources:
         raise HTTPException(400, "Donnez au moins un document ou un texte.")
     titre = str(f.get("titre") or "").strip()[:80]

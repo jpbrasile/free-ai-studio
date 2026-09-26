@@ -1256,6 +1256,30 @@ def test_le_nom_d_un_carnet_du_studio_se_lit(nlm, titre, quand, attendu):
     assert pont.nom_du_carnet(titre, quand) == attendu
 
 
+@pytest.mark.parametrize("texte, attendu", [
+    ("Un dialogue sur les phares", "Un dialogue sur les phares"),
+    ("  deux\nlignes  ", "deux lignes"),
+    ("Fais un dialogue entre deux historiens sur la construction des phares, "
+     "de Cordouan à nos jours", "Fais un dialogue entre deux historiens sur la construction…"),
+    ("", "Texte"),
+])
+def test_un_texte_sans_nom_prend_ses_premiers_mots(nlm, texte, attendu):
+    pont, _ = nlm
+    assert pont.titre_du_texte(texte) == attendu
+
+
+def test_une_simple_requete_nomme_le_carnet_par_ses_mots_26_09(client):
+    """« la requête commence par "texte collé" c'est inutile » (26/09/2026)."""
+    c, pont, sc = client
+    brancher(pont)
+    j = _attendre_fin(c, c.post("/notebooklm/resume", headers=ENTETE, data={
+        "texte": "Un dialogue sur les phares", "quand": "26/09/2026 13:52"}).json()["id"])
+    assert j["titre"] == "Un dialogue sur les phares"
+    creer = next(a for a in sc.appels if a[0] == "creer")
+    assert creer[1] == "Studio · Un dialogue sur les phares · 26/09/2026 13:52"
+    assert "Texte collé" not in json.dumps(sc.appels, ensure_ascii=False, default=str)
+
+
 def test_la_liste_va_du_plus_ancien_au_plus_recent_sans_les_carnets_des_autres(nlm):
     pont, sc = nlm
     brancher(pont)

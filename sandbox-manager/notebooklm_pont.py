@@ -487,6 +487,17 @@ def nom_du_carnet(titre: str = "", quand: str = "") -> str:
     return " · ".join(m for m in morceaux if m)[:100]
 
 
+def titre_du_texte(texte: str, n: int = 60) -> str:
+    """Le titre d'un texte sans nom : ses premiers mots, coupes a un mot entier.
+    « Texte collé » ne disait rien : sur une simple requete, c'etait le nom du
+    carnet et du resume (« c'est inutile », proprietaire, 26/09/2026)."""
+    mots = " ".join((texte or "").split())
+    if len(mots) <= n:
+        return mots or "Texte"
+    coupe = mots[:n].rsplit(" ", 1)[0] or mots[:n]
+    return coupe.rstrip(" ,;:.") + "…"
+
+
 def _horodatage(d) -> float | None:
     try:
         return d.timestamp() if d else None
