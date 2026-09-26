@@ -405,10 +405,13 @@ def executer(pont: Pont, code: str, sortie: Path, delai_s: int, gpu: bool = Fals
             fin = time.time() + PRET_S
             while True:
                 try:
-                    pret.lancer(delai=60)
+                    pret.lancer(delai=90)
                     break
                 except ColabErreur as exc:
-                    if "rien rendu de lisible" not in str(exc) or time.time() > fin or arret():
+                    # Vu en reel : reponse vide (a 55 s) OU pas de reponse du tout.
+                    if not any(m in str(exc) for m in ("rien rendu de lisible", "n'a pas répondu")):
+                        raise
+                    if time.time() > fin or arret():
                         raise ColabErreur(PHRASE_PAS_PRET) from exc
                     progres({"etape": "attente"})
                     time.sleep(SUIVI_S)

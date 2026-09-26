@@ -208,6 +208,24 @@ def test_le_travail_attend_le_clic_sur_l_avertissement_de_colab(banc, tmp_path):
     assert b.carnet.ordre == []
 
 
+def test_un_carnet_qui_ne_repond_pas_du_tout_est_aussi_attendu(banc, tmp_path, monkeypatch):
+    """Vu le 26/09/2026 : deuxieme essai, pas de reponse du tout en 60 s ; le
+    Studio abandonnait en disant « 5 minutes » au bout d'une."""
+    b = banc()
+    vrai = b.pont.outil
+    silences = [1, 1]
+
+    def outil(nom, arguments, delai=colab_pont.APPEL_S):
+        if nom == "run_code_cell" and silences:
+            silences.pop()
+            raise colab_pont.ColabErreur("Colab n'a pas répondu à tools/call en 90 s.")
+        return vrai(nom, arguments, delai)
+
+    monkeypatch.setattr(b.pont, "outil", outil)
+    r = colab_pont.executer(b.pont, "print('ok')\n", tmp_path / "sortie", 60)
+    assert r["exit_code"] == 0 and silences == []
+
+
 def test_sans_clic_en_5_minutes_le_studio_dit_quoi_faire(banc, tmp_path, monkeypatch):
     b = banc()
     b.carnet.muettes = 10 ** 6
