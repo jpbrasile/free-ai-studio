@@ -55,6 +55,8 @@ dans le script** : un report redevient une décision qu'on voit passer.
 - Idéalement, une personne qui n'a jamais ouvert un terminal. À défaut, vous, en vous
   interdisant tout ce qui n'est pas écrit dans le README.
 
+**Le jour de l'essai** : imprimer `docs/ESSAI_MACHINE_NEUVE_FEUILLE.md`, la feuille à remplir au stylo (état de départ, six tâches, observations, report du n/6). Ce protocole-ci reste la règle ; la feuille ne fait que le mettre en cases.
+
 ## 1. Avant la séance : noter l'état de départ
 
 L'ordinateur n'est pas neuf : ce qui y est déjà installé fausse la mesure, surtout la
