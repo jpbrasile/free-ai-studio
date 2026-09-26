@@ -2,9 +2,10 @@
 
 Décision de l'utilisateur du 19/09/2026 : **les sauvegardes se font en local et sur le
 VPS** (`docs/PLAN-PLATEFORME.md` §8, décision 15). Ce document porte cette décision, la
-date qui la rend vérifiable, et l'endroit où la preuve s'écrira. **Il ne contient pas
-encore de procédure** : elle s'écrit le jour où le premier essai se prépare, et elle
-s'écrira contre des variables, jamais contre des valeurs (voir plus bas).
+date qui la rend vérifiable, et l'endroit où la preuve s'écrira. **La procédure est écrite
+depuis le 26/09/2026** (section « La procédure », en fin de document), contre des
+variables, jamais contre des valeurs. **Elle n'a encore jamais été jouée** : ni
+sauvegarde, ni restauration. Tant que l'essai n'a pas eu lieu, elle est une intention.
 
 ## La date : 31 octobre 2026
 
@@ -32,11 +33,11 @@ Passé le 31/10/2026, la dernière écriture fait **échouer la CI**.
 Elles sont ouvertes depuis le 19/09/2026 et **l'essai de restauration les referme presque
 toutes en une fois** — c'est la raison de le dater plutôt que de les instruire une par une.
 
-| Question | État |
-|---|---|
-| La troisième copie (disque externe ou espace en ligne) | **à décider** — local + VPS font déjà deux lieux ; quelques Mo par mois coûtent presque rien |
-| Le VPS est-il lui-même sauvegardé ? | **non vérifié** — s'il meurt en portant la seule copie hors site, il n'en reste qu'une |
-| Le VPS est-il en Europe, comme le plan l'exige ? | **non vérifié** |
+| Question | État | Ce que l'essai y répondra |
+|---|---|---|
+| La troisième copie (disque externe ou espace en ligne) | **à décider** — local + VPS font déjà deux lieux ; quelques Mo par mois coûtent presque rien | la **taille réelle** d'une archive (le résumé de `sauvegarder.ps1` l'affiche pièce par pièce) : c'est elle qui dit si « quelques Mo » est vrai, une fois les conversations comptées |
+| Le VPS est-il lui-même sauvegardé ? | **non vérifié** | l'étape 6 de l'essai : lire dans le panneau de l'hébergeur si une sauvegarde ou des instantanés du VPS sont actifs, et l'écrire ici |
+| Le VPS est-il en Europe, comme le plan l'exige ? | **non vérifié** | même étape : la région du centre de données, lue dans le panneau de l'hébergeur (pas par un service en ligne à qui l'on donnerait l'adresse) |
 
 ## Ce qu'il y a à sauvegarder aujourd'hui
 
@@ -79,4 +80,178 @@ le nom de domaine du VPS en toutes lettres dans un dépôt **public depuis le 09
   ici, versionnée, relisible — c'est elle qu'il faut pouvoir rejouer.
 
 Le régime existe déjà dans ce dépôt : `.env` est ignoré, `.env.example` porte les noms des
-variables et **aucune valeur**. La procédure à venir n'a qu'à s'y couler.
+variables et **aucune valeur**. La procédure ci-dessous s'y coule : `VPS_HOTE`,
+`VPS_UTILISATEUR`, `VPS_DOSSIER` (et, facultatives, `VPS_PORT_SSH`, `VPS_CLE_SSH`) sont
+nommées dans `.env.example`, vides.
+
+## La procédure
+
+Écrite le 26/09/2026. **Aucun des deux scripts n'a encore été exécuté** : ce qui suit décrit
+ce qu'ils sont écrits pour faire. Vérifié à l'écriture : ils se lisent sans erreur de
+syntaxe par l'analyseur de Windows PowerShell 5.1, et `tests/test_sauvegardes.py` relit
+leurs garde-fous comme du texte. **Non vérifié** : tout ce qui touche Docker, `tar`, `scp`
+et le VPS — c'est l'essai qui le dira.
+
+### Ce qui part où
+
+| Pièce | Contenu | Archive locale | VPS |
+|---|---|---|---|
+| `config.tar` | `config/` **sans** les trois magasins de secrets : compteurs de dépense, témoins de réglage, base de mesures (`config/mesures/`, jamais le texte de la personne) | oui | oui |
+| `config-magasins.tar` | `keys.json`, `sandbox-keys.json`, `notebooklm/` (la session NotebookLM) : valeurs **fermées par le coffre**, noms en clair | oui | **non** par défaut — question A |
+| `open-webui-data.tar` | le volume du chat : conversations, comptes | oui | **non** par défaut — question B |
+| `sandbox-data.tar` | le volume des bacs à sable : travaux, **texte des questions NotebookLM** | oui | **non** par défaut — question B |
+| `<volume>.sha256.txt`, `<volume>.tailles.txt` | la liste des fichiers de chaque volume, empreinte et taille | oui | suit son volume |
+| `manifeste.json` | date, version git, pièces, tailles, empreintes SHA-256, liste des fichiers de `config/`, empreinte **courte** de la clé du coffre | oui | oui |
+| **`secrets/coffre.cle`** | la clé du coffre | **non** | **non, jamais** |
+| **`.env`** | clés des fournisseurs, mots de passe internes, peut-être `STUDIO_COFFRE_CLE` | **non** | **non** |
+| volume `whisper-modeles` | les modèles de la dictée et de la voix | non | non — ils se retéléchargent |
+
+**La clé du coffre et `.env` vont dans le gestionnaire de mots de passe**, et nulle part
+ailleurs : c'est ce qui rend vraie la phrase « config/ sans sa clé est illisible » — dans le
+bon sens. Aucun interrupteur des scripts ne les met dans une archive. Le manifeste garde
+seulement les 16 premiers caractères du SHA-256 de la clé : de quoi reconnaître la bonne
+clé à la restauration, rien pour la retrouver. Si `STUDIO_COFFRE_CLE` est posée dans `.env`,
+c'est elle qui ouvre le coffre (`coffre.py` la lit avant le fichier), et les scripts ne la
+lisent pas : l'empreinte du manifeste est alors celle d'un fichier qui ne sert pas.
+
+Par défaut, **seul ce qui ne contient ni secret ni texte de la personne part sur le VPS.**
+Ce n'est pas un choix tranché : ce sont les deux premières questions ci-dessous.
+
+### Questions pour le propriétaire, nées de la procédure
+
+| | Question | Ce qui est fait en attendant |
+|---|---|---|
+| A | **Les magasins chiffrés partent-ils sur le VPS ?** Pour : si le PC meurt, les clés se rouvrent avec la clé du gestionnaire de mots de passe. Contre : « une sauvegarde de `keys.json` est une sauvegarde de secrets » (plus haut), les noms des services sont en clair, et une valeur d'avant le coffre (sans le préfixe `coffre-v1:`) serait en clair — **non vérifié** qu'il n'en reste aucune. Les clés de fournisseurs se refont aussi chez chaque fournisseur. | ne partent pas ; l'interrupteur `-VpsAvecMagasinsChiffres` existe, éteint |
+| B | **Les conversations et le texte des questions NotebookLM partent-ils sur le VPS ?** La décision du 19/09 dit « local et VPS » ; celle du 25/09 dit que le texte des questions NotebookLM « reste sur ce poste ». Les deux ne tiennent pas ensemble pour `sandbox-data`. Et la base du chat contient peut-être la clé interne du routeur (Open WebUI garde ses réglages de connexion dans sa base) — **non vérifié**. | ne partent pas ; l'interrupteur `-VpsAvecVolumes` existe, éteint |
+| C | **La copie VPS doit-elle être chiffrée ?** Le plan d'origine dit « *encrypted backups* ». Aujourd'hui les archives partent telles quelles, par `scp` (chiffré en transit, pas au repos). Tant que A et B restent à « non », rien de secret ni de personnel n'y part ; si l'une passe à « oui », la question devient bloquante (avec quoi chiffrer, et où garder cette clé-là). | non chiffrée |
+| D | **La clé du coffre dans l'archive *locale* ?** Écarté ici : la règle du document range les clés au gestionnaire de mots de passe, et une archive locale se copie sur un disque externe. Si le propriétaire préfère une archive locale autosuffisante, c'est à décider, pas à glisser dans un script. | jamais dans une archive |
+
+### `scripts/sauvegarder.ps1`
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sauvegarder.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sauvegarder.ps1 -VersVps
+```
+
+- **Où.** Un dossier daté `studio-AAAAMMJJ-HHMMSS` sous `-Destination`, par défaut
+  `%USERPROFILE%\Sauvegardes\<projet>`. **Refuse un dossier situé dans le dépôt.**
+- **Les volumes** sont retrouvés par leurs étiquettes Docker Compose (projet + nom court),
+  pas par un nom deviné, puis lus par un conteneur jetable (`alpine:3.20`, `-Image` pour en
+  changer ; téléchargé une fois s'il manque) qui les monte **en lecture seule** et écrit
+  l'archive, les empreintes et les tailles.
+- **À chaud ou à froid.** Si le Studio tourne, le script le dit et **demande** : arrêter le
+  chat, les bacs à sable et le routeur le temps de la copie (recommandé : la base du chat
+  est une base SQLite, qu'une copie au milieu d'une écriture peut rendre illisible), copier
+  à chaud, ou quitter. `-Arret` et `-AChaud` répondent d'avance. S'il a arrêté, il
+  redémarre à la fin, **même si la copie a échoué**. Le manifeste écrit `a-froid` ou
+  `a-chaud`. Les deux veilleurs de l'hôte (mise à jour, sonde de la carte) continuent
+  d'écrire leurs témoins dans `config/` ; ces fichiers se reposent d'eux-mêmes.
+- **Contrôle après coup.** `config.tar` est relu : s'il contient un magasin de secrets, la
+  pièce est retirée et le script s'arrête — on ne se fie pas au seul `--exclude`.
+- **`-VersVps`** lit `VPS_HOTE`, `VPS_UTILISATEUR`, `VPS_DOSSIER` dans l'environnement de la
+  session, sinon dans `.env`, refuse une valeur qui contiendrait un caractère inattendu, et
+  n'en affiche aucune. Il crée `VPS_DOSSIER/studio-…` (droits `umask 077`), y copie par
+  `scp` les pièces marquées VPS, le manifeste et un fichier `SHA256SUMS-vps`, puis **fait
+  recalculer les empreintes par le VPS** (`sha256sum -c`). Une copie qui ne se vérifie pas
+  là-bas est annoncée « NON vérifiée ». `ssh` tourne en `BatchMode` : la clé SSH doit être
+  chargée dans `ssh-agent` (ou sans phrase), et l'hôte déjà connu — une première connexion à
+  la main, une fois. Aucune rotation des anciennes copies n'est faite, ni en local ni sur le
+  VPS.
+- **À la fin**, il rappelle que la clé du coffre et `.env` ne sont pas dans la sauvegarde,
+  et donne l'empreinte courte de la clé pour vérifier que celle du gestionnaire est la
+  bonne.
+
+### `scripts/restaurer.ps1`
+
+```powershell
+# essai, depuis une copie locale
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restaurer.ps1 -Archive <dossier studio-...>
+# essai, depuis le VPS
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\restaurer.ps1 -DepuisVps studio-AAAAMMJJ-HHMMSS
+```
+
+- **Par défaut, rien du Studio en service n'est touché.** La cible est un dossier d'essai
+  à côté du dépôt (`<dépôt>-essai`, `-Cible` pour un autre), refusé s'il recouvre le dépôt,
+  et deux volumes d'essai au nom de ce dossier (par défaut `<dépôt>-essai_open-webui-data`
+  et `<dépôt>-essai_sandbox-data`) — exactement les noms que Docker Compose donnera quand on
+  lancera `docker compose up` depuis ce dossier, ce qui permet d'y relancer le Studio. Deux
+  essais dans deux dossiers ne partagent donc aucun volume. Si le dossier d'essai n'existe
+  pas, il est créé par `git clone` du dépôt local (sans réseau) et remis à la version git
+  de la sauvegarde.
+- **Les empreintes d'abord.** Chaque pièce est comparée au manifeste (et le manifeste à
+  `SHA256SUMS-vps` quand la copie vient du VPS). Une seule différence : **rien n'est écrit**.
+  Une pièce absente (les magasins d'une copie VPS, par exemple) est dite, et le reste est
+  restauré.
+- **Rien n'est écrasé.** Un `config/` déjà présent dans le dossier d'essai, ou un volume
+  cible qui existe et n'est pas vide, fait refuser la restauration ; supprimer reste un
+  geste de la personne, et le script donne la commande. Le projet cible ne doit pas tourner.
+- **La clé du coffre** est demandée en saisie masquée (ou `-FichierCle`, ou `-SansCle`),
+  comparée à l'empreinte du manifeste — une clé différente fait tout refuser — puis posée
+  dans `secrets/coffre.cle` du dossier d'essai. Elle n'est jamais affichée.
+- **Chaque volume restauré est recomparé**, fichier par fichier, à la liste d'empreintes
+  faite à la sauvegarde. Des écarts sont attendus pour une copie `a-chaud`, pas pour une
+  copie `a-froid`.
+- **À la fin**, il dit ce qui a été restauré, et ce qui manque : clé du coffre absente
+  (« keys.json, sandbox-keys.json et la session NotebookLM sont restaurés mais
+  illisibles »), pièces absentes, volumes qui n'existaient pas, et `.env`, qui n'est
+  jamais dans une sauvegarde.
+- **`-Reel`** vise le vrai `config/` et les vrais volumes, et fait taper `ECRASER`. Même
+  alors : l'ancien `config/` est renommé `config.avant-restauration-…`, une clé déjà en place
+  est renommée de même, et un vrai volume non vide fait refuser. C'est le geste du jour du
+  sinistre, **pas celui de l'essai**.
+
+### L'essai de restauration, pas à pas
+
+À jouer par le propriétaire, avant le 31/10/2026. Compter une heure. Tout se lance depuis
+le dossier du dépôt, dans Windows PowerShell.
+
+1. **Avant.** Vérifier que la clé du coffre et le contenu de `.env` sont dans le
+   gestionnaire de mots de passe. Noter trois témoins à retrouver après : le titre d'une
+   conversation du chat, le nombre de travaux affichés par le bac à sable, et la dépense
+   Modal du mois affichée par le Studio.
+2. **Sauvegarder, à froid, avec la copie VPS.** Poser `VPS_HOTE`, `VPS_UTILISATEUR`,
+   `VPS_DOSSIER` dans l'environnement de la session, puis
+   `scripts\sauvegarder.ps1 -Arret -VersVps`. Noter le nom `studio-…`, la taille des
+   pièces, et que la ligne VPS dit « copie et vérifiée ».
+3. **Restaurer dans l'essai, deux fois.**
+   - La copie locale complète, dans la cible par défaut :
+     `scripts\restaurer.ps1 -Archive <dossier local studio-…>`. Coller la clé du coffre
+     quand elle est demandée. Lire le compte rendu « Restauré / Manque ».
+   - La copie hors site, rapatriée du VPS, dans une seconde cible :
+     `scripts\restaurer.ps1 -DepuisVps studio-… -Cible ..\<dépôt>-essai-vps`. Tant que les
+     questions A et B sont à « non », elle ne contient que `config.tar` et le manifeste :
+     c'est **aussi** ce que l'essai doit montrer, noir sur blanc — ce qu'on retrouverait
+     si le PC disparaissait.
+4. **Relancer le Studio sur l'essai.** Les conteneurs portent des noms fixes : le vrai
+   Studio doit d'abord céder la place. Dans le dossier du dépôt :
+   `docker compose down` — **jamais avec `-v`**, qui effacerait les vrais volumes. Puis,
+   dans le dossier d'essai `<dépôt>-essai` : y copier `.env` depuis le gestionnaire de mots
+   de passe (le dossier d'essai n'en a pas), et `docker compose up -d --build` — sans `-p` :
+   le nom du dossier donne le projet, donc les volumes d'essai. Ne **pas** lancer
+   `demarrer.cmd` depuis l'essai : il relancerait les veilleurs de l'hôte sur ce dossier.
+5. **Vérifier que le Studio relit tout.** Sur le chat (port 3000) : la conversation notée,
+   et **une question envoyée qui reçoit une réponse** (c'est la clé interne du routeur qui se
+   vérifie là, voir la question B). Sur la page du Studio : la page Clés montre les
+   fournisseurs branchés — c'est la clé du coffre qui se vérifie. Sur le bac à sable : les
+   travaux notés, et NotebookLM « branché ». La dépense Modal du mois : la même qu'avant.
+   Ne lancer aucun calcul payant pendant l'essai.
+6. **Le VPS lui-même.** Dans le panneau de l'hébergeur : la région du centre de données, et
+   si une sauvegarde ou des instantanés du VPS sont actifs. Ce sont les réponses aux deux
+   questions « non vérifié » du tableau du haut.
+7. **Revenir.** Dans le dossier d'essai : `docker compose down`. Dans le
+   dossier du dépôt : double-cliquer `demarrer.cmd`, et vérifier que la conversation notée
+   est toujours là. Les volumes et dossiers d'essai restent ; les supprimer est un geste du
+   propriétaire, une fois la preuve écrite.
+8. **Écrire la preuve.** Modifier la ligne d'échéance en haut de ce document — la seule, ne
+   pas en ajouter une seconde, la CI refuserait. Remplacer `etat: en-attente` par
+   `etat: tenue | preuve: …`, par exemple :
+
+   ```text
+   etat: tenue | preuve: 2026-10-xx, sauvegarde studio-AAAAMMJJ-HHMMSS (a froid) rapatriee du VPS et restauree avec la copie locale dans le projet d'essai ; chat, cles, bac a sable et compteurs relus ; ecarts : ...
+   ```
+
+   Pas de `|` dans le texte de la preuve (c'est le séparateur des champs), pas de `-->`, et
+   **aucune coordonnée du VPS** : ni nom, ni adresse, ni chemin. Écrire aussi, dans ce
+   document, les réponses aux trois questions du tableau du haut et ce qui a raté. Un essai
+   qui échoue s'écrit comme tel : il reste `en-attente`, avec ce qui a raté, et on le rejoue.
+   Enfin, `python scripts/verifier-echeances.py` doit dire « tenue ».
