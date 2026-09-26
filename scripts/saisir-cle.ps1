@@ -128,7 +128,27 @@ if ((Read-Host "Les relancer maintenant pour prendre la ou les cles ? (O/n)").Tr
 Push-Location $Racine
 try {
     # up -d ne recree que les conteneurs dont la configuration a change.
-    docker compose up -d
+    # La surcouche GPU si une carte repond, comme start.ps1, start.sh et
+    # demarrer.ps1 (26/09/2026, PLAN.md SP-CARTE-DEBRANCHEE-AU-REDEMARRAGE) :
+    # un `up -d` nu voit une configuration CHANGEE pour le gestionnaire, le
+    # recree sans SANDBOX_WORKER_GPU_URL, et saisir une cle debranchait la
+    # carte. GPU_MODELES_DIR pose comme demarrer.ps1, pour que le montage des
+    # poids s'ecrive a l'identique et ne recree rien d'autre (non verifie en
+    # reel : aucun `up` n'a ete lance pour l'ecrire).
+    $argsCompose = @("compose", "-f", "docker-compose.yml")
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        try {
+            $releve = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null
+            if ($LASTEXITCODE -eq 0 -and $releve) {
+                $argsCompose += @("-f", "docker-compose.gpu.yml")
+                $cacheHF = Join-Path $env:USERPROFILE ".cache\huggingface"
+                if (-not $env:GPU_MODELES_DIR -and (Test-Path (Join-Path $cacheHF "hub"))) {
+                    $env:GPU_MODELES_DIR = $cacheHF
+                }
+            }
+        } catch { }
+    }
+    & docker @($argsCompose + @("up", "-d"))
     if ($LASTEXITCODE -ne 0) { Write-Host "ARRET : docker compose up -d a echoue (code $LASTEXITCODE). Docker Desktop est-il ouvert ?"; exit 1 }
     Write-Host "Services relances."
 } finally { Pop-Location }

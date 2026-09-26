@@ -353,9 +353,22 @@ ports:
 docker --version && docker compose version
 docker compose ps
 docker compose logs --tail=200
-docker compose up -d --build      # le code est cuit dans l'image : --build est nécessaire
+nvidia-smi --query-gpu=name --format=csv,noheader   # une carte répond-elle ?
+# pas de carte (le cas le plus courant) :
+docker compose -f docker-compose.yml up -d --build      # le code est cuit dans l'image : --build est nécessaire
+# une carte a répondu ci-dessus : la surcouche, sinon le Studio la croit absente
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 python scripts/self-test.py       # n'appelle aucun service payant
 ```
+
+**Carte graphique : ne jamais relancer par un `up` nu** (26/09/2026). Sur une machine où
+`nvidia-smi` répond, un `docker compose up -d` sans `-f docker-compose.gpu.yml` recrée le
+gestionnaire **sans** la carte : le Studio dit calmement « pas de carte branchée » pendant
+que `sandbox-worker-gpu` tourne à côté, et les clips partent chez le loueur — **≈ 0,24 $**
+mesuré le 22/09 pour un clip que la carte d'ici aurait fait pour rien. `start.sh`,
+`start.ps1`, `demarrer.cmd`, le bouton « Mettre à jour » et `scripts/saisir-cle.*` font ce
+choix tout seuls ;
+`tests/test_lanceurs_surcouche.py` les empêche de diverger.
 
 Tout remettre à zéro, **y compris l'historique Open WebUI** :
 

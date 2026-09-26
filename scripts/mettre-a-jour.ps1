@@ -92,7 +92,26 @@ try {
 
     # --- 2. Reconstruire ------------------------------------------------------
     Ecrire-Etat -Phase 'construction' -Message 'Reconstruction des services (quelques minutes)...'
-    $build = Lancer 'docker' @('compose', 'up', '-d', '--build')
+    # La surcouche GPU si une carte repond, comme demarrer.ps1, start.ps1 et
+    # start.sh (26/09/2026, PLAN.md SP-CARTE-DEBRANCHEE-AU-REDEMARRAGE). Un
+    # `up -d --build` nu recreait le gestionnaire SANS SANDBOX_WORKER_GPU_URL :
+    # chaque clic sur << Mettre a jour >> debranchait la carte en silence, et
+    # les clips partaient chez le loueur. Sans carte, la commande est celle
+    # d'avant a un `-f docker-compose.yml` pres, qui est le fichier par defaut.
+    $argsCompose = @('compose', '-f', 'docker-compose.yml')
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        try {
+            $releve = & nvidia-smi --query-gpu=name --format=csv,noheader 2>$null
+            if ($LASTEXITCODE -eq 0 -and $releve) {
+                $argsCompose += @('-f', 'docker-compose.gpu.yml')
+                $cacheHF = Join-Path $env:USERPROFILE '.cache\huggingface'
+                if (-not $env:GPU_MODELES_DIR -and (Test-Path (Join-Path $cacheHF 'hub'))) {
+                    $env:GPU_MODELES_DIR = $cacheHF
+                }
+            }
+        } catch { }
+    }
+    $build = Lancer 'docker' ($argsCompose + @('up', '-d', '--build'))
 
     if ($build.Code -ne 0) {
         Ecrire-Etat -Phase 'construction' -Message 'La reconstruction a echoue.' `

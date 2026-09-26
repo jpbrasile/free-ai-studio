@@ -128,5 +128,17 @@ if [ "$relancer" = "n" ] || [ "$relancer" = "N" ]; then
   exit 0
 fi
 # up -d ne recree que les conteneurs dont la configuration a change.
-docker compose up -d || { echo "ARRET : docker compose up -d a echoue. Docker est-il demarre ?"; exit 1; }
+# La surcouche GPU si une carte repond, comme start.sh (26/09/2026, PLAN.md
+# SP-CARTE-DEBRANCHEE-AU-REDEMARRAGE) : un `up -d` nu recree le gestionnaire
+# sans SANDBOX_WORKER_GPU_URL, et saisir une cle debranchait la carte. Code de
+# retour teste, jamais la seule presence du binaire (voir start.sh).
+compose_args=(-f docker-compose.yml)
+if command -v nvidia-smi >/dev/null 2>&1 \
+   && [ -n "$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1)" ]; then
+  compose_args+=(-f docker-compose.gpu.yml)
+  if [ -z "${GPU_MODELES_DIR:-}" ] && [ -d "$HOME/.cache/huggingface/hub" ]; then
+    export GPU_MODELES_DIR="$HOME/.cache/huggingface"
+  fi
+fi
+docker compose "${compose_args[@]}" up -d || { echo "ARRET : docker compose up -d a echoue. Docker est-il demarre ?"; exit 1; }
 echo "Services relances."

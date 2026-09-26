@@ -318,7 +318,7 @@ la séance, et à écrire ici pour ne pas les décider en voyant le résultat.
    Le 13/09, le retour était qu'un débutant ne doit pas avoir à y penser
    (`PLAN.md:78` (`ni penser à`)). La consigne des tâches 4 et 5 ne nomme pas l'interrupteur :
    lire la carte est permis, rien d'autre. D'accord ? ______________________
-4. **La porte du portage.** `PLAN.md:805` (`Porte du portage`) pose : aucune friction bloquante
+4. **La porte du portage.** `PLAN.md:811` (`Porte du portage`) pose : aucune friction bloquante
    ouverte avant le portage sur un poste client. Au 26/09, une reste ouverte
    (`docs/FRICTIONS.md:35` (`24 h sans intervention`), session NotebookLM, verdict au plus tôt
    le 27/09). NotebookLM n'est dans aucune des six tâches. L'essai attend-il sa levée ?
