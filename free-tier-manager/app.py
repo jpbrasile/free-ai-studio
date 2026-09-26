@@ -2258,7 +2258,7 @@ async def diagnostic_etat():
         "fournisseurs_branches": [n for n in ordre_affiche()
                                   if n != "gemini_max" and configured(n)],
         "quotas": etat_quotas(),
-        "liaison": await etat_liaison(),
+        "liaison": await etat_liaison(), "fumee": lire_fumee(),  # fumee : voir la fin du fichier
     }
 
 
@@ -4066,3 +4066,197 @@ async def chat_completions(request: Request, authorization: Optional[str] = Head
                "http://localhost:8010/diagnostic dit lequel bloque et pourquoi. Rien n’est payé."
                % ", ".join(errors)
     )
+
+
+# --- Fumee du jour (SP-FUMEE-QUOTIDIENNE, 26/09/2026) --------------------------
+# Les noms de modeles des services gratuits changent sans prevenir : un modele
+# retire, et le chat tombe en secours sans que personne sache pourquoi. Une fois
+# par jour (et une fois ~2 min apres le demarrage), un fil demande a chaque
+# service la LISTE de ses modeles -- jamais une reponse, rien de depense, rien
+# de cree -- et verifie que chaque nom que le routeur utilise y figure encore.
+# Un fil du routeur et non une tache planifiee Windows : aucun reglage du
+# systeme, et la fumee vit et meurt avec le service qu'elle surveille.
+# Le resultat va dans config/fumee.json (monte depuis l'hote, survit a une
+# reconstruction) ; /diagnostic/etat le porte et /diagnostic le montre. Ni cle
+# ni corps de reponse n'y sont ecrits : un motif court, le code HTTP au plus.
+# Tout est ici, en fin de fichier, et non pres de /diagnostic : les renvois
+# `app.py:NNN` des documents visent des lignes plus haut, qu'un ajout au milieu
+# decalerait (verifier-renvois.py).
+FUMEE_FICHIER = CONFIG_DIR / "fumee.json"
+FUMEE_PREMIERE_S = float(os.getenv("FUMEE_PREMIERE_S", "120"))
+FUMEE_PERIODE_S = 24 * 3600
+# Ce que le routeur n'a aucun moyen gratuit d'interroger : il ne detient ni
+# jeton Modal, ni jeton Kaggle, ni jeton Hugging Face (ils vivent cote bac a
+# sable). Dit « non couvert » plutot qu'un appel invente.
+FUMEE_NON_COUVERT = [
+    ("modal", "Modal", "le routeur n'a pas de jeton Modal ; scripts/check-modal.sh reste a lancer a la main"),
+    ("kaggle", "Kaggle", "le routeur n'a pas de jeton Kaggle"),
+    ("huggingface", "Hugging Face", "revisions des modeles de chanson et LoRA : cote bac a sable, pas verifiees ici"),
+]
+
+
+def fumee_modeles_attendus() -> Dict[str, List[str]]:
+    """Par cle de service : les noms de modeles que le routeur appelle."""
+    return {
+        "gemini": [PROVIDERS["gemini"]["model"], PROVIDERS["gemini_max"]["model"],
+                   GEMINI_IMAGE_MODEL],
+        "openrouter": [PROVIDERS["openrouter"]["model"]],
+        "groq": [PROVIDERS["groq"]["model"], GROQ_DICTEE_MODELE],
+    }
+
+
+def _fumee_liste(client: httpx.Client, nom: str, cle: str) -> List[str]:
+    """La liste des modeles du service. GET seulement : aucun calcul demande."""
+    if nom == "gemini":
+        # L'API native plutot que la forme OpenAI : elle pagine explicitement,
+        # et une page manquee ferait croire a un modele retire.
+        noms: List[str] = []
+        jeton = ""
+        for _ in range(10):
+            params = {"pageSize": "1000"}
+            if jeton:
+                params["pageToken"] = jeton
+            r = client.get("https://generativelanguage.googleapis.com/v1beta/models",
+                           headers={"x-goog-api-key": cle}, params=params)
+            r.raise_for_status()
+            corps = r.json()
+            noms += [str(m.get("name", "")).removeprefix("models/")
+                     for m in corps.get("models") or []]
+            jeton = corps.get("nextPageToken") or ""
+            if not jeton:
+                break
+        return noms
+    r = client.get(PROVIDERS[nom]["base_url"].rstrip("/") + "/models",
+                   headers={"Authorization": f"Bearer {cle}"})
+    r.raise_for_status()
+    return [str(m.get("id", "")) for m in r.json().get("data") or []]
+
+
+def faire_la_fumee(client: Optional[httpx.Client] = None) -> Dict[str, Any]:
+    """Une passe : un appel de liste par service, resultat ecrit et rendu."""
+    debut = time.time()
+    propre = client is None
+    client = client or httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0),
+                                    headers={"User-Agent": "Free-AI-Studio/1.0"})
+    services: List[Dict[str, Any]] = []
+    try:
+        for nom, attendus in fumee_modeles_attendus().items():
+            ligne: Dict[str, Any] = {"nom": nom, "titre": titre_de(nom), "modeles": attendus}
+            t0 = time.time()
+            cle = provider_key(nom)
+            if not cle:
+                ligne.update(etat="non configuré", motif="aucune cle enregistree")
+            else:
+                try:
+                    presents = set(_fumee_liste(client, nom, cle))
+                    manquants = [m for m in attendus if m not in presents]
+                    if manquants:
+                        ligne.update(etat="échec", motif="modele absent de la liste : "
+                                     + ", ".join(manquants))
+                    else:
+                        ligne.update(etat="ok", motif="")
+                except httpx.HTTPStatusError as exc:
+                    statut = exc.response.status_code
+                    ligne.update(etat="échec", motif="HTTP %d (%s)" % (statut, motif_http(statut)))
+                except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
+                    # Le nom de l'erreur seulement : son texte peut citer l'adresse.
+                    ligne.update(etat="échec", motif=type(exc).__name__)
+            ligne["duree_s"] = round(time.time() - t0, 2)
+            services.append(ligne)
+    finally:
+        if propre:
+            client.close()
+    for nom, titre, motif in FUMEE_NON_COUVERT:
+        services.append({"nom": nom, "titre": titre, "etat": "non couvert", "motif": motif})
+    resultat = {
+        "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "duree_s": round(time.time() - debut, 2),
+        "services": services,
+    }
+    try:
+        FUMEE_FICHIER.parent.mkdir(parents=True, exist_ok=True)
+        FUMEE_FICHIER.write_text(json.dumps(resultat, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+    except OSError as exc:
+        log.warning("Fumee non ecrite (%s) : %s", FUMEE_FICHIER, exc)
+    return resultat
+
+
+def lire_fumee() -> Optional[Dict[str, Any]]:
+    try:
+        return json.loads(FUMEE_FICHIER.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def boucle_fumee() -> None:
+    time.sleep(FUMEE_PREMIERE_S)
+    while True:
+        try:
+            faire_la_fumee()
+        except Exception:  # noqa: BLE001 -- le fil ne doit jamais mourir
+            log.exception("Fumee du jour : passe echouee")
+        time.sleep(FUMEE_PERIODE_S)
+
+
+# Le fil part au demarrage du service. Greffe sur `demarrage_et_arret` plutot
+# qu'ecrite dedans, pour la meme raison de renvois. ROUTEUR_FUMEE=false la
+# coupe (la suite de tests le fait, tests/conftest.py).
+_demarrage_sans_fumee = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def _demarrage_avec_fumee(application):
+    if os.getenv("ROUTEUR_FUMEE", "true").strip().lower() == "true":
+        threading.Thread(target=boucle_fumee, name="fumee", daemon=True).start()
+    async with _demarrage_sans_fumee(application) as etat:
+        yield etat
+
+
+app.router.lifespan_context = _demarrage_avec_fumee
+
+
+@app.get("/diagnostic/fumee")
+async def diagnostic_fumee():
+    return {"fumee": lire_fumee()}
+
+
+# Le bloc de la page /diagnostic. Un script a part, qui lit /diagnostic/fumee :
+# le rendu principal de la page n'est pas touche. `ligne()` vient du premier script.
+FUMEE_HTML = """
+<div class="bloc">
+  <h2>Fumee du jour</h2>
+  <p class="det">Une fois par jour, le Studio demande a chaque service la liste de ses
+  modeles, sans rien depenser, et verifie que les noms qu'il utilise y sont encore.</p>
+  <div id="fumee">Lecture en cours...</div>
+</div>
+<script>
+// ok, echec, non configure (pas de cle : ce n'est pas une panne), non couvert
+// (le routeur n'a aucun moyen gratuit de demander).
+function rendreFumee(f) {
+  var zone = document.getElementById("fumee");
+  zone.innerHTML = "";
+  if (!f) { zone.textContent = "Pas encore de passe : elle part environ 2 minutes apres le demarrage."; return; }
+  var tete = document.createElement("p");
+  tete.className = "det";
+  tete.textContent = "Derniere passe : " + new Date(f.date).toLocaleString("fr-FR")
+                   + " (" + f.duree_s + " s)";
+  zone.appendChild(tete);
+  (f.services || []).forEach(function (s) {
+    var ok = s.etat === "ok" ? true : (s.etat === "échec" ? false : null);
+    var det = s.etat + (s.motif ? " : " + s.motif : "")
+            + (s.modeles ? " ; modeles : " + s.modeles.join(", ") : "");
+    zone.appendChild(ligne(ok, s.titre, det));
+  });
+}
+function lireFumee() {
+  fetch("/diagnostic/fumee").then(function (r) { return r.json(); })
+    .then(function (d) { rendreFumee(d.fumee); })
+    .catch(function (e) { document.getElementById("fumee").textContent = "Illisible : " + e; });
+}
+document.getElementById("relancer").addEventListener("click", lireFumee);
+lireFumee();
+</script>
+"""
+assert DIAGNOSTIC_HTML.count("</body>") == 1
+DIAGNOSTIC_HTML = DIAGNOSTIC_HTML.replace("</body>", FUMEE_HTML + "</body>")

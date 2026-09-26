@@ -34,6 +34,10 @@ os.environ["SANDBOX_AMORCE_BUDGET"] = "false"
 # tests, fiche finie chez Modal remise a << local >> en reproduction forcee.
 # test_reprise.py appelle reprendre_les_travaux() lui-meme.
 os.environ["SANDBOX_REPRISE_AU_DEMARRAGE"] = "false"
+# Meme regle pour la fumee du jour du routeur (26/09/2026) : son fil appellerait
+# les VRAIS services avec les cles factices des tests. test_fumee.py appelle
+# faire_la_fumee() lui-meme, sur un faux reseau.
+os.environ["ROUTEUR_FUMEE"] = "false"
 # La cle du coffre vit hors de config/ ; son defaut est /secrets/coffre.cle, qui
 # sous Windows voudrait dire C:\secrets. Une suite de tests ne cree pas un
 # dossier a la racine du disque. UNE seule cle pour toute la suite : deux tests
