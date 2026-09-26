@@ -1111,6 +1111,28 @@ def test_le_veilleur_ouvre_brancher_sur_demande_et_l_annonce():
     assert "Start-Process -FilePath $Brancher -WorkingDirectory $Racine" in ps1
 
 
+def test_le_veilleur_tient_un_journal_qui_ne_l_arrete_jamais_26_09():
+    """26/09, en réel : demande consommée, aucune fenêtre, et rien pour dire
+    pourquoi (le veilleur tourne caché). Il écrit désormais un journal borné."""
+    ps1 = (Path(__file__).resolve().parents[1] / "scripts" / "maj-veilleuse.ps1").read_text(encoding="utf-8")
+    assert "$Journal = Join-Path $Config 'maj-veilleuse.log'" in ps1
+    fonction = ps1.split("function Ecrire-Journal", 1)[1].split("\n}", 1)[0]
+    # Toute l'écriture est dans un try au catch vide : le journal ne tue pas le veilleur.
+    corps = fonction.split("{", 1)[1].strip()
+    assert corps.startswith("try {") and corps.endswith("} catch { }")
+    assert "'yyyy-MM-dd HH:mm:ss'" in fonction and "200KB" in fonction and "'.1'" in fonction
+    # Le PID de la fenêtre ouverte, l'échec, et les deux raisons d'ignorer une demande.
+    assert "Start-Process -FilePath $Brancher -WorkingDirectory $Racine -PassThru" in ps1
+    for morceau in ("Veilleur demarre (PID", "Demande de branchement recue", "ouverte (PID",
+                    "ECHEC Start-Process", "fichier absent", "garde des 60 s", "Empreinte du veilleur changee"):
+        assert morceau in ps1, morceau
+    # Pas une ligne par tour : le signe de vie n'écrit pas au journal.
+    boucle = ps1.split("while ($true) {", 1)[1]
+    assert "Ecrire-Journal" not in boucle.split("if (Test-Path $DemandeBrancher)", 1)[0]
+    # PowerShell 5.1 lit un .ps1 sans BOM en ANSI : le script reste en ASCII.
+    assert ps1.isascii()
+
+
 def _rendre_markdown(pont, texte: str, tmp_path) -> str:
     """markdown() de la page, sous node, sur un faux DOM qui se relit en HTML."""
     if not shutil.which("node"):

@@ -1,8 +1,8 @@
 # Veilleur de mise a jour.
 #
-# Le probleme, en une image : le bouton « Mettre a jour » est dans une page web
+# Le probleme, en une image : le bouton << Mettre a jour >> est dans une page web
 # servie par un conteneur, et un conteneur ne peut pas se reconstruire lui-meme
-# — il se couperait la branche sous les pieds. Lui donner la main sur Docker
+# -- il se couperait la branche sous les pieds. Lui donner la main sur Docker
 # reviendrait a confier a une page web les pleins pouvoirs sur la machine.
 #
 # Ce veilleur est la reponse simple : il tourne sous VOTRE compte, il regarde une
@@ -39,8 +39,26 @@ $Vivant  = Join-Path $Config 'maj-veilleuse.json'
 # le mot ne porte aucune commande, seulement l'envie d'ouvrir ce fichier-la.
 $DemandeBrancher = Join-Path $Config 'brancher-demandee.json'
 $Brancher        = Join-Path $Racine 'brancher-notebooklm.cmd'
+# Journal du veilleur. Il tourne sans fenetre : sans ce fichier, un Write-Host
+# ou un Write-Warning ne se lit nulle part. Vu en reel le 26/09/2026 : une
+# demande consommee sans fenetre ouverte, et rien pour dire pourquoi.
+$Journal = Join-Path $Config 'maj-veilleuse.log'
 
 if (-not (Test-Path $Config)) { New-Item -ItemType Directory -Path $Config | Out-Null }
+
+# Une ligne horodatee par evenement, pas une par tour de boucle. Borne : au-dela
+# de 200 Ko, le journal devient maj-veilleuse.log.1 (l'ancien .1 est ecrase).
+# Une erreur ici (disque plein, fichier tenu) ne doit jamais arreter le
+# veilleur : try/catch vide, comme le signe de vie.
+function Ecrire-Journal([string]$texte) {
+    try {
+        if ((Test-Path -LiteralPath $Journal) -and (Get-Item -LiteralPath $Journal).Length -gt 200KB) {
+            Move-Item -LiteralPath $Journal -Destination ($Journal + '.1') -Force
+        }
+        $ligne = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' ' + $texte + [Environment]::NewLine
+        [System.IO.File]::AppendAllText($Journal, $ligne, (New-Object System.Text.UTF8Encoding($false)))
+    } catch { }
+}
 
 # --- Un seul veilleur par dossier ----------------------------------------------
 # Ouverture de session, demarrer.cmd, start.ps1 : trois portes peuvent le lancer,
@@ -69,6 +87,7 @@ if (-not $aLaMain) {
             if ($ancien -and $ancien.CommandLine -and
                 $ancien.CommandLine.ToLowerInvariant().IndexOf($PSCommandPath.ToLowerInvariant()) -ge 0) {
                 Write-Host "Un veilleur plus ancien tourne : il est remplace."
+                Ecrire-Journal ("Veilleur plus ancien (PID " + [int]$etat.pid + ") remplace par PID " + $PID)
                 Stop-Process -Id ([int]$etat.pid) -Force
                 try { $aLaMain = $Verrou.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { $aLaMain = $true }
             }
@@ -77,6 +96,7 @@ if (-not $aLaMain) {
 }
 if (-not $aLaMain) {
     Write-Host "Un veilleur tourne deja pour ce dossier : rien a faire."
+    Ecrire-Journal ("Second lancement (PID " + $PID + ") : un veilleur tourne deja, arret.")
     exit 0
 }
 
@@ -113,6 +133,7 @@ $DernierBrancher = [datetime]::MinValue
 
 function Se-Relancer {
     Write-Host "Le veilleur lui-meme a change : il se relance avec la nouvelle version."
+    Ecrire-Journal ("Empreinte du veilleur changee : relance (PID " + $PID + " s'arrete).")
     $Verrou.ReleaseMutex()
     $Verrou.Dispose()
     Start-Process -FilePath 'powershell' -WindowStyle Hidden -WorkingDirectory $Racine `
@@ -123,6 +144,7 @@ function Se-Relancer {
 }
 
 Write-Host "Veilleur de mise a jour actif. Le bouton << Mettre a jour >> de la page Studio fonctionne."
+Ecrire-Journal ("Veilleur demarre (PID " + $PID + ", " + $PSCommandPath + ")")
 
 while ($true) {
     # Signe de vie : la page s'en sert pour savoir si le bouton peut agir ou
@@ -136,15 +158,27 @@ while ($true) {
 
     if (Test-Path $DemandeBrancher) {
         Remove-Item $DemandeBrancher -Force -ErrorAction SilentlyContinue
+        Ecrire-Journal "Demande de branchement recue (brancher-demandee.json)"
+        $ecart = ((Get-Date) - $DernierBrancher).TotalSeconds
         # Deux clics rapides ne font qu'une fenetre : la derniere a 60 s pres.
-        if ((Test-Path $Brancher) -and (((Get-Date) - $DernierBrancher).TotalSeconds -gt 60)) {
+        if ((Test-Path $Brancher) -and ($ecart -gt 60)) {
             $DernierBrancher = Get-Date
             Write-Host "Demande recue : ouverture de brancher-notebooklm.cmd"
             try {
-                Start-Process -FilePath $Brancher -WorkingDirectory $Racine | Out-Null
+                $fenetre = Start-Process -FilePath $Brancher -WorkingDirectory $Racine -PassThru
+                if ($fenetre) {
+                    Ecrire-Journal ("Fenetre brancher-notebooklm.cmd ouverte (PID " + $fenetre.Id + ")")
+                } else {
+                    Ecrire-Journal "Start-Process n'a rendu aucun processus pour brancher-notebooklm.cmd"
+                }
             } catch {
                 Write-Warning "brancher-notebooklm.cmd n'a pas pu s'ouvrir : $($_.Exception.Message)"
+                Ecrire-Journal ("ECHEC Start-Process brancher-notebooklm.cmd : " + $_.Exception.Message)
             }
+        } elseif (-not (Test-Path $Brancher)) {
+            Ecrire-Journal ("Demande ignoree : fichier absent " + $Brancher)
+        } else {
+            Ecrire-Journal ("Demande ignoree : garde des 60 s (derniere ouverture il y a " + [int]$ecart + " s)")
         }
     }
 
@@ -161,10 +195,13 @@ while ($true) {
     if (Test-Path $Demande) {
         Remove-Item $Demande -Force -ErrorAction SilentlyContinue
         Write-Host "`nDemande recue : mise a jour en cours..."
+        Ecrire-Journal "Demande de mise a jour recue (maj-demandee.json) : mettre-a-jour.ps1 lance"
         try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $Script
+            Ecrire-Journal ("Mise a jour terminee (code de sortie " + $LASTEXITCODE + ")")
         } catch {
             Write-Warning "Mise a jour interrompue : $($_.Exception.Message)"
+            Ecrire-Journal ("Mise a jour interrompue : " + $_.Exception.Message)
         }
         $nouvelle = $null
         try { $nouvelle = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash } catch { }
