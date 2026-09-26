@@ -976,6 +976,11 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
        - Même compte Modal que le Studio, ou un compte séparé ?
        - Qui paie au-delà du crédit de 30 $ ?
        - ~~Clients dans l'UE : la licence de H3 les exclut par défaut (`SP:130`) ; que leur propose-t-on ?~~ **Répondu le 26/09** : chaque client fournit la copie de sa propre autorisation (18.0).
+19. **À faire — les chantiers trop gros pour être corrigés en passant (règle du propriétaire, 26/09/2026 : « les petites corrections peuvent être faites quand elles sont rencontrées ; les plus grosses à mettre dans la todo du plan »).**
+    - **Session NotebookLM, ligne bloquante** (`docs/FRICTIONS.md`, ligne « rebuild de 14:45 ») : verdict « tient 24 h » au plus tôt le 27/09 à 17:01. Si elle retombe : branchement témoin depuis Firefox (piste « liaison TPM »), puis décision sur la voie Android (jeton maître valable pour tout le compte ⇒ compte Google dédié ?).
+    - **Sauvegardes** (`docs/SAUVEGARDES.md`, section « La procédure ») : scripts écrits le 26/09, **jamais exécutés**. Restent : les questions A à D du propriétaire (magasins chiffrés et volumes sur le VPS ? chiffrer la copie VPS ? clé du coffre dans l'archive locale ?), l'essai de restauration avant le 31/10, et la rotation des anciennes sauvegardes (absente).
+    - **Essai machine neuve** (`docs/ESSAI_MACHINE_NEUVE_FEUILLE.md`, section G) : quatre décisions avant la séance (mot de passe administrateur, clé Gemini fournie ou créée, interrupteurs Image et Recherche, attendre ou non le verdict NotebookLM) ; puis la séance, avant le 31/10.
+    - **Réduction du disque Docker** : confiée à l'agent « quand c'est opportun » (Docker libre, aucune mesure en cours ; pas avant la fin du test des 24 h).
 
 ## Détail par tâche
 
