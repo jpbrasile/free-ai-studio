@@ -155,7 +155,7 @@ Ce n'est pas un choix tranché : ce sont les deux premières questions ci-dessou
 | | Question | Ce qui est fait en attendant |
 |---|---|---|
 | A | **Les magasins chiffrés partent-ils sur le VPS ?** Pour : si le PC meurt, les clés se rouvrent avec la clé du gestionnaire de mots de passe. Contre : « une sauvegarde de `keys.json` est une sauvegarde de secrets » (plus haut), les noms des services sont en clair, et une valeur d'avant le coffre (sans le préfixe `coffre-v1:`) serait en clair — ~~**non vérifié** qu'il n'en reste aucune~~ **vérifié le 26/09/2026** sur ce poste : `keys.json` a 2 valeurs, les deux commencent par `coffre-v1:` ; `sandbox-keys.json` est vide (aucune valeur affichée pendant la vérification). Les clés de fournisseurs se refont aussi chez chaque fournisseur. | ne partent pas ; l'interrupteur `-VpsAvecMagasinsChiffres` existe, éteint |
-| B | **Les conversations et le texte des questions NotebookLM partent-ils sur le VPS ?** La décision du 19/09 dit « local et VPS » ; celle du 25/09 dit que le texte des questions NotebookLM « reste sur ce poste ». Les deux ne tiennent pas ensemble pour `sandbox-data`. Et la base du chat contient peut-être la clé interne du routeur (Open WebUI garde ses réglages de connexion dans sa base) — ~~**non vérifié**~~ **vérifié le 26/09/2026 : oui, en clair, quatre fois.** Dans la copie restaurée de la base (`webui.db`, table `config`), `openai.api_keys`, `image_generation.openai.api_key`, `audio.stt.openai.api_key` et `audio.tts.openai.api_key` portent chacune une valeur de 64 signes, **identique à `FREE_TIER_MANAGER_KEY`** de `.env` — comparaison par empreinte SHA-256 dans un conteneur jetable, aucune valeur affichée. La table `api_key` (clés des personnes) est vide. Donc `open-webui-data.tar` est **aussi une sauvegarde de secret** : l'envoyer sur le VPS, c'est y envoyer la clé du routeur ; l'archive locale la contient déjà. | ne partent pas ; l'interrupteur `-VpsAvecVolumes` existe, éteint | ne partent pas ; l'interrupteur `-VpsAvecVolumes` existe, éteint |
+| B | **Les conversations et le texte des questions NotebookLM partent-ils sur le VPS ?** La décision du 19/09 dit « local et VPS » ; celle du 25/09 dit que le texte des questions NotebookLM « reste sur ce poste ». Les deux ne tiennent pas ensemble pour `sandbox-data`. Et la base du chat contient peut-être la clé interne du routeur (Open WebUI garde ses réglages de connexion dans sa base) — ~~**non vérifié**~~ **vérifié le 26/09/2026 : oui, en clair, quatre fois.** Dans la copie restaurée de la base (`webui.db`, table `config`), `openai.api_keys`, `image_generation.openai.api_key`, `audio.stt.openai.api_key` et `audio.tts.openai.api_key` portent chacune une valeur de 64 signes, **identique à `FREE_TIER_MANAGER_KEY`** de `.env` — comparaison par empreinte SHA-256 dans un conteneur jetable, aucune valeur affichée. La table `api_key` (clés des personnes) est vide. Donc `open-webui-data.tar` est **aussi une sauvegarde de secret** : l'envoyer sur le VPS, c'est y envoyer la clé du routeur ; l'archive locale la contient déjà. | ne partent pas ; l'interrupteur `-VpsAvecVolumes` existe, éteint |
 | C | **La copie VPS doit-elle être chiffrée ?** Le plan d'origine dit « *encrypted backups* ». Aujourd'hui les archives partent telles quelles, par `scp` (chiffré en transit, pas au repos). Tant que A et B restent à « non », rien de secret ni de personnel n'y part ; si l'une passe à « oui », la question devient bloquante (avec quoi chiffrer, et où garder cette clé-là). | non chiffrée |
 | D | **La clé du coffre dans l'archive *locale* ?** Écarté ici : la règle du document range les clés au gestionnaire de mots de passe, et une archive locale se copie sur un disque externe. Si le propriétaire préfère une archive locale autosuffisante, c'est à décider, pas à glisser dans un script. | jamais dans une archive |
 
@@ -296,3 +296,55 @@ le dossier du dépôt, dans Windows PowerShell.
    document, les réponses aux trois questions du tableau du haut et ce qui a raté. Un essai
    qui échoue s'écrit comme tel : il reste `en-attente`, avec ce qui a raté, et on le rejoue.
    Enfin, `python scripts/verifier-echeances.py` doit dire « tenue ».
+
+## Proposition : la clé du routeur hors des sauvegardes (27/09/2026, à discuter)
+
+Rien n'est construit. Cette section attend l'accord du propriétaire.
+
+### Ce qui est mesuré
+
+- La base du chat (`webui.db`, table `config`) garde **quatre fois** la clé interne du routeur,
+  en clair (question B, vérifié le 26/09). Open WebUI la recopie depuis `OPENAI_API_KEY` au
+  premier démarrage, puis la relit dans sa base : c'est sa façon de garder un réglage.
+- Cette clé ouvre, sur le routeur : le chat, les images, la transcription, la voix, `/status`,
+  et `/boost/activate` (le mode payant plafonné d'OpenRouter).
+- Ce qui borne le risque aujourd'hui, mesuré le 27/09 sur ce poste : le port 8010 n'écoute que
+  sur `127.0.0.1` ; `OPENROUTER_MANAGEMENT_KEY` est vide, donc le Boost refuse de s'activer ;
+  `ALLOW_PAID_MODELS=false`. Les clés des fournisseurs, elles, sont dans `keys.json`, fermées
+  par le coffre : la clé du routeur ne les révèle pas.
+- Sur ce poste, `.env` porte déjà la même clé en clair. La base n'ajoute donc **aucune**
+  exposition **ici**. Elle en ajoute **dans chaque copie** : `open-webui-data.tar` est une
+  sauvegarde de secret, et c'est ce qui bloque le VPS (question B).
+
+### Ce que je propose : (1) la clé retirée de la copie, remise à la restauration
+
+1. **`sauvegarder.ps1`** : après l'archive du volume du chat, un conteneur jetable ouvre la
+   copie de `webui.db` **dans l'archive**, jamais la base vivante, et vide les quatre valeurs.
+   Le manifeste le dit : `cle_du_routeur: retiree`. Le contrôle de la copie vérifie ensuite,
+   par empreinte et sans rien afficher, qu'aucune valeur de 64 signes égale à
+   `FREE_TIER_MANAGER_KEY` ne reste dans la copie.
+2. **`restaurer.ps1`** : après la restauration du volume, il réécrit les quatre valeurs avec
+   le `FREE_TIER_MANAGER_KEY` du `.env` de destination. Ce `.env` est déjà exigé :
+   l'essai du 26/09 a montré qu'une restauration a besoin de cette clé, que la personne
+   reprend dans son gestionnaire de mots de passe.
+3. **Effet** : `open-webui-data.tar` ne porte plus de secret. Pour le VPS, la question B
+   redevient une question de vie privée (les conversations), et non de clé.
+4. **Preuve de clôture** : un test qui rougit sur l'état d'aujourd'hui (une archive dont la
+   base porte la clé) ; puis l'essai réel sur une copie : sauvegarde, restauration dans le
+   projet d'essai, une question posée au chat qui reçoit sa réponse.
+
+### Les deux autres voies, et pourquoi je ne les propose pas en premier
+
+- **(2) Changer la clé** (script de rotation : nouvelle valeur dans `.env`, puis les quatre
+  valeurs de la base, puis la relance du routeur et du chat). C'est utile **si une copie a
+  fui**, mais ne ferme rien : la copie suivante porterait la nouvelle clé. À écrire comme
+  complément de (1), pas à la place.
+- **(3) `ENABLE_PERSISTENT_CONFIG=false`** dans Open WebUI : les réglages ne viendraient
+  plus de la base mais de l'environnement, à chaque démarrage. Rejeté : tout réglage changé
+  depuis l'administration du chat serait perdu à chaque redémarrage. La table `config` compte
+  352 lignes, et je n'ai pas mesuré combien ont été changées à la main.
+
+### Ce que le propriétaire décide
+
+Faire (1), avec ou sans (2). Ou garder l'état d'aujourd'hui, où la copie du chat reste une
+sauvegarde de secret qui ne part pas sur le VPS.
