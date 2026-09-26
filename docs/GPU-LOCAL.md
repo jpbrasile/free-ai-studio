@@ -415,6 +415,11 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
 > le shell et le moteur partagent le disque ; et la boîte « carte prise » n'a **pas de
 > capture d'écran** — la fenêtre Chrome qui porte l'onglet rend un viewport de 0 × 0. Le
 > reste des lignes ci-dessous tient toujours.
+>
+> **Relu le 26/09/2026 : ces deux derniers manques sont fermés depuis le 20/09**, comme le
+> dit `PLAN.md`, étape 9 — le `compose up` et un clip à la maison depuis WSL2 Ubuntu, et la
+> capture de la boîte « carte prise » prise dans une fenêtre de 1707 × 847. Ce paragraphe
+> n'avait pas été mis à jour.
 
 - ~~De combien la 4090 bat la L4 louée.~~ **Mesuré le 19/09** : 412 s contre 422 s pour un
   clip de 3 s, mais en 720p au lieu de 480p et 50 passes au lieu de 30 — voir le tableau.
@@ -426,8 +431,9 @@ les deux cas ; le réseau clos reste le défaut tant que rien ne paie son ouvert
 - **Si la TI2V-5B tient vraiment dans 24 Go sur CETTE carte**, qui est partagée. La fiche
   annonce 24 Go pour une carte entière ; la sonde de la phase 1 décidera sur la mémoire
   libre à l'instant, et un manque en cours de route est un repli chez Modal, pas une panne.
-- La qualité comparée : personne n'a encore vu côte à côte un clip de la 1.3B 480p et un
-  de la 5B 720p sur le même texte.
+- ~~La qualité comparée : personne n'a encore vu côte à côte un clip de la 1.3B 480p et un
+  de la 5B 720p sur le même texte.~~ **Faite le 20/09/2026** : section « GPU-2 — la
+  comparaison de qualité » plus bas (ligne non barrée jusqu'au 26/09).
 - ~~**Le routage de la phase 3 n'a jamais tourné dans la pile Docker complète.**~~
   **Vérifié le 19/09 au soir, deux clips de bout en bout** (`succeeded`, 73 images,
   1280 × 704, fichier récupéré par l'adresse à jeton de la page). Construction du worker
@@ -1262,6 +1268,7 @@ injoignable. Elle ne se corrige pas en multipliant par 2,74.
 **Pour que ce soit actif dans la pile qui tourne**, le code étant copié dans l'image :
 `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build sandbox-manager`.
 Ce redémarrage n'a **pas** été fait — c'est un service en marche que je n'ai pas lancé.
+*(Fait ensuite avec l'accord du propriétaire : section suivante.)*
 
 ### L'image reconstruite l'a dit tout de suite : le compteur restait à 1,39 $
 
