@@ -98,9 +98,32 @@ Studio pendant la mesure de la session NotebookLM ; le manifeste dit « a-chaud 
 la version de la sauvegarde, `config/` remis, les deux volumes d'essai
 (`free-ai-studio-essai_*`) conformes à leur liste fichier par fichier, rien du Studio en
 service touché. La base du chat copiée à chaud se rouvre : `PRAGMA integrity_check` = `ok`,
-43 tables. **Non vérifié encore** : relancer le Studio sur l'essai (il occuperait les mêmes
-ports que le Studio en service), une copie à froid, la clé du coffre (restauration faite
-sans elle : les magasins restent illisibles dans l'essai), `scp` et le VPS.
+43 tables.
+
+**Le Studio relancé sur l'essai, même nuit (vers 20:40)**, à côté du Studio en service :
+- un fichier `docker-compose.essai.yml` propre au dossier d'essai (noms `essai-*`, ports
+  18010, 18020 et 13000 par `!override`, les noms des conteneurs étant écrits en dur dans
+  `docker-compose.yml`) ;
+- un `.env` d'essai tiré de `.env.example` avec **quatre secrets internes neufs**, aucune clé
+  de fournisseur, Modal, Kaggle et Colab coupés : le vrai `.env` n'est pas copié.
+
+`up -d --build` a réussi. Les cinq services ont répondu 200 à `/health`, et le routeur à
+`/diagnostic/etat`. L'essai relit ce qu'on lui a rendu :
+- 126 dossiers de travaux, comme le Studio en service ; `/jobs` en sert 100, son plafond ;
+- la base du chat donne les mêmes comptes des deux côtés : 1 compte, 24 conversations,
+  5 fichiers, 352 réglages.
+
+Le Studio en service a répondu 200 pendant tout l'essai. La pile d'essai a ensuite été
+arrêtée, ses images supprimées. Ses volumes et son dossier sont **gardés**.
+
+**Ce que l'essai apprend pour un vrai jour de restauration** : la base du chat garde la clé
+du routeur (question B). Avec un `.env` neuf, le chat restauré présente donc l'**ancienne**
+clé à un routeur qui en attend une nouvelle. Il faut reprendre `FREE_TIER_MANAGER_KEY` du
+gestionnaire de mots de passe, avec la clé du coffre. **Non vérifié** : le chat de l'essai
+refusé par son routeur (déduit, pas observé).
+
+**Non vérifié encore** : une copie à froid, la restauration **avec** la clé du coffre (faite
+sans elle, les magasins restent illisibles dans l'essai), `scp` et le VPS.
 
 ### Ce qui part où
 
