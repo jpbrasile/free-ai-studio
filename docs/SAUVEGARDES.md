@@ -86,11 +86,21 @@ nommées dans `.env.example`, vides.
 
 ## La procédure
 
-Écrite le 26/09/2026. **Aucun des deux scripts n'a encore été exécuté** : ce qui suit décrit
-ce qu'ils sont écrits pour faire. Vérifié à l'écriture : ils se lisent sans erreur de
+Écrite le 26/09/2026. Vérifié à l'écriture : les deux scripts se lisent sans erreur de
 syntaxe par l'analyseur de Windows PowerShell 5.1, et `tests/test_sauvegardes.py` relit
-leurs garde-fous comme du texte. **Non vérifié** : tout ce qui touche Docker, `tar`, `scp`
-et le VPS — c'est l'essai qui le dira.
+leurs garde-fous comme du texte.
+
+**Premier passage réel, 26/09/2026 à 19:28, à chaud** (`-AChaud`, pour ne pas arrêter le
+Studio pendant la mesure de la session NotebookLM ; le manifeste dit « a-chaud ») :
+`sauvegarder.ps1` a produit 8 pièces sans erreur (chat 1 130 072 576 octets, bacs à sable
+887 864 832, `config.tar` 44 032, magasins 29 696 ; 31 fichiers de `config/`) ; puis
+`restaurer.ps1 -SansCle` dans la cible d'essai : 8 empreintes conformes, clone du dépôt à
+la version de la sauvegarde, `config/` remis, les deux volumes d'essai
+(`free-ai-studio-essai_*`) conformes à leur liste fichier par fichier, rien du Studio en
+service touché. La base du chat copiée à chaud se rouvre : `PRAGMA integrity_check` = `ok`,
+43 tables. **Non vérifié encore** : relancer le Studio sur l'essai (il occuperait les mêmes
+ports que le Studio en service), une copie à froid, la clé du coffre (restauration faite
+sans elle : les magasins restent illisibles dans l'essai), `scp` et le VPS.
 
 ### Ce qui part où
 
