@@ -664,10 +664,36 @@ Write-Host "  Free AI Studio est installe." -ForegroundColor Green
 Write-Host ""
 Write-Host "  Votre page : http://127.0.0.1:8010/studio"
 Write-Host ""
-Write-Host "  IL RESTE UNE CHOSE : donner une cle gratuite pour le chat." -ForegroundColor White
-Write-Host "  Sur la page, cliquez << Cles >>, puis suivez les instructions."
-Write-Host "  Une cle Google Gemini gratuite suffit pour ecrire, lire une image"
-Write-Host "  et fabriquer une image. Rien n'est payant."
+# Le rappel de la cle ne s'affiche que s'il sert (27/09/2026) : il sortait a
+# CHAQUE demarrage, cles deja donnees comprises. On demande au routeur, comme
+# scripts/self-test.py, quels services de chat sont utilisables. $null = on n'a
+# pas pu le savoir : le rappel reste, adouci. La cle interne n'est jamais affichee.
+function Services-De-Chat {
+    if (-not $pret) { return $null }
+    try {
+        $texte = [System.IO.File]::ReadAllText($cheminEnv, $utf8SansMarque)
+        $m = [regex]::Match($texte, "(?m)^FREE_TIER_MANAGER_KEY=(.+?)\s*$")
+        if (-not $m.Success) { return $null }
+        $etat = Invoke-RestMethod -Uri "http://127.0.0.1:8010/status" -TimeoutSec 10 `
+            -Headers @{ Authorization = "Bearer " + $m.Groups[1].Value }
+        # La virgule garde le tableau entier : un tableau VIDE rendu nu devient
+        # $null chez l'appelant, et << aucune cle >> passerait pour << on ne sait pas >>.
+        return ,@($etat.providers | Where-Object { $_.eligible -eq $true } | ForEach-Object { $_.name })
+    } catch { return $null }
+}
+$services = Services-De-Chat
+if ($services -and $services.Count -gt 0) {
+    Write-Host ("  Le chat a deja sa cle (" + ($services -join ", ") + ") : rien d'autre a faire.")
+} else {
+    if ($null -eq $services) {
+        Write-Host "  SI CE N'EST PAS DEJA FAIT : donner une cle gratuite pour le chat." -ForegroundColor White
+    } else {
+        Write-Host "  IL RESTE UNE CHOSE : donner une cle gratuite pour le chat." -ForegroundColor White
+    }
+    Write-Host "  Sur la page, cliquez << Cles >>, puis suivez les instructions."
+    Write-Host "  Une cle Google Gemini gratuite suffit pour ecrire, lire une image"
+    Write-Host "  et fabriquer une image. Rien n'est payant."
+}
 Write-Host ""
 Write-Host "  La prochaine fois, double-cliquez simplement demarrer.cmd."
 Write-Host "  --------------------------------------------------------------" -ForegroundColor White
