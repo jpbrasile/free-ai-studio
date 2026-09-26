@@ -165,8 +165,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sauvegarder.ps1 -Ver
   recalculer les empreintes par le VPS** (`sha256sum -c`). Une copie qui ne se vérifie pas
   là-bas est annoncée « NON vérifiée ». `ssh` tourne en `BatchMode` : la clé SSH doit être
   chargée dans `ssh-agent` (ou sans phrase), et l'hôte déjà connu — une première connexion à
-  la main, une fois. Aucune rotation des anciennes copies n'est faite, ni en local ni sur le
-  VPS.
+  la main, une fois.
+- **`-Garder N`** (ajouté le 26/09/2026) : rotation **locale** seulement. Sans lui, rien n'est
+  supprimé ; le script dit combien d'anciennes sauvegardes du projet sont là et leur taille.
+  Avec lui, il garde les N plus récentes, celle qu'il vient de faire comprise, et supprime
+  les autres. N vaut au moins 2 : on ne supprime pas la précédente avant d'avoir restauré la
+  nouvelle. Seuls comptent les dossiers `studio-AAAAMMJJ-HHMMSS` dont le manifeste porte le
+  même projet. **Essayé le 26/09** sur des leurres : `-Garder 1` est refusé ; sans l'option,
+  rien n'est supprimé ; `-Garder 2` a supprimé les trois anciennes du projet et laissé un
+  autre projet, un dossier sans manifeste et un dossier au nom quelconque. Sur le VPS,
+  aucune rotation.
 - **À la fin**, il rappelle que la clé du coffre et `.env` ne sont pas dans la sauvegarde,
   et donne l'empreinte courte de la clé pour vérifier que celle du gestionnaire est la
   bonne.

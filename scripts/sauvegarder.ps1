@@ -38,7 +38,8 @@
 #
 # Ce script ne supprime rien du Studio : ni volume, ni conteneur, ni fichier.
 # S'il arrete le Studio le temps de la copie, c'est apres l'avoir demande, et il
-# le redemarre meme si la copie echoue.
+# le redemarre meme si la copie echoue. La seule suppression possible est celle
+# des anciennes sauvegardes, et seulement avec -Garder N (au moins 2).
 
 param(
     # Dossier ou poser l'archive. Refuse s'il est dans le depot.
@@ -57,7 +58,11 @@ param(
     [switch]$VpsAvecVolumes,
     # Image du conteneur jetable qui lit les volumes. Etiquette fixe : la meme
     # image a la sauvegarde et a la restauration.
-    [string]$Image = "alpine:3.20"
+    [string]$Image = "alpine:3.20",
+    # Rotation locale : garder les N sauvegardes les plus recentes (celle-ci
+    # comprise) et supprimer les autres. 0 (par defaut) : rien n'est supprime,
+    # le script dit seulement combien il y en a et leur taille. Au moins 2.
+    [int]$Garder = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,6 +154,10 @@ if ($Arret -and $AChaud) {
 }
 if (($VpsAvecMagasinsChiffres -or $VpsAvecVolumes) -and -not $VersVps) {
     Arreter "-VpsAvecMagasinsChiffres et -VpsAvecVolumes ne valent qu'avec -VersVps." @()
+}
+# Garder 1, c'est effacer la copie precedente avant d'avoir restaure celle-ci.
+if ($Garder -ne 0 -and $Garder -lt 2) {
+    Arreter "-Garder vaut au moins 2." @("0 (par defaut) ne supprime rien ; 2 garde celle-ci et la precedente.")
 }
 
 if (-not $Projet) {
@@ -448,6 +457,48 @@ if ($VersVps) {
     if ($restes.Count -gt 0) { Note ("Restees sur ce poste seulement : " + ($restes -join ", ")) }
 }
 
+# --- 5b. Rotation locale, si on la demande --------------------------------------
+# Ne sont candidats que les dossiers studio-AAAAMMJJ-HHMMSS de la destination
+# qui portent un manifeste du MEME projet ; le nom porte la date, le tri se fait
+# sur lui. Celle qui vient d'etre faite n'est jamais candidate. Rien sur le VPS.
+Titre "Rotation locale"
+$Anciennes = @(Get-ChildItem -LiteralPath $Destination -Directory |
+    Where-Object { $_.Name -match '^studio-[0-9]{8}-[0-9]{6}$' -and $_.Name -ne $Nom } |
+    Where-Object {
+        $m = Join-Path $_.FullName "manifeste.json"
+        $ok = $false
+        if (Test-Path -LiteralPath $m) {
+            try { $ok = ((Get-Content -LiteralPath $m -Raw | ConvertFrom-Json).projet -eq $Projet) } catch { $ok = $false }
+        }
+        $ok
+    } | Sort-Object Name -Descending)
+function Taille-Dossier($d) {
+    $s = (Get-ChildItem -LiteralPath $d -Recurse -File | Measure-Object -Property Length -Sum).Sum
+    if (-not $s) { return 0 }
+    return [int64]$s
+}
+$RotationEtat = "non demandee"
+if ($Garder -eq 0) {
+    $total = [int64]0
+    foreach ($a in $Anciennes) { $total += Taille-Dossier $a.FullName }
+    Note ("Sauvegardes plus anciennes du projet ici : " + $Anciennes.Count + ", " + [Math]::Round($total / 1GB, 1) + " Go.")
+    Note "Rien n'est supprime. -Garder N garde les N plus recentes (celle-ci comprise)."
+} else {
+    $aSupprimer = @($Anciennes | Select-Object -Skip ($Garder - 1))
+    $supprimees = @()
+    foreach ($a in $aSupprimer) {
+        try {
+            Remove-Item -LiteralPath $a.FullName -Recurse -Force
+            $supprimees += $a.Name
+        } catch {
+            Souci ("Non supprimee : " + $a.Name + " (" + $_.Exception.Message + ")")
+        }
+    }
+    $RotationEtat = ("gardees " + [Math]::Min($Garder, $Anciennes.Count + 1) + ", supprimees " + $supprimees.Count)
+    if ($supprimees.Count -gt 0) { Bon ("Supprimees : " + ($supprimees -join ", ")) }
+    else { Bon ("Rien a supprimer : " + ($Anciennes.Count + 1) + " sauvegarde(s), " + $Garder + " gardee(s) au plus.") }
+}
+
 # --- 6. Ce qui a ete fait, et ce qui reste a faire a la main -------------------
 Write-Host ""
 Write-Host "  --------------------------------------------------------------" -ForegroundColor White
@@ -456,6 +507,7 @@ Write-Host ("  Local : " + $Dossier)
 foreach ($p in $Pieces) { Write-Host ("    " + $p.nom + "  " + $p.octets + " octets") }
 if ($VolumesAbsents.Count -gt 0) { Write-Host ("  Volumes absents, NON sauvegardes : " + ($VolumesAbsents -join ", ")) -ForegroundColor Yellow }
 Write-Host ("  VPS : " + $VpsEtat)
+Write-Host ("  Rotation locale : " + $RotationEtat)
 Write-Host ""
 Write-Host "  LA CLE DU COFFRE N'EST PAS DANS CETTE SAUVEGARDE." -ForegroundColor White
 Write-Host "  Sans elle, les cles saisies sur les pages /cles ne se rouvrent pas."

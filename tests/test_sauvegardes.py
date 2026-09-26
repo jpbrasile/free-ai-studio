@@ -1,9 +1,10 @@
 """Sauvegarder et restaurer : les garde-fous se relisent dans le texte des scripts.
 
 docs/SAUVEGARDES.md, section << La procedure >>. Ces tests lisent les deux
-scripts comme du texte, ils ne lancent rien : ni Docker, ni tar, ni ssh. Au
-26/09/2026 aucun des deux scripts n'a ete execute ; c'est l'essai de
-restauration, joue par le proprietaire avant le 31/10/2026, qui le fera.
+scripts comme du texte, ils ne lancent rien : ni Docker, ni tar, ni ssh. Le
+26/09/2026 au soir, les deux scripts ont tourne une premiere fois (a chaud,
+restauration dans la cible d'essai) ; l'essai complet, joue par le
+proprietaire avant le 31/10/2026, reste a faire.
 
 Ce qu'ils tiennent :
 - aucune coordonnee en dur (ni adresse IP, ni nom de domaine) : le VPS n'est
@@ -218,10 +219,31 @@ def test_la_sauvegarde_refuse_un_dossier_dans_le_depot_et_ne_supprime_rien_du_st
     code = _code(SAUVE)
     assert "Le dossier de sauvegarde est dans le depot." in code
     assert '"volume", "rm"' not in code and '"down"' not in code
-    # Le seul Remove-Item retire une piece fautive que le script vient de fabriquer.
-    assert code.count("Remove-Item") == 1
+    # Deux Remove-Item : une piece fautive que le script vient de fabriquer, et
+    # la rotation des anciennes sauvegardes (test suivant).
+    assert code.count("Remove-Item") == 2
+    rotation = _bloc(SAUVE, "# --- 5b. Rotation locale", "# --- 6.")
+    assert _code(rotation).count("Remove-Item") == 1
     # S'il a arrete le Studio, il le redemarre dans un finally.
     assert re.search(r"\} finally \{\s+# Redemarre", SAUVE)
+
+
+def test_la_rotation_est_demandee_ne_vise_que_les_sauvegardes_du_projet_et_garde_la_neuve():
+    """Essai reel du 26/09/2026 sur des leurres : -Garder 1 refuse ; sans -Garder,
+    rien n'est supprime ; -Garder 2 a supprime les 3 anciennes du projet et laisse
+    un autre projet, un dossier sans manifeste et un dossier au nom quelconque."""
+    assert "[int]$Garder = 0" in SAUVE
+    assert "if ($Garder -ne 0 -and $Garder -lt 2) {" in SAUVE
+    rotation = _code(_bloc(SAUVE, "# --- 5b. Rotation locale", "# --- 6."))
+    assert "'^studio-[0-9]{8}-[0-9]{6}$'" in rotation
+    assert "$_.Name -ne $Nom" in rotation
+    assert ".projet -eq $Projet" in rotation
+    assert "Select-Object -Skip ($Garder - 1)" in rotation
+    # Garder 0 : aucune suppression dans cette branche.
+    branche_zero = rotation[rotation.index("if ($Garder -eq 0) {"):rotation.index("} else {")]
+    assert "Remove-Item" not in branche_zero
+    # Rien sur le VPS : la rotation ne parle ni ssh ni scp.
+    assert "$Ssh" not in rotation and "$Scp" not in rotation
 
 
 # --- Le document ------------------------------------------------------------
