@@ -922,6 +922,59 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
        - `login` laisse à côté du fichier un dossier `<fichier>.browser_profile`, profil Chrome encore connecté. La page doit dire de le supprimer aussi. **Remplacé le 25/09** (friction « pas clair ») : `brancher-notebooklm.cmd` installe l'outil à la version épinglée, lance `login`, envoie la session au Studio et efface le fichier ET le profil dans un `finally` ; l'extension de cookies passe en repli replié. Vérifié en réel : `-Verifier` (installation, Studio joint, Chrome trouvé ; 1,2 s au second passage). **Non vérifié** : le parcours complet avec une vraie connexion Google — c'est le propriétaire qui la fait.
        Vu en réel le 25/09, par le propriétaire, depuis la page : un PDF (article sur la dissociation de H2S) a donné un résumé de 2,7 Mo, lu dans « Vos résumés ». Le carnet s'appelle « Studio · Dissociation_of_H2S….pdf · 25/09/2026 08:54 ».
 
+18. **Module film et séries — contribution du propriétaire, 26/09/2026.** Source : le sous-plan « Studio Film & Series Module — Subplan » (en anglais, daté du 25/09/2026), **ancré dans le dépôt sous `docs/sources/film/sous-plan-film-series.md`** ; ci-dessous, `SP:n` renvoie à la ligne n de ce fichier, lue le 26/09. Il ajouterait au Studio la production de films et de séries longues avec MiniMax H3 (poids ouverts) : 11 briques de flow et un flow composite « Film / Series », la première production étant une série mensuelle de 20 minutes (`SP:5-20`). **Rien n'est construit ; rien n'est décidé au-delà du 18.4.** Les chiffres viennent du sous-plan et **n'ont pas été reproduits ici**, sauf mention. Relecture adverse du plan de rangement faite le 26/09 par GLM-5.3 (Z.AI, outils en lecture seule) ; son rendu n'est pas recopié ici.
+    0. **Licence MiniMax H3 — étape 0, bloquante.** Le sous-plan le pose lui-même (« step 0 of the plan », `SP:100`) : la licence communautaire par défaut exclut l'UE, le Royaume-Uni, la Corée du Sud et les États-Unis. `README.md:429-430` dit déjà que la licence de H3 exclut l'UE du déploiement local ; il ne cite pas les États-Unis — écart à trancher sur le texte même de la licence.
+       - **Critère de feu vert** : le texte de la licence des poids lu, et l'usage en France **explicitement** permis par écrit. Un formulaire approuvé ne suffit pas : une autorisation individuelle peut ajouter des conditions (`SP:106`).
+       - « Approbation en moins de dix minutes, apparemment automatique » : un seul témoignage cité par le sous-plan (`SP:105`). **Non vérifié.**
+       - Formulaire cité : https://platform.minimax.io/h3-license (`SP:104`). **Pas encore rempli au 26/09.**
+       - **Refus, ou exclusion maintenue ⇒ point 18 fermé.** C'est écrit d'avance. Les replis du sous-plan (licence commerciale vendue par Comfy, API hébergées MiniMax ou fal, `SP:107`) sont payants : ils ne sont pas des replis du Studio (`PLAN.md:34`).
+       - Le développement sur la 4090 est déjà un usage des poids : **aucun téléchargement, aucun essai avant le feu vert**. Le sous-plan dit la même chose (`SP:215`).
+    1. **Ce que le sous-plan apporte.** Chaque fonctionnalité est une PR, fusionnée seulement si son test d'acceptation passe sur un jeu d'essai fixe (`SP:20`). Chiffres cités tels quels ; *estim.* marque une estimation du sous-plan, pas une mesure.
+
+       | Phase | Contenu | Chiffres du sous-plan |
+       |---|---|---|
+       | 1 (sem. 1) | un plan de dialogue à deux personnages, 10 s, et les chiffres matériels (`SP:211`) | porte : une prise en moins de ~15 min, aucun plantage sur 10 passages (`SP:245`) |
+       | 2 (sem. 2) | un LLM écrit les plans en JSON, par API | un validateur refuse plus de 9 images / 12 fichiers de références (`SP:276`) |
+       | 3 (sem. 2–3) | Blender sans écran rend pose, profondeur, masques, caméra | pose ~0,6, profondeur ~0,3, total ≤ 1,0 (`SP:285`) |
+       | 4 (sem. 3) | base personnages, voix, lieux ; `continuity.json` | empreintes calculées une fois (`SP:310`) |
+       | 5 | routeur Ref2VA / FL2VA ; LTX-2 seulement après le test de 60 s | une seule variante H3 chargée à la fois (`SP:314`, `SP:322`) |
+       | 6–7 (sem. 3–5) | prises, relecture humaine deux fois par jour, réparation des lèvres (LatentSync), juge | juge autonome à ≥ 90 % d'accord sur 100 plans (`SP:328`, `SP:374`) |
+       | 8 | continuité ancrée sur le plan maître de chaque scène | (`SP:379`) |
+       | 9 (sem. 4–5) | montage OTIO, agrandissement en dernier, son refait par scène | sortie locale bornée à 768 px (`SP:398`) ; −14 LUFS web, −23 diffusion (`SP:408`) |
+
+       | Fonctionnalité | Jours | Calcul d'essai (`SP:463-474`) |
+       |---|---|---|
+       | 1 H3 sur Modal | 3–4 | ~10 $ |
+       | 2 Fiches de personnages | 2–3 | ~5 $ |
+       | 3 Routeur de références | 2–3 | ~10 $ |
+       | 4 Passes Blender | 3–4 | ~10 $ |
+       | 5 Première image imposée + son directeur | 2–3 | ~15 $ |
+       | 6 Découpage en plans | 2–3 | ~5 $ |
+       | 7 File de relecture + reprise sur note | 2–3 | ~10 $ |
+       | 8 Réparation des lèvres | 2–3 | ~5 $ |
+       | 9 Son de scène + doublage | 3–4 | ~10 $ |
+       | 10 Agrandissement + premier montage | 2–3 | ~10 $ |
+       | 11 Flow composite Film / Series | 3–4 | ~20 $ |
+       | 12 Juge v1 | 3–4 | ~5 $ |
+
+       Estimations d'ensemble, toutes *estim.* : 625 prises pour 20 minutes, 85–155 heures de 4090 ou 200–350 $ chez Modal (`SP:416`) ; « Estimated 3–6 minutes per take […] (not yet benchmarked) », 0,25–0,35 $ la prise (`SP:436`) ; 250–450 $ le film, plus 100–200 $ d'essais une fois, sur un taux de passage « 70% assumed » (`SP:594`, `SP:606`) ; 8–10 semaines jusqu'au premier film (`SP:55`) ; notes que le sous-plan se donne : 9/10, 8,5/10, 8–8,5/10 (`SP:92-94`).
+    2. **Écarts avec le Studio**, du plus lourd au plus léger.
+       - **Mémoire d'abord.** Le sous-plan annonce la mémoire vive comme la contrainte la plus serrée : pics de 78–93 GiB mesurés **par un tiers** sur une 5090, et une MemoryError signalée sur une 4090 avec 64 Go (`SP:137`). C'est le socle de développement qu'il annonce, et c'est celui de ce PC (63,8 Go lus le 26/09, RTX 4090). **Non reproduit ici.** Le Studio décide sur la mémoire de la **carte** libre au lancement (`docs/GPU-LOCAL.md:396-397`) ; ce document ne parle pas de mémoire vive (recherche du 26/09).
+       - **Argent.** 0,25–0,35 $ la prise, et chaque fonctionnalité demande 5–20 $ d'essais (tableau ci-dessus). Le Studio est gratuit par défaut (AGENTS.md ; `PLAN.md:34`). **Toute dépense de ce module est une décision dédiée, hors du budget du Studio.**
+       - **Colab et Kaggle retirés** par le sous-plan (« Colab and Kaggle are dropped », `SP:455`), alors que le Studio vient de faire tourner un clip sur Colab gratuit (point 17.4, `PLAN.md:892`).
+       - **« One heavy process at a time »** (`SP:152`) : le sous-plan suppose la carte à lui. Ici, la 4090 est partagée avec le `llama-server` de dsh3 (`PLAN.md:828`), et réserver la carte est refusé d'avance (`docs/GPU-LOCAL.md:395`).
+       - **Prolongation par latent, pas par image.** Le Studio prolonge une vidéo depuis sa **dernière image** (`sandbox-manager/montage.py:1`, `video_prolonger` dans `sandbox-manager/composite.py:2625`). Le sous-plan enchaîne par la fin **latente** du clip précédent (`SP:386`).
+    3. **`h3_continuation`, le prototype.** Il enchaîne des clips MiniMax-H3 par LightX2V en épinglant la fin latente, vidéo et son, du clip précédent. Statut écrit par son auteur : agencement vérifié sur processeur contre le code de LightX2V, **28 contrôles, jamais sur carte ni avec les vrais poids** (`sources/film/h3_continuation/README.md:5`, dépôt privé `free-ai-studio-jugement`). L'algorithme vient d'un projet GPL-3.0 (`README.md:36` du même dossier) : il reste donc dans le dépôt privé, hors du dépôt MIT. S'il est repris un jour : conteneur séparé appelé par HTTP, comme Piper (`PLAN.md:803`). **Non décidé.**
+    4. **Ordre et forme — décision du propriétaire, 26/09/2026.**
+       - **Après** : les frictions bloquantes (`docs/FRICTIONS.md:9`), le portage sur le poste client, et les deux échéances CI du 31/10 (`.github/workflows/validate.yml:87-88`).
+       - **Forme par défaut** : projet à part, comme JARVIS (`PLAN.md:823`).
+       - **Premier pas, à 0 $** : rejouer les 28 contrôles sur processeur du prototype — sans carte, sans poids — et consigner le résultat ici, réussi ou échoué.
+       - Pour chaque hypothèse risquée, seuil et plan B écrits d'avance, selon la règle d'arrêt du point 16.7 (`PLAN.md:843`).
+    5. **Questions ouvertes au propriétaire.**
+       - Même compte Modal que le Studio, ou un compte séparé ?
+       - Qui paie au-delà du crédit de 30 $ ?
+       - Clients dans l'UE : la licence de H3 les exclut par défaut (`SP:130`) ; que leur propose-t-on ?
+
 ## Détail par tâche
 
 ### P0-1 — Le chat ne se dégrade plus en silence
