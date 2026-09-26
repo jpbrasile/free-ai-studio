@@ -1674,7 +1674,7 @@ async def notebooklm_reparer(request: Request, authorization: Optional[str] = He
     _nlm_coupe(request)
     if not notebooklm_pont.branchee():
         raise HTTPException(409, notebooklm_pont.PHRASE_ABSENTE)
-    r = await asyncio.to_thread(notebooklm_pont.entretenir)
+    r = await asyncio.to_thread(notebooklm_pont.entretenir, origine="bouton")
     if r.get("ok"):
         return {"ok": True}
     return {"ok": False, "message": notebooklm_pont.PHRASE_IRREPARABLE}

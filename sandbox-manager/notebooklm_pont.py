@@ -193,11 +193,62 @@ def changements(avant: str, apres: str) -> str:
         ", ".join(retires) or "aucun", ", ".join(doublons) or "aucun")
 
 
-def entretenir(commande: str = "notebooklm") -> dict:
+# FRICTIONS.md, ligne du rebuild de 14:45 (25/09/2026) : Google a refuse la
+# session et l'on n'a jamais su QUAND l'entretien avait lache -- son journal est
+# mort avec l'ancien conteneur. Ce fichier vit dans config/, sur le PC : il
+# survit a une reconstruction. Il garde la derniere reussite, le premier echec
+# de la serie en cours (et le dernier, et leur nombre), et le dernier incident
+# clos. Des dates, des codes, des NOMS de cookies ; jamais une valeur.
+JOURNAL_ENTRETIEN = "entretien.json"
+
+
+def _instant(t: float) -> dict:
+    return {"quand": t, "heure": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))}
+
+
+def journal_entretien() -> dict:
+    try:
+        return json.loads((DOSSIER / JOURNAL_ENTRETIEN).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _noter_entretien(ok: bool, origine: str, code: int, message: str, diff: str) -> None:
+    """Jamais bloquant : un journal illisible ou un disque plein ne doit pas
+    empecher l'entretien lui-meme."""
+    try:
+        j = journal_entretien()
+        fait = dict(_instant(time.time()), origine=origine, changements=diff)
+        if ok:
+            serie = j.pop("echec_en_cours", None)
+            if serie:
+                serie["retabli"] = fait
+                j["dernier_incident"] = serie
+            j["derniere_reussite"] = fait
+        else:
+            fait.update(code=code, message=message)
+            serie = j.get("echec_en_cours")
+            if serie:
+                serie["nombre"] += 1
+                serie["dernier"] = fait
+            else:
+                j["echec_en_cours"] = {
+                    "premier": fait, "dernier": fait, "nombre": 1,
+                    "reussite_precedente": (j.get("derniere_reussite") or {}).get("heure")}
+        DOSSIER.mkdir(parents=True, exist_ok=True)
+        tmp = (DOSSIER / JOURNAL_ENTRETIEN).with_suffix(".tmp")
+        tmp.write_text(json.dumps(j, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, DOSSIER / JOURNAL_ENTRETIEN)
+    except OSError as exc:
+        log.warning("NotebookLM entretien : journal non ecrit (%s)", type(exc).__name__)
+
+
+def entretenir(commande: str = "notebooklm", origine: str = "fil") -> dict:
     """Garde la session vivante sans que la personne se reconnecte : la
     commande publique de la bibliotheque (`auth refresh --verify`) sur une
     copie en clair le temps de l'appel, puis la session tournee revient
-    dans le coffre. Meme verrou que les appels : jamais deux rotations a la fois."""
+    dans le coffre. Meme verrou que les appels : jamais deux rotations a la fois.
+    `origine` (demarrage, fil, bouton) va au journal de config/."""
     if not FICHIER.exists():
         return {"fait": False}
     with _verrou:
@@ -227,6 +278,7 @@ def entretenir(commande: str = "notebooklm") -> dict:
                 log.warning("NotebookLM entretien : ECHEC (code %s) %s ; %s", code, message, diff)
             else:
                 log.info("NotebookLM entretien : ok ; %s", diff)
+            _noter_entretien(code == 0, origine, code, message, diff)
             return {"fait": True, "ok": code == 0, "changements": diff}
         finally:
             shutil.rmtree(d, ignore_errors=True)
@@ -236,11 +288,13 @@ def entretenir_sans_fin(attente=None) -> None:
     """Le fil du Studio : un entretien au demarrage (la machine a pu dormir),
     puis toutes les ENTRETIEN_S secondes. Ne s'arrete jamais sur une erreur."""
     attente = attente or time.sleep
+    origine = "demarrage"
     while True:
         try:
-            entretenir()
+            entretenir(origine=origine)
         except Exception as exc:  # noqa: BLE001 -- le fil ne doit pas mourir
             log.warning("NotebookLM entretien : erreur %s", type(exc).__name__)
+        origine = "fil"
         attente(ENTRETIEN_S)
 
 

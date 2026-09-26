@@ -317,8 +317,8 @@ def test_le_fil_d_entretien_survit_a_une_erreur_et_attend_entre_deux(nlm, monkey
     pont, _ = nlm
     tours, attentes = [], []
 
-    def entretenir():
-        tours.append(1)
+    def entretenir(origine):
+        tours.append(origine)
         if len(tours) == 1:
             raise RuntimeError("panne")
 
@@ -332,8 +332,79 @@ def test_le_fil_d_entretien_survit_a_une_erreur_et_attend_entre_deux(nlm, monkey
     monkeypatch.setattr(pont, "entretenir", entretenir)
     with pytest.raises(Fin):
         pont.entretenir_sans_fin(attente)
-    assert len(tours) == 2 and attentes == [pont.ENTRETIEN_S] * 2
+    assert tours == ["demarrage", "fil"] and attentes == [pont.ENTRETIEN_S] * 2
     assert 900 <= pont.ENTRETIEN_S <= 1200   # 15 a 20 min, conseil de la bibliotheque
+
+
+# FRICTIONS.md, rebuild de 14:45 : le journal de l'entretien mourait avec le
+# conteneur. Il vit maintenant dans config/ ; ces tests disent ce qu'il garde.
+
+def _entretien(pont, monkeypatch, sortie, origine="fil", message=""):
+    run, _vu = faux_refresh(sortie=sortie, message=message)
+    monkeypatch.setattr(pont.subprocess, "run", run)
+    return pont.entretenir(origine=origine)
+
+
+def test_le_journal_d_entretien_vit_dans_config_et_garde_la_derniere_reussite(nlm, monkeypatch):
+    pont, _ = nlm
+    brancher(pont)
+    assert pont.journal_entretien() == {}
+    _entretien(pont, monkeypatch, 0, origine="demarrage")
+    fichier = pont.DOSSIER / pont.JOURNAL_ENTRETIEN
+    assert fichier.exists()                      # a cote du coffre, dans config/
+    j = pont.journal_entretien()
+    assert j["derniere_reussite"]["origine"] == "demarrage"
+    assert "tournes : __Secure-1PSIDTS" in j["derniere_reussite"]["changements"]
+    assert "echec_en_cours" not in j
+    assert "valeur-" not in fichier.read_text(encoding="utf-8")
+
+
+def test_le_premier_echec_reste_quand_les_suivants_s_ajoutent(nlm, monkeypatch):
+    pont, _ = nlm
+    brancher(pont)
+    _entretien(pont, monkeypatch, 0)
+    reussite = pont.journal_entretien()["derniere_reussite"]["heure"]
+    _entretien(pont, monkeypatch, 1, message="Error: Authentication expired")
+    _entretien(pont, monkeypatch, 1, origine="bouton", message="Error: redirect to accounts.google.com")
+    serie = pont.journal_entretien()["echec_en_cours"]
+    assert serie["nombre"] == 2 and serie["reussite_precedente"] == reussite
+    assert serie["premier"]["message"] == "Error: Authentication expired"
+    assert serie["premier"]["origine"] == "fil" and serie["premier"]["code"] == 1
+    assert serie["dernier"]["origine"] == "bouton"
+    # La derniere reussite n'est pas effacee par les echecs.
+    assert pont.journal_entretien()["derniere_reussite"]["heure"] == reussite
+
+
+def test_une_reussite_clot_l_incident_et_le_garde(nlm, monkeypatch):
+    pont, _ = nlm
+    brancher(pont)
+    _entretien(pont, monkeypatch, 1, message="Error: Authentication expired")
+    _entretien(pont, monkeypatch, 0, origine="bouton")
+    j = pont.journal_entretien()
+    assert "echec_en_cours" not in j
+    incident = j["dernier_incident"]
+    assert incident["nombre"] == 1 and incident["reussite_precedente"] is None
+    assert incident["retabli"]["origine"] == "bouton"
+
+
+def test_un_journal_impossible_a_ecrire_n_empeche_pas_l_entretien(nlm, monkeypatch, caplog):
+    pont, _ = nlm
+    brancher(pont)
+
+    # Un dossier a la place du fichier : l'ecriture echoue, pas la rotation.
+    (pont.DOSSIER / pont.JOURNAL_ENTRETIEN).mkdir()
+    with caplog.at_level("WARNING", logger="sandbox-manager.notebooklm"):
+        r = _entretien(pont, monkeypatch, 0)
+    assert r["ok"] and "journal non ecrit" in caplog.text
+    assert "valeur-psidts-entretenue" in pont._lire()
+
+
+def test_un_journal_illisible_repart_de_zero(nlm, monkeypatch):
+    pont, _ = nlm
+    brancher(pont)
+    (pont.DOSSIER / pont.JOURNAL_ENTRETIEN).write_text("{pas du json", encoding="utf-8")
+    _entretien(pont, monkeypatch, 0)
+    assert pont.journal_entretien()["derniere_reussite"]["origine"] == "fil"
 
 
 def test_les_changements_disent_des_noms_et_les_doublons_jamais_une_valeur(nlm):
