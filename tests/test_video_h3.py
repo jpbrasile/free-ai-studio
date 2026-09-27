@@ -282,3 +282,70 @@ def test_le_registre_annonce_le_pire_cas_du_code(h3):
     entree = next(a for a in reg["applications"] if a["id"] == "video_h3")
     assert entree["modele"] == h3.video_h3.HF
     assert entree["cout_max_usd"] == h3.video_h3.pire_cas()
+
+
+# --- 5. Première et dernière image : créées par l'image du Studio ou téléversées ---
+
+class _FauxRouteur:
+    """Remplace httpx.AsyncClient : rend `reponse` et garde la demande."""
+
+    def __init__(self, statut, corps, vu):
+        self.statut, self.corps, self.vu = statut, corps, vu
+
+    def __call__(self, *a, **k):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, headers=None, json=None):
+        self.vu.update(url=url, headers=headers, json=json)
+        statut, corps = self.statut, self.corps
+
+        class R:
+            status_code = statut
+
+            def json(self):
+                return corps
+        return R()
+
+
+def test_l_image_du_studio_passe_par_le_routeur(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    vu = {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteur(200, {"data": [{"url": "data:image/png;base64," + PNG}]}, vu))
+    r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "  une rue  mouillée "})
+    assert r.status_code == 200 and r.json()["image"].startswith("data:image/png;base64,")
+    assert vu["url"].endswith("/v1/images/generations")
+    assert vu["json"] == {"prompt": "une rue mouillée", "n": 1, "size": "1664x960"}
+    assert vu["headers"]["Authorization"] == "Bearer cle-routeur-de-test"
+
+
+def test_le_refus_de_l_image_est_dit(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteur(503, {"detail": "Ajoutez la clé Google."}, {}))
+    r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "x"})
+    assert r.status_code == 503 and "Ajoutez la clé Google." in r.json()["detail"]
+
+
+def test_sans_cle_du_routeur_on_propose_de_televerser(h3, monkeypatch):
+    monkeypatch.delenv("FREE_TIER_MANAGER_KEY", raising=False)
+    r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "x"})
+    assert r.status_code == 503 and "Téléversez" in r.json()["detail"]
+    assert client(h3).post("/video-h3/image", headers=CLE, json={"texte": " "}).status_code == 400
+
+
+def test_la_page_offre_creer_ou_televerser_pour_chaque_bord(h3):
+    html = client(h3).get("/video-h3").text
+    for nom in ("premiere", "derniere"):
+        assert 'name="source_' + nom + '" value="creer"' in html
+        assert 'name="source_' + nom + '" value="televerser"' in html
+        assert 'id="invite_' + nom + '"' in html and 'id="fichier_' + nom + '"' in html
+    # Les exemples des trois cases sont du vrai texte, modifiable, pas une indication grisée.
+    assert "placeholder=" not in html.split('id="image_paroles"', 1)[1].split(">", 1)[0]
+    assert client(h3).get("/video-h3/etat", headers=CLE).json()["taille"] == {"largeur": 832, "hauteur": 480}

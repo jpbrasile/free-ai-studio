@@ -154,6 +154,22 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "") -> str:
     return " ".join(morceaux)
 
 
+# --- La première et la dernière image, par l'image du Studio ------------------------
+
+# Une taille paysage : le routeur la traduit en 16:9 pour Google (aspect_ratio
+# de free-tier-manager). La page recadre ensuite en 832 x 480 sans déformer.
+TAILLE_IMAGE_DEMANDEE = "1664x960"
+
+
+def texte_image(texte: str) -> str:
+    t = " ".join(str(texte or "").split())
+    if not t:
+        raise ValueError("Décrivez l'image à créer.")
+    if len(t) > 2000:
+        raise ValueError("Description d'image trop longue (2 000 caractères au plus).")
+    return t
+
+
 # --- Le graphe ComfyUI -------------------------------------------------------------
 
 def _n(classe: str, entrees: dict) -> dict:
@@ -601,6 +617,9 @@ PAGE_HTML = r"""<!doctype html>
   .refus { color: #a40000; font-weight: 600; }
   button { font: inherit; padding: 8px 16px; margin-top: 12px; cursor: pointer; }
   video { width: 100%; margin-top: 10px; background: #000; }
+  .image_bord { border-top: 1px solid #eee; margin-top: 12px; padding-top: 8px; }
+  .image_bord label { font-weight: normal; }
+  .apercu { display: block; max-width: 100%; margin-top: 8px; border: 1px solid #ccc; }
   pre { white-space: pre-wrap; font-size: .8rem; max-height: 240px; overflow: auto; background: #f3f3f3; padding: 8px; }
 </style>
 </head>
@@ -634,18 +653,44 @@ PAGE_HTML = r"""<!doctype html>
   <label for="mode">Mode</label>
   <select id="mode"></select>
   <p class="note" id="mode_note"></p>
-  <div id="images_bloc" hidden>
-    <label for="images" id="images_titre">Images</label>
-    <input type="file" id="images" accept="image/png,image/jpeg,image/webp" multiple>
-    <p class="note" id="images_note"></p>
-  </div>
-
   <label for="image_paroles">1. Image et paroles</label>
-  <textarea id="image_paroles" placeholder="Une femme en manteau rouge marche sous la pluie à Paris, la nuit ; elle se retourne et dit : « On y est presque. »"></textarea>
+  <textarea id="image_paroles">Une femme en manteau rouge marche sous la pluie à Paris, la nuit ; elle se retourne et dit : « On y est presque. »</textarea>
   <label for="ambiance">2. Ambiance sonore</label>
-  <textarea id="ambiance" placeholder="Pluie, circulation au loin."></textarea>
-  <label for="musique">3. Musique</label>
-  <textarea id="musique" placeholder="(vide = pas de musique demandée)"></textarea>
+  <textarea id="ambiance">Pluie, circulation au loin.</textarea>
+  <label for="musique">3. Musique (effacez pour ne pas en demander)</label>
+  <textarea id="musique"></textarea>
+  <p class="note">Les trois textes sont des exemples : modifiez-les librement.</p>
+
+  <div class="image_bord" id="bord_premiere" hidden>
+    <b>Première image</b>
+    <label><input type="radio" name="source_premiere" value="creer" checked> La créer avec l'image du Studio (clé Google, gratuite)</label>
+    <label><input type="radio" name="source_premiere" value="televerser"> La téléverser</label>
+    <div class="creer">
+      <label for="invite_premiere">Description de l'image (préremplie d'après la case 1, modifiable)</label>
+      <textarea id="invite_premiere"></textarea>
+      <button id="creer_premiere">Créer l'image</button>
+    </div>
+    <div class="televerser" hidden><input type="file" id="fichier_premiere" accept="image/png,image/jpeg,image/webp"></div>
+    <img id="apercu_premiere" class="apercu" alt="" hidden>
+    <p class="note" id="etat_premiere"></p>
+  </div>
+  <div class="image_bord" id="bord_derniere" hidden>
+    <b>Dernière image</b>
+    <label><input type="radio" name="source_derniere" value="creer" checked> La créer avec l'image du Studio (clé Google, gratuite)</label>
+    <label><input type="radio" name="source_derniere" value="televerser"> La téléverser</label>
+    <div class="creer">
+      <label for="invite_derniere">Description de l'image (préremplie d'après la case 1, modifiable)</label>
+      <textarea id="invite_derniere"></textarea>
+      <button id="creer_derniere">Créer l'image</button>
+    </div>
+    <div class="televerser" hidden><input type="file" id="fichier_derniere" accept="image/png,image/jpeg,image/webp"></div>
+    <img id="apercu_derniere" class="apercu" alt="" hidden>
+    <p class="note" id="etat_derniere"></p>
+  </div>
+  <div id="references_bloc" hidden>
+    <label for="images">Images de référence (de 1 à 9)</label>
+    <input type="file" id="images" accept="image/png,image/jpeg,image/webp" multiple>
+  </div>
 
   <label for="longueur">Durée</label>
   <select id="longueur"></select>
@@ -684,14 +729,90 @@ function lireFichier(f){
   });
 }
 
+// Première et dernière image : créées par l'image du Studio ou téléversées,
+// puis recadrées à la taille du clip (sans déformation), ici, dans la page.
+const IMAGES = {premiere: null, derniere: null};
+const RETOUCHEE = {premiere: false, derniere: false};
+const PREFIXE = {
+  premiere: "Photo réaliste, cadrage paysage 16:9, image nette, début de la scène : ",
+  derniere: "Photo réaliste, cadrage paysage 16:9, image nette, même personnage et même décor, fin de la scène : "};
+
+function sansParoles(t){
+  // La description de l'image n'a que faire des répliques entre guillemets.
+  // Le verbe qui annonçait la réplique part avec elle (« … et dit : »).
+  return t.replace(/«[^»]*»/g, "").replace(/"[^"]*"/g, "")
+    .replace(/\s*(?:,\s*)?(?:\bet\s+)?\b(?:dit|demande|crie|murmure|chuchote|répond)\s*:\s*/gi, " ")
+    .replace(/\s+/g, " ").replace(/\s+([,.])/g, "$1").replace(/[\s,;:]+$/, "").trim();
+}
+
+function majInvitesImages(){
+  const base = sansParoles(document.getElementById("image_paroles").value);
+  for (const nom of ["premiere", "derniere"]){
+    if (!RETOUCHEE[nom]) document.getElementById("invite_" + nom).value = PREFIXE[nom] + base;
+  }
+}
+
+function recadrer(src){
+  return new Promise((ok, ko) => {
+    const im = new Image();
+    im.onload = () => {
+      const L = ETAT.taille.largeur, Ht = ETAT.taille.hauteur;
+      const c = document.createElement("canvas");
+      c.width = L; c.height = Ht;
+      const s = Math.max(L / im.width, Ht / im.height);
+      const w = im.width * s, h = im.height * s;
+      c.getContext("2d").drawImage(im, (L - w) / 2, (Ht - h) / 2, w, h);
+      ok(c.toDataURL("image/png"));
+    };
+    im.onerror = () => ko(new Error("image illisible"));
+    im.src = src;
+  });
+}
+
+function poserImage(nom, src){
+  return recadrer(src).then(png => {
+    IMAGES[nom] = png;
+    const a = document.getElementById("apercu_" + nom);
+    a.src = png;
+    a.hidden = false;
+    document.getElementById("etat_" + nom).textContent = "Image prête, recadrée en "
+      + ETAT.taille.largeur + " × " + ETAT.taille.hauteur + ".";
+  });
+}
+
+function brancherBord(nom){
+  for (const r of document.querySelectorAll('input[name="source_' + nom + '"]')){
+    r.addEventListener("change", () => {
+      const creer = document.querySelector('input[name="source_' + nom + '"]:checked').value === "creer";
+      const bord = document.getElementById("bord_" + nom);
+      bord.querySelector(".creer").hidden = !creer;
+      bord.querySelector(".televerser").hidden = creer;
+    });
+  }
+  document.getElementById("invite_" + nom).addEventListener("input", () => { RETOUCHEE[nom] = true; });
+  document.getElementById("fichier_" + nom).addEventListener("change", async (e) => {
+    const f = e.target.files[0];
+    if (f) await poserImage(nom, await lireFichier(f));
+  });
+  document.getElementById("creer_" + nom).addEventListener("click", async () => {
+    const etat = document.getElementById("etat_" + nom);
+    etat.className = "note";
+    etat.textContent = "Création de l'image (quelques secondes)…";
+    const r = await fetch("/video-h3/image", {method: "POST", headers: H,
+      body: JSON.stringify({texte: document.getElementById("invite_" + nom).value})});
+    const d = await r.json();
+    if (!r.ok){ etat.className = "refus"; etat.textContent = d.detail || "Refusé."; return; }
+    await poserImage(nom, d.image);
+  });
+}
+
 function majMode(){
-  const m = ETAT.modes[document.getElementById("mode").value];
+  const cle = document.getElementById("mode").value;
+  const m = ETAT.modes[cle];
   document.getElementById("mode_note").textContent = m.note + " Essayé le " + dateFr(m.essaye_le) + ".";
-  const bloc = document.getElementById("images_bloc");
-  bloc.hidden = m.images_max === 0;
-  document.getElementById("images_note").textContent = m.images_min === m.images_max
-    ? m.images_min + " image(s), dans l'ordre : première, puis dernière."
-    : "De " + m.images_min + " à " + m.images_max + " images.";
+  document.getElementById("bord_premiere").hidden = !(cle === "premiere" || cle === "premiere_derniere");
+  document.getElementById("bord_derniere").hidden = cle !== "premiere_derniere";
+  document.getElementById("references_bloc").hidden = cle !== "references";
 }
 
 function majPrix(){
@@ -811,9 +932,20 @@ document.getElementById("lancer").addEventListener("click", async () => {
   document.getElementById("resultat").hidden = true;
   document.getElementById("journal").hidden = true;
   const m = document.getElementById("mode").value;
-  const fichiers = ETAT.modes[m].images_max ? Array.from(document.getElementById("images").files) : [];
   const images = [];
-  for (const f of fichiers){ images.push(await lireFichier(f)); }
+  if (m === "references"){
+    for (const f of Array.from(document.getElementById("images").files)){ images.push(await lireFichier(f)); }
+  } else {
+    const noms = m === "premiere" ? ["premiere"] : m === "premiere_derniere" ? ["premiere", "derniere"] : [];
+    for (const nom of noms){
+      if (!IMAGES[nom]){
+        alerteTexte("Il manque la " + (nom === "premiere" ? "première" : "dernière")
+          + " image : créez-la ou téléversez-la.");
+        return;
+      }
+      images.push(IMAGES[nom]);
+    }
+  }
   const graine = document.getElementById("graine").value;
   const r = await fetch("/video-h3/creer", {method: "POST", headers: H, body: JSON.stringify({
     mode: m, images: images,
@@ -829,7 +961,10 @@ document.getElementById("lancer").addEventListener("click", async () => {
   suivre(d.id);
 });
 
-rafraichir();
+brancherBord("premiere");
+brancherBord("derniere");
+document.getElementById("image_paroles").addEventListener("input", majInvitesImages);
+rafraichir().then(majInvitesImages);
 </script>
 </body>
 </html>

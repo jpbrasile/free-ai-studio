@@ -3911,6 +3911,7 @@ def video_h3_etat(authorization: Optional[str] = Header(default=None)):
         "pire_cas_usd": video_h3.pire_cas(),
         "pire_cas_poids_usd": video_h3.pire_cas_poids(),
         "poids_go": video_h3.POIDS_GO,
+        "taille": {"largeur": video_h3.LARGEUR, "hauteur": video_h3.HAUTEUR},
         "autorisation": video_h3.autorisation_etat(),
         "poids": video_h3.poids_etat(),
         "modal_configure": modal_configured(),
@@ -3979,6 +3980,45 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     threading.Thread(target=run_video_h3, args=(jid, video_h3.construire_script(plan["demande"])),
                      daemon=True).start()
     return read_job(jid)
+
+
+@app.post("/video-h3/image")
+async def video_h3_image(request: Request, authorization: Optional[str] = Header(default=None)):
+    """La première ou la dernière image, par l'image du Studio (routeur, Gemini).
+
+    Demande du propriétaire, 27/09/2026 : créer ces images dans le Studio ou
+    les téléverser, au choix. Gratuit (palier gratuit de Google) ; rien n'est
+    loué. La page recadre ensuite l'image à la taille du clip.
+    """
+    auth(authorization)
+    corps = await request.json()
+    try:
+        texte = video_h3.texte_image(corps.get("texte", ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
+    if not cle:
+        raise HTTPException(503, "L'image du Studio n'est pas joignable d'ici : la clé interne du "
+                                 "routeur manque. Téléversez l'image à la place.")
+    try:
+        async with httpx.AsyncClient(timeout=200) as client:
+            r = await client.post(ROUTEUR_INTERNE + "/v1/images/generations",
+                                  headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
+                                  json={"prompt": texte, "n": 1, "size": video_h3.TAILLE_IMAGE_DEMANDEE})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "L'image du Studio ne répond pas (%s)." % type(exc).__name__) from exc
+    try:
+        d = r.json()
+    except ValueError:
+        d = {}
+    if r.status_code >= 400:
+        detail = d.get("detail") if isinstance(d.get("detail"), str) else "refus sans détail"
+        raise HTTPException(r.status_code if r.status_code in (400, 503) else 502,
+                            "L'image du Studio a refusé : " + detail)
+    images = [x.get("url") for x in d.get("data") or [] if str(x.get("url", "")).startswith("data:image/")]
+    if not images:
+        raise HTTPException(502, "L'image du Studio n'a rendu aucune image.")
+    return {"image": images[0]}
 
 
 @app.get("/video-h3", response_class=HTMLResponse)
