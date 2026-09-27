@@ -533,7 +533,8 @@ def plafond_de(usage: str) -> float:
 
 
 def verifier(usage: str, gpu: Optional[str], duree_max_s: int, memoire_mb: int,
-             quoi: str = "Ce calcul", suite: str = "") -> dict:
+             quoi: str = "Ce calcul", suite: str = "",
+             coeurs: Optional[float] = None) -> dict:
     """Refuse AVANT de lancer si le PIRE CAS depasse ce que cet usage peut prendre.
 
     Le pire cas, c'est le calcul qui va jusqu'au bout de son delai sans rien
@@ -541,7 +542,7 @@ def verifier(usage: str, gpu: Optional[str], duree_max_s: int, memoire_mb: int,
     combien de temps prendra le calcul.
     """
     etat = vue(usage)
-    pire = prix_seconde(gpu, memoire_mb) * duree_max_s
+    pire = prix_seconde(gpu, memoire_mb, coeurs) * duree_max_s
     plafond = etat["plafond_usd"]
     if etat["usd"] + pire > plafond:
         if usage == "autonome":
@@ -589,7 +590,8 @@ def poser(usage: str, secondes: float, usd: float, appels: int) -> None:
         _ecrire(etat)
 
 
-def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int) -> dict:
+def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int,
+              coeurs: Optional[float] = None) -> dict:
     """Encaisse le temps reellement passe, MEME si le calcul a echoue.
 
     Un calcul qui plante a la derniere minute a quand meme loue la carte pendant
@@ -607,7 +609,7 @@ def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int) 
     reel = _releve_reel()
     with _VERROU:
         etat = _relire()
-        depense = prix_seconde(gpu, memoire_mb) * secondes
+        depense = prix_seconde(gpu, memoire_mb, coeurs) * secondes
         etat["secondes"] += secondes
         etat["usd"] += depense
         etat["usd_par_usage"][usage] += depense

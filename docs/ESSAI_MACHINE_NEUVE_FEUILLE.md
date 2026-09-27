@@ -64,10 +64,10 @@ Pendant l'essai, c'est la personne qui récupère le dossier : cela fait partie 
 - **Veille de l'essai** : relever le commit de `main` sur GitHub (page du dépôt, identifiant
   court du dernier commit) : `____________`
 - **Après la tâche 1** : la page du Studio affiche « version installée » suivie de 7 caractères
-  (`free-tier-manager/app.py:3028` (`version installée`)). Elle les lit dans le dossier `.git`
+  (`free-tier-manager/app.py:3029` (`version installée`)). Elle les lit dans le dossier `.git`
   (`free-tier-manager/app.py:2507` (`lu directement dans .git`)). Relevé : `____________`
 - Dossier pris en ZIP : pas de `.git`, la page affiche « version inconnue »
-  (`free-tier-manager/app.py:3028` (`version inconnue`)). Garder alors le commit relevé la veille,
+  (`free-tier-manager/app.py:3029` (`version inconnue`)). Garder alors le commit relevé la veille,
   et écrire « ZIP » à côté.
 
 ---
@@ -201,7 +201,7 @@ Ce qui s'est affiché : ☐ une image ☐ du texte ☐ rien ☐ un message d'err
 > **Consigne à lire :** « Le Studio sait vérifier s'il va bien. Trouvez où, et dites-moi ce
 > qu'il affiche. »
 
-Le lien « Diagnostic » est sur la page du Studio (`free-tier-manager/app.py:2913` (`Diagnostic`)) ;
+Le lien « Diagnostic » est sur la page du Studio (`free-tier-manager/app.py:2914` (`Diagnostic`)) ;
 la page est `http://127.0.0.1:8010/diagnostic`.
 
 **Compte « oui »** : la personne ouvre la page Diagnostic et dit avec ses mots ce qu'elle

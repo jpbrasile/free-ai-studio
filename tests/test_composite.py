@@ -1784,8 +1784,10 @@ def test_les_briques_sans_route_sont_EXACTEMENT_celles_qu_on_a_nommees(registre)
     """
     dehors = {a["id"] for a in registre["applications"]
               if a["id"] not in composite.ROUTES}
+    # `video_h3` (27/09) : sa page a sa garde de licence et ses poids à préparer ;
+    # l'entrer dans les chaînes est de la V2 (PLAN.md, 18.9), pas un oubli.
     assert dehors == {"chat_secours_openrouter", "chat_secours_groq",
-                      "recherche_web"}, dehors
+                      "recherche_web", "video_h3"}, dehors
     # 13 avant « Prolonger la vidéo », 24/09 ; 14 avant le résumé NotebookLM, 26/09.
     assert len(composite.ROUTES) == 15, sorted(composite.ROUTES)
 

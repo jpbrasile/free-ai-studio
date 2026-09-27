@@ -85,11 +85,11 @@ décision** · **à faire**.
 
 | Phase | État réel | Preuve | Verdict | Sur `main` |
 |---|---|---|---|---|
-| **P0** Setup (VPS EU, Postgres, Forgejo+CI, sauvegardes, arrêt d'urgence) | **Rien dans ce dépôt** — et c'était la seule lecture d'une version antérieure de ce document. **Mais l'utilisateur possède déjà un VPS qui tourne**, avec Docker, Coolify, un **PostgreSQL** (Supabase auto-hébergé) et nginx, relevé le 19/09 dans les procédures d'un autre projet. **Il n'est simplement relié à rien ici.** L'arrêt d'urgence, lui, existe mais **par travail**, pas global : `POST /jobs/{jid}/arreter` | `sandbox-manager/app.py:1598` ; pour le VPS : `agentic-flow-fresh/.claude/skills/vps-claude/SKILL.md`, `pv-supabase/SKILL.md` | **partiel, et bien plus avancé qu'il n'y paraît** : le matériel de P0 existe, l'arrêt d'urgence ne répond pas à « Kill switch must stop **all** pipelines », et **la localisation européenne du VPS reste non vérifiée** alors que le plan l'exige | non |
+| **P0** Setup (VPS EU, Postgres, Forgejo+CI, sauvegardes, arrêt d'urgence) | **Rien dans ce dépôt** — et c'était la seule lecture d'une version antérieure de ce document. **Mais l'utilisateur possède déjà un VPS qui tourne**, avec Docker, Coolify, un **PostgreSQL** (Supabase auto-hébergé) et nginx, relevé le 19/09 dans les procédures d'un autre projet. **Il n'est simplement relié à rien ici.** L'arrêt d'urgence, lui, existe mais **par travail**, pas global : `POST /jobs/{jid}/arreter` | `sandbox-manager/app.py:1603` ; pour le VPS : `agentic-flow-fresh/.claude/skills/vps-claude/SKILL.md`, `pv-supabase/SKILL.md` | **partiel, et bien plus avancé qu'il n'y paraît** : le matériel de P0 existe, l'arrêt d'urgence ne répond pas à « Kill switch must stop **all** pipelines », et **la localisation européenne du VPS reste non vérifiée** alors que le plan l'exige | non |
 | **P1** Registry + Scan | `registry/` et `scan/` n'existent pas. Aucun schéma, aucune graine, aucune source de balayage | relevé de racine, 19/09 | à faire | — |
 | **P2** Gateway | La passerelle existe : chaîne `gemini → openrouter → groq`, bascule annoncée et non silencieuse, pause jusqu'à minuit Pacifique. Ce qui manque : elle **ne lit aucun registre**, et elle **ne compte rien d'avance** | `free-tier-manager/app.py:146` (`PROVIDERS`), `:251` (`LIMITES_PUBLIEES`), `:767` (`apply_rate_limit_cooldown`) | partiel — **et sur un point le réel réfute le plan** (ci-dessous) | en partie |
-| **P3** Runners | Quatre endroits d'exécution réels, dans cet ordre : `modal → local → kaggle → colab` (`sandbox-manager/app.py:879`, `:1451`). Pas de `llama.cpp`, **pas un seul LLM auto-hébergé** | `sandbox-manager/` | partiel | en partie |
-| **P4** Integrate + Evals + Gates | `integrate/`, `evals/`, `gates/` absents. Mais des barrières existent déjà comme code, sous d'autres noms : `budget_verifier` refuse **avant** de lancer, sur le pire cas, hors ligne (`video.py:187`, `chanson.py:203`, `dialogue.py:380`) ; `contexte_partage()` coupe Kaggle dès que le contexte devient partagé (`sandbox-manager/app.py:73`) ; `exiger_page_du_studio` ferme les routes sensibles côté serveur (`free-tier-manager/app.py:1820`, `sandbox-manager/app.py:159`) ; le chat refuse tout nom de modèle par un 403 **en configuration par défaut** (`:3521-3526`, sous `if FREE_ONLY or not ALLOW_PAID` — `FREE_ONLY` vaut `true` et `ALLOW_PAID_MODELS` `false` par défaut, `:29-30`) | voir colonne | **partiel sur les barrières, absent sur les évaluations** | en partie |
+| **P3** Runners | Quatre endroits d'exécution réels, dans cet ordre : `modal → local → kaggle → colab` (`sandbox-manager/app.py:884`, `:1451`). Pas de `llama.cpp`, **pas un seul LLM auto-hébergé** | `sandbox-manager/` | partiel | en partie |
+| **P4** Integrate + Evals + Gates | `integrate/`, `evals/`, `gates/` absents. Mais des barrières existent déjà comme code, sous d'autres noms : `budget_verifier` refuse **avant** de lancer, sur le pire cas, hors ligne (`video.py:187`, `chanson.py:203`, `dialogue.py:380`) ; `contexte_partage()` coupe Kaggle dès que le contexte devient partagé (`sandbox-manager/app.py:74`) ; `exiger_page_du_studio` ferme les routes sensibles côté serveur (`free-tier-manager/app.py:1820`, `sandbox-manager/app.py:161`) ; le chat refuse tout nom de modèle par un 403 **en configuration par défaut** (`:3521-3526`, sous `if FREE_ONLY or not ALLOW_PAID` — `FREE_ONLY` vaut `true` et `ALLOW_PAID_MODELS` `false` par défaut, `:29-30`) | voir colonne | **partiel sur les barrières, absent sur les évaluations** | en partie |
 | **P5** Expérience (20–30 candidats, zéro geste humain) | Jamais lancée. Aucun taux d'autonomie n'a jamais été mesuré | — | à faire | — |
 | **P6** Studio (« after P5 success ») | **Existe et tourne. C'est le seul livrable du plan qui existe** | tout le dépôt | **fait, hors séquence** | en partie |
 | **P7** Contributions | Rien. `CONTRIBUTING.md` existe mais ne décrit aucune soumission d'évaluation | `CONTRIBUTING.md` | à faire | — |
@@ -499,7 +499,7 @@ n'est donc pas, en soi, une faute.
 
 **Mais sa section `policy`, elle, décrit bien le Studio, et elle est fausse** : elle annonce
 `"fallback_manual": ["colab", "kaggle"]` alors que l'ordre réel du Studio est
-`["modal", "local", "kaggle", "colab"]`, **automatique** (`sandbox-manager/app.py:879`,
+`["modal", "local", "kaggle", "colab"]`, **automatique** (`sandbox-manager/app.py:884`,
 `:1451`). Kaggle y est donné pour manuel quand il est automatique, et `local` n'y figure
 pas du tout. À cela s'ajoute que **aucun code ne lit ce fichier** — la recherche de son nom
 dans `*.py`, `*.sh`, `*.ps1`, `*.yml`, `*.cmd` ne renvoie **aucune ligne** — alors
@@ -677,7 +677,7 @@ jusqu'au 08/09 et qu'il a écrite dans son code pour ne pas la refaire.
 Plus une première barrière réellement utile, reprise du plan d'origine (l. 81 : « Never
 retire a role's last working option ») : **« chaque fonction a au moins deux entrées
 vivantes »**. Aujourd'hui, le routeur *refuse bien* quand plus rien n'est branché — un 503
-avec le chemin vers la page Clés (`free-tier-manager/app.py:3559-3563`). **Mais il ne le
+avec le chemin vers la page Clés (`free-tier-manager/app.py:3560-3564`). **Mais il ne le
 découvre qu'au moment de la question.** Rien, ni au démarrage ni en CI, ne dit « ce rôle
 n'a plus qu'une seule option ». C'est cette alerte-là qui manque, pas le refus.
 
@@ -904,7 +904,7 @@ l'édition du registre, ni le budget de maintenance.
 d'administration doivent renvoyer un refus **côté serveur**, pas disparaître de la page.
 C'est la leçon que le dépôt a apprise le 16/09 en posant `exiger_page_du_studio` sur
 `/maj/lancer`, `/diagnostic/reparer` et `/cles/oublier` (`free-tier-manager/app.py:1820`,
-`sandbox-manager/app.py:159`). La forme existe ; il suffit de la réemployer.
+`sandbox-manager/app.py:161`). La forme existe ; il suffit de la réemployer.
 
 #### Un budget de maintenance, plafonné et ajustable
 
@@ -1793,7 +1793,7 @@ une de plus. **Il y en a déjà une septième, et elle est suivie par git.**
 > → Modal si configuré et si l'usage reste couvert par le crédit gratuit
 > ```
 
-**Le code fait l'inverse.** `sandbox-manager/app.py:879` pose
+**Le code fait l'inverse.** `sandbox-manager/app.py:884` pose
 `"fallback_order": ["modal", "local", "kaggle", "colab"]`, et la ligne suivante est
 `if modal_configured():`. **Modal passe en premier.** C'est la même erreur que celle déjà
 reprochée à `modal/profiles.json` — dans un fichier **plus gros, suivi par git, et que

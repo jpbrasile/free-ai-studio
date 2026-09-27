@@ -74,6 +74,7 @@ Les sections ci-dessus listent des **candidats** pour les carnets Colab/Kaggle. 
 | Vidéo, qualité « Rapide » (à la maison ou sur une machine louée) | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | local, modal, kaggle, colab | **non mesurée** |
 | Prolonger la vidéo de quelques secondes (machine louée) | `Wan-AI/Wan2.1-VACE-1.3B-diffusers` | modal, kaggle | **non mesurée** |
 | Vidéo fabriquée À LA MAISON, sur la carte de ce PC | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | local | 14,4 Go mesurés |
+| Vidéo H3 : image et son ensemble, quatre modes (texte seul, première image, première et dernière, références) | `Comfy-Org/MiniMax-H3` | modal | **non mesurée** |
 | Chanson | `m-a-p/YuE2-3B` | modal, kaggle, colab | **non mesurée** |
 | Dialogue à plusieurs voix | `FireRedTeam/FireRedTTS2` | modal, kaggle | **non mesurée** |
 

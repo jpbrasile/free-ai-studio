@@ -40,7 +40,7 @@ from pathlib import Path
 
 RACINE = Path(__file__).resolve().parent.parent
 BASE_DEFAUT = "http://127.0.0.1:8020"
-PAGES = ["/", "/essai", "/video", "/chanson", "/dialogue", "/composite"]
+PAGES = ["/", "/essai", "/video", "/video-h3", "/chanson", "/dialogue", "/composite"]
 
 # --- ce qu'on refuse dans le rendu -----------------------------------------
 # « 4.88 $ », « 15.00 $ » : le point décimal anglais devant l'unité.
@@ -90,6 +90,7 @@ MODULES = [
     "sandbox-manager/ou_calculer.py",
     "sandbox-manager/depenses.py",
     "sandbox-manager/video.py",
+    "sandbox-manager/video_h3.py",
     "sandbox-manager/chanson.py",
     "sandbox-manager/chanson_maison.py",
     "sandbox-manager/dialogue.py",

@@ -65,6 +65,7 @@ import notebooklm_pont
 import ou_calculer
 import poids_video
 import video
+import video_h3
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("sandbox-manager")
@@ -91,7 +92,8 @@ for _nom in ("uvicorn.access", "uvicorn.error"):
 app = FastAPI(title="Free AI Studio Sandbox Manager", version="2.0.0")
 # Les pages HTML de ce service : chacune recoit le bouton « 🏠 Studio ».
 # tests/test_accueil.py echoue si une page HTML manque ici.
-PAGES_HTML = ("/", "/notebooklm", "/cles", "/essai", "/video", "/chanson", "/dialogue", "/composite")
+PAGES_HTML = ("/", "/notebooklm", "/cles", "/essai", "/video", "/video-h3", "/chanson", "/dialogue",
+              "/composite")
 accueil.brancher(app, PAGES_HTML)
 
 KEY = os.getenv("SANDBOX_MANAGER_KEY", "").strip()
@@ -621,6 +623,7 @@ def modal_execute(
     volume: Optional[str] = None,
     point_de_montage: str = "/modeles",
     usage: Optional[str] = "autonome",
+    coeurs: Optional[float] = None,
 ) -> dict:
     """Execute du code sur une machine Modal.
 
@@ -667,7 +670,9 @@ def modal_execute(
     idle_timeout = max(1, int(os.getenv("MODAL_IDLE_TIMEOUT_SECONDS", "60")))
     if idle_timeout < sandbox_lifetime and timeout_s:
         idle_timeout = sandbox_lifetime
-    cpu = float(os.getenv("MODAL_CPU", "1.0"))
+    # `coeurs` : la video H3 charge 52 Go de poids, essayee avec 4 coeurs
+    # le 27/09/2026 ; les autres travaux gardent le reglage general.
+    cpu = float(coeurs) if coeurs else float(os.getenv("MODAL_CPU", "1.0"))
     memory = memory_mb or int(os.getenv("MODAL_MEMORY_MB", "2048"))
     gpu_name = (gpu_type or os.getenv("MODAL_GPU_DEFAULT", "T4")).strip() if gpu else None
     app_name = os.getenv("MODAL_APP_NAME", "free-ai-studio-sandbox").strip() or "free-ai-studio-sandbox"
@@ -679,7 +684,7 @@ def modal_execute(
     # budget_modal.prix_seconde() sait faire -- le compter au prix d'un H100
     # refuserait les travaux les moins chers du service.
     if usage:
-        budget_modal.verifier(usage, gpu_name, sandbox_lifetime, memory,
+        budget_modal.verifier(usage, gpu_name, sandbox_lifetime, memory, coeurs=cpu,
                               quoi="Ce travail sur Modal")
     sb = None
     loue_depuis = None
@@ -789,7 +794,7 @@ def modal_execute(
             # menteur -- c'est deja la regle des trois autres usages.
             try:
                 budget_modal.consommer(usage, gpu_name,
-                                       time.time() - loue_depuis, memory)
+                                       time.time() - loue_depuis, memory, coeurs=cpu)
             except Exception:
                 # Un compteur qui ne sait pas s'ecrire ne doit pas faire perdre
                 # le resultat d'un calcul qui, lui, a abouti.
@@ -3821,6 +3826,164 @@ def video_page():
         .replace("__OPTIONS_DUREE__", video.options_duree_html())
         .replace("__QUALITE_LOUEE__", video.QUALITE_LOUEE_PAR_DEFAUT)
         .replace("__CLE__", KEY)), "video"))
+
+
+# --- Video H3 -----------------------------------------------------------------
+# MiniMax H3 par ComfyUI, sur une machine louee chez Modal (PLAN.md, 18.9).
+# ComfyUI est sous GPL-3.0 : il tourne a part sur la machine louee, et le
+# script qu'on y envoie lui parle par HTTP. Rien de ComfyUI n'est importe ici.
+# Le detail (graphe, scripts, page, garde de licence) est dans video_h3.py.
+
+def run_video_h3(jid: str, code: str):
+    """Un clip H3 chez Modal ; le temps de location est encaisse meme en echec."""
+    debut = time.time()
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
+    write_job(jid, job)
+    try:
+        finish_execution(jid, "modal", modal_execute(
+            jid, code, True, True,
+            gpu_type=video_h3.GPU,
+            timeout_s=video_h3.DUREE_MAX_S,
+            memory_mb=video_h3.MEMOIRE_MB,
+            coeurs=video_h3.COEURS,
+            apt=video_h3.APT,
+            commandes=video_h3.COMMANDES,
+            volume=video_h3.VOLUME,
+            point_de_montage=video_h3.POINT_DE_MONTAGE,
+            # Compte juste en dessous, sur l'usage « video » : pas deux fois.
+            usage=None,
+        ))
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        etat = budget_modal.consommer("video", video_h3.GPU, time.time() - debut,
+                                      video_h3.MEMOIRE_MB, coeurs=video_h3.COEURS)
+        job = read_job(jid)
+        job["budget"] = etat
+        if job.get("status") == "failed" and not job.get("error"):
+            phrase = video_h3.phrase_d_echec(job.get("stderr", ""))
+            if phrase:
+                job["error"] = phrase
+        write_job(jid, job)
+
+
+def run_poids_h3(jid: str, code: str):
+    """Telecharge les poids vers le disque Modal, sur processeur seulement."""
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": time.time(), "provider_effective": "modal"})
+    write_job(jid, job)
+    try:
+        finish_execution(jid, "modal", modal_execute(
+            jid, code, False, True,
+            timeout_s=video_h3.POIDS_DUREE_MAX_S,
+            memory_mb=video_h3.POIDS_MEMOIRE_MB,
+            coeurs=video_h3.POIDS_COEURS,
+            paquets=video_h3.PAQUETS_POIDS,
+            volume=video_h3.VOLUME,
+            point_de_montage=video_h3.POINT_DE_MONTAGE,
+            # Compte par modal_execute lui-meme, avant et apres.
+            usage="video",
+        ))
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+    job = read_job(jid)
+    video_h3.poids_noter(job.get("status") == "succeeded",
+                         (job.get("stdout") or "")[-300:] if job.get("status") == "succeeded"
+                         else (job.get("error") or job.get("stderr") or "")[-300:])
+
+
+def _modal_ou_refus():
+    if not modal_configured():
+        raise HTTPException(503, "Modal n'est pas branche. Ouvrez la page « Brancher Modal "
+                                 "ou Kaggle » et collez les deux valeurs du jeton Modal.")
+
+
+@app.get("/video-h3/etat")
+def video_h3_etat(authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    return {
+        "budget": budget_modal.vue("video"),
+        "modes": video_h3.MODES,
+        "durees": video_h3.durees(),
+        "secondes_mesurees": video_h3.SECONDES_MESUREES[video_h3.LONGUEUR_PAR_DEFAUT],
+        "mesure_le": video_h3.MESURE_LE,
+        "pire_cas_usd": video_h3.pire_cas(),
+        "pire_cas_poids_usd": video_h3.pire_cas_poids(),
+        "poids_go": video_h3.POIDS_GO,
+        "autorisation": video_h3.autorisation_etat(),
+        "poids": video_h3.poids_etat(),
+        "modal_configure": modal_configured(),
+    }
+
+
+@app.post("/video-h3/autorisation")
+async def video_h3_autorisation(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    corps = await request.json()
+    try:
+        return video_h3.autorisation_poser(corps.get("copie", ""), corps.get("date_autorisation", ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/video-h3/poids/preparer")
+def video_h3_poids(authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    if not video_h3.autorisation_etat()["presente"]:
+        raise HTTPException(403, "Déposez d'abord la copie de votre autorisation MiniMax H3.")
+    _modal_ou_refus()
+    try:
+        budget_modal.verifier("video", None, video_h3.POIDS_DUREE_MAX_S, video_h3.POIDS_MEMOIRE_MB,
+                              quoi="Le téléchargement des poids", coeurs=video_h3.POIDS_COEURS)
+    except budget_modal.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+    jid = uuid.uuid4().hex
+    write_job(jid, {"id": jid, "provider": "modal", "title": "Poids H3", "gpu": False, "internet": True,
+                    "status": "queued", "created_at": time.time(), "artifacts": [],
+                    "titre": "Poids MiniMax H3"})
+    threading.Thread(target=run_poids_h3, args=(jid, video_h3.construire_script_poids()),
+                     daemon=True).start()
+    return read_job(jid)
+
+
+@app.post("/video-h3/creer")
+async def video_h3_creer(request: Request, authorization: Optional[str] = Header(default=None)):
+    auth(authorization)
+    payload = await request.json()
+    # LA GARDE DE LICENCE, AVANT TOUT : sans copie de l'autorisation de CE
+    # Studio, rien n'est loue (PLAN.md, 18.0).
+    if not video_h3.autorisation_etat()["presente"]:
+        raise HTTPException(403, "Aucune copie d'autorisation MiniMax H3 sur ce Studio : "
+                                 "déposez-la en haut de la page. Sans elle, H3 n'est pas permis ici.")
+    try:
+        plan = video_h3.preparer(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not video_h3.poids_etat()["prets"]:
+        raise HTTPException(409, "Les poids de H3 ne sont pas encore sur le disque Modal : "
+                                 "cliquez « Préparer les poids » (une fois).")
+    _modal_ou_refus()
+    try:
+        budget_modal.verifier("video", video_h3.GPU, video_h3.DUREE_MAX_S, video_h3.MEMOIRE_MB,
+                              quoi="Ce clip", coeurs=video_h3.COEURS)
+    except budget_modal.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid, "provider": "modal", "title": "Free AI Studio video H3", "gpu": True,
+        "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+        "video": plan["resume_public"],
+        "titre": (plan["resume_public"]["invite"][:60] or "Vidéo H3"),
+    })
+    threading.Thread(target=run_video_h3, args=(jid, video_h3.construire_script(plan["demande"])),
+                     daemon=True).start()
+    return read_job(jid)
+
+
+@app.get("/video-h3", response_class=HTMLResponse)
+def video_h3_page():
+    return HTMLResponse(format_fr.avec_formateurs(video_h3.PAGE_HTML.replace("__CLE__", KEY)))
 
 
 # --- Chanson ------------------------------------------------------------------

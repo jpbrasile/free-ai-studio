@@ -517,6 +517,7 @@ CLE_DE_LA_BRIQUE = {
     "dictee_groq": (COTE_ROUTEUR, "groq"),
     "video_rapide": (COTE_SANDBOX, None),
     "video_prolonger": (COTE_SANDBOX, None),
+    "video_h3": (COTE_SANDBOX, None),
     "chanson": (COTE_SANDBOX, None),
     "dialogue": (COTE_SANDBOX, None),
     # Pas une cle : une session Google, fermee dans le coffre par la page

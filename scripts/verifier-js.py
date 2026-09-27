@@ -37,7 +37,7 @@ PAGES = {
     # /dialogue manquait ici depuis la creation de la route : sa page porte du
     # JavaScript et n'avait jamais ete passee a node --check. Le verificateur
     # annoncait donc << 0 en echec >> sans l'avoir regardee.
-    "sandbox-manager": ["/", "/cles", "/video", "/chanson", "/dialogue", "/essai"],
+    "sandbox-manager": ["/", "/cles", "/video", "/video-h3", "/chanson", "/dialogue", "/essai"],
 }
 
 
@@ -71,7 +71,7 @@ def main() -> int:
             sources["%s %s" % (dossier, chemin)] = r.text
         for nom, html in chaines_html(module).items():
             sources["%s %s" % (dossier, nom)] = html
-    for nom_module in ("video", "chanson", "dialogue"):
+    for nom_module in ("video", "video_h3", "chanson", "dialogue"):
         module = sys.modules.get(nom_module)
         if module is not None:
             for nom, html in chaines_html(module).items():

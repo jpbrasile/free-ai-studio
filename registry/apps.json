@@ -330,6 +330,25 @@
       "note": "Place sur la carte MESURÉE, pas estimée : la mémoire libre qu'un vrai clip consomme, relevée durée par durée le 21/09/2026 et publiée avec sa provenance dans `sandbox-manager/ancres_video.py` (`ou_calculer.BESOIN_MO_MESURE`). Le chiffre ci-dessus est celui d'un clip de 3 s, et la place dépend de la longueur du clip : 11 771 Mo à 1 s, 14 751 à 3 s, 16 711 à 4 s, 20 451 à 8 s. Avec les 1 024 Mo de marge de la sonde, et la carte supposée entièrement libre : une carte de 12 Go ne peut fabriquer AUCUNE durée (même 1 s demande 12 795 Mo), une carte de 16 Go s'arrête à 3 s, et il faut 24 Go pour tout le menu. Détail et provenance : `docs/GPU-LOCAL.md`, section << Ce que la carte du client peut vraiment faire >>. Jusqu'au 21/09 ce champ annonçait 12,5 Go, qui était le compteur interne de torch et non la place prise sur la carte : 1,9 Go de moins que la réalité. Ce modèle n'a pas de VACE — l'image de fin et l'image de référence ne peuvent pas être fabriquées ici, elles partent chez le loueur et la page le dit."
     },
     {
+      "id": "video_h3",
+      "fonction": "Vidéo H3 : image et son ensemble, quatre modes (texte seul, première image, première et dernière, références)",
+      "capacite": "video_h3",
+      "entrees": ["texte", "image"],
+      "sorties": ["video"],
+      "fournisseur": "MiniMax (poids), Comfy-Org (fichiers INT8)",
+      "modele": "Comfy-Org/MiniMax-H3",
+      "nature": "modèle ouvert exécuté à distance sur une machine louée (A100), par ComfyUI lancé à part sur cette machine et piloté par HTTP (ComfyUI est sous GPL-3.0, jamais importé)",
+      "licence": "licence MiniMax H3 : autorisation écrite de MiniMax exigée",
+      "territoire": "exclut par défaut l'Union européenne, le Royaume-Uni et la Corée ; chaque Studio dépose la copie de sa propre autorisation, sinon la page refuse",
+      "vram_min_go": null,
+      "modes": ["modal"],
+      "cout": "Modal : environ 0,077 $ le clip de 5,2 s, estimé d'après 72,4 s de location mesurées le 27/09/2026 (clip texte seul, hors du Studio) au tarif du bac à sable relevé le 20/09/2026 ; les autres durées n'ont pas été essayées. Au pire 0,955 $ (délai de 900 s). Une fois : environ 52 Go de poids téléchargés sur processeur, au pire 0,38 $",
+      "cout_max_usd": 0.955,
+      "source": "https://huggingface.co/Comfy-Org/MiniMax-H3",
+      "verifie_le": "2026-09-27",
+      "code": "sandbox-manager/video_h3.py"
+    },
+    {
       "id": "chanson",
       "fonction": "Chanson",
       "capacite": "chanson",
