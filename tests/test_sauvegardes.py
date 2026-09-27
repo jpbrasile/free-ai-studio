@@ -254,7 +254,9 @@ def test_la_rotation_est_demandee_ne_vise_que_les_sauvegardes_du_projet_et_garde
 
 def test_le_document_decrit_la_procedure_sans_toucher_a_l_echeance():
     assert "## La procédure" in DOC
-    assert "<!-- echeance: restauration-sauvegardes | butoir: 2026-10-31 | etat: en-attente -->" in DOC
+    # Tenue le 27/09/2026 (essai de restauration avec la cle du coffre) : la
+    # ligne garde son butoir et porte une preuve datee ; plus « en-attente ».
+    assert "<!-- echeance: restauration-sauvegardes | butoir: 2026-10-31 | etat: tenue | preuve: 2026-09-27, " in DOC
     # Une seule ligne d'echeance : l'exemple de preuve ne doit pas en former une seconde.
     assert DOC.count("<!--") == 1
     for script in ("scripts/sauvegarder.ps1", "scripts/restaurer.ps1"):

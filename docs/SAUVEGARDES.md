@@ -497,3 +497,9 @@ Premier essai **avec** la clé ; celui du 26/09 était sans (`-SansCle`).
 
 **Leçon** : pour qu'un PC neuf retrouve OpenRouter, `.env` doit aussi être dans le gestionnaire
 Google (fiche « Studio - .env », section « Où les trouver, précisément »).
+
+Le propriétaire, administrateur, a aussi **FreeLLMAPI** (application de bureau sur ce poste,
+port 31415, qui regroupe plus de services gratuits qu'OpenRouter). Le Studio ne s'en sert
+pas au 27/09. Ses deux clés vont aussi dans le gestionnaire Google, sinon un PC neuf les
+perd : la licence Premium `fla_…` (écran Licence de l'application) et le jeton
+`freellmapi-…` (page Keys de l'application), par exemple sur le site `freellmapi.local`.
