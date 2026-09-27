@@ -105,6 +105,39 @@ MODES = {
                    "note": "Une nouvelle scène avec le même personnage. Essayé avec une seule "
                            "image de référence ; jusqu'à 9 acceptées par le modèle."},
 }
+# --- Prolonger un clip ---------------------------------------------------------------
+# Par défaut, le plan suivant part de la DERNIÈRE IMAGE du précédent (mode
+# « première image »), puis le Studio recolle les deux, son compris, en retirant
+# l'image qui se montrerait deux fois. Rien de plus n'est installé.
+#
+# En option (H3_MOTION_CONTEXT=true, décision du propriétaire le 27/09 :
+# « autoriser en option sinon dernière image ») : « par tronçon ». Le plan suivant
+# reprend 22 images et 1 s de son du précédent, pris dans son latent gardé sur le
+# disque Modal, par le nœud ComfyUI-H3-Motion-Context (NikoDemon80, GPL-3.0,
+# essayé hors du Studio le 27/09). Cloné dans la machine louée au commit relu,
+# appelé par le graphe, jamais importé ici.
+MC_DEPOT = "https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context"
+MC_COMMIT = "5335715abe54c1a9bfbe3494da29aae3e8635ce3"   # relu le 27/09/2026
+COMMANDES_MC = (
+    f"git clone {MC_DEPOT} {DOSSIER_COMFY}/custom_nodes/h3_motion_context",
+    f"cd {DOSSIER_COMFY}/custom_nodes/h3_motion_context && git checkout {MC_COMMIT}",
+)
+CONTEXTE_IMAGES, CONTEXTE_SON = "22", 24   # réglage recommandé par le nœud, celui de l'essai
+# Au-delà de ~4 raccords la texture se dégrade (limite connue, PLAN 18.x) :
+# 4 plans au plus par chaîne, puis on repart d'une image.
+PLANS_MAX = 4
+DOSSIER_CHAINES = POINT_DE_MONTAGE + "/chaines"
+
+
+def motion_context_actif() -> bool:
+    return os.getenv("H3_MOTION_CONTEXT", "false").strip().lower() == "true"
+
+
+def commandes() -> tuple:
+    """Ce qui construit la machine louée ; le nœud tiers seulement si l'option est mise."""
+    return COMMANDES + (COMMANDES_MC if motion_context_actif() else ())
+
+
 COUPES = (0.0, 0.25, 0.5)   # secondes retirées au début, par ffmpeg
 IMAGE_MAX_OCTETS = 8 * 1024 * 1024
 IMAGES_MAX_OCTETS = 24 * 1024 * 1024
@@ -240,6 +273,41 @@ def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0
     return g
 
 
+NOEUDS_TRONCON = ("MiniMaxH3MotionContextLoadLatent", "MiniMaxH3MotionContext",
+                  "MiniMaxH3MotionContextTrim")
+
+
+def graphe_troncon(texte: str, longueur: int, graine: int, contexte: str) -> dict:
+    """Le plan suivant par tronçon : le graphe de l'essai du 27/09 (branche b).
+
+    Le latent du plan précédent est relu sur le disque Modal ; le nœud en épingle
+    la fin (22 images, 1 s de son) au début du nouveau plan, puis Trim retire ces
+    images reprises, et le son qui va avec, du plan livré.
+    """
+    g = graphe("texte", texte, longueur, graine)
+    g["30"] = _n("MiniMaxH3MotionContextLoadLatent", {"latent_path": contexte, "clip_index": 1})
+    g["31"] = _n("MiniMaxH3MotionContext", {
+        "conditioning": ["10", 0], "vae": ["4", 0], "latent": ["10", 1], "context_latent": ["30", 0],
+        "audio_vae": ["5", 0], "context_length": CONTEXTE_IMAGES, "audio_context_length": CONTEXTE_SON})
+    g["13"]["inputs"]["conditioning"] = ["31", 0]
+    g["32"] = _n("MiniMaxH3MotionContextTrim", {"images": ["15", 0], "audio": ["16", 0],
+                                                 "trim_frames": ["31", 1], "fps": float(IMAGES_PAR_SECONDE)})
+    g["17"]["inputs"].update({"images": ["32", 0], "audio": ["32", 1]})
+    return g
+
+
+def garder_latent(demande: dict, jid: str) -> dict:
+    """Option tronçon : le latent de ce clip reste sur le disque Modal, pour le
+    plan qui le prolongera. Sans l'option, rien n'est ajouté au graphe."""
+    if not motion_context_actif():
+        return demande
+    demande["graphe"]["19"] = _n("MiniMaxH3MotionContextSaveLatent", {
+        "latent": ["14", 0], "filename_prefix": "h3_context/clip", "clip_index": 1})
+    demande["classes"] = list(demande["classes"]) + ["MiniMaxH3MotionContextSaveLatent"]
+    demande["latent_vers"] = f"{DOSSIER_CHAINES}/{jid}.safetensors"
+    return demande
+
+
 # --- La demande ------------------------------------------------------------------
 
 def _image(b64: str, quoi: str) -> str:
@@ -347,6 +415,47 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     }
 
 
+def voie_prolonger(precedent: dict) -> str:
+    """« troncon » si l'option est mise ET que le clip a gardé son latent ; sinon « image »."""
+    v = precedent.get("video") or {}
+    return "troncon" if motion_context_actif() and v.get("latent_vers") else "image"
+
+
+def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[str] = None,
+                       graine_hasard=None) -> dict:
+    """Le plan qui suit un clip H3 réussi. Mêmes contrôles que `preparer` ;
+    la page envoie les trois cases de la suite, la durée et la graine."""
+    v = precedent.get("video") or {}
+    if not str(v.get("moteur", "")).startswith("MiniMax H3"):
+        raise ValueError("Seul un clip H3 se prolonge ici.")
+    if precedent.get("status") != "succeeded":
+        raise ValueError("Ce clip n'est pas réussi : rien à prolonger.")
+    plans = int(v.get("plans") or 1)
+    if plans >= PLANS_MAX:
+        raise ValueError(f"Cette chaîne a déjà {PLANS_MAX} plans : au-delà, l'image se dégrade. "
+                         "Repartez d'une image.")
+    voie = voie_prolonger(precedent)
+    base = dict(payload, coupe_s=0)
+    if voie == "troncon":
+        plan = preparer(dict(base, mode="texte", images=[]), graine_hasard)
+        d = plan["demande"]
+        d["graphe"] = graphe_troncon(plan["resume_public"]["invite"], d["longueur"], d["graine"],
+                                     v["latent_vers"])
+        d["classes"] = [MODES["texte"]["noeud"], *NOEUDS_TRONCON]
+        d["contexte"] = v["latent_vers"]
+    else:
+        if not derniere_b64:
+            raise ValueError("La dernière image du clip est illisible.")
+        plan = preparer(dict(base, mode="premiere", images=[derniere_b64]), graine_hasard)
+    plan["demande"]["mode"] = "prolonger"
+    plan["resume_public"].update({
+        "mode": "prolonger",
+        "mode_titre": "Prolonger " + ("par tronçon" if voie == "troncon" else "par la dernière image"),
+        "voie": voie, "precedent": str(precedent.get("id", "")), "plans": plans + 1,
+    })
+    return plan
+
+
 # --- La garde de licence ---------------------------------------------------------
 
 DOSSIER_AUTORISATION = budget_modal.CONFIG_DIR / "h3-autorisation"
@@ -441,6 +550,9 @@ def phrase_d_echec(stderr: str) -> str:
         return "ComfyUI s'est arrêté pendant le calcul (mémoire ?). Le détail est dans le journal."
     if "DELAI" in s:
         return "Le clip n'était pas fini avant le délai. Rien n'a été rendu."
+    if "CONTEXTE_ABSENT" in s:
+        return ("La fin du clip précédent n'est plus sur le disque Modal : prolongez-le par "
+                "la dernière image (option « tronçon » éteinte), ou repartez d'une image.")
     return ""
 
 
@@ -463,6 +575,9 @@ manque = [f for f in D["fichiers"] if not (BASE / f).is_file()]
 if manque:
     print("POIDS_ABSENTS " + ", ".join(manque), file=sys.stderr)
     sys.exit(3)
+if D.get("contexte") and not Path(D["contexte"]).is_file():
+    print("CONTEXTE_ABSENT " + D["contexte"], file=sys.stderr)
+    sys.exit(10)
 
 Path("/tmp/chemins.yaml").write_text(
     "h3:\n  base_path: " + str(BASE) + "\n  diffusion_models: diffusion_models\n"
@@ -551,9 +666,22 @@ if D["coupe_s"] > 0:
 else:
     shutil.copyfile(clips[-1], OUT / "video.mp4")
 proc.kill()
+latent_garde = False
+if D.get("latent_vers"):
+    # Le latent reste sur le disque Modal pour le plan suivant. Son absence
+    # n'annule pas le clip : on ne pourra le prolonger que par la dernière image.
+    latents = sorted(Path("/tmp/sortie/h3_context").glob("clip_*.safetensors"))
+    if latents:
+        Path(D["latent_vers"]).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(latents[-1], D["latent_vers"])
+        subprocess.run(["sync"], check=False)
+        latent_garde = True
+    else:
+        print("LATENT_NON_GARDE", file=sys.stderr)
 (OUT / "resume.json").write_text(json.dumps({
     "moteur": "MiniMax H3, ComfyUI " + D["comfy_version"], "mode": D["mode"],
     "images": D["longueur"], "graine": D["graine"], "coupe_s": D["coupe_s"],
+    "latent_garde": latent_garde,
     "demarrage_comfy_s": round(t_pret - t0, 1), "calcul_s": calcul_s,
     "total_s": round(time.time() - t0, 1)}, ensure_ascii=False))
 print("ok", calcul_s, "s de calcul")
@@ -719,6 +847,10 @@ PAGE_HTML = r"""<!doctype html>
     <video id="lecteur" controls playsinline></video>
     <p><a id="telecharger" href="#">Enregistrer le clip</a></p>
     <p class="note" id="fiche"></p>
+    <div id="prolonger_bloc" hidden>
+      <p class="note" id="prolonger_note"></p>
+      <button id="prolonger">Prolonger ce clip</button>
+    </div>
   </div>
   <pre id="journal" hidden></pre>
 </div>
@@ -882,9 +1014,17 @@ function suivre(jid){
       document.getElementById("lecteur").src = j.video_url;
       document.getElementById("telecharger").href = j.video_url + "&telecharger=1&nom=clip-h3";
       const r = j.resume || {};
+      const v = j.video || {};
       document.getElementById("fiche").textContent = "Graine " + r.graine + " ; " + fr(r.calcul_s, 0)
-        + " s de calcul, " + fr(r.total_s, 0) + " s en tout.";
+        + " s de calcul, " + fr(r.total_s, 0) + " s de location."
+        + (v.plans ? " Chaîne de " + v.plans + " plans, " + fr(v.secondes, 1) + " s en tout." : "");
+      majProlonger(jid, v, r);
       rafraichir();
+      return;
+    }
+    if (j.etape === "recollage"){
+      st.textContent = "Plan rendu ; le Studio le recolle au clip précédent…";
+      setTimeout(() => suivre(jid), 3000);
       return;
     }
     if (j.status === "failed"){
@@ -926,6 +1066,47 @@ document.getElementById("poids_preparer").addEventListener("click", async () => 
     setTimeout(attendre, 10000);
   });
   attendre();
+});
+
+// Prolonger : le clip affiché devient le début de la chaîne. Les trois cases,
+// la durée et la graine décrivent le plan suivant.
+let PRECEDENT = null;
+
+function majProlonger(jid, v, r){
+  const bloc = document.getElementById("prolonger_bloc");
+  const plans = v.plans || 1, max = ETAT.prolonger.plans_max;
+  PRECEDENT = jid;
+  bloc.hidden = false;
+  const btn = document.getElementById("prolonger");
+  btn.disabled = plans >= max;
+  const troncon = ETAT.prolonger.par_troncon && v.latent_vers && r.latent_garde;
+  document.getElementById("prolonger_note").textContent = plans >= max
+    ? "Cette chaîne a " + plans + " plans, le maximum : au-delà, l'image se dégrade. Repartez d'une image."
+    : "Plan " + plans + " sur " + max + ". Réécrivez les trois cases pour la suite, puis prolongez. "
+      + (troncon
+        ? "Par tronçon : le plan suivant reprend 22 images et 1 s de son de celui-ci."
+        : "Par la dernière image : le plan suivant part de la dernière image de celui-ci ; "
+          + "le mouvement et le son ne sont pas repris à la jointure.")
+      + " Même prix qu'un clip.";
+}
+
+document.getElementById("prolonger").addEventListener("click", async () => {
+  const st = document.getElementById("statut");
+  st.className = "note";
+  document.getElementById("journal").hidden = true;
+  const graine = document.getElementById("graine").value;
+  const r = await fetch("/video-h3/prolonger", {method: "POST", headers: H, body: JSON.stringify({
+    precedent: PRECEDENT,
+    image_paroles: document.getElementById("image_paroles").value,
+    ambiance: document.getElementById("ambiance").value,
+    musique: document.getElementById("musique").value,
+    longueur: Number(document.getElementById("longueur").value),
+    graine: graine === "" ? null : Number(graine)})});
+  const d = await r.json();
+  if (!r.ok){ alerteTexte(typeof d.detail === "string" ? d.detail : "Refusé."); return; }
+  document.getElementById("resultat").hidden = true;
+  st.textContent = "Plan suivant lancé.";
+  suivre(d.id);
 });
 
 function alerteTexte(t){

@@ -61,6 +61,7 @@ import nettoyage_dialogue
 # NotebookLM par notebooklm-py : session Google fermee dans le coffre
 # (PLAN.md 17.6). La bibliotheque elle-meme n'est chargee qu'a l'usage.
 import mesures
+import montage
 import notebooklm_pont
 import ou_calculer
 import poids_video
@@ -3771,6 +3772,8 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
             if job.get("status") == "failed" else ""),
         # Ce que le bouton d'arret a vraiment fait, dit par la page vidéo.
         "arret_detail": job.get("arret_detail") or "",
+        # « recollage » : le plan H3 prolongé est rendu, le Studio le recolle.
+        "etape": job.get("etape") or "",
         "video": job.get("video"),
         # Ou ce clip a ete fabrique, et pourquoi la. Deux mots sur la page,
         # et de quoi ne pas refaire le raisonnement six mois plus tard.
@@ -3834,8 +3837,11 @@ def video_page():
 # script qu'on y envoie lui parle par HTTP. Rien de ComfyUI n'est importe ici.
 # Le detail (graphe, scripts, page, garde de licence) est dans video_h3.py.
 
-def run_video_h3(jid: str, code: str):
-    """Un clip H3 chez Modal ; le temps de location est encaisse meme en echec."""
+def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: int = 0):
+    """Un clip H3 chez Modal ; le temps de location est encaisse meme en echec.
+
+    Avec `precedent` (prolonger), le plan rendu est recolle apres le clip
+    precedent, son compris, et la video du travail devient la chaine entiere."""
     debut = time.time()
     job = read_job(jid)
     job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
@@ -3848,7 +3854,7 @@ def run_video_h3(jid: str, code: str):
             memory_mb=video_h3.MEMOIRE_MB,
             coeurs=video_h3.COEURS,
             apt=video_h3.APT,
-            commandes=video_h3.COMMANDES,
+            commandes=video_h3.commandes(),
             volume=video_h3.VOLUME,
             point_de_montage=video_h3.POINT_DE_MONTAGE,
             # Compte juste en dessous, sur l'usage « video » : pas deux fois.
@@ -3865,7 +3871,43 @@ def run_video_h3(jid: str, code: str):
             phrase = video_h3.phrase_d_echec(job.get("stderr", ""))
             if phrase:
                 job["error"] = phrase
+        a_recoller = bool(precedent) and job.get("status") == "succeeded"
+        if a_recoller:
+            # Pas « réussi » avant le recollage : la page montrerait le plan seul.
+            job.update({"status": "running", "etape": "recollage"})
         write_job(jid, job)
+    if a_recoller:
+        recoller_h3(jid, precedent, retirer)
+
+
+def _video_h3_octets(jid: str) -> Optional[Path]:
+    art = video_fichiers(jid).get("video")
+    if not art:
+        return None
+    chemin = ART / art["path"]
+    return chemin if chemin.is_file() and not chemin.is_symlink() else None
+
+
+def recoller_h3(jid: str, precedent: str, retirer: int):
+    """Le plan neuf va apres la chaine precedente ; la video du travail devient
+    la chaine entiere. Un montage rate fait echouer le travail, avec sa phrase :
+    montrer le plan seul le ferait passer pour la chaine."""
+    job = read_job(jid)
+    avant, plan = _video_h3_octets(precedent), _video_h3_octets(jid)
+    try:
+        if not avant or not plan:
+            raise montage.MontageImpossible("Le clip précédent ou le plan neuf est introuvable.")
+        chaine = montage.recoller_son(avant.read_bytes(), plan.read_bytes(), retirer)
+    except montage.MontageImpossible as exc:
+        job.update({"status": "failed", "error": str(exc), "etape": ""})
+        write_job(jid, job)
+        return
+    plan.write_bytes(chaine)
+    video = job.get("video") or {}
+    # Compte sur la chaine rendue : le plan par troncon arrive deja raccourci.
+    video["secondes"] = round(montage.images(plan) / video_h3.IMAGES_PAR_SECONDE, 2)
+    job.update({"video": video, "status": "succeeded", "etape": ""})
+    write_job(jid, job)
 
 
 def run_poids_h3(jid: str, code: str):
@@ -3923,6 +3965,7 @@ def video_h3_etat(authorization: Optional[str] = Header(default=None)):
         "autorisation": video_h3.autorisation_etat(),
         "poids": video_h3.poids_etat(),
         "modal_configure": modal_configured(),
+        "prolonger": {"par_troncon": video_h3.motion_context_actif(), "plans_max": video_h3.PLANS_MAX},
     }
 
 
@@ -3963,15 +4006,24 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     _h3_ou_404()
     auth(authorization)
     payload = await request.json()
+    _garde_licence_h3()
+    try:
+        plan = video_h3.preparer(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _lancer_h3(plan)
+
+
+def _garde_licence_h3():
     # LA GARDE DE LICENCE, AVANT TOUT : sans copie de l'autorisation de CE
     # Studio, rien n'est loue (PLAN.md, 18.0).
     if not video_h3.autorisation_etat()["presente"]:
         raise HTTPException(403, "Aucune copie d'autorisation MiniMax H3 sur ce Studio : "
                                  "déposez-la en haut de la page. Sans elle, H3 n'est pas permis ici.")
-    try:
-        plan = video_h3.preparer(payload)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
+
+
+def _lancer_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
+    """Poids, Modal, budget ; puis le travail part. Commun a creer et prolonger."""
     if not video_h3.poids_etat()["prets"]:
         raise HTTPException(409, "Les poids de H3 ne sont pas encore sur le disque Modal : "
                                  "cliquez « Préparer les poids » (une fois).")
@@ -3982,26 +4034,63 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     except budget_modal.BudgetDepasse as exc:
         raise HTTPException(429, str(exc)) from exc
     jid = uuid.uuid4().hex
+    demande = video_h3.garder_latent(plan["demande"], jid)
+    resume = dict(plan["resume_public"])
+    if demande.get("latent_vers"):
+        resume["latent_vers"] = demande["latent_vers"]
     write_job(jid, {
         "id": jid, "provider": "modal", "title": "Free AI Studio video H3", "gpu": True,
         "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
-        "video": plan["resume_public"],
-        "titre": (plan["resume_public"]["invite"][:60] or "Vidéo H3"),
+        "video": resume,
+        "titre": (resume["invite"][:60] or "Vidéo H3"),
     })
-    threading.Thread(target=run_video_h3, args=(jid, video_h3.construire_script(plan["demande"])),
+    threading.Thread(target=run_video_h3, args=(jid, video_h3.construire_script(demande), precedent, retirer),
                      daemon=True).start()
     return read_job(jid)
 
 
+@app.post("/video-h3/prolonger")
+async def video_h3_prolonger(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Un plan de plus après un clip H3 réussi (PLAN 18.9, V2).
+
+    Par la dernière image du clip par défaut ; par tronçon si l'option
+    H3_MOTION_CONTEXT est mise et que le clip a gardé son latent."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    payload = await request.json()
+    precedent = str(payload.get("precedent") or "")
+    if not re.fullmatch(r"[0-9a-f]{32}", precedent):
+        raise HTTPException(400, "Clip à prolonger illisible.")
+    try:
+        avant = read_job(precedent)
+    except HTTPException as exc:
+        raise HTTPException(404, "Ce clip n'existe plus sur ce Studio.") from exc
+    derniere = None
+    if video_h3.voie_prolonger(avant) == "image" and avant.get("status") == "succeeded":
+        chemin = _video_h3_octets(precedent)
+        if not chemin:
+            raise HTTPException(404, "La vidéo de ce clip n'est plus sur ce Studio.")
+        try:
+            derniere = base64.b64encode(montage.derniere_image(chemin.read_bytes())).decode()
+        except montage.MontageImpossible as exc:
+            raise HTTPException(503, str(exc)) from exc
+    try:
+        plan = video_h3.preparer_prolonger(payload, avant, derniere)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _lancer_h3(plan, precedent, retirer=1 if plan["resume_public"]["voie"] == "image" else 0)
+
+
 @app.post("/video-h3/image")
 async def video_h3_image(request: Request, authorization: Optional[str] = Header(default=None)):
-    _h3_ou_404()
     """La première ou la dernière image, par l'image du Studio (routeur, Gemini).
 
     Demande du propriétaire, 27/09/2026 : créer ces images dans le Studio ou
     les téléverser, au choix. Gratuit (palier gratuit de Google) ; rien n'est
     loué. La page recadre ensuite l'image à la taille du clip.
     """
+    _h3_ou_404()
     auth(authorization)
     corps = await request.json()
     try:

@@ -7,6 +7,8 @@ que rien de ComfyUI (GPL-3.0) n'est importé par le code du Studio.
 import ast
 import base64
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -372,3 +374,182 @@ def test_la_page_offre_creer_ou_televerser_pour_chaque_bord(h3):
     # Les exemples des trois cases sont du vrai texte, modifiable, pas une indication grisée.
     assert "placeholder=" not in html.split('id="image_paroles"', 1)[1].split(">", 1)[0]
     assert client(h3).get("/video-h3/etat", headers=CLE).json()["taille"] == {"largeur": 832, "hauteur": 480}
+
+
+# --- 6. Prolonger (V2) : par la dernière image, ou par tronçon en option --------------
+
+def _clip_reussi(h3, jid="b" * 32, **video):
+    v = {"moteur": "MiniMax H3 (ComfyUI v0.37.0)", "mode": "premiere", "secondes": 5.17}
+    v.update(video)
+    job = {"id": jid, "status": "succeeded", "artifacts": [], "video": v}
+    h3.write_job(jid, job)
+    return job
+
+
+def test_sans_l_option_rien_de_tiers_n_entre_dans_la_machine(h3, monkeypatch):
+    v = h3.video_h3
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    assert v.commandes() == v.COMMANDES
+    assert not any("Motion-Context" in c for c in v.commandes())
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    assert v.commandes()[-1].endswith("git checkout " + v.MC_COMMIT)
+
+
+def test_sans_l_option_on_prolonge_par_la_derniere_image(h3, monkeypatch):
+    v = h3.video_h3
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    avant = _clip_reussi(h3, latent_vers="/poids/chaines/x.safetensors")
+    plan = v.preparer_prolonger(demande(coupe_s=0.5), avant, PNG)
+    g, d = plan["demande"]["graphe"], plan["demande"]
+    assert g["10"]["inputs"]["first_frame"] == ["60", 0] and list(d["images"]) == ["premiere.png"]
+    assert not any(n["class_type"].startswith("MiniMaxH3MotionContext") for n in g.values())
+    assert d["mode"] == "prolonger" and d["coupe_s"] == 0 and "contexte" not in d
+    r = plan["resume_public"]
+    assert r["voie"] == "image" and r["plans"] == 2 and r["precedent"] == "b" * 32
+    assert v.garder_latent(d, "c" * 32) is d and "latent_vers" not in d
+
+
+def test_avec_l_option_on_prolonge_par_troncon(h3, monkeypatch):
+    v = h3.video_h3
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors", plans=2)
+    plan = v.preparer_prolonger(demande(), avant)
+    g, d = plan["demande"]["graphe"], plan["demande"]
+    assert g["30"]["inputs"] == {"latent_path": avant["video"]["latent_vers"], "clip_index": 1}
+    mc = g["31"]["inputs"]
+    assert mc["context_latent"] == ["30", 0] and mc["latent"] == ["10", 1] and mc["audio_vae"] == ["5", 0]
+    assert (mc["context_length"], mc["audio_context_length"]) == ("22", 24)
+    assert g["13"]["inputs"]["conditioning"] == ["31", 0]
+    assert g["32"]["inputs"]["trim_frames"] == ["31", 1]
+    assert g["17"]["inputs"]["images"] == ["32", 0] and g["17"]["inputs"]["audio"] == ["32", 1]
+    assert "first_frame" not in g["10"]["inputs"] and d["images"] == {}
+    assert d["contexte"] == avant["video"]["latent_vers"]
+    assert set(v.NOEUDS_TRONCON) <= set(d["classes"])
+    assert plan["resume_public"]["voie"] == "troncon" and plan["resume_public"]["plans"] == 3
+    # Et ce plan garde à son tour son latent pour le suivant.
+    v.garder_latent(d, "c" * 32)
+    assert g["19"]["class_type"] == "MiniMaxH3MotionContextSaveLatent"
+    assert g["19"]["inputs"]["latent"] == ["14", 0]
+    assert d["latent_vers"] == "/poids/chaines/" + "c" * 32 + ".safetensors"
+
+
+def test_un_clip_sans_latent_garde_se_prolonge_par_l_image_meme_avec_l_option(h3, monkeypatch):
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    assert h3.video_h3.voie_prolonger(_clip_reussi(h3)) == "image"
+
+
+@pytest.mark.parametrize("video,statut,message", [
+    ({"moteur": "Wan 2.1"}, "succeeded", "clip H3"),
+    ({}, "failed", "pas réussi"),
+    ({"plans": 4}, "succeeded", "4 plans"),
+])
+def test_ce_qui_ne_se_prolonge_pas_est_refuse(h3, video, statut, message):
+    avant = _clip_reussi(h3, **video)
+    avant["status"] = statut
+    with pytest.raises(ValueError, match=message):
+        h3.video_h3.preparer_prolonger(demande(), avant, PNG)
+
+
+def test_le_script_verifie_le_contexte_et_garde_le_latent(h3, monkeypatch):
+    v = h3.video_h3
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors")
+    d = v.garder_latent(v.preparer_prolonger(demande(), avant)["demande"], "c" * 32)
+    code = v.construire_script(d)
+    ast.parse(code)
+    assert "CONTEXTE_ABSENT" in code and "latent_garde" in code
+    assert "par la dernière image" in v.phrase_d_echec("CONTEXTE_ABSENT /poids/chaines/x")
+
+
+def test_prolonger_sans_copie_d_autorisation_rien_n_est_loue(h3):
+    _clip_reussi(h3)
+    r = client(h3).post("/video-h3/prolonger", headers=CLE, json=demande(precedent="b" * 32))
+    assert r.status_code == 403
+
+
+def test_prolonger_part_de_la_derniere_image_puis_recolle(h3, monkeypatch, tmp_path):
+    _autoriser(h3)
+    h3.video_h3.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    _clip_reussi(h3)
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"mp4")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
+    monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG))
+    lance = []
+    monkeypatch.setattr(h3, "run_video_h3", lambda *a: lance.append(a))
+    assert client(h3).post("/video-h3/prolonger", headers=CLE,
+                           json=demande(precedent="../etc")).status_code == 400
+    r = client(h3).post("/video-h3/prolonger", headers=CLE, json=demande(precedent="b" * 32))
+    assert r.status_code == 200, r.text
+    jid, _code, precedent, retirer = lance[0]
+    assert (precedent, retirer) == ("b" * 32, 1)
+    j = client(h3).get("/video/jobs/" + jid, headers=CLE).json()
+    assert j["video"]["mode"] == "prolonger" and j["video"]["plans"] == 2
+
+
+def test_le_plan_n_est_reussi_qu_une_fois_recolle(h3, monkeypatch, tmp_path):
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: {"exit_code": 0})
+
+    def fini(jid, ou, resultat):
+        job = h3.read_job(jid)
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "finish_execution", fini)
+    avant, plan = tmp_path / "avant.mp4", tmp_path / "plan.mp4"
+    avant.write_bytes(b"A")
+    plan.write_bytes(b"B")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: avant if jid == "b" * 32 else plan)
+    vus = []
+
+    def recoller(a, b, retirer):
+        vus.append((a, b, retirer, h3.read_job("c" * 32)["status"]))
+        return b"AB"
+
+    monkeypatch.setattr(h3.montage, "recoller_son", recoller)
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 247)
+    _clip_reussi(h3)
+    h3.write_job("c" * 32, {"id": "c" * 32, "status": "queued", "artifacts": [], "video": {"plans": 2}})
+    h3.run_video_h3("c" * 32, "print(1)", "b" * 32, 1)
+    job = h3.read_job("c" * 32)
+    # Pendant le recollage le travail n'est pas « réussi » : la page montrerait le plan seul.
+    assert vus == [(b"A", b"B", 1, "running")]
+    assert job["status"] == "succeeded" and job["etape"] == "" and plan.read_bytes() == b"AB"
+    assert job["video"]["secondes"] == round(247 / 24, 2)
+
+
+def test_un_recollage_rate_fait_echouer_le_plan(h3, monkeypatch):
+    _clip_reussi(h3)
+    h3.write_job("c" * 32, {"id": "c" * 32, "status": "running", "artifacts": [], "video": {}})
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: None)
+    h3.recoller_h3("c" * 32, "b" * 32, 1)
+    job = h3.read_job("c" * 32)
+    assert job["status"] == "failed" and "introuvable" in job["error"]
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_le_recollage_garde_le_son_et_compte_les_images(h3, tmp_path):
+    def clip(nom, couleur):
+        chemin = tmp_path / nom
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "color=c=%s:s=64x48:r=24" % couleur, "-f", "lavfi", "-i", "sine=f=440:r=48000",
+                        "-frames:v", "24", "-t", "1", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        str(chemin)], check=True)
+        return chemin.read_bytes()
+
+    m = h3.montage
+    for retirer, attendu in ((1, 47), (0, 48)):
+        sortie = tmp_path / ("ab%d.mp4" % retirer)
+        sortie.write_bytes(m.recoller_son(clip("a.mp4", "red"), clip("b.mp4", "blue"), retirer))
+        assert m.images(sortie) == attendu
+        flux = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                               "-of", "csv=p=0", str(sortie)], capture_output=True, text=True).stdout.split()
+        assert flux == ["video", "audio"]
+
+
+def test_la_page_propose_de_prolonger(h3):
+    html = client(h3).get("/video-h3").text
+    assert 'id="prolonger"' in html and "/video-h3/prolonger" in html
+    assert client(h3).get("/video-h3/etat", headers=CLE).json()["prolonger"]["plans_max"] == 4

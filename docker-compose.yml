@@ -60,6 +60,9 @@ services:
       # Vidéo H3 : outil du poste administrateur (PLAN 20.1), éteint par défaut.
       # Le routeur la lit dans .env (env_file) pour montrer ou non sa carte.
       VIDEO_H3_ACTIF: ${VIDEO_H3_ACTIF:-false}
+      # Prolonger H3 « par tronçon » : ajoute un nœud ComfyUI tiers (GPL-3.0,
+      # commit relu) à la machine louée. Éteint : par la dernière image.
+      H3_MOTION_CONTEXT: ${H3_MOTION_CONTEXT:-false}
       # Modal = backend automatique principal lorsqu'il est explicitement configuré.
       MODAL_ENABLED: ${MODAL_ENABLED:-false}
       MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}

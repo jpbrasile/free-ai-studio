@@ -154,7 +154,7 @@ def test_une_brique_sans_route_ne_peut_pas_etre_PROMISE(apps):
     C'etait `image_fabrication`, qui a maintenant une route ; c'est desormais
     `recherche_web`, qui n'en aura pas : le Studio ne sert aucune adresse de
     recherche. `WEB_SEARCH_ENGINE` est un REGLAGE passe au frontal de chat
-    (`docker-compose.yml:223`), et le registre le dit deja lui-meme en portant
+    (`docker-compose.yml:226`), et le registre le dit deja lui-meme en portant
     `code: null` la ou les quinze autres briques pointent une ligne de code.
     Un test dont le vehicule guerit se repointe, il ne se desserre pas.
     """

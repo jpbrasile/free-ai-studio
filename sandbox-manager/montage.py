@@ -81,6 +81,36 @@ def recoller(premiere: bytes, suite: bytes) -> bytes:
         return sortie.read_bytes()
 
 
+def recoller_son(premiere: bytes, suite: bytes, retirer: int = 1) -> bytes:
+    """Comme `recoller`, mais le son suit : la vidéo H3 parle (27/09/2026).
+
+    `retirer` images sont ôtées du debut de la suite, et le son de la meme
+    duree avec elles : 1 quand la suite part de la derniere image du premier
+    clip, 0 quand elle arrive deja coupee (prolongation par troncon)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, b, sortie = Path(dossier, "a.mp4"), Path(dossier, "b.mp4"), Path(dossier, "ab.mp4")
+        a.write_bytes(premiere)
+        b.write_bytes(suite)
+        num, den = _cadence(a)
+        debut_s = retirer * den / num
+        _lancer(["-i", str(a), "-i", str(b), "-filter_complex",
+                 "[1:v]trim=start_frame=%d[bv];"
+                 "[1:a]atrim=start=%.6f,asetpts=PTS-STARTPTS[ba];"
+                 "[0:v][0:a][bv][ba]concat=n=2:v=1:a=1[v0][a];"
+                 "[v0]settb=%d/%d,setpts=N[v]" % (retirer, debut_s, den, num),
+                 "-map", "[v]", "-map", "[a]", "-r", "%d/%d" % (num, den),
+                 "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-movflags", "+faststart", str(sortie)],
+                "Le recollage des deux clips")
+        attendu = images(a) + images(b) - retirer
+        obtenu = images(sortie)
+        if obtenu != attendu:
+            raise MontageImpossible(
+                "Le recollage a rendu %d images au lieu de %d : le clip n'est pas "
+                "rendu, plutôt que de le montrer amputé." % (obtenu, attendu))
+        return sortie.read_bytes()
+
+
 def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
