@@ -984,7 +984,7 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
     4. **Ordre et forme — décision du propriétaire, 26/09/2026.**
        - **Après** : les frictions bloquantes (`docs/FRICTIONS.md:9`), le portage sur le poste client, et les deux échéances CI du 31/10 (`.github/workflows/validate.yml:87-88`).
        - **Forme par défaut** : projet à part, comme JARVIS (`PLAN.md:823`).
-       - **Premier pas, à 0 $** : rejouer les 28 contrôles sur processeur du prototype — sans carte, sans poids — et consigner le résultat ici, réussi ou échoué.
+       - **Premier pas, à 0 $** : rejouer les 28 contrôles sur processeur du prototype — sans carte, sans poids — et consigner le résultat ici, réussi ou échoué. **Fait le 27/09/2026 : 28 sur 28, code 0**, lancé par le propriétaire (`tests/test_continuation.py` du dépôt privé) contre LightX2V `a4b8ce3` (25/09/2026, clone dans `Documents\LightX2V`, hors des dépôts). Ne prouve que l'agencement ; rien sur carte ni avec les poids.
        - Pour chaque hypothèse risquée, seuil et plan B écrits d'avance, selon la règle d'arrêt du point 16.7 (`PLAN.md:843`).
     5. **Questions ouvertes au propriétaire.**
        - Même compte Modal que le Studio, ou un compte séparé ?
