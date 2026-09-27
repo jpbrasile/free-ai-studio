@@ -118,6 +118,19 @@ function dateFr(s){                                   // formateur-francais
   if (!m) return String(s);
   return m[3] + "/" + m[2] + "/" + m[1] + (m[4] ? " \\u00e0 " + m[4] : "");
 }
+function renouvellementTexte(b){
+  // Demande du proprietaire, 27/09/2026 : dire QUAND les 30 $ reviennent, en
+  // information complementaire. La date vient du service (une seule source,
+  // budget_modal.premier_du_mois_suivant) ; la page n'en calcule aucune.
+  // Texte sans balise : la page du Sandbox l'affiche par textContent.
+  if (!b || !b.compteur_remis_a_zero_le) return "";
+  return "Pour information : le cr\\u00e9dit de " + fr(b.credit_offert_usd, 0)
+    + " $ de Modal revient le " + dateFr(b.compteur_remis_a_zero_le)
+    + ", jour o\\u00f9 le compteur du Studio repart de z\\u00e9ro. Cycle relev\\u00e9 le "
+    + "20/09/2026 sur le tableau de bord Modal de ce compte (\\u00ab Billing Cycle: "
+    + "Sep 1 - Oct 1, 2026 \\u00bb) ; pour un autre compte, c\\u2019est son propre "
+    + "tableau de bord qui fait foi. ";
+}
 function moFr(v, u){                                  // formateur-francais
   // Le jumeau de `en_memoire`. Les chiffres de memoire arrivent par le reseau
   // APRES le chargement : ils ne passent jamais par Python, et le bras du rendu

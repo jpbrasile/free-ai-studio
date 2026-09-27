@@ -593,6 +593,32 @@ def test_la_banniere_avoue_sous_compter_quand_modal_se_tait(
     assert "relevé chez Modal" not in texte
 
 
+@pytest.mark.parametrize("nom_module,usage", [(p, p) for p, _ in PAGES] + [("app", "autonome")])
+def test_chaque_banniere_dit_quand_le_credit_revient(budget, tmp_path, nom_module, usage):
+    """Demande du proprietaire, 27/09/2026 : << indique dans l'ui du studio quand
+    le rafraichissement des 30 $ aura lieu comme information complementaire >>.
+
+    La date affichee est celle que rend le service, `compteur_remis_a_zero_le`,
+    ecrite a la francaise -- jamais une date calculee par la page. Et la phrase
+    dit d'ou vient le cycle, et qui fait foi pour un autre compte.
+    """
+    etat = budget.lire() if usage == "autonome" else budget.vue(usage)
+    a, m, j = etat["compteur_remis_a_zero_le"].split("-")
+    texte = _rendu(tmp_path, nom_module, etat)
+    assert "revient le %s/%s/%s" % (j, m, a) in texte
+    assert "de 30 $ de Modal" in texte
+    assert "Billing Cycle: Sep 1 - Oct 1, 2026" in texte
+    assert "son propre tableau de bord qui fait foi" in texte
+
+
+def test_sans_date_la_banniere_ne_l_invente_pas(budget, tmp_path):
+    """Un service ancien qui ne rend pas le champ : rien plutot qu'une date fausse."""
+    etat = budget.vue("video")
+    del etat["compteur_remis_a_zero_le"]
+    texte = _rendu(tmp_path, "video", etat)
+    assert "revient le" not in texte
+
+
 # --- 10. La page d'essai : elle depense, elle doit le dire -------------------
 
 def test_la_page_d_essai_montre_le_budget_et_dit_d_ou_il_vient(budget, monkeypatch, tmp_path):

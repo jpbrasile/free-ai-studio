@@ -2242,7 +2242,7 @@ function budgetTexte(b){
                 && b.usd_reel >= b.usd_estime);
   return "Depense sur Modal ce mois-ci " + (reel ? "selon Modal" : "selon le Studio")
     + ", tous usages confondus : " + fr(b.usd, 2) + " $ sur "
-    + fr(b.plafond_usd, 2) + " $. Ce que vous lancez ici est compte sur la part du "
+    + fr(b.plafond_usd, 2) + " $. " + renouvellementTexte(b) + "Ce que vous lancez ici est compte sur la part du "
     + "Sandbox : " + fr(b.reserve_autonome_usd, 2) + " $ que les pages video, chanson "
     + "et dialogue ne peuvent pas entamer, mais qui se depensent d'ici. "
     // Les 8 % decrivent la METHODE de comptage, pas le total affiche : ce total

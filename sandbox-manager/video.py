@@ -1572,7 +1572,7 @@ function budgetTexte(b){
          + '8 %</b> (le processeur réellement utilisé dépasse le cœur réservé, et cela ne se '
          + 'sait qu’après), et ce total peut contenir des travaux comptés avant cette date, '
          + 'à des tarifs plus bas. ')
-    + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
+    + renouvellementTexte(b) + 'Ce compteur est <b>unique</b> depuis le 19/09/2026 : il compte '
     + 'ensemble les clips, les chansons, les dialogues et le code envoyé au Sandbox, sur un '
     + 'budget de ' + fr(b.plafond_total_usd, 2) + ' $, dont '
     + fr(b.reserve_autonome_usd, 2) + ' $ sont réservés au Sandbox et ne peuvent pas '
