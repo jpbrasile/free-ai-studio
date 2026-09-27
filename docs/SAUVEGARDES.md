@@ -9,7 +9,7 @@ sauvegarde, ni restauration. Tant que l'essai n'a pas eu lieu, elle est une inte
 
 ## La date : 31 octobre 2026
 
-<!-- echeance: restauration-sauvegardes | butoir: 2026-10-31 | etat: en-attente -->
+<!-- echeance: restauration-sauvegardes | butoir: 2026-10-31 | etat: tenue | preuve: 2026-09-27, sauvegarde studio-20260927-101637 (a froid, locale) restauree avec la cle du coffre tiree du gestionnaire Google dans le projet d'essai free-ai-studio-essai ; cles Gemini et Groq relues depuis le coffre, 118 travaux, 24 conversations, 352 reglages, une question au chat repondue ; ecarts : copie VPS non essayee (sautee), cle OpenRouter absente car seulement dans .env -->
 
 **Le critère n'est pas « la sauvegarde est configurée », c'est « elle a été remise en
 place ».** Il vient du plan d'origine, pour P0 : *« DoD : restore-from-backup test
@@ -468,3 +468,32 @@ aujourd'hui 127, dont 9 dossiers d'étalonnage sans `job.json` (`etalonnage-*`,
 `sonde-carte-20260920`), d'où les 118 fiches. Le 127e (`f3d64816…`) date du 27/09 vers 02:20,
 après la copie du 26/09. L'archive du 27/09 contient bien les 127 dossiers (relu dans
 `sandbox-data.tailles.txt`).
+
+## Essai de restauration du 27/09/2026, avec la clé du coffre
+
+Premier essai **avec** la clé ; celui du 26/09 était sans (`-SansCle`).
+
+- **Restauration** : `restaurer.ps1 -Archive …\studio-20260927-101637`, lancée par le
+  propriétaire dans une fenêtre PowerShell, clé collée depuis le gestionnaire de mots de passe
+  Google. Sur le disque : `secrets\coffre.cle` de l'essai identique à celle du Studio (empreintes
+  comparées, aucune valeur affichée), dépôt à la version de la sauvegarde (`f7c309f`), 22
+  entrées dans `config/`, volumes d'essai 1,1 Go (chat, 238 fichiers) et 853 Mo (bac à sable,
+  1 381 fichiers).
+- **Studio d'essai relancé à côté** du Studio en service, qui a continué de tourner : fichier
+  `docker-compose.essai.yml` (conteneurs `essai-*`, ports 18010, 18020, 13000) ; `.env` tiré de
+  `.env.example`, quatre secrets internes neufs, Modal, Kaggle, Colab et modèles payants coupés ;
+  clé du routeur remise par `remettre-cle-routeur.ps1` (4 lignes). Les cinq services **healthy**.
+- **Relu dans l'essai** :
+  - page Clés : Gemini et Groq renseignés, source « interface », donc **rouverts par la clé du
+    coffre** ; OpenRouter **absent** : sa clé n'est que dans `.env` du Studio, jamais sauvegardé ;
+  - bac à sable : 118 travaux (`X-Total-Count`), comme le Studio en service ;
+  - chat : 1 compte, 24 conversations, 352 réglages ; une question envoyée **avec la clé que le
+    chat restauré présente au routeur** : réponse 200, « Paris ».
+- **Sauté** : la copie VPS (non demandée), la dépense Modal du mois et NotebookLM « branché »
+  (non relus), la page ouverte dans un navigateur (tout a été relu par les API).
+- **Arrêté ensuite** (`docker compose down`, sans `-v`). Le dossier `free-ai-studio-essai`, son
+  `.env` d'essai et ses 3 volumes restent : ils contiennent une copie des conversations, les
+  supprimer attend l'accord du propriétaire.
+
+**Leçon** : pour qu'un PC neuf retrouve OpenRouter, `.env` doit aussi être dans le gestionnaire
+Google (fiche « Studio - .env », section « Où les trouver, précisément »).
