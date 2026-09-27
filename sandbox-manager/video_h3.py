@@ -101,10 +101,15 @@ COUPES = (0.0, 0.25, 0.5)   # secondes retirées au début, par ffmpeg
 IMAGE_MAX_OCTETS = 8 * 1024 * 1024
 IMAGES_MAX_OCTETS = 24 * 1024 * 1024
 
-# Temps de location MESURÉ, par longueur : le clip texte seul du 27/09, démarrage
-# de ComfyUI compris (72,4 s). Une seule longueur a été chronométrée ; les
-# autres n'ont pas d'estimation, seulement le pire cas.
-SECONDES_MESUREES = {124: 72.4}
+# Temps de location MESURÉ PAR LE STUDIO, par longueur : le second clip passé par
+# /video-h3 le 27/09 (première image, disque déjà lu) a été compté 109 s,
+# création de la machine comprise ; Modal en a facturé 0,107 $. L'essai du matin
+# hors du Studio (72,4 s) sous-estimait : il ne comptait ni la création de la
+# machine ni le tarif du bac à sable. Le tout premier clip coûte plus (lecture
+# des 52 Go sur un disque neuf : 0,21 $ avec le téléchargement). Une seule
+# longueur a été chronométrée ; les autres n'ont pas d'estimation, seulement le
+# pire cas.
+SECONDES_MESUREES = {124: 109.1}
 MESURE_LE = "2026-09-27"
 
 
@@ -695,7 +700,8 @@ function majPrix(){
   const pire = "Au pire (la machine va jusqu'au bout de son délai) : " + fr(ETAT.pire_cas_usd, 2) + " $.";
   document.getElementById("prix").textContent = (d && d.prix_estime_usd !== null)
     ? "Estimé : " + fr(d.prix_estime_usd, 3) + " $, d'après " + fr(ETAT.secondes_mesurees, 0)
-      + " s de location mesurées le " + dateFr(ETAT.mesure_le) + " au tarif relevé chez Modal. " + pire
+      + " s de location mesurées par le Studio le " + dateFr(ETAT.mesure_le)
+      + ". Le tout premier clip coûte davantage : il lit les 52 Go de poids sur un disque neuf. " + pire
     : "Durée jamais essayée : pas d'estimation mesurée. " + pire;
 }
 

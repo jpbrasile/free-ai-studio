@@ -342,7 +342,7 @@
       "territoire": "exclut par défaut l'Union européenne, le Royaume-Uni et la Corée ; chaque Studio dépose la copie de sa propre autorisation, sinon la page refuse",
       "vram_min_go": null,
       "modes": ["modal"],
-      "cout": "Modal : environ 0,077 $ le clip de 5,2 s, estimé d'après 72,4 s de location mesurées le 27/09/2026 (clip texte seul, hors du Studio) au tarif du bac à sable relevé le 20/09/2026 ; les autres durées n'ont pas été essayées. Au pire 0,955 $ (délai de 900 s). Une fois : environ 52 Go de poids téléchargés sur processeur, au pire 0,38 $",
+      "cout": "Modal : environ 0,116 $ le clip de 5,2 s, d'après 109 s de location comptées par le Studio le 27/09/2026 (second clip, première image ; Modal a facturé 0,107 $) ; le tout premier clip coûte davantage, il lit les poids sur un disque neuf ; les autres durées n'ont pas été essayées. Au pire 0,955 $ (délai de 900 s). Une fois : environ 52 Go de poids téléchargés sur processeur, au pire 0,38 $",
       "cout_max_usd": 0.955,
       "source": "https://huggingface.co/Comfy-Org/MiniMax-H3",
       "verifie_le": "2026-09-27",
