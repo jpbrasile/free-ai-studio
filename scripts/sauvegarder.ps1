@@ -583,6 +583,8 @@ Write-Host "  LA CLE DU COFFRE N'EST PAS DANS CETTE SAUVEGARDE." -ForegroundColo
 Write-Host "  Sans elle, les cles saisies sur les pages /cles ne se rouvrent pas."
 if ($Cle.fichier_present) {
     Write-Host ("  Verifiez qu'elle est dans votre gestionnaire de mots de passe (empreinte " + $Cle.empreinte + ").")
+    Write-Host "  Elle est ici : secrets\coffre.cle du dossier du Studio, une seule ligne (notepad secrets\coffre.cle)."
+    Write-Host "  Copiez-la dans une fiche 'Studio - cle du coffre' (dans Chrome : chrome://password-manager)."
 } else {
     Write-Host "  secrets\coffre.cle est absent : la cle est peut-etre dans STUDIO_COFFRE_CLE (.env)."
 }

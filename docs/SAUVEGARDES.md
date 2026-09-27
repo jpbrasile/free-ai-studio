@@ -139,6 +139,18 @@ sans elle, les magasins restent illisibles dans l'essai), `scp` et le VPS.
 | **`.env`** | clés des fournisseurs, mots de passe internes, peut-être `STUDIO_COFFRE_CLE` | **non** | **non** |
 | volume `whisper-modeles` | les modèles de la dictée et de la voix | non | non — ils se retéléchargent |
 
+**Où les trouver, précisément** (ajouté le 27/09/2026, à la demande du propriétaire) :
+- **la clé du coffre** : le fichier `secrets\coffre.cle` du dossier du Studio (ici
+  `C:\Users\test\Documents\free-ai-studio\secrets\coffre.cle`), une seule ligne de 44 signes.
+  L'ouvrir avec `notepad secrets\coffre.cle`, copier la ligne entière ;
+- **`.env`** : le fichier `.env` à la racine du même dossier (`notepad .env`) ;
+- **le gestionnaire de mots de passe** : constat du 27/09, **aucun n'était installé** sur ce
+  poste (ni programme, ni extension Chrome), alors que ce document le supposait. Le plus
+  simple, déjà présent : celui de Chrome, `chrome://password-manager`, « Ajouter », avec une
+  fiche « Studio - clé du coffre » (la ligne en mot de passe) et une fiche « Studio - .env »
+  (le contenu en note). Il est rangé dans le compte Google, donc hors de ce PC : c'est ce
+  qu'on veut si le disque meurt.
+
 **La clé du coffre et `.env` vont dans le gestionnaire de mots de passe**, et nulle part
 ailleurs : c'est ce qui rend vraie la phrase « config/ sans sa clé est illisible » — dans le
 bon sens. Aucun interrupteur des scripts ne les met dans une archive. Le manifeste garde
