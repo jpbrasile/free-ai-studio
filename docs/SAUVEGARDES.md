@@ -492,8 +492,10 @@ Premier essai **avec** la clé ; celui du 26/09 était sans (`-SansCle`).
 - **Sauté** : la copie VPS (non demandée), la dépense Modal du mois et NotebookLM « branché »
   (non relus), la page ouverte dans un navigateur (tout a été relu par les API).
 - **Arrêté ensuite** (`docker compose down`, sans `-v`). Le dossier `free-ai-studio-essai`, son
-  `.env` d'essai et ses 3 volumes restent : ils contiennent une copie des conversations, les
-  supprimer attend l'accord du propriétaire.
+  `.env` d'essai et ses 3 volumes ~~restent : ils contiennent une copie des conversations, les
+  supprimer attend l'accord du propriétaire.~~ **supprimés le 27/09 avec l'accord du
+  propriétaire** (« oui delete »), ainsi que les 4 images Docker de l'essai ; vérifié : aucun
+  dossier, volume ni image d'essai ne reste, le Studio en service est sain.
 
 **Leçon** : pour qu'un PC neuf retrouve OpenRouter, `.env` doit aussi être dans le gestionnaire
 Google (fiche « Studio - .env », section « Où les trouver, précisément »).
