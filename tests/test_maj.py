@@ -166,6 +166,26 @@ def test_une_branche_imposee_garde_la_main(routeur, monkeypatch):
     assert "sha=main" in demandes_github(github)[0]
 
 
+def test_une_branche_imposee_differente_est_dite(routeur, monkeypatch):
+    """Piege releve le 27/09/2026 (PLAN 20.3) : le bouton fait `git pull
+    --ff-only`, donc tire la branche DU DOSSIER. Si `DEPOT_BRANCHE` en impose
+    une autre, la page compare a l'une et le bouton recupere l'autre. L'etat le
+    dit, avec les deux noms ; la page l'affiche."""
+    github = GitHubSimule(commits=[commit("aaa111")])
+    brancher(routeur, monkeypatch, github, branche="stable")
+    monkeypatch.setenv("DEPOT_BRANCHE", "main")
+    reponse = etat(routeur)
+    assert reponse["branche_divergente"] == {"annoncee": "main", "tiree": "stable"}
+    assert "d.branche_divergente" in TestClient(routeur.app).get("/studio").text
+
+
+def test_une_branche_imposee_identique_ne_dit_rien(routeur, monkeypatch):
+    github = GitHubSimule(commits=[commit("aaa111")])
+    brancher(routeur, monkeypatch, github, branche="stable")
+    monkeypatch.setenv("DEPOT_BRANCHE", "stable")
+    assert "branche_divergente" not in etat(routeur)
+
+
 def test_un_dossier_en_avance_n_est_pas_annonce_en_retard(routeur, monkeypatch):
     """Le cas exact du 20/09 : ce dossier a deux commits que la branche n'a pas.
 

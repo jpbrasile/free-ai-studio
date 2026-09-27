@@ -64,10 +64,10 @@ Pendant l'essai, c'est la personne qui récupère le dossier : cela fait partie 
 - **Veille de l'essai** : relever le commit de `main` sur GitHub (page du dépôt, identifiant
   court du dernier commit) : `____________`
 - **Après la tâche 1** : la page du Studio affiche « version installée » suivie de 7 caractères
-  (`free-tier-manager/app.py:3019` (`version installée`)). Elle les lit dans le dossier `.git`
+  (`free-tier-manager/app.py:3028` (`version installée`)). Elle les lit dans le dossier `.git`
   (`free-tier-manager/app.py:2507` (`lu directement dans .git`)). Relevé : `____________`
 - Dossier pris en ZIP : pas de `.git`, la page affiche « version inconnue »
-  (`free-tier-manager/app.py:3019` (`version inconnue`)). Garder alors le commit relevé la veille,
+  (`free-tier-manager/app.py:3028` (`version inconnue`)). Garder alors le commit relevé la veille,
   et écrire « ZIP » à côté.
 
 ---
@@ -166,7 +166,7 @@ Question posée : ______________________________ Choix du menu (Auto / Max) : __
 > en France cette semaine, et montrez-moi d'où vient sa réponse. »
 
 La carte « Recherche Web » de la page du Studio dit comment faire
-(`free-tier-manager/app.py:2830` (`Recherche Web`)).
+(`free-tier-manager/app.py:2839` (`Recherche Web`)).
 
 **Compte « oui »** : la réponse affiche au moins une source (lien ou nom de site) et la personne
 la montre, sans aide.
@@ -182,7 +182,7 @@ Où ça a bloqué, mot pour mot : ______________________________________________
 > **Consigne à lire :** « Demandez au Studio de dessiner un chat roux sur un toit. »
 
 La carte « Image » de la page du Studio dit comment faire
-(`free-tier-manager/app.py:2829` (`Image`)).
+(`free-tier-manager/app.py:2838` (`Image`)).
 
 **Compte « oui »** : une image s'affiche, sans aide. Du texte à la place d'une image compte
 « non ». Si cela arrive (c'est arrivé le 13/09, cause non établie :
@@ -201,7 +201,7 @@ Ce qui s'est affiché : ☐ une image ☐ du texte ☐ rien ☐ un message d'err
 > **Consigne à lire :** « Le Studio sait vérifier s'il va bien. Trouvez où, et dites-moi ce
 > qu'il affiche. »
 
-Le lien « Diagnostic » est sur la page du Studio (`free-tier-manager/app.py:2904` (`Diagnostic`)) ;
+Le lien « Diagnostic » est sur la page du Studio (`free-tier-manager/app.py:2913` (`Diagnostic`)) ;
 la page est `http://127.0.0.1:8010/diagnostic`.
 
 **Compte « oui »** : la personne ouvre la page Diagnostic et dit avec ses mots ce qu'elle
@@ -314,7 +314,7 @@ la séance, et à écrire ici pour ne pas les décider en voyant le résultat.
    `free-tier-manager/app.py:210` (`aistudio.google.com/apikey`)) fait-il partie de l'essai ?
    Décision : ______________________
 3. **Les interrupteurs Image et Recherche Web.** Les cartes de la page du Studio disent d'ouvrir
-   le rouage et de mettre l'interrupteur (`free-tier-manager/app.py:2829` (`mettez <b>Image</b>`)).
+   le rouage et de mettre l'interrupteur (`free-tier-manager/app.py:2838` (`mettez <b>Image</b>`)).
    Le 13/09, le retour était qu'un débutant ne doit pas avoir à y penser
    (`PLAN.md:78` (`ni penser à`)). La consigne des tâches 4 et 5 ne nomme pas l'interrupteur :
    lire la carte est permis, rien d'autre. D'accord ? ______________________

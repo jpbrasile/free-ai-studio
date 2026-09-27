@@ -215,4 +215,8 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Une console Windows en cp1252 plantait sur un emoji cite dans une faute
+    # (27/09/2026) : la garde tombait au lieu de dire ce qu'elle a vu.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     sys.exit(main(sys.argv[1:]))

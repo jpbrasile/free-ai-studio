@@ -55,7 +55,7 @@ dépôt refuse partout ailleurs.
 **Une correction à écrire noir sur blanc** : le dépôt n'a pas écarté le flux
 d'apprentissage. Il a décidé de **ne pas reconstruire NotebookLM** et de renvoyer vers
 celui de Google (`docs/NOTEBOOKLM.md` ; route `/notebooklm`,
-`free-tier-manager/app.py:2824` ; le bouton envoie sur `https://notebooklm.google.com/`,
+`free-tier-manager/app.py:2833` ; le bouton envoie sur `https://notebooklm.google.com/`,
 `:2846`). Ne pas refaire un produit existant est une décision de moyens ; abandonner
 l'apprentissage serait une décision de cap. Seule la première a été prise.
 
@@ -94,7 +94,7 @@ décision** · **à faire**.
 | **P6** Studio (« after P5 success ») | **Existe et tourne. C'est le seul livrable du plan qui existe** | tout le dépôt | **fait, hors séquence** | en partie |
 | **P7** Contributions | Rien. `CONTRIBUTING.md` existe mais ne décrit aucune soumission d'évaluation | `CONTRIBUTING.md` | à faire | — |
 | **P8** Flux payants | `flows/`, `queue/`, `billing/`, `compliance/` absents. Mais des fonctions payantes existent déjà (§2.6) | relevé de racine | à faire, et déjà contredit sur son préalable | — |
-| **P9** Flux d'apprentissage | Le dépôt a décidé de ne pas reconstruire NotebookLM et de renvoyer vers Google. **Il n'a pas écarté l'apprentissage** | `docs/NOTEBOOKLM.md` ; `free-tier-manager/app.py:2824` | partiellement écarté par décision (la reconstruction, pas le cap) | oui |
+| **P9** Flux d'apprentissage | Le dépôt a décidé de ne pas reconstruire NotebookLM et de renvoyer vers Google. **Il n'a pas écarté l'apprentissage** | `docs/NOTEBOOKLM.md` ; `free-tier-manager/app.py:2833` | partiellement écarté par décision (la reconstruction, pas le cap) | oui |
 
 **Le plan d'origine nomme dix-sept répertoires** (`Downloads\PLAN.md:47-59`, `:127`,
 `:131-136`). **Seize sont absents.** Le seul qui existe est `sandbox/` — et `studio/`, que
@@ -677,7 +677,7 @@ jusqu'au 08/09 et qu'il a écrite dans son code pour ne pas la refaire.
 Plus une première barrière réellement utile, reprise du plan d'origine (l. 81 : « Never
 retire a role's last working option ») : **« chaque fonction a au moins deux entrées
 vivantes »**. Aujourd'hui, le routeur *refuse bien* quand plus rien n'est branché — un 503
-avec le chemin vers la page Clés (`free-tier-manager/app.py:3544-3548`). **Mais il ne le
+avec le chemin vers la page Clés (`free-tier-manager/app.py:3559-3563`). **Mais il ne le
 découvre qu'au moment de la question.** Rien, ni au démarrage ni en CI, ne dit « ce rôle
 n'a plus qu'une seule option ». C'est cette alerte-là qui manque, pas le refus.
 

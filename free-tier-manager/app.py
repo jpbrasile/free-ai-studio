@@ -2701,6 +2701,15 @@ async def maj_etat():
         "retard": [],
     }
     sortie["travaux"] = lire_json_windows(MAJ_ETAT)
+    # Le bouton fait `git pull --ff-only` (scripts/mettre-a-jour.ps1) : il tire
+    # la branche DU DOSSIER, quoi que dise `DEPOT_BRANCHE`. Si les deux
+    # different, la page compare a l'une et le bouton recupere l'autre ; on le
+    # dit plutot que de laisser croire (PLAN 20.3, 27/09/2026). Hors cache :
+    # un reglage change doit se voir tout de suite.
+    impose = os.getenv("DEPOT_BRANCHE", "").strip()
+    tiree = branche_locale()
+    if impose and tiree and impose != tiree:
+        sortie["branche_divergente"] = {"annoncee": impose, "tiree": tiree}
 
     if locale and slug:
         frais = _github_en_cache(slug, locale)
@@ -3083,6 +3092,12 @@ function majAfficher(d){
   } else {
     majCase.className = "etat";
     majCase.textContent = "Comparaison impossible pour l’instant (" + version + "). Le bouton met quand même à jour.";
+  }
+  if(d.branche_divergente){
+    majCase.className = "etat pasret";
+    majCase.textContent += " Attention : la comparaison suit « " + d.branche_divergente.annoncee
+      + " », mais le bouton récupère « " + d.branche_divergente.tiree
+      + " », la branche de ce dossier (réglage DEPOT_BRANCHE).";
   }
   majMot.textContent = d.veilleuse ? "" : " — le veilleur n’est pas lancé ; le bouton dira quoi faire.";
 }
