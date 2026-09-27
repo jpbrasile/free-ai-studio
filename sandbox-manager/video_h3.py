@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import time
 from typing import Optional
 
@@ -178,18 +179,39 @@ def durees() -> list:
 
 # --- L'invite en trois cases -----------------------------------------------------
 
+# Les paroles au format des poids : `(S1) <d>[French] …</d>` (fiche du modèle,
+# MiniMaxAI/MiniMax-H3). Sans balise ni langue, la réécriture d'invite de MiniMax
+# (H3-Context-IR, non publiée) manque et la parole sort au hasard : le 27/09, un
+# « Enfin au sec » entre guillemets est sorti en charabia (PLAN 18.9).
+LANGUE_PAROLES = "French"
+_PAROLES = re.compile(r"«\s*([^«»]+?)\s*»|“\s*([^“”]+?)\s*”|\"\s*([^\"]+?)\s*\"")
+
+
+def balises_paroles(texte: str, langue: str = LANGUE_PAROLES) -> str:
+    """Chaque réplique entre guillemets devient `(S1) <d>[langue] …</d>`.
+    Un texte qui porte déjà ses balises `<d>` est laissé tel quel."""
+    if "<d>" in texte:
+        return texte
+
+    def balise(m):
+        return f"(S1) <d>[{langue}] {next(g for g in m.groups() if g)}</d>"
+    return _PAROLES.sub(balise, texte)
+
+
 def invite(image_paroles: str, ambiance: str = "", musique: str = "") -> str:
     """Une seule invite pour le modèle, à partir des trois cases de la page.
 
     H3 fabrique l'image ET le son à partir du même texte : la case « image et
     paroles » décrit ce qu'on voit et ce qui est dit (les paroles entre
-    guillemets), les deux autres le reste de la bande son.
+    guillemets, balisées ici pour le modèle), les deux autres le reste de la
+    bande son.
     """
     morceaux = []
-    for texte, prefixe in ((image_paroles, ""), (ambiance, "Sound: "), (musique, "Music: ")):
+    for texte, prefixe in ((balises_paroles(image_paroles), ""), (ambiance, "Sound: "),
+                           (musique, "Music: ")):
         t = " ".join(str(texte or "").split())
         if t:
-            if t[-1] not in ".!?\"»":
+            if t[-1] not in ".!?\"»>":
                 t += "."
             morceaux.append(prefixe + t)
     return " ".join(morceaux)
