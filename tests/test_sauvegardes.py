@@ -219,9 +219,13 @@ def test_la_sauvegarde_refuse_un_dossier_dans_le_depot_et_ne_supprime_rien_du_st
     code = _code(SAUVE)
     assert "Le dossier de sauvegarde est dans le depot." in code
     assert '"volume", "rm"' not in code and '"down"' not in code
-    # Deux Remove-Item : une piece fautive que le script vient de fabriquer, et
-    # la rotation des anciennes sauvegardes (test suivant).
-    assert code.count("Remove-Item") == 2
+    # Trois Remove-Item de fichier : deux pieces fautives que le script vient de
+    # fabriquer (config.tar avec un magasin, la copie du chat qui porterait la
+    # cle du routeur), et la rotation des anciennes sauvegardes (test suivant).
+    # Le quatrieme ne retire qu'une variable d'environnement du processus.
+    fichiers = [l for l in code.splitlines() if "Remove-Item" in l and "Env:" not in l]
+    assert len(fichiers) == 3, fichiers
+    assert code.count("Remove-Item Env:FAS_CLE_ROUTEUR") == 1
     rotation = _bloc(SAUVE, "# --- 5b. Rotation locale", "# --- 6.")
     assert _code(rotation).count("Remove-Item") == 1
     # S'il a arrete le Studio, il le redemarre dans un finally.

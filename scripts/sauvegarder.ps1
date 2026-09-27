@@ -11,7 +11,8 @@
 #   config.tar            config/ SANS les magasins de secrets
 #   config-magasins.tar   keys.json, sandbox-keys.json, notebooklm/ : les valeurs
 #                         y sont fermees par le coffre, les NOMS sont en clair
-#   open-webui-data.tar   le volume du chat (conversations, comptes)
+#   open-webui-data.tar   le volume du chat (conversations, comptes), SANS la cle
+#                         interne du routeur (voir plus bas)
 #   sandbox-data.tar      le volume des bacs a sable (travaux, questions NotebookLM)
 #   <volume>.sha256.txt   chaque fichier du volume et son empreinte
 #   <volume>.tailles.txt  chaque fichier du volume et sa taille
@@ -22,6 +23,14 @@
 # passe. Le manifeste n'en garde qu'une empreinte courte (16 caracteres d'un
 # SHA-256), pour que restaurer.ps1 puisse dire si la cle qu'on lui donne est la
 # bonne. Ce script ne l'affiche jamais.
+#
+# LA CLE INTERNE DU ROUTEUR non plus (27/09/2026). Open WebUI la garde en clair
+# dans sa base, quatre fois. Le volume du chat est donc copie dans un conteneur
+# jetable, la cle y est remplacee par une marque (scripts/cle_routeur_chat.py),
+# chaque fichier de la copie est relu pour s'assurer qu'elle n'y est plus, et
+# c'est CETTE copie qui est archivee. La base vivante n'est pas touchee.
+# restaurer.ps1 la remet depuis le .env de la cible. Si elle reste quelque part,
+# la sauvegarde s'arrete.
 #
 # -VersVps copie ensuite par scp, avec les SEULES variables VPS_HOTE,
 # VPS_UTILISATEUR, VPS_DOSSIER (VPS_PORT_SSH et VPS_CLE_SSH facultatives), lues
@@ -59,6 +68,10 @@ param(
     # Image du conteneur jetable qui lit les volumes. Etiquette fixe : la meme
     # image a la sauvegarde et a la restauration.
     [string]$Image = "alpine:3.20",
+    # Image qui retire la cle du routeur de la copie du chat : celle d'Open
+    # WebUI (python et sqlite, deja sur la machine). Vide : lue dans
+    # docker-compose.yml.
+    [string]$ImageChat = "",
     # Rotation locale : garder les N sauvegardes les plus recentes (celle-ci
     # comprise) et supprimer les autres. 0 (par defaut) : rien n'est supprime,
     # le script dit seulement combien il y en a et leur taille. Au moins 2.
@@ -210,6 +223,26 @@ foreach ($court in $Volumes) {
     }
 }
 
+# La cle du routeur a retirer de la copie du chat : celle que le Studio utilise
+# (l'environnement, sinon .env, comme Docker Compose). Jamais affichee ; elle
+# passe au conteneur par le NOM de la variable, pas par sa valeur.
+$CleRouteur = Variable-Vps "FREE_TIER_MANAGER_KEY"
+$CleRouteurEtat = [ordered]@{ retiree = $false; lignes = 0; note = "" }
+if (-not $ImageChat) {
+    $compose = [System.IO.File]::ReadAllText((Join-Path $Racine "docker-compose.yml"))
+    $m = [regex]::Match($compose, '(?m)^\s*image:\s*(ghcr\.io/open-webui/open-webui:\S+)\s*$')
+    if ($m.Success) { $ImageChat = $m.Groups[1].Value }
+}
+if ($NomsVolumes.ContainsKey("open-webui-data")) {
+    if (-not $CleRouteur) {
+        $CleRouteurEtat.note = "NON retiree : FREE_TIER_MANAGER_KEY introuvable (ni environnement ni .env) ; open-webui-data.tar peut la porter"
+        Souci "Cle du routeur introuvable : la copie du chat la portera peut-etre (voir le manifeste)."
+    } elseif (-not $ImageChat) {
+        $CleRouteurEtat.note = "NON retiree : image d'Open WebUI introuvable dans docker-compose.yml ; open-webui-data.tar la porte"
+        Souci "Image d'Open WebUI introuvable : la copie du chat portera la cle du routeur."
+    }
+}
+
 # --- 2. A chaud ou a froid ------------------------------------------------------
 # Une copie a chaud n'est PAS sure : le chat ecrit dans une base SQLite, et une
 # base copiee au milieu d'une ecriture peut ne pas se rouvrir. Un travail du bac
@@ -284,9 +317,40 @@ try {
     # ecrit l'archive, la liste des empreintes et celle des tailles.
     foreach ($court in $Volumes) {
         if (-not $NomsVolumes.ContainsKey($court)) { continue }
-        $commande = "cd /donnees && tar -cf /sortie/" + $court + ".tar . && " +
+        $archiver = "tar -cf /sortie/" + $court + ".tar . && " +
             "find . -type f -exec sha256sum {} + > /sortie/" + $court + ".sha256.txt && " +
             "find . -type f -exec stat -c '%s %n' {} + > /sortie/" + $court + ".tailles.txt"
+        if ($court -eq "open-webui-data" -and $CleRouteur -and $ImageChat) {
+            # La copie d'abord, la cle retiree de la copie, puis l'archive ET les
+            # listes d'empreintes faites sur elle : restaurer.ps1 compare ce qu'il
+            # remet a ces listes, elles doivent decrire ce qui est archive.
+            $commande = "mkdir /travail && cp -a /donnees/. /travail/ && " +
+                "python /scripts/cle_routeur_chat.py retirer /travail && cd /travail && " + $archiver
+            $env:FAS_CLE_ROUTEUR = $CleRouteur
+            try {
+                $r = Executer "docker" @("run", "--rm", "--entrypoint", "sh",
+                    "-e", "FAS_CLE_ROUTEUR",
+                    "-v", ($NomsVolumes[$court] + ":/donnees:ro"),
+                    "-v", ((Join-Path $Racine "scripts") + ":/scripts:ro"),
+                    "-v", ($Dossier + ":/sortie"),
+                    $ImageChat, "-c", $commande) ("copie-" + $court)
+            } finally { Remove-Item Env:FAS_CLE_ROUTEUR -ErrorAction SilentlyContinue }
+            $resultat = [regex]::Match($r.Sortie, 'RESULTAT lignes=(\d+) restes=(\S*)')
+            if ($r.Code -ne 0) {
+                # Une archive commencee ne doit pas rester : elle porterait la cle.
+                Remove-Item -LiteralPath (Join-Path $Dossier ($court + ".tar")) -Force -ErrorAction SilentlyContinue
+                $restes = ""
+                if ($resultat.Success) { $restes = $resultat.Groups[2].Value }
+                Arreter ("Le volume " + $court + " n'a pas pu etre copie sans la cle du routeur.") @(
+                    ("Fichiers qui la portent encore : " + $restes), $r.Erreur)
+            }
+            $CleRouteurEtat.retiree = $true
+            if ($resultat.Success) { $CleRouteurEtat.lignes = [int]$resultat.Groups[1].Value }
+            $CleRouteurEtat.note = "remplacee par une marque dans " + $CleRouteurEtat.lignes + " ligne(s) de la base ; aucun fichier de la copie ne la porte ; restaurer.ps1 la remet depuis le .env de la cible"
+            Bon ("volume " + $court + " (cle du routeur retiree de la copie : " + $CleRouteurEtat.lignes + " ligne(s))")
+            continue
+        }
+        $commande = "cd /donnees && " + $archiver
         $r = Executer "docker" @("run", "--rm",
             "-v", ($NomsVolumes[$court] + ":/donnees:ro"),
             "-v", ($Dossier + ":/sortie"),
@@ -371,6 +435,7 @@ $Manifeste = [ordered]@{
     volumes_absents = $VolumesAbsents
     fichiers_config = $FichiersConfig
     cle_du_coffre = $Cle
+    cle_du_routeur = $CleRouteurEtat
     hors_archive = @(
         "secrets/coffre.cle : gestionnaire de mots de passe",
         ".env : gestionnaire de mots de passe (cles des fournisseurs, mots de passe internes)",
@@ -508,6 +573,11 @@ foreach ($p in $Pieces) { Write-Host ("    " + $p.nom + "  " + $p.octets + " oct
 if ($VolumesAbsents.Count -gt 0) { Write-Host ("  Volumes absents, NON sauvegardes : " + ($VolumesAbsents -join ", ")) -ForegroundColor Yellow }
 Write-Host ("  VPS : " + $VpsEtat)
 Write-Host ("  Rotation locale : " + $RotationEtat)
+if ($CleRouteurEtat.retiree) {
+    Write-Host ("  Cle du routeur : retiree de la copie du chat (" + $CleRouteurEtat.lignes + " ligne(s))")
+} elseif ($CleRouteurEtat.note) {
+    Write-Host ("  Cle du routeur : " + $CleRouteurEtat.note) -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Host "  LA CLE DU COFFRE N'EST PAS DANS CETTE SAUVEGARDE." -ForegroundColor White
 Write-Host "  Sans elle, les cles saisies sur les pages /cles ne se rouvrent pas."

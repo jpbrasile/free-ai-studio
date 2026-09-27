@@ -392,6 +392,25 @@ foreach ($court in $aVolumes) {
     }
 }
 
+# La cle du routeur, retiree de la copie du chat par sauvegarder.ps1 (27/09/2026).
+# Elle revient du .env de la CIBLE, s'il existe deja ; sinon, a remettre apres.
+$remettre = Join-Path $PSScriptRoot "remettre-cle-routeur.ps1"
+$commandeRemettre = "powershell -ExecutionPolicy Bypass -File scripts\remettre-cle-routeur.ps1 -Cible " + $Dossier
+if ($Reel) { $commandeRemettre = "powershell -ExecutionPolicy Bypass -File scripts\remettre-cle-routeur.ps1 -Reel" }
+if (($aVolumes -contains "open-webui-data") -and $Manifeste.cle_du_routeur -and $Manifeste.cle_du_routeur.retiree) {
+    $envCible = Join-Path $Dossier ".env"
+    $aCle = (Test-Path -LiteralPath $envCible) -and
+        (@([System.IO.File]::ReadAllLines($envCible) | Where-Object { $_ -match '^FREE_TIER_MANAGER_KEY=.+' }).Count -gt 0)
+    if ($aCle) {
+        if ($Reel) { & $remettre -Reel -Projet $Projet } else { & $remettre -Cible $Dossier -Projet $Projet }
+        if ($LASTEXITCODE -eq 0) { $Restaure += "cle du routeur -> chat, depuis le .env de la cible" }
+        else { $Manque += ("la cle du routeur dans le chat : la remettre a echoue ; relancez " + $commandeRemettre) }
+    } else {
+        $Manque += ("la cle du routeur dans le chat (retiree de la sauvegarde) : copiez .env dans " + $Dossier +
+            ", puis " + $commandeRemettre + " ; sans elle, le chat restaure est refuse par son routeur")
+    }
+}
+
 foreach ($n in $Absentes) { $Manque += ($n + " : absente de cette copie") }
 foreach ($court in @($Manifeste.volumes_absents)) { if ($court) { $Manque += ("volume " + $court + " : n'existait pas a la sauvegarde") } }
 $Manque += ".env : jamais dans une sauvegarde (gestionnaire de mots de passe)"

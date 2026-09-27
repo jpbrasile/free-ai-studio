@@ -131,7 +131,7 @@ sans elle, les magasins restent illisibles dans l'essai), `scp` et le VPS.
 |---|---|---|---|
 | `config.tar` | `config/` **sans** les trois magasins de secrets : compteurs de dépense, témoins de réglage, base de mesures (`config/mesures/`, jamais le texte de la personne) | oui | oui |
 | `config-magasins.tar` | `keys.json`, `sandbox-keys.json`, `notebooklm/` (la session NotebookLM) : valeurs **fermées par le coffre**, noms en clair | oui | **non** par défaut — question A |
-| `open-webui-data.tar` | le volume du chat : conversations, comptes, **et la clé interne du routeur en clair** (vérifié le 26/09, question B) | oui | **non** par défaut — question B |
+| `open-webui-data.tar` | le volume du chat : conversations, comptes ; ~~**et la clé interne du routeur en clair** (vérifié le 26/09, question B)~~ **sans la clé du routeur depuis le 27/09** (retirée de la copie, remise à la restauration : section « La clé du routeur hors des sauvegardes », en fin de document) | oui | **non** par défaut — question B |
 | `sandbox-data.tar` | le volume des bacs à sable : travaux, **texte des questions NotebookLM** | oui | **non** par défaut — question B |
 | `<volume>.sha256.txt`, `<volume>.tailles.txt` | la liste des fichiers de chaque volume, empreinte et taille | oui | suit son volume |
 | `manifeste.json` | date, version git, pièces, tailles, empreintes SHA-256, liste des fichiers de `config/`, empreinte **courte** de la clé du coffre | oui | oui |
@@ -155,7 +155,7 @@ Ce n'est pas un choix tranché : ce sont les deux premières questions ci-dessou
 | | Question | Ce qui est fait en attendant |
 |---|---|---|
 | A | **Les magasins chiffrés partent-ils sur le VPS ?** Pour : si le PC meurt, les clés se rouvrent avec la clé du gestionnaire de mots de passe. Contre : « une sauvegarde de `keys.json` est une sauvegarde de secrets » (plus haut), les noms des services sont en clair, et une valeur d'avant le coffre (sans le préfixe `coffre-v1:`) serait en clair — ~~**non vérifié** qu'il n'en reste aucune~~ **vérifié le 26/09/2026** sur ce poste : `keys.json` a 2 valeurs, les deux commencent par `coffre-v1:` ; `sandbox-keys.json` est vide (aucune valeur affichée pendant la vérification). Les clés de fournisseurs se refont aussi chez chaque fournisseur. | ne partent pas ; l'interrupteur `-VpsAvecMagasinsChiffres` existe, éteint |
-| B | **Les conversations et le texte des questions NotebookLM partent-ils sur le VPS ?** La décision du 19/09 dit « local et VPS » ; celle du 25/09 dit que le texte des questions NotebookLM « reste sur ce poste ». Les deux ne tiennent pas ensemble pour `sandbox-data`. Et la base du chat contient peut-être la clé interne du routeur (Open WebUI garde ses réglages de connexion dans sa base) — ~~**non vérifié**~~ **vérifié le 26/09/2026 : oui, en clair, quatre fois.** Dans la copie restaurée de la base (`webui.db`, table `config`), `openai.api_keys`, `image_generation.openai.api_key`, `audio.stt.openai.api_key` et `audio.tts.openai.api_key` portent chacune une valeur de 64 signes, **identique à `FREE_TIER_MANAGER_KEY`** de `.env` — comparaison par empreinte SHA-256 dans un conteneur jetable, aucune valeur affichée. La table `api_key` (clés des personnes) est vide. Donc `open-webui-data.tar` est **aussi une sauvegarde de secret** : l'envoyer sur le VPS, c'est y envoyer la clé du routeur ; l'archive locale la contient déjà. | ne partent pas ; l'interrupteur `-VpsAvecVolumes` existe, éteint |
+| B | **Les conversations et le texte des questions NotebookLM partent-ils sur le VPS ?** La décision du 19/09 dit « local et VPS » ; celle du 25/09 dit que le texte des questions NotebookLM « reste sur ce poste ». Les deux ne tiennent pas ensemble pour `sandbox-data`. Et la base du chat contient peut-être la clé interne du routeur (Open WebUI garde ses réglages de connexion dans sa base) — ~~**non vérifié**~~ **vérifié le 26/09/2026 : oui, en clair, quatre fois.** Dans la copie restaurée de la base (`webui.db`, table `config`), `openai.api_keys`, `image_generation.openai.api_key`, `audio.stt.openai.api_key` et `audio.tts.openai.api_key` portent chacune une valeur de 64 signes, **identique à `FREE_TIER_MANAGER_KEY`** de `.env` — comparaison par empreinte SHA-256 dans un conteneur jetable, aucune valeur affichée. La table `api_key` (clés des personnes) est vide. Donc `open-webui-data.tar` est **aussi une sauvegarde de secret** : l'envoyer sur le VPS, c'est y envoyer la clé du routeur ; l'archive locale la contient déjà. **Depuis le 27/09, la copie ne la porte plus** (section « La clé du routeur hors des sauvegardes », en fin de document) : la question B redevient une question de vie privée, les conversations. | ne partent pas ; l'interrupteur `-VpsAvecVolumes` existe, éteint |
 | C | **La copie VPS doit-elle être chiffrée ?** Le plan d'origine dit « *encrypted backups* ». Aujourd'hui les archives partent telles quelles, par `scp` (chiffré en transit, pas au repos). Tant que A et B restent à « non », rien de secret ni de personnel n'y part ; si l'une passe à « oui », la question devient bloquante (avec quoi chiffrer, et où garder cette clé-là). | non chiffrée |
 | D | **La clé du coffre dans l'archive *locale* ?** Écarté ici : la règle du document range les clés au gestionnaire de mots de passe, et une archive locale se copie sur un disque externe. Si le propriétaire préfère une archive locale autosuffisante, c'est à décider, pas à glisser dans un script. | jamais dans une archive |
 
@@ -267,7 +267,7 @@ le dossier du dépôt, dans Windows PowerShell.
    Studio doit d'abord céder la place. Dans le dossier du dépôt :
    `docker compose down` — **jamais avec `-v`**, qui effacerait les vrais volumes. Puis,
    dans le dossier d'essai `<dépôt>-essai` : y copier `.env` depuis le gestionnaire de mots
-   de passe (le dossier d'essai n'en a pas), et `docker compose up -d --build` — sans `-p` :
+   de passe (le dossier d'essai n'en a pas), puis `scripts\remettre-cle-routeur.ps1` (la clé du routeur dans le chat, si la restauration l'a demandé), et `docker compose up -d --build` — sans `-p` :
    le nom du dossier donne le projet, donc les volumes d'essai. Ne **pas** lancer
    `demarrer.cmd` depuis l'essai : il relancerait les veilleurs de l'hôte sur ce dossier.
 5. **Vérifier que le Studio relit tout.** Sur le chat (port 3000) : la conversation notée,
@@ -297,9 +297,11 @@ le dossier du dépôt, dans Windows PowerShell.
    qui échoue s'écrit comme tel : il reste `en-attente`, avec ce qui a raté, et on le rejoue.
    Enfin, `python scripts/verifier-echeances.py` doit dire « tenue ».
 
-## Proposition : la clé du routeur hors des sauvegardes (27/09/2026, à discuter)
+## La clé du routeur hors des sauvegardes (proposée puis faite le 27/09/2026)
 
-Rien n'est construit. Cette section attend l'accord du propriétaire.
+~~Rien n'est construit. Cette section attend l'accord du propriétaire.~~ **Voie (1) faite le
+27/09/2026, à la demande du propriétaire** (« fais la correction (1) de la clé du routeur ») ;
+ce qui a été fait, et en quoi il diffère de la proposition, est en fin de section.
 
 ### Ce qui est mesuré
 
@@ -346,5 +348,57 @@ Rien n'est construit. Cette section attend l'accord du propriétaire.
 
 ### Ce que le propriétaire décide
 
-Faire (1), avec ou sans (2). Ou garder l'état d'aujourd'hui, où la copie du chat reste une
-sauvegarde de secret qui ne part pas sur le VPS.
+~~Faire (1), avec ou sans (2). Ou garder l'état d'aujourd'hui, où la copie du chat reste une
+sauvegarde de secret qui ne part pas sur le VPS.~~ Décidé le 27/09 : (1). La voie (2) reste
+possible, elle n'est pas écrite.
+
+### Ce qui a été fait (27/09/2026)
+
+Deux écarts avec la proposition, trouvés en l'écrivant :
+- **Nettoyer la copie AVANT l'archive, pas dans l'archive.** `<volume>.sha256.txt` est
+  comparé à la restauration : modifier la base dans l'archive l'aurait rendue « non
+  conforme ». Le volume du chat est donc copié dans un conteneur jetable (`/travail`), la clé
+  y est retirée, puis l'archive **et** les deux listes sont faites sur cette copie.
+- **Une marque, pas une valeur vide.** La clé est remplacée par
+  `cle-du-routeur-retiree-par-la-sauvegarde`. Un chat restauré sans sa clé est alors refusé
+  par son routeur, au lieu de parler à vide ; et la restauration sait exactement quoi
+  remplacer.
+
+Les pièces :
+- `scripts/cle_routeur_chat.py`, deux verbes, `retirer` et `remettre`. La clé arrive par la
+  variable `FAS_CLE_ROUTEUR`, passée au conteneur par son **nom** (`-e FAS_CLE_ROUTEUR`) et
+  jamais par sa valeur. `retirer` travaille avec `secure_delete` et termine par un
+  `wal_checkpoint(TRUNCATE)`. Il relit ensuite **chaque fichier** de la copie, octet par
+  octet. S'il reste une trace dans la base, il la compacte (`VACUUM`) et relit ; s'il en reste
+  une ailleurs, la sauvegarde s'arrête et l'archive commencée est retirée.
+- `sauvegarder.ps1` : l'image est celle d'Open WebUI, lue dans `docker-compose.yml` (python et
+  sqlite, déjà sur la machine). Le manifeste porte `cle_du_routeur` (`retiree`, `lignes`,
+  `note`). Sans `FREE_TIER_MANAGER_KEY`, la copie se fait comme avant et le manifeste le dit.
+- `restaurer.ps1` : la clé est remise depuis le `.env` **de la cible** quand il existe déjà.
+  Sinon, le compte rendu donne la commande : `scripts\remettre-cle-routeur.ps1 -Cible <dossier>`
+  (ou `-Reel`). Ce script ne remplace que la marque ; relancé, il ne change rien.
+- `tests/test_cle_routeur_chat.py` : l'outil sur de vraies bases SQLite en WAL (rouge d'abord :
+  une copie faite comme avant porte la clé et le contrôle la trouve ; une clé laissée hors de
+  la base arrête la sauvegarde ; aucune trace dans une page libérée ; `remettre` pose la clé de
+  la cible). S'y ajoutent les deux scripts relus comme du texte.
+
+**Essai réel, 27/09 vers 04:25** : une sauvegarde à chaud dans un dossier à part, Studio en
+service.
+- « 4 ligne(s) » retirées. Relu sur l'hôte, octet par octet : la clé apparaît **0 fois** dans
+  les 9 fichiers de la sauvegarde, la marque 4 fois dans `open-webui-data.tar`.
+- La base vivante porte toujours ses 4 lignes : elle n'est pas touchée.
+- Contre-épreuve : la sauvegarde du 26/09, faite par l'ancien script, porte la clé **4 fois**
+  dans `open-webui-data.tar`.
+- Restauration dans une cible neuve dont le `.env` ne contient qu'une clé de routeur **neuve**,
+  tirée au hasard. Toutes les empreintes sont conformes, fichiers du volume compris. La clé a
+  été remise automatiquement (« 4 ligne(s) »).
+- La base restaurée : `integrity_check` = `ok`, 352 réglages, 24 conversations. Les quatre
+  lignes portent la clé de la cible, aucune ne porte encore la marque.
+- `remettre-cle-routeur.ps1` relancé : « aucune marque à remplacer », code 0.
+- Dossier, sauvegarde et volumes de cet essai supprimés ensuite : ils contenaient une copie
+  des conversations.
+
+***Non vérifié*** :
+- le chat restauré qui pose une question et reçoit sa réponse (Studio d'essai non relancé) ;
+- le message « copiez .env, puis … » d'une restauration sans `.env` (texte relu, pas joué) ;
+- une copie à froid.
