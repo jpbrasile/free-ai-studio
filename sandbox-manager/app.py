@@ -3899,8 +3899,16 @@ def _modal_ou_refus():
                                  "ou Kaggle » et collez les deux valeurs du jeton Modal.")
 
 
+def _h3_ou_404():
+    # Outil du poste administrateur (PLAN 20.1) : sans le réglage, les routes
+    # H3 n'existent pas pour ce Studio.
+    if not video_h3.actif():
+        raise HTTPException(404, "La vidéo H3 n'est pas activée sur ce Studio.")
+
+
 @app.get("/video-h3/etat")
 def video_h3_etat(authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
     auth(authorization)
     return {
         "budget": budget_modal.vue("video"),
@@ -3920,6 +3928,7 @@ def video_h3_etat(authorization: Optional[str] = Header(default=None)):
 
 @app.post("/video-h3/autorisation")
 async def video_h3_autorisation(request: Request, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
     auth(authorization)
     corps = await request.json()
     try:
@@ -3930,6 +3939,7 @@ async def video_h3_autorisation(request: Request, authorization: Optional[str] =
 
 @app.post("/video-h3/poids/preparer")
 def video_h3_poids(authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
     auth(authorization)
     if not video_h3.autorisation_etat()["presente"]:
         raise HTTPException(403, "Déposez d'abord la copie de votre autorisation MiniMax H3.")
@@ -3950,6 +3960,7 @@ def video_h3_poids(authorization: Optional[str] = Header(default=None)):
 
 @app.post("/video-h3/creer")
 async def video_h3_creer(request: Request, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
     auth(authorization)
     payload = await request.json()
     # LA GARDE DE LICENCE, AVANT TOUT : sans copie de l'autorisation de CE
@@ -3984,6 +3995,7 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
 
 @app.post("/video-h3/image")
 async def video_h3_image(request: Request, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
     """La première ou la dernière image, par l'image du Studio (routeur, Gemini).
 
     Demande du propriétaire, 27/09/2026 : créer ces images dans le Studio ou
@@ -4023,6 +4035,7 @@ async def video_h3_image(request: Request, authorization: Optional[str] = Header
 
 @app.get("/video-h3", response_class=HTMLResponse)
 def video_h3_page():
+    _h3_ou_404()
     return HTMLResponse(format_fr.avec_formateurs(video_h3.PAGE_HTML.replace("__CLE__", KEY)))
 
 

@@ -26,11 +26,34 @@ def h3(sandbox, monkeypatch, tmp_path):
     monkeypatch.setattr(v, "FICHE_POIDS", tmp_path / "h3-poids.json")
     monkeypatch.setattr(sandbox.budget_modal, "FICHIER", tmp_path / "modal-budget.json")
     monkeypatch.setattr(sandbox.budget_modal, "_releve_reel", lambda: None)
+    monkeypatch.setenv("VIDEO_H3_ACTIF", "true")
     return sandbox
 
 
 def client(sandbox):
     return TestClient(sandbox.app, base_url="http://127.0.0.1:8020")
+
+
+# H3 est un outil du poste administrateur (PLAN 20.1) : un Studio client, sans
+# le réglage, n'a ni la page, ni les routes, ni la carte d'accueil.
+@pytest.mark.parametrize("methode,chemin", [
+    ("get", "/video-h3"), ("get", "/video-h3/etat"), ("post", "/video-h3/autorisation"),
+    ("post", "/video-h3/poids/preparer"), ("post", "/video-h3/creer"), ("post", "/video-h3/image"),
+])
+def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
+    monkeypatch.delenv("VIDEO_H3_ACTIF")
+    r = getattr(client(h3), methode)(chemin, headers=CLE, **({"json": {}} if methode == "post" else {}))
+    assert r.status_code == 404 and "pas activée" in r.json()["detail"]
+
+
+def test_la_carte_d_accueil_suit_le_reglage(routeur, monkeypatch):
+    c = TestClient(routeur.app)
+    monkeypatch.delenv("VIDEO_H3_ACTIF", raising=False)
+    sans = c.get("/studio").text
+    monkeypatch.setenv("VIDEO_H3_ACTIF", "true")
+    avec = c.get("/studio").text
+    assert "/video-h3" not in sans and "Vidéo H3" not in sans
+    assert "/video-h3" in avec and "🎬 Vidéo" in sans
 
 
 def demande(**autres):

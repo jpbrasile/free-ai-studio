@@ -26,6 +26,8 @@ os.environ["FREE_AI_CONFIG_DIR"] = tempfile.mkdtemp(prefix="free-ai-config-")
 os.environ["SANDBOX_WORKSPACE"] = tempfile.mkdtemp(prefix="free-ai-workspace-")
 os.environ.setdefault("FREE_TIER_MANAGER_KEY", "cle-de-verification")
 os.environ.setdefault("SANDBOX_MANAGER_KEY", "cle-de-verification")
+# La page H3 est éteinte par défaut (PLAN 20.1) ; ses scripts se vérifient quand même.
+os.environ["VIDEO_H3_ACTIF"] = "true"
 # Hors conteneur, le compte courant n'a pas le droit de changer un proprietaire.
 os.chown = lambda *args, **kwargs: None
 

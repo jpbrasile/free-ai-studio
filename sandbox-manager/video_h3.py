@@ -50,6 +50,14 @@ FICHIERS = (
 )
 POIDS_GO = 52   # total téléchargé le 27/09/2026 (essai hors du Studio)
 
+
+def actif() -> bool:
+    """H3 est un outil du poste administrateur (PLAN 20.1) : la licence de
+    MiniMax est accordée à une personne, pas aux clients du Studio. Éteint par
+    défaut ; VIDEO_H3_ACTIF=true dans le .env de l'administrateur l'allume.
+    Lu à chaque appel, pour que les tests puissent le basculer."""
+    return os.getenv("VIDEO_H3_ACTIF", "false").strip().lower() == "true"
+
 # Le disque Modal où les poids restent d'un clip à l'autre. Un disque à part
 # de celui de la vidéo « Rapide » : 52 Go qu'on veut pouvoir effacer seuls.
 VOLUME = os.getenv("H3_MODAL_VOLUME", "free-ai-studio-h3")

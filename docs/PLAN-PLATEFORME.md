@@ -79,7 +79,7 @@ décision** · **à faire**.
 | Elle couvre neuf fonctions | chat, image, recherche web, dictée, voix, dessins SVG, vidéo, chanson, dialogue. **Aucun fichier du dépôt ne porte cette liste** : elle est reconstituée à la main, page par page | `free-tier-manager/app.py`, `sandbox-manager/app.py` | fait, **mais non dénombré par le dépôt** — c'est déjà un symptôme du §5 | sept sur neuf |
 | Elle est testée | **209** fonctions `def test_` dans **12** fichiers portant des tests (`tests/*.py` en compte 13, `conftest.py` n'en porte aucune) — `grep -rh "def test_" tests/*.py \| wc -l`, 19/09. Le journal écrit « **214 tests passent** » au 18/09 (`PLAN.md:315`) : c'est le compte **collecté** par pytest, reproduit le 19/09 par `pytest --collect-only -q`. Deux instruments, deux nombres justes | `tests/` | fait | **non** : `main` ne porte que 5 fichiers de test sur 13 |
 | Une CI la vérifie | **10 étapes nommées** (`grep -c "^      - name:" .github/workflows/validate.yml`) — ~~9~~ le matin du 19/09, la dixième est « Échéances », posée le soir même par `176878c` —, plus **trois** actions sans nom (`checkout`, `setup-python`, `setup-node`, l. 11, 14, 49). Déclencheurs : `push` et `pull_request`, sans filtre de chemin | `.github/workflows/validate.yml` | fait | oui |
-| Un bac à sable isole le code étranger | `read_only`, `cap_drop: ALL`, `no-new-privileges`, `pids_limit: 128`, `mem_limit: 1g`, réseau `sandbox-internal` déclaré `internal: true` (`docker-compose.yml:245-246`) : **aucune sortie réseau** | `docker-compose.yml` | fait | **oui, déjà sur `main`** |
+| Un bac à sable isole le code étranger | `read_only`, `cap_drop: ALL`, `no-new-privileges`, `pids_limit: 128`, `mem_limit: 1g`, réseau `sandbox-internal` déclaré `internal: true` (`docker-compose.yml:248-249`) : **aucune sortie réseau** | `docker-compose.yml` | fait | **oui, déjà sur `main`** |
 
 ### Les phases du plan d'origine
 
@@ -157,7 +157,7 @@ serveur ».
 
 **La nuance honnête**, et elle compte : ici « serveur » est le PC de l'utilisateur, lié à
 `127.0.0.1`. Tant que c'est vrai, l'écart est théorique. Mais `STUDIO_HEBERGE` existe déjà
-(`docker-compose.yml:73`, `.env.example:333`) : le jour où cette variable passe à `true`,
+(`docker-compose.yml:76`, `.env.example:338`) : le jour où cette variable passe à `true`,
 la règle est violée au sens plein **sans qu'une seule ligne de code ne change**.
 
 *Rectification d'une version antérieure de ce document : j'avais écrit que cette règle
@@ -168,8 +168,8 @@ paraît.**
 
 **Un : `free-tier-manager` ne lit jamais `STUDIO_HEBERGE`.** La recherche de `HEBERGE` dans
 tout `free-tier-manager/` ne renvoie **aucune ligne**. La variable parvient pourtant au
-service — il la reçoit par `env_file: .env` (`docker-compose.yml:131-132`, et
-`.env.example:333` la pose à `false`) — mais **aucune ligne ne la consulte**. Le seul
+service — il la reçoit par `env_file: .env` (`docker-compose.yml:134-135`, et
+`.env.example:338` la pose à `false`) — mais **aucune ligne ne la consulte**. Le seul
 service qui la lit est `sandbox-manager` (`app.py:67`), pour couper Kaggle automatique.
 **Le drapeau qui déclare « cette instance est hébergée » est donc invisible au service qui
 écrit les clés en clair** : le jour où il passe à `true`, le bac à sable réagit et le
@@ -208,7 +208,7 @@ protégée par rien.
 > **Ce qui borne le risque d'aujourd'hui, mesuré le 19/09** : `config/` est dans
 > `.gitignore` et **non suivi** — `git ls-files config/` ne rend aucune ligne, donc
 > **aucune clé n'a jamais été commitée** — et les trois ports sont liés à `127.0.0.1`
-> (`docker-compose.yml:110`, `:134`, `:162`). Les seules clés en jeu sont celles de
+> (`docker-compose.yml:113`, `:134`, `:162`). Les seules clés en jeu sont celles de
 > l'utilisateur, sur sa machine. **Cela borne l'urgence ; cela ne referme pas le chemin.**
 
 ### 2. Windows — ici, c'est le dépôt qui a raison contre le plan
@@ -677,7 +677,7 @@ jusqu'au 08/09 et qu'il a écrite dans son code pour ne pas la refaire.
 Plus une première barrière réellement utile, reprise du plan d'origine (l. 81 : « Never
 retire a role's last working option ») : **« chaque fonction a au moins deux entrées
 vivantes »**. Aujourd'hui, le routeur *refuse bien* quand plus rien n'est branché — un 503
-avec le chemin vers la page Clés (`free-tier-manager/app.py:3560-3564`). **Mais il ne le
+avec le chemin vers la page Clés (`free-tier-manager/app.py:3564-3568`). **Mais il ne le
 découvre qu'au moment de la question.** Rien, ni au démarrage ni en CI, ne dit « ce rôle
 n'a plus qu'une seule option ». C'est cette alerte-là qui manque, pas le refus.
 
@@ -819,7 +819,7 @@ l'utilisateur : « pas de barre desserrée ».
 #### Une contradiction à régler avant, et elle est dans le dépôt
 
 **Le bac à sable n'a aucune sortie réseau** (`internal: true`,
-`docker-compose.yml:245-246`). C'est excellent pour exécuter du code qu'on n'a pas écrit —
+`docker-compose.yml:248-249`). C'est excellent pour exécuter du code qu'on n'a pas écrit —
 
 *(Renvoi corrigé le 22/09/2026, ici et au §1. Il disait `:211-213` ; la ligne était en
 `:237-238` à `5e0990c`, et elle est en `:245-246` une fois monté le registre en lecture
@@ -1381,13 +1381,13 @@ Ce que le §6 porte, et qui se décide maintenant :
 | 12 | **`FREE_ONLY=false` est-il un état admis ?** Si oui, la règle des rôles n'est pas défendue par du code | §5 étape 1 | interdit · admis et documenté |
 
 **Sur le point 11, qui est le seul défaut connu pouvant coûter de l'argent réel.**
-`docker-compose.yml:95-97` le dit lui-même : « 5 + 20 + 5 = EXACTEMENT le credit declare »
-dans `MODAL_CREDIT_MENSUEL_USD` (30, `.env.example:245`), « et aucun des trois compteurs ne
+`docker-compose.yml:98-100` le dit lui-même : « 5 + 20 + 5 = EXACTEMENT le credit declare »
+dans `MODAL_CREDIT_MENSUEL_USD` (30, `.env.example:250`), « et aucun des trois compteurs ne
 voit les deux autres : ils peuvent donc atteindre leur plafond le meme mois ».
 **Et la correction tient en une ligne** : un quatrième compteur, commun aux trois, plafonné
 au crédit déclaré, refusant avant de lancer — exactement la forme de `budget_verifier`, qui
 existe déjà en trois exemplaires. À défaut, la limite de dépense réglée **chez Modal** est
-le seul arrêt réel, et `docker-compose.yml:98` le dit déjà.
+le seul arrêt réel, et `docker-compose.yml:101` le dit déjà.
 
 **Les règles mortes du plan d'origine**, à ranger : le VPS européen, Postgres, Forgejo,
 Temporal, Langfuse, LiteLLM, l'API de registre à paliers, et l'exclusion de Windows (§2.2).
@@ -1463,7 +1463,7 @@ c'est sa décision. Ce qu'elle entraîne, écrit d'avance :
 > Modal, qui facture en dollars.
 
 Aujourd'hui **trois** compteurs — 5 $, 20 $, 5 $ — dont la somme **égale exactement** le
-crédit déclaré de 30 $ (`docker-compose.yml:95-97`, `.env.example:245`), et **aucun ne voit
+crédit déclaré de 30 $ (`docker-compose.yml:98-100`, `.env.example:250`), et **aucun ne voit
 les deux autres**. Un compteur unique **referme le défaut par construction** : on ne peut
 plus dépasser en additionnant trois plafonds qui s'ignorent.
 
@@ -1716,7 +1716,7 @@ document ne le reprend nulle part.
 
 **Vérifié le 19/09, et la bonne nouvelle d'abord : c'est tenu.** `sandbox-worker` n'a
 **pas** de `env_file` — l'unique `env_file: .env` du fichier est à
-`docker-compose.yml:131-132`, et il appartient à `free-tier-manager`. Le worker reçoit
+`docker-compose.yml:134-135`, et il appartient à `free-tier-manager`. Le worker reçoit
 **quatre variables nommées une à une** : `SANDBOX_WORKER_KEY`,
 `SANDBOX_TIMEOUT_SECONDS`, `SANDBOX_MAX_CODE_BYTES`, `SANDBOX_MAX_OUTPUT_BYTES`. **Aucune
 clé de fournisseur.** La seule qui soit un secret est la clé d'authentification du bac à

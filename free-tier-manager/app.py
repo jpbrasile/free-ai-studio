@@ -3133,6 +3133,10 @@ setInterval(majRafraichir, 5000);
 </script>
 </body></html>
 """
+    if os.getenv("VIDEO_H3_ACTIF", "false").strip().lower() != "true":
+        # H3 est un outil du poste administrateur (PLAN 20.1) : sans le
+        # réglage, sa carte n'est pas proposée (ses routes répondent 404).
+        html = re.sub(r'<a class="card" href="http://localhost:8020/video-h3".*?</a>\n', "", html)
     return HTMLResponse(html)
 
 
