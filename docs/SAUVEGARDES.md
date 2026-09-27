@@ -422,4 +422,14 @@ sans `-VersVps`. Code de sortie 0. Relevé du résumé du script :
 
 ***Non vérifié*** : la restauration de cette archive-ci (l'essai du 31/10 s'en chargera).
 Constat : le script ne compte **aucune** sauvegarde plus ancienne dans
-`%USERPROFILE%\Sauvegardes\free-ai-studio` ; celle du 26/09 n'y est plus (non recherché ailleurs).
+`%USERPROFILE%\Sauvegardes\free-ai-studio` ; ~~celle du 26/09 n'y est plus (non recherché ailleurs).~~
+**Recherché le 27/09** : `studio-20260926-192832` a été supprimée le 27/09 à 04:53, avec le
+dossier `free-ai-studio-essai` et ses 3 volumes, à la demande du propriétaire (« supprime les
+restes d'essai du 26/09 », 04:52), après la contre-épreuve de 04:25. Elle n'existe nulle part
+ailleurs sur le disque. L'archive du 27/09 est donc **la seule**, tant qu'elle n'est pas restaurée.
+
+Écart de compte, expliqué : l'essai du 26/09 relisait 126 dossiers de travaux ; il y en a
+aujourd'hui 127, dont 9 dossiers d'étalonnage sans `job.json` (`etalonnage-*`,
+`sonde-carte-20260920`), d'où les 118 fiches. Le 127e (`f3d64816…`) date du 27/09 vers 02:20,
+après la copie du 26/09. L'archive du 27/09 contient bien les 127 dossiers (relu dans
+`sandbox-data.tailles.txt`).
