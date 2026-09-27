@@ -122,7 +122,7 @@ clé à un routeur qui en attend une nouvelle. Il faut reprendre `FREE_TIER_MANA
 gestionnaire de mots de passe, avec la clé du coffre. **Non vérifié** : le chat de l'essai
 refusé par son routeur (déduit, pas observé).
 
-**Non vérifié encore** : une copie à froid, la restauration **avec** la clé du coffre (faite
+**Non vérifié encore** : ~~une copie à froid~~ (**faite le 27/09/2026**, voir « Copie à froid du 27/09 » plus bas), la restauration **avec** la clé du coffre (faite
 sans elle, les magasins restent illisibles dans l'essai), `scp` et le VPS.
 
 ### Ce qui part où
@@ -401,4 +401,25 @@ service.
 ***Non vérifié*** :
 - le chat restauré qui pose une question et reçoit sa réponse (Studio d'essai non relancé) ;
 - le message « copiez .env, puis … » d'une restauration sans `.env` (texte relu, pas joué) ;
-- une copie à froid.
+- ~~une copie à froid.~~ Faite le 27/09/2026 (section suivante).
+
+## Copie à froid du 27/09/2026
+
+Demandée par le propriétaire (« push puis copie à froid »). Avant de lancer : aucun travail
+en cours dans le bac à sable (118 fiches `job.json` lues dans le conteneur : 95 réussies,
+20 échouées, 3 annulées, aucune en cours).
+
+Commande : `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sauvegarder.ps1 -Arret`,
+sans `-VersVps`. Code de sortie 0. Relevé du résumé du script :
+
+- archive `studio-20260927-101637`, manifeste **`a-froid`**, 8 pièces, 32 fichiers de `config/` ;
+- `open-webui-data.tar` 1 130 035 200 octets, `sandbox-data.tar` 889 526 272 octets,
+  `config.tar` 46 080, `config-magasins.tar` 29 696 ;
+- clé du routeur retirée de la copie du chat : 4 lignes, comme mesuré le 26/09 ;
+- Studio arrêté pendant la copie puis redémarré : sandbox-manager, manager, sandbox-worker et
+  open-webui repassés **healthy** moins d'une minute après ; `voix` et `sandbox-worker-gpu`
+  n'ont pas été arrêtés (leur durée de marche, 14 h et 9 h, n'a pas bougé).
+
+***Non vérifié*** : la restauration de cette archive-ci (l'essai du 31/10 s'en chargera).
+Constat : le script ne compte **aucune** sauvegarde plus ancienne dans
+`%USERPROFILE%\Sauvegardes\free-ai-studio` ; celle du 26/09 n'y est plus (non recherché ailleurs).
