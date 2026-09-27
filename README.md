@@ -59,6 +59,12 @@ Cinq gestes. Aucun terminal, aucun assistant de code.
    partagent le même projet Docker, ce qui casse le chat plus tard.
    *(Sans Git ni VS Code : bouton vert « Code » sur GitHub → « Download ZIP » → extraire.
    Tout marchera sauf le bouton de mise à jour, et l'installateur vous le dira.)*
+
+   **Puis choisir la version validée**, `stable` (depuis le 27/09/2026) : dans VS Code,
+   palette de commandes, `Git: Checkout to...`, choisir **`origin/stable`**. Le bouton
+   « Mettre à jour » suivra ensuite cette branche, qui n'avance qu'après validation ;
+   `main` porte les nouveautés en cours de mise au point. En ligne de commande :
+   `git clone -b stable https://github.com/jpbrasile/free-ai-studio.git`.
 5. **Double-cliquer `demarrer.cmd`**, à la racine du dossier.
 
 `demarrer.cmd` vérifie l'ordinateur avant d'agir : version de Windows, Docker installé,

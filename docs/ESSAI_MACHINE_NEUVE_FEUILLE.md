@@ -30,7 +30,7 @@ ce qui manque se **note**, ne se corrige pas en silence (`docs/ESSAI_MACHINE_NEU
 
 Seule la clé Gemini sert à l'essai. `docs/SERVICES_DEBUTANT.md:100` (`Commencez uniquement avec`)
 conseille aussi Groq et OpenRouter ; les ajouter changerait ce qu'on mesure. Le README dit
-qu'une clé Gemini suffit (`README.md:78-79` (`une seule chose`)).
+qu'une clé Gemini suffit (`README.md:84-85` (`une seule chose`)).
 
 ### Ce qu'il ne faut PAS faire
 
@@ -113,7 +113,7 @@ Lire la consigne **telle quelle**, sans rien ajouter. Ne pas montrer l'écran du
 > dans la partie *Installation*, jusqu'à ce que la page du Studio s'ouvre. »
 
 Ouvrir la page GitHub dans le navigateur avant de lire la consigne. Les gestes : Docker Desktop,
-Git, VS Code, récupérer le dossier, double-clic sur `demarrer.cmd` (`README.md:36-62` (`Cinq gestes`)).
+Git, VS Code, récupérer le dossier, double-clic sur `demarrer.cmd` (`README.md:36-68` (`Cinq gestes`)).
 
 **Compte « oui »** : la page `http://127.0.0.1:8010/studio` s'ouvre dans le navigateur
 (`demarrer.cmd` l'ouvre seul à la fin : `scripts/demarrer.ps1:665` (`Votre page`)), sans aide.

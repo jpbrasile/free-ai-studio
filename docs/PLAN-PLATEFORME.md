@@ -480,8 +480,8 @@ troisième copie »). Relevé le 19/09, **il y en a six, et quatre divergent** :
 
 | # | Copie | Preuve | État |
 |---|---|---|---|
-| 1 | Tableau « Fonction / Ce qui la fait tourner / Coût » | `README.md:316-324` | **périmé** |
-| 2 | Tableau « Fonction / Fournisseur, modèle / Nature / Licence » | `README.md:394-…` | **périmé** |
+| 1 | Tableau « Fonction / Ce qui la fait tourner / Coût » | `README.md:322-330` | **périmé** |
+| 2 | Tableau « Fonction / Fournisseur, modèle / Nature / Licence » | `README.md:400-…` | **périmé** |
 | 3 | `PROVIDERS` et `LIMITES_PUBLIEES` | `free-tier-manager/app.py:52`, `:141` | source réelle du routeur |
 | 4 | `MODELES` / `MODELE` / `LORA` | `video.py:84`, `chanson.py:85` et `:126`, `dialogue.py:115` | source réelle des trois pages |
 | 5 | `modal/profiles.json` | 2 521 octets, 13 profils, `"verified": "2026-09-09"` | **lu par aucun code, et faux sur un point vérifiable** |

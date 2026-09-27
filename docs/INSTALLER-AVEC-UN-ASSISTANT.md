@@ -25,8 +25,12 @@ Ton rôle ici : installer, vérifier, et rendre la main. Tu n'es pas là pour am
      Deux dossiers du Studio sur la même machine se gênent (`docs/DEPANNAGE.md`, « Le piège
      du dossier imbriqué »).
    - Sinon, clone depuis le dossier **parent** que la personne t'a donné (`Documents` par
-     défaut) : `git clone https://github.com/jpbrasile/free-ai-studio.git`, puis entre dans
-     `free-ai-studio`. Git crée lui-même ce sous-dossier : ne le crée pas avant.
+     défaut) : `git clone -b stable https://github.com/jpbrasile/free-ai-studio.git`, puis
+     entre dans `free-ai-studio`. Git crée lui-même ce sous-dossier : ne le crée pas avant.
+     `-b stable` : la version validée (depuis le 27/09/2026) ; le bouton « Mettre à jour »
+     suivra cette branche. `main` porte les mises au point en cours : seulement si la
+     personne le demande. Un dossier déjà cloné sur `main` passe à `stable` par
+     `git checkout stable`.
 
    Git absent : dis à la personne de l'installer (<https://git-scm.com/download/win> sous
    Windows). Ne passe pas par le ZIP de GitHub : le bouton « Mettre à jour » ne marcherait pas.
