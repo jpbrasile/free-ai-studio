@@ -144,9 +144,11 @@ sans elle, les magasins restent illisibles dans l'essai), `scp` et le VPS.
   `C:\Users\test\Documents\free-ai-studio\secrets\coffre.cle`), une seule ligne de 44 signes.
   L'ouvrir avec `notepad secrets\coffre.cle`, copier la ligne entière ;
 - **`.env`** : le fichier `.env` à la racine du même dossier (`notepad .env`) ;
-- **le gestionnaire de mots de passe** : constat du 27/09, **aucun n'était installé** sur ce
-  poste (ni programme, ni extension Chrome), alors que ce document le supposait. Le plus
-  simple, déjà présent : celui de Chrome, `chrome://password-manager`, « Ajouter », avec une
+- **le gestionnaire de mots de passe** : ~~constat du 27/09, **aucun n'était installé** sur ce
+  poste (ni programme, ni extension Chrome), alors que ce document le supposait.~~ **Corrigé
+  le 27/09 par le propriétaire : c'est le gestionnaire de Google** (aucun programme à
+  installer, d'où mon constat trompeur). On l'ouvre par `chrome://password-manager` ou
+  `passwords.google.com`, « Ajouter », avec une
   fiche « Studio - clé du coffre » (la ligne en mot de passe) et une fiche « Studio - .env »
   (le contenu en note). Il est rangé dans le compte Google, donc hors de ce PC : c'est ce
   qu'on veut si le disque meurt.
