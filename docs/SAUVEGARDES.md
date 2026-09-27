@@ -147,11 +147,32 @@ sans elle, les magasins restent illisibles dans l'essai), `scp` et le VPS.
 - **le gestionnaire de mots de passe** : ~~constat du 27/09, **aucun n'était installé** sur ce
   poste (ni programme, ni extension Chrome), alors que ce document le supposait.~~ **Corrigé
   le 27/09 par le propriétaire : c'est le gestionnaire de Google** (aucun programme à
-  installer, d'où mon constat trompeur). On l'ouvre par `chrome://password-manager` ou
+  installer, d'où mon constat trompeur). ~~On l'ouvre par `chrome://password-manager` ou
   `passwords.google.com`, « Ajouter », avec une
   fiche « Studio - clé du coffre » (la ligne en mot de passe) et une fiche « Studio - .env »
-  (le contenu en note). Il est rangé dans le compte Google, donc hors de ce PC : c'est ce
-  qu'on veut si le disque meurt.
+  (le contenu en note).~~ Instructions refaites le 27/09 après l'essai du propriétaire : **sur
+  passwords.google.com, le bouton « Ajouter » peut manquer.** Ce qui a marché :
+
+  **Ranger la clé du coffre (une fois, sur ce PC)**
+  1. Ouvrir la clé : touche Windows, taper
+     `notepad C:\Users\test\Documents\free-ai-studio\secrets\coffre.cle`, Entrée. Une seule
+     ligne : la sélectionner entièrement (Ctrl+A), la copier (Ctrl+C), fermer sans enregistrer.
+  2. Dans **Chrome sur ce PC**, taper dans la barre d'adresse
+     `chrome://password-manager/passwords`.
+  3. Cliquer **« Ajouter »**, en haut, à droite du champ de recherche (parfois un simple
+     **+**). S'il manque : menu **⋮** de Chrome > **Mots de passe et saisie automatique** >
+     **Gestionnaire de mots de passe Google** > **Mots de passe**, le bouton est en haut.
+  4. Remplir : Site `studio.local` ; Nom d'utilisateur `cle-du-coffre` ; Mot de passe :
+     coller (Ctrl+V). Enregistrer.
+  5. Même geste pour `.env` : Nom d'utilisateur `env`, le contenu du fichier dans **Note**.
+
+  **La retrouver (jour de restauration, sur n'importe quel appareil)** : passwords.google.com
+  (ou `chrome://password-manager/passwords`), chercher `studio.local`, ouvrir la fiche,
+  icône **œil** pour l'afficher, icône **copier**. La coller quand `restaurer.ps1` la demande :
+  rien ne s'affiche pendant le collage, puis Entrée.
+
+  La fiche est rangée dans le compte Google, donc hors de ce PC : c'est ce qu'on veut si le
+  disque meurt.
 
 **La clé du coffre et `.env` vont dans le gestionnaire de mots de passe**, et nulle part
 ailleurs : c'est ce qui rend vraie la phrase « config/ sans sa clé est illisible » — dans le

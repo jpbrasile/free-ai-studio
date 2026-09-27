@@ -295,8 +295,10 @@ if ($FichierCle) {
     $CleTexte = [System.IO.File]::ReadAllText((Plein $FichierCle)).Trim()
 } elseif (-not $SansCle -and $Presentes.ContainsKey("config-magasins.tar")) {
     Note "La cle du coffre ouvre les cles restaurees. Ou la trouver :"
-    Note "  1. votre gestionnaire de mots de passe, fiche 'Studio - cle du coffre' (dans Chrome : chrome://password-manager) ;"
-    Note "  2. sinon, sur le PC d'origine : le fichier secrets\coffre.cle du dossier du Studio, une seule ligne (notepad secrets\coffre.cle)."
+    Note "  1. le gestionnaire de mots de passe Google (dans Chrome : chrome://password-manager/passwords) : chercher studio.local,"
+    Note "     ouvrir la fiche cle-du-coffre, icone oeil puis icone copier ;"
+    Note "  2. sinon, sur le PC d'origine : notepad secrets\coffre.cle (une seule ligne, Ctrl+A puis Ctrl+C)."
+    Note "  Pas a pas : docs\SAUVEGARDES.md, 'Ou les trouver, precisement'."
     $saisie = Read-Host "Collez-la ici (rien ne s'affiche ; Entree seule pour passer)" -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($saisie)
     try { $CleTexte = ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)).Trim() }
