@@ -46,7 +46,9 @@ def client(sandbox):
     ("get", "/video-h3/fiches"), ("post", "/video-h3/fiches"),
     ("get", "/video-h3/clips"), ("post", "/video-h3/scenario/ordonner"), ("post", "/video-h3/montage"),
     ("post", "/video-h3/scenario/decouper"), ("post", "/video-h3/scenario/tourner"),
-    ("get", "/video-h3/scenario/" + "a" * 32), ("post", "/video-h3/musique"),
+    ("get", "/video-h3/scenario/" + "a" * 32), ("post", "/video-h3/musique"), ("get", "/video-h3/scenarios"),
+    ("post", "/video-h3/scenario/" + "a" * 32 + "/juger"), ("post", "/video-h3/scenario/" + "a" * 32 + "/corriger"),
+    ("post", "/video-h3/scenario/" + "a" * 32 + "/rejouer"),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -1041,9 +1043,200 @@ def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch):
         assert vid["invite"].endswith("non_diegetic_music: N/A") and "Piano" not in vid["invite"]
     assert "<Subject 2> (S1) <d>[English] Is this seat taken?</d>" in tournes[0]["invite"]
     assert "<Subject 1> (S1) <d>[French] Non.</d>" in tournes[1]["invite"]
-    assert poses == [(sc["travaux"][2], c_id, 5.17, 0.3)]
+    # Le départ se compte en images (124 à la fin du plan 1), pas en secondes arrondies.
+    assert poses == [(sc["travaux"][2], c_id, pytest.approx(124 / 24), 0.3)]
+    assert sc["fins_images"] == [124, 248, 372]
     assert sc["film"] == "e" * 32 and sc["film_sans_musique"] == sc["travaux"][2]
     assert sc["fiches"] == [lea, james] and sc["musique"]["a_partir_du_plan"] == 2
+
+
+# --- 11. Juger, corriger, rejouer un scénario tourné (28/09) ---
+
+def test_le_jugement_se_lit_en_numero_d_image_et_l_heure_se_calcule_ici(h3):
+    v = h3.video_h3
+    assert "Image 1 shows Léa" in v.consigne_jugement(["Léa", "James"])
+    rep = ('```json\n{"verdict": "defaut", "defauts": [{"image": 9, "quoi": "Léa porte une veste grise"}, '
+           '{"image": 40, "quoi": "hors planche"}, {"image": "x", "quoi": "illisible"}]}\n```')
+    assert v.lire_jugement(rep, 5.17, 11) == {"verdict": "defaut",
+                                              "defauts": [{"t_s": 9.2, "quoi": "Léa porte une veste grise"}]}
+    with pytest.raises(ValueError, match="pas pu être lu"):
+        v.lire_jugement("Tout va bien.", 0, 11)
+
+
+def test_la_correction_garde_chaque_replique_a_sa_place(h3):
+    v = h3.video_h3
+    plans = [{"image_paroles": "Léa entre.", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Léa dit « Bonjour. »", "ambiance": "", "enchainement": "coupe"}]
+    bon = json.dumps([{"image_paroles": "Léa, seule, entre.", "ambiance": "", "enchainement": "suite"},
+                      {"image_paroles": "Léa, manteau rouge, dit « Bonjour. »", "ambiance": ""}], ensure_ascii=False)
+    corriges = v.lire_correction(bon, plans)
+    assert [p["enchainement"] for p in corriges] == ["coupe", "coupe"]   # l'enchaînement ne bouge pas
+    assert corriges[1]["image_paroles"] == "Léa, manteau rouge, dit « Bonjour. »"
+    deplace = json.dumps([{"image_paroles": "Léa entre et dit « Bonjour. »", "ambiance": ""},
+                          {"image_paroles": "Léa sourit.", "ambiance": ""}], ensure_ascii=False)
+    with pytest.raises(ValueError, match="déplacé"):
+        v.lire_correction(deplace, plans)
+    with pytest.raises(ValueError, match="nombre de plans"):
+        v.lire_correction(json.dumps(plans[:1], ensure_ascii=False), plans)
+
+
+def test_seuls_les_plans_changes_ou_coches_sont_retournes(h3):
+    v = h3.video_h3
+    p = [{"image_paroles": t, "ambiance": "", "enchainement": e}
+         for t, e in (("a", "coupe"), ("b", "coupe"), ("c", "suite"), ("d", "coupe"))]
+    change = [dict(p[0]), dict(p[1], image_paroles="b, seule"), dict(p[2]), dict(p[3])]
+    # Le plan 3 est une suite du plan 2 retourné : il repart de sa nouvelle dernière image.
+    assert v.plans_a_reprendre(p, change) == [0, 3]
+    assert v.plans_a_reprendre(p, p, retourner={4}) == [0, 1, 2]
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_planche_et_reprise_d_un_plan(h3, tmp_path):
+    film = tmp_path / "film.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=64x48:r=24",
+                    "-f", "lavfi", "-i", "sine=f=440:r=48000", "-frames:v", "96", "-t", "4",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(film)], check=True)
+    m = h3.montage
+    png, nombre = m.planche(film.read_bytes(), 1.0, 2.5)
+    assert png.startswith(b"\x89PNG") and nombre == 5
+    extrait = tmp_path / "extrait.mp4"
+    extrait.write_bytes(m.extraire(film.read_bytes(), 24, 72))
+    assert m.images(extrait) == 48
+    flux = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0",
+                           str(extrait)], capture_output=True, text=True).stdout.split()
+    assert flux == ["video", "audio"]
+    with pytest.raises(m.MontageImpossible, match="vide"):
+        m.extraire(film.read_bytes(), 10, 10)
+
+
+def _scenario_tourne(h3, monkeypatch, tmp_path):
+    """Un scénario à deux, réussi, de trois plans de 124 images, avec sa musique."""
+    v = h3.video_h3
+    lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_image(james, "face", PNG)
+    film = tmp_path / "sans.mp4"
+    film.write_bytes(b"FILM")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: film if jid else None)
+    plans = [{"image_paroles": "James demande « Is this seat taken? »", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Léa répond « Non. »", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Ils marchent", "ambiance": "", "enchainement": "coupe"}]
+    sid = "5" * 32
+    v.scenario_ecrire({"id": sid, "etat": "réussi", "erreur": "", "plans": plans, "travaux": ["1" * 32] * 3,
+                       "fins_images": [124, 248, 372], "film": "f" * 32, "film_sans_musique": "e" * 32,
+                       "fiche": lea, "fiches": [lea, james],
+                       "reglages": {"fiche": None, "fiches": [lea, james], "langues": {lea: "French",
+                                    james: "English"}, "langue": "French", "musique": "", "longueur": 124,
+                                    "graine": 2809},
+                       "musique": {"chanson": "c" * 32, "a_partir_du_plan": 2}})
+    monkeypatch.setattr(h3, "_chansons_pretes", lambda: [{"id": "c" * 32, "titre": "Jazz", "cree_a": 0}])
+    return sid, plans
+
+
+def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_path):
+    sid, _ = _scenario_tourne(h3, monkeypatch, tmp_path)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    planches = []
+    monkeypatch.setattr(h3.montage, "planche", lambda film, debut, duree: planches.append(
+        (film, round(debut, 3), round(duree, 3))) or (b"\x89PNG", 11))
+    vu = {}
+    rep = {"choices": [{"message": {"content": '{"verdict": "defaut", "defauts": [{"image": 9, "quoi": "veste grise"}]}'}}]}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, rep, vu))
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: pytest.fail("rien ne se loue"))
+    r = client(h3).post(f"/video-h3/scenario/{sid}/juger", headers=CLE)
+    assert r.status_code == 200, r.text
+    # Le film SANS musique, découpé plan par plan aux images notées.
+    assert planches == [(b"FILM", 0.0, 5.167), (b"FILM", 5.167, 5.167), (b"FILM", 10.333, 5.167)]
+    contenu = vu["json"]["messages"][0]["content"]
+    assert vu["json"]["model"] == "free-ai-max"   # « Auto » manquait les défauts le 28/09
+    assert contenu[0]["type"] == "text" and "Image 1 shows Léa" in contenu[0]["text"]
+    assert [c["type"] for c in contenu[1:]] == ["image_url"] * 3   # deux fiches, puis la planche
+    assert r.json()["jugement"][1] == {"plan": 2, "verdict": "defaut",
+                                       "defauts": [{"t_s": 9.2, "quoi": "veste grise"}]}
+    assert client(h3).post("/video-h3/scenario/" + "9" * 32 + "/juger", headers=CLE).status_code == 404
+
+
+def test_corriger_part_des_retours_et_du_jugement(h3, monkeypatch, tmp_path):
+    sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    c = client(h3)
+    assert c.post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={}).status_code == 400
+    corriges = [dict(plans[0]), dict(plans[1], image_paroles="Léa, en manteau rouge, répond « Non. »"),
+                dict(plans[2])]
+    vu = {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(
+        200, {"choices": [{"message": {"content": json.dumps(corriges, ensure_ascii=False)}}]}, vu))
+    # Seuls les défauts gardés par le propriétaire partent (la fausse alerte décochée, non).
+    r = c.post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={
+        "retours": "Ils doivent marcher.", "defauts": [{"plan": 2, "t_s": 9.2, "quoi": "veste grise"}]})
+    assert r.status_code == 200, r.text
+    assert "Ils doivent marcher." in r.json()["retours"] and "Shot 2, at 9.2 s: veste grise" in r.json()["retours"]
+    assert r.json()["plans"][1]["image_paroles"] == "Léa, en manteau rouge, répond « Non. »"
+    assert "veste grise" in vu["json"]["messages"][0]["content"]
+    # Le 28/09, dix défauts de 150 caractères pour un seul plan ont fait « Retours trop longs » :
+    # trois par plan partent, le reste est laissé.
+    bavard = [{"plan": 1, "t_s": k / 2, "quoi": "deux femmes identiques en manteau rouge " * 4} for k in range(10)]
+    r = c.post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={"defauts": bavard + [
+        {"plan": 2, "t_s": 9.2, "quoi": "veste grise"}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["retours"].count("Shot 1,") == 3 and "Shot 2, at 9.2 s: veste grise" in r.json()["retours"]
+    assert c.post(f"/video-h3/scenario/{sid}/corriger", headers=CLE,
+                  json={"retours": "x" * 2001}).status_code == 400
+
+
+def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeypatch, tmp_path):
+    v = h3.video_h3
+    sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    extraits = []
+    monkeypatch.setattr(h3.montage, "extraire", lambda f, a, b: extraits.append((a, b)) or b"X%d" % a)
+    monkeypatch.setattr(h3.montage, "recoller_son", lambda a, b, retirer: a + b)
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 124)
+    tournes = []
+
+    def tourner(jid, code, precedent, retirer):
+        job = h3.read_job(jid)
+        tournes.append((precedent, job["video"]))
+        job["video"]["secondes"] = round(248 / 24, 2)   # la chaîne : plan 1 repris + plan 2 neuf
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "run_video_h3", tourner)
+    poses = []
+    monkeypatch.setattr(h3, "_mettre_musique", lambda *a: poses.append(a) or "d" * 32)
+    fils, vrai = [], h3.run_scenario_h3
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    c = client(h3)
+    r = c.post(f"/video-h3/scenario/{sid}/rejouer", headers=CLE, json={"plans": plans})
+    assert r.status_code == 400 and "Aucun plan n'a changé" in r.json()["detail"]
+    nouveaux = [dict(plans[0]), dict(plans[1], image_paroles="Léa, en manteau rouge, répond « Non. »"),
+                dict(plans[2])]
+    r = c.post(f"/video-h3/scenario/{sid}/rejouer", headers=CLE, json={"plans": nouveaux})
+    assert r.status_code == 200, r.text
+    assert r.json()["repris"] == [1, 3] and r.json()["parent"] == sid
+    assert r.json()["plans_initiaux"] == plans
+    vrai(*fils[0])
+    sc = v.scenario_lire(r.json()["id"])
+    assert sc["etat"] == "réussi", sc["erreur"]
+    assert extraits == [(0, 124), (248, 372)]   # plans 1 et 3 découpés dans l'ancien film
+    (precedent, video), = tournes                 # un seul plan loué
+    assert h3.read_job(precedent)["video"]["mode"] == "reprise"   # il se recolle au plan 1 repris
+    assert video["graine"] != 2809 and "manteau rouge" in video["invite"]
+    assert sc["fins_images"] == [124, 248, 372]
+    assert poses and poses[0][1:] == ("c" * 32, pytest.approx(124 / 24), 0.3)
+    assert sc["film"] == "d" * 32
+
+
+def test_la_page_propose_juger_corriger_rejouer_et_la_musique(h3):
+    html = client(h3).get("/video-h3").text
+    for morceau in ('id="scenario_juger"', 'id="scenario_corriger"', 'id="scenario_rejouer"', 'id="retours"',
+                    'id="scenario_choix"', "/video-h3/scenarios", "function diffGras", 'id="musique_poser"',
+                    "/video-h3/musique", "Retourner ce plan même inchangé", "defauts: DEFAUTS.filter",
+                    'id="scenario_auto"', "retourner: fautifs.map"):
+        assert morceau in html
 
 
 def test_le_routeur_envoie_l_image_de_depart_a_google(routeur, monkeypatch):

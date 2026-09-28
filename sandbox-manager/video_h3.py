@@ -639,6 +639,85 @@ def scenario_noter(sid: str, **champs) -> dict:
     return scenario_ecrire(sc)
 
 
+# --- Juger, corriger, rejouer un scénario tourné (28/09) ------------------------
+# Demande du propriétaire : un bouton pour faire juger les plans, le scénario
+# remis à jour d'après les retours (les changements en gras), un bouton pour
+# rejouer. Essai du 28/09 : Gemini, par le routeur, a vu sur la planche du plan 2
+# « Léa porte une veste grise au lieu de sa veste rouge » ; il n'a pas vu la
+# silhouette de dos vers 6,5 s. Une aide, pas une garantie.
+
+MODELE_JUGE = "free-ai-max"   # le modèle plus fort du routeur, gratuit, son propre quota
+
+
+def consigne_jugement(noms: list) -> str:
+    refs = " ".join(f"Image {k + 1} shows {nom}, a reference picture." for k, nom in enumerate(noms))
+    # Le modèle rend le NUMÉRO de l'image, le Studio en fait l'heure : le 28/09,
+    # un départ mal annoncé dans la consigne a décalé sa réponse d'une seconde.
+    return (refs + f" Image {len(noms) + 1} is a contact sheet of ONE video shot: frames numbered from 1, "
+            "one every 0.5 s, read left to right then top to bottom; black cells after the end are empty. "
+            # Neutre, sans questions qui cherchent la faute : le 28/09, la consigne
+            # d'avant faisait trouver un défaut même au plan repris tel quel.
+            "Say whether the characters stay consistent with their reference pictures throughout the shot. "
+            "Many shots have no problem: then answer ok with an empty list. Report only what you clearly see, "
+            "each problem once, at the first frame where it appears, in one short sentence. "
+            "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", "
+            "\"defauts\": [{\"image\": frame number, \"quoi\": \"what is wrong\"}]}.")
+
+
+def lire_jugement(reponse: str, debut_s: float, nombre: int) -> dict:
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or d.get("verdict") not in ("ok", "defaut"):
+        raise ValueError("Le jugement du chat n'a pas pu être lu : réessayez.")
+    defauts = []
+    for x in d.get("defauts") or []:
+        try:
+            i = int(x.get("image"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        quoi = " ".join(str(x.get("quoi") or "").split())[:300]
+        if 1 <= i <= nombre and quoi:   # une image qui n'existe pas n'a rien montré
+            defauts.append({"t_s": round(debut_s + (i - 1) * 0.5, 1), "quoi": quoi})
+    return {"verdict": d["verdict"], "defauts": defauts}
+
+
+def consigne_correction(plans: list, retours: str) -> str:
+    return ("Here are the shots of a short film (JSON) and the feedback after shooting them. Rewrite the shots "
+            "so that the feedback is fixed: be explicit about who is in the frame and what they wear. Keep the "
+            "same number of shots in the same order, keep each \"enchainement\", and copy every line of "
+            "dialogue between « » EXACTLY in its own shot; never add, move or remove dialogue. Change only what "
+            "the feedback requires; write in the language of the shots. Answer with the JSON array only.\n\n"
+            "Shots: %s\n\nFeedback: %s" % (json.dumps(plans, ensure_ascii=False), retours))
+
+
+def lire_correction(reponse: str, plans: list) -> list:
+    """La correction du chat, contrôlée : mêmes plans, mêmes répliques à la même place."""
+    nouveaux = lire_decoupage(reponse, " ".join(p["image_paroles"] + " " + p["ambiance"] for p in plans))
+    if len(nouveaux) != len(plans):
+        raise ValueError("La correction a changé le nombre de plans : réessayez.")
+    for i, (n, p) in enumerate(zip(nouveaux, plans)):
+        if repliques(n["image_paroles"] + " " + n["ambiance"]) != repliques(p["image_paroles"] + " " + p["ambiance"]):
+            raise ValueError(f"La correction a déplacé ou retiré une réplique (plan {i + 1}) : réessayez.")
+    return [dict(n, enchainement=p["enchainement"]) for n, p in zip(nouveaux, plans)]
+
+
+def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:
+    """Les numéros (0…) des plans repris tels quels au lieu d'être retournés :
+    inchangés, non demandés, et, pour une « suite », après un plan repris
+    (elle part de sa dernière image)."""
+    repris = []
+    for i, p in enumerate(nouveaux):
+        pareil = i < len(anciens) and all(p[k] == anciens[i].get(k) for k in ("image_paroles", "ambiance",
+                                                                              "enchainement"))
+        if pareil and (i + 1) not in retourner and (p["enchainement"] == "coupe" or (i - 1) in repris):
+            repris.append(i)
+    return repris
+
+
 # --- Le graphe ComfyUI -------------------------------------------------------------
 
 def _n(classe: str, entrees: dict) -> dict:
@@ -1388,6 +1467,42 @@ PAGE_HTML = r"""<!doctype html>
     <button id="scenario_tourner" hidden>Tourner le scénario</button>
     <button id="scenario_arreter" hidden>Arrêter le tournage</button>
     <p class="note" id="scenario_etat"></p>
+    <label for="scenario_choix">Reprendre un scénario déjà tourné</label>
+    <select id="scenario_choix"><option value="">Choisissez un scénario…</option></select>
+    <div id="scenario_suite" hidden>
+      <button id="scenario_juger">Faire juger les plans</button>
+      <span class="note">le chat du Studio (Free AI Max, un modèle qui voit, gratuit) compare chaque plan aux fiches, sur une
+      planche d'une image toutes les 0,5 s. Une aide : il peut manquer un défaut.</span>
+      <div id="jugement"></div>
+      <label for="retours">Vos remarques sur le film</label>
+      <textarea id="retours" maxlength="2000"></textarea>
+      <button id="scenario_corriger">Remettre le scénario à jour d'après les retours</button>
+      <p class="note">Les plans ci-dessus montrent en <b>gras</b> ce qui a changé depuis le scénario initial
+      (<s>barré</s> : retiré). Au rejeu, seuls les plans changés ou cochés sont retournés et payés ; les autres
+      sont repris tels quels, et la musique est reposée.</p>
+      <button id="scenario_rejouer">Rejouer le scénario</button>
+      <label for="auto_tours">Tout seul : juger, corriger les plans fautifs, les rejouer, rejuger</label>
+      <select id="auto_tours"><option value="1">1 tour</option><option value="2" selected>2 tours au plus</option>
+        <option value="3">3 tours au plus</option></select>
+      <button id="scenario_auto">Corriger tout seul</button>
+      <span class="note">chaque tour ne retourne (et ne paie) que les plans où le juge voit un défaut, puis recolle
+      le film avec les autres et repose la musique ; il s'arrête dès qu'aucun défaut n'est vu. Gardez la page ouverte.</span>
+    </div>
+  </div>
+  <div class="image_bord">
+    <b>Poser une musique sous un film</b>
+    <span class="note">une chanson du Studio (page Chanson) sous le son du film, du début choisi à la fin, avec
+    un decrescendo final ; rien n'est loué.</span>
+    <label for="musique_film">Film</label>
+    <select id="musique_film"></select>
+    <label for="musique_chanson">Musique</label>
+    <select id="musique_chanson"></select>
+    <label for="musique_debut">Début de la musique (secondes)</label>
+    <input id="musique_debut" type="number" min="0" step="0.01" value="0">
+    <label for="musique_volume">Volume (de 0,05 à 1)</label>
+    <input id="musique_volume" type="number" min="0.05" max="1" step="0.05" value="0.3">
+    <button id="musique_poser">Poser la musique</button>
+    <p class="note" id="musique_etat"></p>
   </div>
 </div>
 
@@ -1858,17 +1973,47 @@ async function chargerClips(){
     .concat(avant.map(id => d.clips.find(c => c.id === id)).filter(Boolean));
   COCHES = new Set([...COCHES].filter(id => CLIPS.some(c => c.id === id)));
   dessinerClips();
-  const sc = document.getElementById("scenario_chanson");
-  const gardeSc = sc.value;
-  sc.innerHTML = '<option value="">Aucune (musique décrite au clip)</option>';
-  for (const c of (d.chansons || [])){
+  for (const [idSel, vide] of [["scenario_chanson", "Aucune (musique décrite au clip)"], ["musique_chanson", ""]]){
+    const sc = document.getElementById(idSel);
+    const gardeSc = sc.value;
+    sc.innerHTML = vide ? '<option value="">' + vide + '</option>' : "";
+    for (const c of (d.chansons || [])){
+      const o = document.createElement("option");
+      o.value = c.id;
+      o.textContent = c.titre + " (" + quandLocal(c.cree_a) + ")";
+      sc.appendChild(o);
+    }
+    if ((d.chansons || []).some(c => c.id === gardeSc)) sc.value = gardeSc;
+  }
+  const mf = document.getElementById("musique_film");
+  const gardeMf = mf.value;
+  mf.innerHTML = "";
+  for (const c of CLIPS){
     const o = document.createElement("option");
     o.value = c.id;
-    o.textContent = c.titre + " (" + quandLocal(c.cree_a) + ")";
-    sc.appendChild(o);
+    o.textContent = quandLocal(c.cree_a) + " · " + fr(c.secondes || 0, 1) + " s · " + (c.invite || "").slice(0, 60);
+    mf.appendChild(o);
   }
-  sc.value = (d.chansons || []).some(c => c.id === gardeSc) ? gardeSc : "";
+  if (CLIPS.some(c => c.id === gardeMf)) mf.value = gardeMf;
 }
+
+document.getElementById("musique_poser").addEventListener("click", async () => {
+  const e = document.getElementById("musique_etat");
+  e.className = "note";
+  e.textContent = "Pose de la musique…";
+  const r = await fetch("/video-h3/musique", {method: "POST", headers: H, body: JSON.stringify({
+    film: document.getElementById("musique_film").value, chanson: document.getElementById("musique_chanson").value,
+    debut_s: Number(document.getElementById("musique_debut").value) || 0,
+    volume: Number(document.getElementById("musique_volume").value) || 0.3})});
+  const j = await r.json();
+  if (!r.ok){ e.className = "refus"; e.textContent = typeof j.detail === "string" ? j.detail : "Refusé."; return; }
+  e.textContent = "Musique posée : le film est ci-dessus.";
+  const lien = await fetch("/video/jobs/" + j.id, {headers: H}).then(x => x.json());
+  document.getElementById("montage_resultat").hidden = false;
+  document.getElementById("montage_lecteur").src = lien.video_url;
+  document.getElementById("montage_telecharger").href = lien.video_url + "&telecharger=1&nom=film-h3";
+  chargerClips();
+});
 
 function dessinerClips(){
   const liste = document.getElementById("clips_liste");
@@ -1940,6 +2085,27 @@ document.getElementById("montage_lancer").addEventListener("click", async () => 
 
 // Tourner un scénario neuf : le chat découpe, le propriétaire relit, le Studio tourne.
 let PLANS = [], ENCHAINEMENTS = __ENCHAINEMENTS__, SCENARIO = null;
+// Un scénario déjà tourné, repris : ses plans initiaux (pour le gras) et les plans à retourner.
+let PLANS_INITIAUX = null, SCENARIO_TOURNE = null, RETOURNER = new Set();
+
+// Les mots du plan, en gras ce qui n'était pas dans le plan initial, barré ce qui en a été retiré.
+function diffGras(avant, apres){
+  const a = (avant || "").split(/\s+/).filter(Boolean), b = (apres || "").split(/\s+/).filter(Boolean);
+  const L = Array.from({length: a.length + 1}, () => new Array(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--)
+    for (let j = b.length - 1; j >= 0; j--)
+      L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const bloc = document.createElement("p");
+  bloc.className = "note";
+  const mot = (t, balise) => { const e = document.createElement(balise); e.textContent = t; bloc.append(e, " "); };
+  let i = 0, j = 0;
+  while (i < a.length || j < b.length){
+    if (i < a.length && j < b.length && a[i] === b[j]){ mot(b[j], "span"); i++; j++; }
+    else if (i < a.length && (j >= b.length || L[i + 1][j] >= L[i][j + 1])){ mot(a[i], "s"); i++; }
+    else { mot(b[j], "b"); j++; }
+  }
+  return bloc;
+}
 
 function scenarioEtat(t, refus){
   const e = document.getElementById("scenario_etat");
@@ -1957,12 +2123,19 @@ function dessinerPlans(){
     t.textContent = "Plan " + (i + 1);
     const vue = document.createElement("textarea");
     vue.value = p.image_paroles;
-    vue.addEventListener("input", () => { p.image_paroles = vue.value; });
     const son = document.createElement("input");
     son.type = "text";
     son.value = p.ambiance;
     son.placeholder = "Ambiance sonore";
-    son.addEventListener("input", () => { p.ambiance = son.value; });
+    const ecart = document.createElement("div");
+    const init = PLANS_INITIAUX && PLANS_INITIAUX[i];
+    const majEcart = () => {
+      ecart.innerHTML = "";
+      if (init) ecart.append(diffGras(init.image_paroles, p.image_paroles), diffGras(init.ambiance, p.ambiance));
+    };
+    majEcart();
+    vue.addEventListener("input", () => { p.image_paroles = vue.value; majEcart(); });
+    son.addEventListener("input", () => { p.ambiance = son.value; majEcart(); });
     const ench = document.createElement("select");
     for (const [cle, titre] of Object.entries(ENCHAINEMENTS)){
       const o = document.createElement("option");
@@ -1973,12 +2146,22 @@ function dessinerPlans(){
     ench.value = p.enchainement;
     ench.disabled = i === 0;
     ench.addEventListener("change", () => { p.enchainement = ench.value; });
-    bloc.append(t, vue, son, ench, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
+    bloc.append(t, vue, son, ecart, ench, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
+    if (SCENARIO_TOURNE){
+      const coche = document.createElement("input");
+      coche.type = "checkbox";
+      coche.checked = RETOURNER.has(i + 1);
+      coche.addEventListener("change", () => { coche.checked ? RETOURNER.add(i + 1) : RETOURNER.delete(i + 1); });
+      const etiquette = document.createElement("label");
+      etiquette.append(coche, " Retourner ce plan même inchangé");
+      bloc.appendChild(etiquette);
+    }
     liste.appendChild(bloc);
   });
   const max = ETAT ? ETAT.prolonger.plans_max : 4;
   document.getElementById("plan_ajouter").hidden = !PLANS.length || PLANS.length >= max;
-  document.getElementById("scenario_tourner").hidden = !PLANS.length;
+  // Un scénario repris se rejoue (plans changés seulement), il ne se retourne pas en entier.
+  document.getElementById("scenario_tourner").hidden = !PLANS.length || !!SCENARIO_TOURNE;
   const opt = document.getElementById("longueur").selectedOptions[0];
   const prix = opt && ETAT ? (ETAT.durees.find(x => String(x.images) === opt.value) || {}).prix_estime_usd : null;
   document.getElementById("scenario_prix").textContent = PLANS.length
@@ -1993,8 +2176,169 @@ document.getElementById("scenario_decouper").addEventListener("click", async () 
   const d = await r.json();
   if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
   PLANS = d.plans;
+  PLANS_INITIAUX = null;
+  SCENARIO_TOURNE = null;
+  document.getElementById("scenario_suite").hidden = true;
   dessinerPlans();
   scenarioEtat("Relisez et corrigez les plans, puis tournez.");
+});
+
+async function chargerScenarios(){
+  const r = await fetch("/video-h3/scenarios", {headers: H});
+  if (!r.ok) return;
+  const sel = document.getElementById("scenario_choix");
+  const garde = sel.value;
+  sel.innerHTML = '<option value="">Choisissez un scénario…</option>';
+  for (const s of (await r.json()).scenarios.filter(x => x.etat === "réussi")){
+    const o = document.createElement("option");
+    o.value = s.id;
+    o.textContent = quandLocal(s.cree_a) + " · " + s.plans + " plans · " + s.debut;
+    sel.appendChild(o);
+  }
+  sel.value = garde;
+}
+
+let DEFAUTS = [];
+
+function dessinerJugement(jugement){
+  const zone = document.getElementById("jugement");
+  zone.innerHTML = "";
+  DEFAUTS = [];
+  for (const j of jugement || []){
+    if (!j.defauts.length){
+      const p = document.createElement("p");
+      p.className = "note";
+      p.textContent = "Plan " + j.plan + " : " + (j.verdict === "ok" ? "rien à signaler." : "défaut signalé sans image précise.");
+      zone.appendChild(p);
+      continue;
+    }
+    for (const x of j.defauts){
+      const d = {plan: j.plan, t_s: x.t_s, quoi: x.quoi, garde: true};
+      DEFAUTS.push(d);
+      const label = document.createElement("label");
+      label.className = "refus";
+      const c = document.createElement("input");
+      c.type = "checkbox";
+      c.checked = true;
+      c.addEventListener("change", () => { d.garde = c.checked; });
+      label.append(c, " Plan " + j.plan + ", à " + fr(x.t_s, 1) + " s : " + x.quoi);
+      zone.appendChild(label);
+      zone.appendChild(document.createElement("br"));
+    }
+  }
+}
+
+async function ouvrirScenario(sid){
+  const sc = await fetch("/video-h3/scenario/" + sid, {headers: H}).then(r => r.json());
+  if (sc.etat !== "réussi") return;
+  SCENARIO_TOURNE = sid;
+  PLANS = sc.plans.map(p => Object.assign({}, p));
+  PLANS_INITIAUX = sc.plans_initiaux || sc.plans;
+  RETOURNER = new Set();
+  document.getElementById("scenario_suite").hidden = false;
+  document.getElementById("scenario_choix").value = sid;
+  dessinerJugement(sc.jugement);
+  dessinerPlans();
+  document.getElementById("scenario_tourner").hidden = true;
+  if (sc.video_url){
+    document.getElementById("montage_resultat").hidden = false;
+    document.getElementById("montage_lecteur").src = sc.video_url;
+    document.getElementById("montage_telecharger").href = sc.video_url + "&telecharger=1&nom=film-h3";
+  }
+}
+
+document.getElementById("scenario_choix").addEventListener("change", e => {
+  if (e.target.value) ouvrirScenario(e.target.value);
+});
+
+document.getElementById("scenario_juger").addEventListener("click", async () => {
+  if (!SCENARIO_TOURNE) return;
+  scenarioEtat("Le chat du Studio regarde chaque plan…");
+  const r = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/juger", {method: "POST", headers: H, body: "{}"});
+  const d = await r.json();
+  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  dessinerJugement(d.jugement);
+  scenarioEtat("Jugement reçu : corrigez le scénario d'après les retours, ou rejouez.");
+});
+
+document.getElementById("scenario_corriger").addEventListener("click", async () => {
+  if (!SCENARIO_TOURNE) return;
+  scenarioEtat("Le chat du Studio remet les plans à jour…");
+  const r = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/corriger", {method: "POST", headers: H,
+    body: JSON.stringify({retours: document.getElementById("retours").value, defauts: DEFAUTS.filter(d => d.garde)})});
+  const d = await r.json();
+  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  PLANS = d.plans;
+  dessinerPlans();
+  document.getElementById("scenario_tourner").hidden = true;
+  scenarioEtat("Plans remis à jour : les changements sont en gras. Relisez, puis rejouez.");
+});
+
+document.getElementById("scenario_rejouer").addEventListener("click", async () => {
+  if (!SCENARIO_TOURNE) return;
+  scenarioEtat("Contrôle et traduction des plans à retourner…");
+  const r = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/rejouer", {method: "POST", headers: H,
+    body: JSON.stringify({plans: PLANS, retourner: [...RETOURNER]})});
+  const d = await r.json();
+  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  SCENARIO = d.id;
+  scenarioEtat("Rejeu lancé : " + (d.repris.length ? "plan(s) " + d.repris.join(", ") + " repris tels quels." : "tout est retourné."));
+  suivreScenario(d.id);
+});
+
+async function appeler(chemin, corps){
+  const r = await fetch(chemin, {method: "POST", headers: H, body: JSON.stringify(corps || {})});
+  const d = await r.json();
+  if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Refusé.");
+  return d;
+}
+
+async function attendreScenario(sid){
+  for (;;){
+    await new Promise(ok => setTimeout(ok, 10000));
+    const sc = await fetch("/video-h3/scenario/" + sid, {headers: H}).then(r => r.json());
+    if (sc.etat !== "en cours") return sc;
+    const faits = (sc.statuts || []).filter(s => s.status === "succeeded").length;
+    scenarioEtat("Tout seul : tournage, plan " + Math.min(faits + 1, sc.plans.length) + " sur " + sc.plans.length + "…");
+  }
+}
+
+// La boucle du propriétaire (28/09) : juger, corriger le texte des plans
+// fautifs, ne rejouer qu'eux, recoller, rejuger ; au plus N tours.
+async function corrigerToutSeul(sid, tours){
+  for (let tour = 1; ; tour++){
+    scenarioEtat("Tout seul, tour " + tour + " : le juge regarde chaque plan…");
+    const j = await appeler("/video-h3/scenario/" + sid + "/juger");
+    dessinerJugement(j.jugement);
+    const fautifs = j.jugement.filter(x => x.defauts.length);
+    if (!fautifs.length) return scenarioEtat("Tout seul : aucun défaut vu après " + (tour - 1) + " rejeu(x). Film prêt.");
+    if (tour > tours) return scenarioEtat("Tout seul : " + tours + " tour(s) faits, défauts restants aux plans "
+      + fautifs.map(x => x.plan).join(", ") + ". À vous de voir.", true);
+    scenarioEtat("Tout seul, tour " + tour + " : correction du texte des plans " + fautifs.map(x => x.plan).join(", ") + "…");
+    const c = await appeler("/video-h3/scenario/" + sid + "/corriger", {retours: "", defauts: DEFAUTS});
+    PLANS = c.plans;
+    dessinerPlans();
+    const r = await appeler("/video-h3/scenario/" + sid + "/rejouer", {plans: PLANS, retourner: fautifs.map(x => x.plan)});
+    const sc = await attendreScenario(r.id);
+    if (sc.etat !== "réussi") return scenarioEtat("Tout seul : rejeu " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
+    sid = r.id;
+    chargerClips();
+    await chargerScenarios();
+    await ouvrirScenario(sid);
+  }
+}
+
+document.getElementById("scenario_auto").addEventListener("click", async () => {
+  if (!SCENARIO_TOURNE) return;
+  const bouton = document.getElementById("scenario_auto");
+  bouton.disabled = true;
+  try {
+    await corrigerToutSeul(SCENARIO_TOURNE, Number(document.getElementById("auto_tours").value));
+  } catch (e) {
+    scenarioEtat("Tout seul : " + e.message, true);
+  } finally {
+    bouton.disabled = false;
+  }
 });
 
 document.getElementById("plan_ajouter").addEventListener("click", () => {
@@ -2008,11 +2352,9 @@ function suivreScenario(sid){
     document.getElementById("scenario_arreter").hidden = sc.etat !== "en cours";
     if (sc.etat === "réussi"){
       scenarioEtat("Scénario tourné : " + sc.plans.length + " plans recollés.");
-      document.getElementById("montage_resultat").hidden = false;
-      document.getElementById("montage_lecteur").src = sc.video_url;
-      document.getElementById("montage_telecharger").href = sc.video_url + "&telecharger=1&nom=film-h3";
       chargerClips();
       rafraichir();
+      chargerScenarios().then(() => ouvrirScenario(sid));
       return;
     }
     if (sc.etat !== "en cours"){
@@ -2056,7 +2398,7 @@ document.getElementById("scenario_arreter").addEventListener("click", async () =
 brancherBord("premiere");
 brancherBord("derniere");
 document.getElementById("image_paroles").addEventListener("input", majInvitesImages);
-rafraichir().then(majInvitesImages).then(() => chargerFiches("")).then(chargerClips);
+rafraichir().then(majInvitesImages).then(() => chargerFiches("")).then(chargerClips).then(chargerScenarios);
 </script>
 </body>
 </html>

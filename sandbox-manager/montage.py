@@ -147,6 +147,50 @@ def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0
         return sortie.read_bytes()
 
 
+PLANCHE_IMAGES = 12   # 4 x 3, une image toutes les 0,5 s : un plan de 5 s y tient
+
+
+def planche(video: bytes, debut_s: float, duree_s: float) -> tuple[bytes, int]:
+    """Une planche PNG du passage [debut_s, debut_s + duree_s) : une image toutes
+    les 0,5 s, numérotées de gauche à droite puis de haut en bas (28/09/2026,
+    pour faire juger un plan par un modèle qui voit). Rend (png, nombre d'images)."""
+    nombre = max(1, min(PLANCHE_IMAGES, int(-(-duree_s * 2 // 1))))
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "a.mp4"), Path(dossier, "planche.png")
+        a.write_bytes(video)
+        _lancer(["-ss", "%.3f" % debut_s, "-t", "%.3f" % duree_s, "-i", str(a),
+                 "-vf", "fps=2,scale=416:-1,tile=4x3", "-frames:v", "1", str(sortie)],
+                "La planche du plan")
+        if not sortie.is_file() or not sortie.stat().st_size:
+            raise MontageImpossible("La planche du plan n'a pas pu être faite.")
+        return sortie.read_bytes(), nombre
+
+
+def extraire(video: bytes, premiere: int, fin: int) -> bytes:
+    """Les images [premiere, fin) d'un film, son compris : un plan déjà tourné,
+    repris tel quel quand un scénario est rejoué (28/09/2026). Un seul
+    réencodage (crf 18), comme au recollage."""
+    if not 0 <= premiere < fin:
+        raise MontageImpossible("Le passage à reprendre est vide.")
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "a.mp4"), Path(dossier, "extrait.mp4")
+        a.write_bytes(video)
+        num, den = _cadence(a)
+        _lancer(["-i", str(a), "-filter_complex",
+                 "[0:v]trim=start_frame=%d:end_frame=%d,setpts=PTS-STARTPTS[v0];"
+                 "[v0]settb=%d/%d,setpts=N[v];"
+                 "[0:a]atrim=start=%.6f:end=%.6f,asetpts=PTS-STARTPTS[a]"
+                 % (premiere, fin, den, num, premiere * den / num, fin * den / num),
+                 "-map", "[v]", "-map", "[a]", "-r", "%d/%d" % (num, den),
+                 "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+                 "-c:a", "aac", "-movflags", "+faststart", str(sortie)],
+                "La reprise du plan")
+        if images(sortie) != fin - premiere:
+            raise MontageImpossible("La reprise du plan a rendu %d images au lieu de %d."
+                                    % (images(sortie), fin - premiere))
+        return sortie.read_bytes()
+
+
 def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
