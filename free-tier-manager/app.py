@@ -3325,6 +3325,10 @@ IMAGE_MODEL = "free-ai-image"
 IMAGE_MAX_N = 4
 
 
+IMAGE_REFERENCE = re.compile(r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)\Z")
+IMAGE_REFERENCE_MAX_B64 = 8 * 1024 * 1024 * 4 // 3 + 4
+
+
 def aspect_ratio(size: Any) -> Optional[str]:
     """Traduit un << 1024x1024 >> d'Open WebUI en proportion comprise par Google."""
     try:
@@ -3361,6 +3365,16 @@ async def images_generations(request: Request, authorization: Optional[str] = He
         pass
 
     corps: Dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
+    # Une image de depart, facultative (fiches de casting de la video H3, PLAN
+    # 18.9) : Google la recoit avant le texte et garde la meme personne sous un
+    # autre angle. Champ propre au Studio ; Open WebUI ne l'envoie pas.
+    reference = str(payload.get("image_reference") or "")
+    if reference:
+        m = IMAGE_REFERENCE.match(reference)
+        if not m or len(m.group(2)) > IMAGE_REFERENCE_MAX_B64:
+            raise HTTPException(status_code=400,
+                                detail="Image de depart illisible ou trop lourde (PNG, JPEG ou WebP, 8 Mo).")
+        corps["contents"][0]["parts"].insert(0, {"inlineData": {"mimeType": m.group(1), "data": m.group(2)}})
     ratio = aspect_ratio(payload.get("size"))
     if ratio:
         corps["generationConfig"] = {"imageConfig": {"aspectRatio": ratio}}

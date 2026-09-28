@@ -26,6 +26,7 @@ def h3(sandbox, monkeypatch, tmp_path):
     monkeypatch.setattr(v, "DOSSIER_AUTORISATION", tmp_path / "h3-autorisation")
     monkeypatch.setattr(v, "FICHE_AUTORISATION", tmp_path / "h3-autorisation" / "fiche.json")
     monkeypatch.setattr(v, "FICHE_POIDS", tmp_path / "h3-poids.json")
+    monkeypatch.setattr(v, "DOSSIER_FICHES", tmp_path / "h3-fiches")
     monkeypatch.setattr(sandbox.budget_modal, "FICHIER", tmp_path / "modal-budget.json")
     monkeypatch.setattr(sandbox.budget_modal, "_releve_reel", lambda: None)
     monkeypatch.setenv("VIDEO_H3_ACTIF", "true")
@@ -41,6 +42,7 @@ def client(sandbox):
 @pytest.mark.parametrize("methode,chemin", [
     ("get", "/video-h3"), ("get", "/video-h3/etat"), ("post", "/video-h3/autorisation"),
     ("post", "/video-h3/poids/preparer"), ("post", "/video-h3/creer"), ("post", "/video-h3/image"),
+    ("get", "/video-h3/fiches"), ("post", "/video-h3/fiches"),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -591,3 +593,106 @@ def test_la_langue_des_paroles_se_choisit_parmi_les_onze(h3):
     assert v.preparer(demande())["resume_public"]["langue"] == "French"
     with pytest.raises(ValueError, match="Langue"):
         v.preparer(demande(langue="Klingon"))
+
+
+# --- Fiches de casting (PLAN 18.9) ------------------------------------------------
+
+JPG = base64.b64encode(b"\xff\xd8\xff\xe0" + b"\0" * 64).decode()
+
+
+def test_une_fiche_se_cree_image_par_image_se_rejoue_et_se_supprime(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    c = client(h3)
+    assert c.post("/video-h3/fiches", headers=CLE, json={"nom": "", "description": "x"}).status_code == 400
+    f = c.post("/video-h3/fiches", headers=CLE,
+               json={"nom": "Léa", "description": "Femme de 35 ans, manteau rouge"}).json()
+    fid = f["id"]
+    # Les autres angles partent du portrait de face : sans lui, refus.
+    r = c.post(f"/video-h3/fiches/{fid}/images/profil", headers=CLE, json={})
+    assert r.status_code == 400 and "portrait de face" in r.json()["detail"]
+
+    vu = {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteur(200, {"data": [{"url": "data:image/png;base64," + PNG}]}, vu))
+    f = c.post(f"/video-h3/fiches/{fid}/images/face", headers=CLE, json={}).json()
+    assert "Femme de 35 ans, manteau rouge" in vu["json"]["prompt"] and "image_reference" not in vu["json"]
+    assert f["images"]["face"] == "data:image/png;base64," + PNG
+
+    f = c.post(f"/video-h3/fiches/{fid}/images/trois_quarts", headers=CLE, json={}).json()
+    assert vu["json"]["image_reference"] == "data:image/png;base64," + PNG   # le visage suit
+    assert "même personne" in vu["json"]["prompt"]
+    # Rejouer = redemander le même angle ; un téléversement remplace sans appeler Google.
+    vu.clear()
+    f = c.post(f"/video-h3/fiches/{fid}/images/trois_quarts", headers=CLE, json={"image": JPG}).json()
+    assert vu == {} and f["images"]["trois_quarts"].startswith("data:image/jpeg;base64,")
+    assert sorted(p.name for p in (h3.video_h3.DOSSIER_FICHES / fid).iterdir()) == \
+        ["face.png", "fiche.json", "trois_quarts.jpg"]
+
+    liste = c.get("/video-h3/fiches", headers=CLE).json()
+    assert [x["angles"] for x in liste["fiches"]] == [["face", "trois_quarts"]]
+    assert list(liste["angles"]) == ["face", "trois_quarts", "pied", "profil"]
+
+    f = c.delete(f"/video-h3/fiches/{fid}/images/face", headers=CLE).json()
+    assert list(f["images"]) == ["trois_quarts"]
+    assert c.delete(f"/video-h3/fiches/{fid}", headers=CLE).status_code == 200
+    assert c.get(f"/video-h3/fiches/{fid}", headers=CLE).status_code == 404
+    assert not (h3.video_h3.DOSSIER_FICHES / fid).exists()
+
+
+def test_une_fiche_refuse_les_identifiants_et_angles_inventes(h3):
+    c = client(h3)
+    for chemin in ("/video-h3/fiches/..%2F..%2Fsecrets", "/video-h3/fiches/abc"):
+        assert c.get(chemin, headers=CLE).status_code == 404
+    fid = h3.video_h3.fiche_creer("Léa", "une femme")["id"]
+    r = c.post(f"/video-h3/fiches/{fid}/images/dos", headers=CLE, json={"image": PNG})
+    assert r.status_code == 400 and "Angle" in r.json()["detail"]
+    assert c.get("/video-h3/fiches", headers={"Authorization": "Bearer faux"}).status_code in (401, 403)
+
+
+def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3):
+    v = h3.video_h3
+    fid = v.fiche_creer("Léa", "femme de 35 ans, manteau rouge")["id"]
+    with pytest.raises(ValueError, match="aucune image"):
+        v.preparer(demande(mode="references", fiche=fid))
+    v.fiche_poser_image(fid, "face", PNG)
+    v.fiche_poser_image(fid, "pied", JPG)
+    plan = v.preparer(demande(mode="references", fiche=fid, images=[PNG],
+                              image_paroles="Elle sourit et dit « Bonjour. »"))
+    invite = plan["resume_public"]["invite"]
+    assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. "
+                             "detailed_description: Elle sourit")
+    # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
+    # personnage l'a récitée.
+    assert "manteau rouge" not in invite and "Léa" not in invite
+    assert "<Subject 1> (S1) <d>[French] Bonjour.</d>" in invite
+    assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]   # fiche, puis ajout
+    assert plan["resume_public"]["fiche"] == {"id": fid, "nom": "Léa"}
+    with pytest.raises(ValueError, match="Références"):
+        v.preparer(demande(mode="texte", fiche=fid))
+    with pytest.raises(ValueError, match="inconnue"):
+        v.preparer(demande(mode="references", fiche="0123456789ab"))
+
+
+def test_la_page_propose_les_fiches(h3):
+    html = client(h3).get("/video-h3").text
+    for morceau in ('id="fiche_choix"', 'id="fiche_ref"', "/video-h3/fiches/", "Rejouer", "Supprimer",
+                    'fiche: m === "references"'):
+        assert morceau in html
+
+
+def test_le_routeur_envoie_l_image_de_depart_a_google(routeur, monkeypatch):
+    vu = {}
+    reponse = {"candidates": [{"content": {"parts": [{"inlineData": {"data": PNG, "mimeType": "image/png"}}]}}]}
+    monkeypatch.setattr(routeur.httpx, "AsyncClient", _FauxRouteur(200, reponse, vu))
+    c = TestClient(routeur.app)
+    entete = {"Authorization": "Bearer cle-interne-de-test"}
+    r = c.post("/v1/images/generations", headers=entete,
+               json={"prompt": "la même, de profil", "image_reference": "data:image/jpeg;base64," + JPG})
+    assert r.status_code == 200
+    assert vu["json"]["contents"][0]["parts"] == [
+        {"inlineData": {"mimeType": "image/jpeg", "data": JPG}}, {"text": "la même, de profil"}]
+    r = c.post("/v1/images/generations", headers=entete, json={"prompt": "x", "image_reference": "http://ailleurs"})
+    assert r.status_code == 400
+    vu.clear()
+    c.post("/v1/images/generations", headers=entete, json={"prompt": "sans départ"})
+    assert vu["json"]["contents"][0]["parts"] == [{"text": "sans départ"}]

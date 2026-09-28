@@ -4097,6 +4097,12 @@ async def video_h3_image(request: Request, authorization: Optional[str] = Header
         texte = video_h3.texte_image(corps.get("texte", ""))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    return {"image": await _image_du_studio(
+        {"prompt": texte, "n": 1, "size": video_h3.TAILLE_IMAGE_DEMANDEE})}
+
+
+async def _image_du_studio(demande: dict) -> str:
+    """Une image par le routeur (Gemini) ; rend son data-URI ou lève une HTTPException."""
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
         raise HTTPException(503, "L'image du Studio n'est pas joignable d'ici : la clé interne du "
@@ -4105,7 +4111,7 @@ async def video_h3_image(request: Request, authorization: Optional[str] = Header
         async with httpx.AsyncClient(timeout=200) as client:
             r = await client.post(ROUTEUR_INTERNE + "/v1/images/generations",
                                   headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
-                                  json={"prompt": texte, "n": 1, "size": video_h3.TAILLE_IMAGE_DEMANDEE})
+                                  json=demande)
     except httpx.HTTPError as exc:
         raise HTTPException(502, "L'image du Studio ne répond pas (%s)." % type(exc).__name__) from exc
     try:
@@ -4119,7 +4125,83 @@ async def video_h3_image(request: Request, authorization: Optional[str] = Header
     images = [x.get("url") for x in d.get("data") or [] if str(x.get("url", "")).startswith("data:image/")]
     if not images:
         raise HTTPException(502, "L'image du Studio n'a rendu aucune image.")
-    return {"image": images[0]}
+    return images[0]
+
+
+# --- Fiches de casting (PLAN 18.9) : un personnage et ses images, gardés ici ---
+
+def _fiche_publique(fiche: dict, avec_images: bool = True) -> dict:
+    d = {k: fiche[k] for k in ("id", "nom", "description", "cree_le")}
+    d["images"] = {a: video_h3.fiche_image_data_url(fiche["id"], a) if avec_images else True
+                   for a in video_h3.ANGLES if a in fiche.get("images", {})}
+    return d
+
+
+def _fiche_ou_400(action):
+    try:
+        return action()
+    except ValueError as exc:
+        raise HTTPException(404 if "inconnue" in str(exc) else 400, str(exc)) from exc
+
+
+@app.get("/video-h3/fiches")
+def video_h3_fiches(authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return {"fiches": video_h3.fiches_liste(),
+            "angles": {a: titre for a, (titre, _) in video_h3.ANGLES.items()}}
+
+
+@app.post("/video-h3/fiches")
+async def video_h3_fiche_creer(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Une fiche vide ; la page fabrique ensuite ses images, angle par angle."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    fiche = _fiche_ou_400(lambda: video_h3.fiche_creer(corps.get("nom", ""), corps.get("description", "")))
+    return _fiche_publique(fiche)
+
+
+@app.get("/video-h3/fiches/{fid}")
+def video_h3_fiche(fid: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_lire(fid)))
+
+
+@app.delete("/video-h3/fiches/{fid}")
+def video_h3_fiche_supprimer(fid: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    _fiche_ou_400(lambda: video_h3.fiche_supprimer(fid))
+    return {"supprimee": fid}
+
+
+@app.post("/video-h3/fiches/{fid}/images/{angle}")
+async def video_h3_fiche_image(fid: str, angle: str, request: Request,
+                               authorization: Optional[str] = Header(default=None)):
+    """Crée (ou rejoue) une image de la fiche par l'image du Studio, ou pose
+    l'image téléversée si la page en envoie une (champ `image`)."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    fiche = _fiche_ou_400(lambda: video_h3.fiche_lire(fid))
+    image = corps.get("image") if isinstance(corps, dict) else None
+    if not image:
+        demande = _fiche_ou_400(lambda: video_h3.fiche_demande_image(fiche, angle))
+        image = await _image_du_studio(demande)
+    fiche = _fiche_ou_400(lambda: video_h3.fiche_poser_image(fid, angle, image))
+    return _fiche_publique(fiche)
+
+
+@app.delete("/video-h3/fiches/{fid}/images/{angle}")
+def video_h3_fiche_image_retirer(fid: str, angle: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_retirer_image(fid, angle)))
 
 
 @app.get("/video-h3", response_class=HTMLResponse)

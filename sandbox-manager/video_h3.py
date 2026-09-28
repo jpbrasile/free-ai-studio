@@ -30,6 +30,7 @@ import os
 import random
 import re
 import time
+from pathlib import Path
 from typing import Optional
 
 import budget_modal
@@ -193,19 +194,19 @@ LANGUES_PAROLES = {
 _PAROLES = re.compile(r"«\s*([^«»]+?)\s*»|“\s*([^“”]+?)\s*”|\"\s*([^\"]+?)\s*\"")
 
 
-def balises_paroles(texte: str, langue: str = LANGUE_PAROLES) -> str:
+def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(S1)") -> str:
     """Chaque réplique entre guillemets devient `(S1) <d>[langue] …</d>`.
     Un texte qui porte déjà ses balises `<d>` est laissé tel quel."""
     if "<d>" in texte:
         return texte
 
     def balise(m):
-        return f"(S1) <d>[{langue}] {next(g for g in m.groups() if g)}</d>"
+        return f"{locuteur} <d>[{langue}] {next(g for g in m.groups() if g)}</d>"
     return _PAROLES.sub(balise, texte)
 
 
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
-           langue: str = LANGUE_PAROLES) -> str:
+           langue: str = LANGUE_PAROLES, locuteur: str = "(S1)") -> str:
     """Une seule invite pour le modèle, à partir des trois cases de la page.
 
     H3 fabrique l'image ET le son à partir du même texte : la case « image et
@@ -218,7 +219,7 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     sans rien dire, H3 ajoute une musique (entendue le 27/09, PLAN 18.9).
     """
     morceaux = []
-    for texte, prefixe in ((balises_paroles(image_paroles, langue), ""), (ambiance, "Sound: "),
+    for texte, prefixe in ((balises_paroles(image_paroles, langue, locuteur), ""), (ambiance, "Sound: "),
                            (musique, "non_diegetic_music: ")):
         t = " ".join(str(texte or "").split())
         if t:
@@ -244,6 +245,148 @@ def texte_image(texte: str) -> str:
     if len(t) > 2000:
         raise ValueError("Description d'image trop longue (2 000 caractères au plus).")
     return t
+
+
+# --- Les fiches de casting (PLAN 18.9, V2) ----------------------------------------
+# Un personnage décrit une fois, et ses images, rejouées à chaque plan en mode
+# « Références ». Demande du propriétaire, 28/09 : « tu automatises la création
+# des images du casting à partir du texte, possibilité de rejouer ou supprimer
+# certaines ». Le portrait de face part du texte ; les autres angles partent du
+# portrait (image de départ envoyée à Google), pour garder le même visage.
+# Le prompt suit le guide de MiniMax (docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md) :
+# `<Subject 1>` défini une fois par ses `<Picture N>`, `<Subject 1> (S1)` quand il parle.
+
+DOSSIER_FICHES = budget_modal.CONFIG_DIR / "h3-fiches"
+ANGLES = {   # l'ordre est celui des <Picture N>
+    "face": ("De face", "portrait de face, cadré aux épaules, regard vers l'objectif"),
+    "trois_quarts": ("Trois-quarts", "portrait de trois-quarts, cadré à la taille"),
+    "pied": ("En pied", "en pied, de face, debout, tout le corps visible"),
+    "profil": ("Profil", "de profil, cadré à la taille"),
+}
+ANGLE_DEPART = "face"
+FICHE_NOM_MAX, FICHE_DESCRIPTION_MAX = 60, 800
+TAILLE_IMAGE_FICHE = "1024x1024"
+_ID_FICHE = re.compile(r"[0-9a-f]{12}")
+_EXTENSIONS = {b"\x89PNG": ".png", b"\xff\xd8\xff": ".jpg", b"RIFF": ".webp"}
+_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp"}
+
+
+def _dossier_fiche(fid) -> Path:
+    if not _ID_FICHE.fullmatch(str(fid or "")):
+        raise ValueError("Fiche inconnue.")
+    return DOSSIER_FICHES / str(fid)
+
+
+def fiche_lire(fid) -> dict:
+    try:
+        return json.loads((_dossier_fiche(fid) / "fiche.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("Fiche inconnue.") from exc
+
+
+def _fiche_ecrire(fiche: dict) -> None:
+    dossier = _dossier_fiche(fiche["id"])
+    dossier.mkdir(parents=True, exist_ok=True)
+    (dossier / "fiche.json").write_text(json.dumps(fiche, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def fiches_liste() -> list:
+    fiches = []
+    for f in sorted(DOSSIER_FICHES.glob("*/fiche.json")) if DOSSIER_FICHES.is_dir() else []:
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        fiches.append({"id": d["id"], "nom": d["nom"], "description": d["description"],
+                       "angles": [a for a in ANGLES if a in d.get("images", {})], "cree_le": d["cree_le"]})
+    return sorted(fiches, key=lambda d: d["cree_le"])
+
+
+def fiche_creer(nom: str, description: str) -> dict:
+    nom, description = " ".join(str(nom or "").split()), " ".join(str(description or "").split())
+    if not nom or len(nom) > FICHE_NOM_MAX:
+        raise ValueError(f"Donnez un nom au personnage ({FICHE_NOM_MAX} caractères au plus).")
+    if not description or len(description) > FICHE_DESCRIPTION_MAX:
+        raise ValueError(f"Décrivez le personnage ({FICHE_DESCRIPTION_MAX} caractères au plus) : "
+                         "âge, visage, coiffure, tenue.")
+    fiche = {"id": os.urandom(6).hex(), "nom": nom, "description": description,
+             "cree_le": time.strftime("%Y-%m-%d %H:%M:%S"), "images": {}}  # date-machine
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_supprimer(fid) -> None:
+    dossier = _dossier_fiche(fid)
+    fiche_lire(fid)
+    for f in dossier.iterdir():
+        f.unlink()
+    dossier.rmdir()
+
+
+def _angle(angle: str) -> str:
+    if angle not in ANGLES:
+        raise ValueError("Angle inconnu.")
+    return angle
+
+
+def fiche_demande_image(fiche: dict, angle: str) -> dict:
+    """Ce qu'on demande à l'image du Studio pour un angle : le texte, la taille,
+    et le portrait de face comme image de départ pour les autres angles."""
+    detail = ANGLES[_angle(angle)][1]
+    fin = "fond neutre gris clair, lumière douce, photographie réaliste, une seule personne."
+    if angle == ANGLE_DEPART:
+        return {"prompt": f"{fiche['description']}. {detail}, {fin}", "n": 1, "size": TAILLE_IMAGE_FICHE}
+    if ANGLE_DEPART not in fiche.get("images", {}):
+        raise ValueError("Créez d'abord le portrait de face : les autres angles partent de lui.")
+    return {"prompt": (f"La même personne que sur l'image jointe, mêmes visage, coiffure et tenue : "
+                       f"{fiche['description']}. {detail}, {fin}"),
+            "n": 1, "size": TAILLE_IMAGE_FICHE,
+            "image_reference": fiche_image_data_url(fiche["id"], ANGLE_DEPART)}
+
+
+def fiche_poser_image(fid, angle: str, image: str) -> dict:
+    fiche = fiche_lire(fid)
+    octets = base64.b64decode(_image(image, ANGLES[_angle(angle)][0]))
+    ext = next(e for debut, e in _EXTENSIONS.items() if octets.startswith(debut))
+    dossier = _dossier_fiche(fid)
+    ancien = fiche["images"].get(angle)
+    if ancien:
+        (dossier / ancien).unlink(missing_ok=True)
+    fiche["images"][angle] = angle + ext
+    (dossier / (angle + ext)).write_bytes(octets)
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_retirer_image(fid, angle: str) -> dict:
+    fiche = fiche_lire(fid)
+    nom = fiche["images"].pop(_angle(angle), None)
+    if nom:
+        (_dossier_fiche(fid) / nom).unlink(missing_ok=True)
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_image_data_url(fid, angle: str) -> str:
+    nom = fiche_lire(fid)["images"].get(_angle(angle))
+    if not nom:
+        raise ValueError("Cette image n'existe pas.")
+    octets = (_dossier_fiche(fid) / nom).read_bytes()
+    return f"data:{_TYPES[Path(nom).suffix]};base64," + base64.b64encode(octets).decode()
+
+
+def fiche_images(fid) -> list:
+    """Les images de la fiche, dans l'ordre des angles, en base64 nu."""
+    fiche = fiche_lire(fid)
+    return [fiche_image_data_url(fid, a).split(",", 1)[1] for a in ANGLES if a in fiche["images"]]
+
+
+def sujet_de_la_fiche(fiche: dict, nombre: int) -> str:
+    """Le personnage, désigné par ses images seulement. La description de la
+    fiche ne sert qu'à fabriquer les images : mise dans l'invite, elle a été
+    DITE par le personnage (essai du 28/09, « Femme de 35 ans, cheveux bruns… »)."""
+    images = ", ".join(f"<Picture {i + 1}>" for i in range(nombre))
+    return f"subject_definitions: <Subject 1> is the person in {images}."
 
 
 # --- Le graphe ComfyUI -------------------------------------------------------------
@@ -376,10 +519,21 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     langue = str(payload.get("langue") or LANGUE_PAROLES)
     if langue not in LANGUES_PAROLES:
         raise ValueError("Langue des paroles inconnue.")
+    fiche, de_la_fiche = None, []
+    if payload.get("fiche"):
+        if mode != "references":
+            raise ValueError("Une fiche de casting se joue en mode « Références ».")
+        fiche = fiche_lire(payload["fiche"])
+        de_la_fiche = fiche_images(fiche["id"])
+        if not de_la_fiche:
+            raise ValueError("Cette fiche n'a encore aucune image : créez-les d'abord.")
     texte = invite(payload.get("image_paroles", ""), payload.get("ambiance", ""),
-                   payload.get("musique", ""), langue)
+                   payload.get("musique", ""), langue,
+                   "<Subject 1> (S1)" if fiche else "(S1)")
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
+    if fiche:
+        texte = sujet_de_la_fiche(fiche, len(de_la_fiche)) + " detailed_description: " + texte
     if len(texte) > 4000:
         raise ValueError("Invite trop longue (4 000 caractères au plus).")
     try:
@@ -407,6 +561,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     brutes = payload.get("images") or []
     if not isinstance(brutes, list):
         raise ValueError("Images illisibles.")
+    brutes = de_la_fiche + brutes
     m = MODES[mode]
     if not m["images_min"] <= len(brutes) <= m["images_max"]:
         if m["images_max"] == 0:
@@ -442,6 +597,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             "mode_titre": m["titre"],
             "invite": texte,
             "langue": langue,
+            "fiche": {"id": fiche["id"], "nom": fiche["nom"]} if fiche else None,
             "images": longueur,
             "secondes": secondes_de(longueur),
             "coupe_s": coupe,
@@ -795,6 +951,9 @@ PAGE_HTML = r"""<!doctype html>
   .image_bord { border-top: 1px solid #eee; margin-top: 12px; padding-top: 8px; }
   .image_bord label { font-weight: normal; }
   .apercu { display: block; max-width: 100%; margin-top: 8px; border: 1px solid #ccc; }
+  .grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: 8px; }
+  .grille img { display: block; width: 100%; border: 1px solid #ccc; margin: 4px 0; }
+  .grille button { margin: 4px 4px 0 0; padding: 4px 10px; }
   pre { white-space: pre-wrap; font-size: .8rem; max-height: 240px; overflow: auto; background: #f3f3f3; padding: 8px; }
 </style>
 </head>
@@ -822,6 +981,24 @@ PAGE_HTML = r"""<!doctype html>
 <div class="bloc" id="poids">
   <b>Poids du modèle.</b> <span id="poids_etat">Lecture…</span>
   <button id="poids_preparer" hidden>Préparer les poids</button>
+</div>
+
+<div class="bloc" id="casting">
+  <b>Fiches de casting</b>
+  <span class="note">un personnage décrit une fois, retrouvé d'un plan à l'autre (mode « Références »).</span>
+  <label for="fiche_choix">Fiche</label>
+  <select id="fiche_choix"><option value="">Nouvelle fiche…</option></select>
+  <label for="fiche_nom">Nom du personnage</label>
+  <input type="text" id="fiche_nom" maxlength="60">
+  <label for="fiche_description">Description (âge, visage, coiffure, tenue)</label>
+  <textarea id="fiche_description" maxlength="800"></textarea>
+  <button id="fiche_creer">Créer la fiche et ses images</button>
+  <button id="fiche_supprimer" hidden>Supprimer la fiche</button>
+  <p class="note" id="fiche_etat"></p>
+  <div id="fiche_images" class="grille"></div>
+  <p class="note">Les images sont faites par l'image du Studio (clé Google, gratuite) : d'abord le
+  portrait de face, d'après la description, puis les autres angles à partir de lui, pour garder le même
+  visage. Rejouez ou supprimez celles qui ne vont pas.</p>
 </div>
 
 <div class="bloc">
@@ -868,7 +1045,9 @@ PAGE_HTML = r"""<!doctype html>
     <p class="note" id="etat_derniere"></p>
   </div>
   <div id="references_bloc" hidden>
-    <label for="images">Images de référence (de 1 à 9)</label>
+    <label for="fiche_ref">Personnage (fiche de casting)</label>
+    <select id="fiche_ref"><option value="">Aucun : images téléversées seulement</option></select>
+    <label for="images">Images de référence (en plus de la fiche, facultatif ; 9 au plus en tout)</label>
     <input type="file" id="images" accept="image/png,image/jpeg,image/webp" multiple>
   </div>
 
@@ -1187,6 +1366,7 @@ document.getElementById("lancer").addEventListener("click", async () => {
     ambiance: document.getElementById("ambiance").value,
     musique: document.getElementById("musique").value,
     langue: document.getElementById("langue").value,
+    fiche: m === "references" ? (document.getElementById("fiche_ref").value || null) : null,
     longueur: Number(document.getElementById("longueur").value),
     coupe_s: Number(document.getElementById("coupe").value),
     graine: graine === "" ? null : Number(graine)})});
@@ -1196,10 +1376,135 @@ document.getElementById("lancer").addEventListener("click", async () => {
   suivre(d.id);
 });
 
+// Fiches de casting (PLAN 18.9) : le Studio fabrique les images angle par angle ;
+// chacune se rejoue ou se supprime.
+let FICHES = [], ANGLES = {};
+
+function ficheEtat(t, refus){
+  const e = document.getElementById("fiche_etat");
+  e.className = refus ? "refus" : "note";
+  e.textContent = t || "";
+}
+
+function bouton(texte, action){
+  const b = document.createElement("button");
+  b.type = "button";
+  b.textContent = texte;
+  b.addEventListener("click", action);
+  return b;
+}
+
+async function chargerFiches(choisir){
+  const r = await fetch("/video-h3/fiches", {headers: H});
+  if (!r.ok) return;
+  const d = await r.json();
+  FICHES = d.fiches;
+  ANGLES = d.angles;
+  const choix = document.getElementById("fiche_choix");
+  const ref = document.getElementById("fiche_ref");
+  let garde = choisir !== undefined ? choisir : choix.value;
+  const gardeRef = ref.value;
+  if (!FICHES.some(f => f.id === garde)) garde = "";
+  choix.innerHTML = '<option value="">Nouvelle fiche…</option>';
+  ref.innerHTML = '<option value="">Aucun : images téléversées seulement</option>';
+  for (const f of FICHES){
+    const n = f.angles.length;
+    for (const sel of [choix, ref]){
+      const o = document.createElement("option");
+      o.value = f.id;
+      o.textContent = f.nom + " (" + n + " image" + (n > 1 ? "s" : "") + ")";
+      sel.appendChild(o);
+    }
+  }
+  choix.value = garde;
+  ref.value = FICHES.some(f => f.id === gardeRef) ? gardeRef : "";
+  await montrerFiche();
+}
+
+async function montrerFiche(){
+  const id = document.getElementById("fiche_choix").value;
+  document.getElementById("fiche_images").innerHTML = "";
+  document.getElementById("fiche_supprimer").hidden = !id;
+  document.getElementById("fiche_creer").hidden = !!id;
+  for (const champ of ["fiche_nom", "fiche_description"]){
+    document.getElementById(champ).disabled = !!id;
+    if (!id) document.getElementById(champ).value = "";
+  }
+  if (!id) return;
+  const r = await fetch("/video-h3/fiches/" + id, {headers: H});
+  const f = await r.json();
+  if (!r.ok){ ficheEtat(f.detail, true); return; }
+  document.getElementById("fiche_nom").value = f.nom;
+  document.getElementById("fiche_description").value = f.description;
+  dessinerFiche(f);
+}
+
+function dessinerFiche(f){
+  const grille = document.getElementById("fiche_images");
+  grille.innerHTML = "";
+  for (const [angle, titre] of Object.entries(ANGLES)){
+    const cas = document.createElement("div");
+    const t = document.createElement("b");
+    t.textContent = titre;
+    cas.appendChild(t);
+    if (f.images[angle]){
+      const img = document.createElement("img");
+      img.src = f.images[angle];
+      img.alt = titre;
+      cas.appendChild(img);
+    }
+    cas.appendChild(bouton(f.images[angle] ? "Rejouer" : "Créer", () => faireImage(f.id, angle)));
+    if (f.images[angle]) cas.appendChild(bouton("Supprimer", () => retirerImage(f.id, angle)));
+    grille.appendChild(cas);
+  }
+}
+
+async function faireImage(id, angle){
+  ficheEtat("Image « " + ANGLES[angle] + " » en cours (10 à 30 s)…");
+  const r = await fetch("/video-h3/fiches/" + id + "/images/" + angle, {method: "POST", headers: H, body: "{}"});
+  const d = await r.json();
+  if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return false; }
+  ficheEtat("");
+  await chargerFiches(id);
+  return true;
+}
+
+async function retirerImage(id, angle){
+  const r = await fetch("/video-h3/fiches/" + id + "/images/" + angle, {method: "DELETE", headers: H});
+  const d = await r.json();
+  if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  await chargerFiches(id);
+}
+
+document.getElementById("fiche_choix").addEventListener("change", () => { ficheEtat(""); montrerFiche(); });
+
+document.getElementById("fiche_creer").addEventListener("click", async () => {
+  const r = await fetch("/video-h3/fiches", {method: "POST", headers: H, body: JSON.stringify({
+    nom: document.getElementById("fiche_nom").value,
+    description: document.getElementById("fiche_description").value})});
+  const d = await r.json();
+  if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  await chargerFiches(d.id);
+  for (const angle of Object.keys(ANGLES)){
+    if (!await faireImage(d.id, angle)) return;
+  }
+  ficheEtat("Fiche prête : choisissez-la en mode « Références », champ « Personnage ».");
+});
+
+document.getElementById("fiche_supprimer").addEventListener("click", async () => {
+  const id = document.getElementById("fiche_choix").value;
+  const f = FICHES.find(x => x.id === id);
+  if (!f || !confirm("Supprimer la fiche « " + f.nom + " » et ses images ?")) return;
+  const r = await fetch("/video-h3/fiches/" + id, {method: "DELETE", headers: H});
+  if (!r.ok){ ficheEtat("Suppression refusée.", true); return; }
+  ficheEtat("Fiche supprimée.");
+  await chargerFiches("");
+});
+
 brancherBord("premiere");
 brancherBord("derniere");
 document.getElementById("image_paroles").addEventListener("input", majInvitesImages);
-rafraichir().then(majInvitesImages);
+rafraichir().then(majInvitesImages).then(() => chargerFiches(""));
 </script>
 </body>
 </html>
