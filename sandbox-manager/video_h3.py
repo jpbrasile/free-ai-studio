@@ -229,8 +229,13 @@ def attribuer_repliques(texte: str, sujets: list) -> str:
     Chaque nom devient `<Subject N>` : dit tel quel, un nom a été récité (28/09).
     Chaque réplique va au PREMIER personnage nommé dans sa phrase (« Léa dit à
     Tom : « … » » : Léa), sinon au dernier nommé avant, sinon au premier ; elle
-    part dans SA langue, sous la forme `<Subject N> (Sx) <d>[langue] …</d>`, les
-    (Sx) numérotés dans l'ordre où l'on parle."""
+    part dans SA langue, les (Sx) numérotés dans l'ordre où l'on parle.
+
+    Forme du guide (5.4) : `<Subject 2> (S1) turns … and says, <d>[English] …</d>`.
+    Quand le locuteur est nommé dans la phrase, (Sx) suit ce nom et la réplique
+    n'a que sa balise `<d>` ; le 28/09, « James demande <Subject 2> (S1) … »
+    faisait parler James à lui-même, et le juge a vu une personne de trop.
+    Sinon, la réplique porte `<Subject N> (Sx) <d>[langue] …</d>`."""
     texte = str(texte or "")
     repliques_vues = list(_PAROLES.finditer(texte))
     dans_une_replique = [(m.start(), m.end()) for m in repliques_vues]
@@ -238,6 +243,8 @@ def attribuer_repliques(texte: str, sujets: list) -> str:
                   for m in re.finditer(_motif_nom(nom), texte, re.I)
                   if not any(a <= m.start() < b for a, b in dans_une_replique))
     locuteurs, parleur, fin_precedente = {}, {}, 0
+    nom_du_locuteur = {}   # début du nom qui porte (Sx) -> personnage
+    dit_par_son_nom = set()   # répliques dont le locuteur est nommé dans la phrase
     for m in repliques_vues:
         avant = texte[fin_precedente:m.start()]
         coupure = max(avant.rfind(c) for c in ".!?;\n")
@@ -246,6 +253,9 @@ def attribuer_repliques(texte: str, sujets: list) -> str:
         plus_tot = [n for n in noms if n[0] < debut_phrase]
         k = dans_la_phrase[0][2] if dans_la_phrase else plus_tot[-1][2] if plus_tot else 0
         parleur[m.start()] = k
+        if dans_la_phrase:
+            nom_du_locuteur[dans_la_phrase[0][0]] = k
+            dit_par_son_nom.add(m.start())
         locuteurs.setdefault(k, len(locuteurs) + 1)
         fin_precedente = m.end()
     evenements = sorted([(a, b, "nom", k) for a, b, k in noms]
@@ -255,11 +265,13 @@ def attribuer_repliques(texte: str, sujets: list) -> str:
         sortie.append(texte[pos:debut])
         pos = fin
         if genre == "nom":
-            sortie.append(f"<Subject {valeur + 1}>")
+            marque = f" (S{locuteurs[valeur]})" if nom_du_locuteur.get(debut) == valeur else ""
+            sortie.append(f"<Subject {valeur + 1}>{marque}")
         else:
             k = parleur[debut]
             dite = next(g for g in valeur.groups() if g)
-            sortie.append(f"<Subject {k + 1}> (S{locuteurs[k]}) <d>[{sujets[k][1]}] {dite}</d>")
+            qui = "" if debut in dit_par_son_nom else f"<Subject {k + 1}> (S{locuteurs[k]}) "
+            sortie.append(f"{qui}<d>[{sujets[k][1]}] {dite}</d>")
     sortie.append(texte[pos:])
     return "".join(sortie)
 
@@ -458,14 +470,15 @@ def sujets_des_fiches(nombres: list) -> str:
 def premier_plan(texte: str) -> str:
     """Qui est au premier plan, compté par le Studio sur les <Subject N> du plan
     (règle 1, 28/09/2026) : quatre fois ce jour-là, H3 a ajouté un personnage ou
-    en a montré un deux fois. Rien si le plan ne nomme personne."""
+    en a montré un deux fois. Rien si le plan ne nomme personne. Le fond n'est
+    pas mentionné : « anyone else stays in the background » a peuplé une
+    terrasse que le texte voulait vide (trois plans refusés par le juge, 28/09)."""
     presents = sorted({int(n) for n in re.findall(r"<Subject (\d+)>", str(texte or ""))})
     if not presents:
         return ""
     noms = [f"<Subject {n}>" for n in presents]
     qui = noms[0] if len(noms) == 1 else ", ".join(noms[:-1]) + " and " + noms[-1]
-    return ("In the foreground: only %s, each of them one single person shown once; anyone else stays in the "
-            "background." % qui)
+    return "In the foreground: only %s, each of them one single person shown once." % qui
 
 
 # --- La traduction en anglais, en mode « Références » -----------------------------

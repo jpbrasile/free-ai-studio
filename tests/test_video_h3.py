@@ -699,7 +699,7 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
     assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. "
                              "retention_analysis: <Subject 1> keeps the face, hair and clothing of the "
                              "reference pictures. detailed_description: In the foreground: only <Subject 1>, "
-                             "each of them one single person shown once; anyone else stays in the background. "
+                             "each of them one single person shown once. "
                              "Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
@@ -952,8 +952,9 @@ def test_chaque_replique_va_au_personnage_nomme_dans_sa_phrase(h3):
     texte = ("Léa sourit à James. James dit « Hello Léa, is this seat taken? » Lea répond "
              "« Non, asseyez-vous. » Puis « Bon café. »")
     assert v.attribuer_repliques(texte, [("Léa", "French"), ("James", "English")]) == (
-        "<Subject 1> sourit à <Subject 2>. <Subject 2> dit <Subject 2> (S1) <d>[English] Hello Léa, is this "
-        "seat taken?</d> <Subject 1> répond <Subject 1> (S2) <d>[French] Non, asseyez-vous.</d> "
+        # Forme du guide (5.4) : (Sx) suit le nom du locuteur dans sa phrase, jamais un second nom.
+        "<Subject 1> sourit à <Subject 2>. <Subject 2> (S1) dit <d>[English] Hello Léa, is this "
+        "seat taken?</d> <Subject 1> (S2) répond <d>[French] Non, asseyez-vous.</d> "
         "Puis <Subject 1> (S2) <d>[French] Bon café.</d>")
     # Un nom dans un autre mot n'est pas un personnage.
     assert v.attribuer_repliques("Jameson entre.", [("James", "English")]) == "Jameson entre."
@@ -963,7 +964,7 @@ def test_premier_plan_et_cadrage_sont_generiques(h3):
     v = h3.video_h3
     # Compté sur les sujets du plan, pas sur les fiches du scénario : un plan à un seul personnage.
     assert v.premier_plan("<Subject 2> marche seul.") == ("In the foreground: only <Subject 2>, each of them one "
-                                                          "single person shown once; anyone else stays in the background.")
+                                                          "single person shown once.")
     assert "only <Subject 1>, <Subject 2> and <Subject 3>," in v.premier_plan("<Subject 3> <Subject 1> <Subject 2>")
     assert v.premier_plan("Une rue vide.") == ""
     # Règle 2, dans le découpage comme dans la correction ; aucun nom de personnage dans la règle.
@@ -988,8 +989,8 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
         "reference pictures. <Subject 2> keeps the face, hair and clothing of the reference pictures. "
         # Règle 1 (28/09) : le Studio compte lui-même qui est au premier plan.
         "detailed_description: In the foreground: only <Subject 1> and <Subject 2>, each of them one single "
-        "person shown once; anyone else stays in the background. <Subject 2> demande <Subject 2> (S1) <d>[English] Is this seat taken?</d> "
-        "<Subject 1> répond <Subject 1> (S2) <d>[French] Oui.</d> non_diegetic_music: N/A")
+        "person shown once. <Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
+        "<Subject 1> (S2) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
     for mauvais, message in (({"langues": {lea: "Klingon"}}, "inconnue"), ({"fiches": [lea, lea]}, "illisible")):
@@ -1087,8 +1088,8 @@ def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch):
         assert vid["invite"].startswith("subject_definitions: <Subject 1> is the person in <Picture 1>. "
                                         "<Subject 2> is the person in <Picture 2>.")
         assert vid["invite"].endswith("non_diegetic_music: N/A") and "Piano" not in vid["invite"]
-    assert "<Subject 2> (S1) <d>[English] Is this seat taken?</d>" in tournes[0]["invite"]
-    assert "<Subject 1> (S1) <d>[French] Non.</d>" in tournes[1]["invite"]
+    assert "<Subject 2> (S1) demande <d>[English] Is this seat taken?</d>" in tournes[0]["invite"]
+    assert "<Subject 1> (S1) répond <d>[French] Non.</d>" in tournes[1]["invite"]
     # Le départ se compte en images (124 à la fin du plan 1), pas en secondes arrondies.
     assert poses == [(sc["travaux"][2], c_id, pytest.approx(124 / 24), 0.3)]
     assert sc["fins_images"] == [124, 248, 372]
