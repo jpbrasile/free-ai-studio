@@ -711,8 +711,12 @@ def lire_jugement(reponse: str, debut_s: float, nombre: int) -> dict:
     return {"verdict": d["verdict"], "defauts": defauts}
 
 
-def consigne_correction(plans: list, retours: str) -> str:
-    return ("Here are the shots of a short film (JSON) and the feedback after shooting them. Rewrite the shots "
+def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
+    # L'histoire vient du scénario initial : des plans déjà réécrits peuvent l'avoir
+    # abîmée, et la correction ne voyait qu'eux (28/09/2026).
+    reference = ("The story the shots must tell (what happens, in order; it must stay true, even where the shots "
+                 "given have drifted from it): %s\n\n" % histoire) if histoire else ""
+    return (reference + "Here are the shots of a short film (JSON) and the feedback after shooting them. Rewrite the shots "
             "so that the feedback is fixed: be explicit about who is in the frame and what they wear. Keep the "
             "same number of shots in the same order, keep each \"enchainement\", and copy every line of "
             "dialogue between « » EXACTLY in its own shot; never add, move or remove dialogue. Change only what "
@@ -720,7 +724,9 @@ def consigne_correction(plans: list, retours: str) -> str:
             # Le 28/09, pour effacer un défaut d'image, la correction a fait asseoir un
             # personnage avant qu'on l'y invite : on change la façon de montrer, pas l'histoire.
             "Change how the scene is shown (framing, clothing, who else is in the frame), never what happens: "
-            "keep every action of the characters, and their order, as in the shots given. If a problem cannot be "
+            "keep every action of the characters, and their order, as in the story. Write each shot in the order "
+            "things happen, lines of dialogue included: an action caused by a line comes after that line. "
+            "If a problem cannot be "
             "fixed without changing what happens, leave that shot unchanged: it will be shot again. " + CADRAGE +
             "Answer with the JSON array only.\n\n"
             "Shots: %s\n\nFeedback: %s" % (json.dumps(plans, ensure_ascii=False), retours))

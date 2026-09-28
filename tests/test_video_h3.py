@@ -1234,7 +1234,12 @@ def test_une_correction_qui_casse_la_continuite_est_refaite_une_fois(h3, monkeyp
     # avant que Léa l'y invite. Le contrôle le voit ; un second essai lui est demandé.
     sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
-    casse = [dict(plans[0]), dict(plans[1], image_paroles="James est déjà assis. Léa répond « Non. »"), dict(plans[2])]
+    # Les plans du scénario ont déjà été abîmés par une correction : la correction
+    # reçoit aussi l'histoire du scénario INITIAL, à chaque essai.
+    initiaux = [dict(p) for p in plans]
+    initiaux[1]["image_paroles"] = "Léa répond « Non. », puis James s'assoit."
+    h3.video_h3.scenario_noter(sid, plans_initiaux=initiaux)
+    casse =[dict(plans[0]), dict(plans[1], image_paroles="James est déjà assis. Léa répond « Non. »"), dict(plans[2])]
     bon = [dict(plans[0]), dict(plans[1], image_paroles="Léa répond « Non. » James s'assoit."), dict(plans[2])]
     probleme = '{"problemes": [{"plan": 2, "quoi": "James est assis avant d\'être invité"}]}'
     vus = []
@@ -1244,6 +1249,10 @@ def test_une_correction_qui_casse_la_continuite_est_refaite_une_fois(h3, monkeyp
     r = client(h3).post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={"retours": "Léa disparaît."})
     assert r.status_code == 200, r.text
     assert len(vus) == 4 and "James est assis avant d'être invité" in vus[2]["messages"][0]["content"]
+    for essai in (vus[0], vus[2]):
+        assert "it must stay true" in essai["messages"][0]["content"]
+        assert "lines of dialogue included" in essai["messages"][0]["content"]
+        assert initiaux[1]["image_paroles"] in essai["messages"][0]["content"]
     assert r.json()["plans"][1]["image_paroles"] == "Léa répond « Non. » James s'assoit."
     assert r.json()["continuite"]["ok"] is True
     # Toujours cassée au second essai : rendue telle quelle, le problème affiché (la page n'en rejoue rien).

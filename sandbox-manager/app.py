@@ -4564,7 +4564,7 @@ async def video_h3_scenario_corriger(sid: str, request: Request,
         raise HTTPException(400, "Aucun retour : faites juger les plans, ou écrivez vos remarques.")
     # L'histoire de référence est celle du scénario initial : une correction ne la change pas.
     histoire = _histoire(sc.get("plans_initiaux") or sc["plans"])
-    consigne = video_h3.consigne_correction(sc["plans"], retours)
+    consigne = video_h3.consigne_correction(sc["plans"], retours, histoire)
     for essai in (1, 2):
         try:
             plans = video_h3.lire_correction(await _chat_du_studio(consigne, "la correction des plans"), sc["plans"])
@@ -4577,7 +4577,7 @@ async def video_h3_scenario_corriger(sid: str, request: Request,
         consigne = video_h3.consigne_correction(sc["plans"], retours + "\nYour previous rewrite broke the "
                                                 "continuity; avoid this:\n" + "\n".join(
                                                     "Shot %d: %s" % (p["plan"], p["quoi"])
-                                                    for p in continuite["problemes"]))
+                                                    for p in continuite["problemes"]), histoire)
     return {"plans": plans, "retours": retours, "continuite": continuite}
 
 
