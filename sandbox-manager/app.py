@@ -4358,9 +4358,25 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
         raise HTTPException(400, "Scénario trop long (2 000 caractères au plus).")
     reponse = await _chat_du_studio(video_h3.consigne_decoupage(scenario), "le découpage en plans")
     try:
-        return {"plans": video_h3.lire_decoupage(reponse, scenario)}
+        plans = video_h3.lire_decoupage(reponse, scenario)
     except ValueError as exc:
         raise HTTPException(502, str(exc)) from exc
+    return {"plans": plans, "continuite": await _continuite(plans, scenario)}
+
+
+async def _continuite(plans: list, histoire: str) -> dict:
+    """Le contrôle de continuité du texte (gratuit) ; illisible, il le dit sans
+    rien bloquer : c'est une aide, le propriétaire relit."""
+    try:
+        return video_h3.lire_continuite(await _chat_du_studio(
+            video_h3.consigne_continuite(plans, histoire), "le contrôle de continuité",
+            modele=video_h3.MODELE_JUGE), len(plans))
+    except (ValueError, HTTPException) as exc:
+        return {"ok": None, "problemes": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
+
+
+def _histoire(plans: list) -> str:
+    return " ".join(p["image_paroles"] for p in plans)
 
 
 REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine")
@@ -4492,6 +4508,9 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
     if not refs:
         raise HTTPException(409, "Les fiches de ce scénario n'ont plus d'image : rien à comparer.")
     jugement = []
+    initiaux = sc.get("plans_initiaux") or sc["plans"]
+    if len(initiaux) != len(sc["plans"]):
+        initiaux = sc["plans"]
     for k in range(len(fins)):
         debut = (fins[k - 1] if k else 0) / ips
         try:
@@ -4501,7 +4520,10 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
         # Free AI Max : le 28/09, sur la même planche du plan 2, « Auto » (Gemini
         # flash-lite) a dit « rien à signaler » quatre fois ; « Max » (Gemini
         # 3.8 flash) a vu deux fois l'homme en trop et la veste grise de Léa.
-        reponse = await _chat_du_studio(video_h3.consigne_jugement(fiches), "le jugement des plans",
+        # Le texte du scénario INITIAL : une correction a pu changer l'histoire
+        # (James assis avant d'être invité, 28/09) ; la vidéo doit suivre l'histoire voulue.
+        reponse = await _chat_du_studio(video_h3.consigne_jugement(fiches, initiaux[k]["image_paroles"]),
+                                        "le jugement des plans",
                                         images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
                                         modele=video_h3.MODELE_JUGE)
         try:
@@ -4540,11 +4562,23 @@ async def video_h3_scenario_corriger(sid: str, request: Request,
     retours = "\n".join(r for r in retours if r)
     if not retours:
         raise HTTPException(400, "Aucun retour : faites juger les plans, ou écrivez vos remarques.")
-    reponse = await _chat_du_studio(video_h3.consigne_correction(sc["plans"], retours), "la correction des plans")
-    try:
-        return {"plans": video_h3.lire_correction(reponse, sc["plans"]), "retours": retours}
-    except ValueError as exc:
-        raise HTTPException(502, str(exc)) from exc
+    # L'histoire de référence est celle du scénario initial : une correction ne la change pas.
+    histoire = _histoire(sc.get("plans_initiaux") or sc["plans"])
+    consigne = video_h3.consigne_correction(sc["plans"], retours)
+    for essai in (1, 2):
+        try:
+            plans = video_h3.lire_correction(await _chat_du_studio(consigne, "la correction des plans"), sc["plans"])
+        except ValueError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        continuite = await _continuite(plans, histoire)
+        if continuite["ok"] is not False or essai == 2:
+            break
+        # Un second essai, avec ce que le contrôle reproche à la réécriture.
+        consigne = video_h3.consigne_correction(sc["plans"], retours + "\nYour previous rewrite broke the "
+                                                "continuity; avoid this:\n" + "\n".join(
+                                                    "Shot %d: %s" % (p["plan"], p["quoi"])
+                                                    for p in continuite["problemes"]))
+    return {"plans": plans, "retours": retours, "continuite": continuite}
 
 
 @app.post("/video-h3/scenario/{sid}/rejouer")

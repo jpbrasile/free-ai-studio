@@ -370,6 +370,19 @@ class _FauxRouteur:
         return R()
 
 
+class _FauxRouteurSuite(_FauxRouteur):
+    """Rend les contenus de `contenus` l'un après l'autre ; garde chaque demande dans `vus`."""
+
+    def __init__(self, contenus, vus):
+        super().__init__(200, None, {})
+        self.contenus, self.vus = list(contenus), vus
+
+    async def post(self, url, headers=None, json=None):
+        self.vus.append(json)
+        self.corps = {"choices": [{"message": {"content": self.contenus.pop(0)}}]}
+        return await super().post(url, headers, json)
+
+
 def test_l_image_du_studio_passe_par_le_routeur(h3, monkeypatch):
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     vu = {}
@@ -1134,7 +1147,7 @@ def _scenario_tourne(h3, monkeypatch, tmp_path):
 
 
 def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_path):
-    sid, _ = _scenario_tourne(h3, monkeypatch, tmp_path)
+    sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     planches = []
     monkeypatch.setattr(h3.montage, "planche", lambda film, debut, duree: planches.append(
@@ -1143,6 +1156,10 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     rep = {"choices": [{"message": {"content": '{"verdict": "defaut", "defauts": [{"image": 9, "quoi": "veste grise"}]}'}}]}
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, rep, vu))
     monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: pytest.fail("rien ne se loue"))
+    # Le juge lit l'histoire du scénario INITIAL, pas le texte corrigé depuis.
+    initiaux = [dict(p) for p in plans]
+    initiaux[2]["image_paroles"] = "Léa et James marchent, puis James dit « Thank you. »"
+    h3.video_h3.scenario_noter(sid, plans_initiaux=initiaux)
     r = client(h3).post(f"/video-h3/scenario/{sid}/juger", headers=CLE)
     assert r.status_code == 200, r.text
     # Le film SANS musique, découpé plan par plan aux images notées.
@@ -1150,6 +1167,10 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     contenu = vu["json"]["messages"][0]["content"]
     assert vu["json"]["model"] == "free-ai-max"   # « Auto » manquait les défauts le 28/09
     assert contenu[0]["type"] == "text" and "Image 1 shows Léa" in contenu[0]["text"]
+    # Le texte du plan jugé (le dernier) part aussi : la vidéo doit faire ce qu'il dit, dans l'ordre.
+    assert "Léa et James marchent, puis James dit « Thank you. »" in contenu[0]["text"]
+    assert plans[2]["image_paroles"] not in contenu[0]["text"]
+    assert "not in this order" in contenu[0]["text"]
     assert [c["type"] for c in contenu[1:]] == ["image_url"] * 3   # deux fiches, puis la planche
     assert r.json()["jugement"][1] == {"plan": 2, "verdict": "defaut",
                                        "defauts": [{"t_s": 9.2, "quoi": "veste grise"}]}
@@ -1163,16 +1184,22 @@ def test_corriger_part_des_retours_et_du_jugement(h3, monkeypatch, tmp_path):
     assert c.post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={}).status_code == 400
     corriges = [dict(plans[0]), dict(plans[1], image_paroles="Léa, en manteau rouge, répond « Non. »"),
                 dict(plans[2])]
-    vu = {}
-    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(
-        200, {"choices": [{"message": {"content": json.dumps(corriges, ensure_ascii=False)}}]}, vu))
+    vus = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [json.dumps(corriges, ensure_ascii=False), '{"etats": [], "problemes": []}'], vus))
     # Seuls les défauts gardés par le propriétaire partent (la fausse alerte décochée, non).
     r = c.post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={
         "retours": "Ils doivent marcher.", "defauts": [{"plan": 2, "t_s": 9.2, "quoi": "veste grise"}]})
     assert r.status_code == 200, r.text
     assert "Ils doivent marcher." in r.json()["retours"] and "Shot 2, at 9.2 s: veste grise" in r.json()["retours"]
     assert r.json()["plans"][1]["image_paroles"] == "Léa, en manteau rouge, répond « Non. »"
-    assert "veste grise" in vu["json"]["messages"][0]["content"]
+    assert "veste grise" in vus[0]["messages"][0]["content"]
+    assert "never what happens" in vus[0]["messages"][0]["content"]
+    # Puis le contrôle de continuité, sur l'histoire du scénario initial.
+    assert vus[1]["model"] == "free-ai-max" and plans[0]["image_paroles"] in vus[1]["messages"][0]["content"]
+    assert r.json()["continuite"]["ok"] is True
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(
+        200, {"choices": [{"message": {"content": json.dumps(corriges, ensure_ascii=False)}}]}, {}))
     # Le 28/09, dix défauts de 150 caractères pour un seul plan ont fait « Retours trop longs » :
     # trois par plan partent, le reste est laissé.
     bavard = [{"plan": 1, "t_s": k / 2, "quoi": "deux femmes identiques en manteau rouge " * 4} for k in range(10)]
@@ -1182,6 +1209,47 @@ def test_corriger_part_des_retours_et_du_jugement(h3, monkeypatch, tmp_path):
     assert r.json()["retours"].count("Shot 1,") == 3 and "Shot 2, at 9.2 s: veste grise" in r.json()["retours"]
     assert c.post(f"/video-h3/scenario/{sid}/corriger", headers=CLE,
                   json={"retours": "x" * 2001}).status_code == 400
+
+
+def test_une_correction_qui_casse_la_continuite_est_refaite_une_fois(h3, monkeypatch, tmp_path):
+    # Le 28/09 : pour effacer un défaut d'image, la correction a fait asseoir James
+    # avant que Léa l'y invite. Le contrôle le voit ; un second essai lui est demandé.
+    sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    casse = [dict(plans[0]), dict(plans[1], image_paroles="James est déjà assis. Léa répond « Non. »"), dict(plans[2])]
+    bon = [dict(plans[0]), dict(plans[1], image_paroles="Léa répond « Non. » James s'assoit."), dict(plans[2])]
+    probleme = '{"problemes": [{"plan": 2, "quoi": "James est assis avant d\'être invité"}]}'
+    vus = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [json.dumps(casse, ensure_ascii=False), probleme, json.dumps(bon, ensure_ascii=False), '{"problemes": []}'],
+        vus))
+    r = client(h3).post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={"retours": "Léa disparaît."})
+    assert r.status_code == 200, r.text
+    assert len(vus) == 4 and "James est assis avant d'être invité" in vus[2]["messages"][0]["content"]
+    assert r.json()["plans"][1]["image_paroles"] == "Léa répond « Non. » James s'assoit."
+    assert r.json()["continuite"]["ok"] is True
+    # Toujours cassée au second essai : rendue telle quelle, le problème affiché (la page n'en rejoue rien).
+    vus.clear()
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [json.dumps(casse, ensure_ascii=False), probleme] * 2, vus))
+    r = client(h3).post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={"retours": "Léa disparaît."})
+    assert r.status_code == 200 and len(vus) == 4
+    assert r.json()["continuite"] == {"ok": False, "etats": [], "problemes": [
+        {"plan": 2, "quoi": "James est assis avant d'être invité"}]}
+
+
+def test_la_continuite_se_lit_et_ne_garde_que_les_plans_du_film(h3):
+    v = h3.video_h3
+    c = v.lire_continuite('Voici : {"etats": [{"plan": 1, "debut": "a", "fin": "b"}], "problemes": '
+                          '[{"plan": 2, "quoi": "  assis   trop tôt "}, {"plan": 9, "quoi": "hors film"}, {"plan": 1}]}', 3)
+    assert c == {"ok": False, "etats": [{"plan": 1, "debut": "a", "fin": "b"}],
+                 "problemes": [{"plan": 2, "quoi": "assis trop tôt"}]}
+    assert v.lire_continuite('{"problemes": []}', 3)["ok"] is True
+    with pytest.raises(ValueError, match="pas pu être lu"):
+        v.lire_continuite("tout va bien", 3)
+    consigne = v.consigne_continuite([{"image_paroles": "Léa s'assoit.", "ambiance": "x", "enchainement": "coupe"}],
+                                     "Léa arrive puis s'assoit.")
+    assert "Léa arrive puis s'assoit." in consigne and "after what causes it" in consigne and '"x"' not in consigne
 
 
 def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeypatch, tmp_path):
@@ -1235,7 +1303,8 @@ def test_la_page_propose_juger_corriger_rejouer_et_la_musique(h3):
     for morceau in ('id="scenario_juger"', 'id="scenario_corriger"', 'id="scenario_rejouer"', 'id="retours"',
                     'id="scenario_choix"', "/video-h3/scenarios", "function diffGras", 'id="musique_poser"',
                     "/video-h3/musique", "Retourner ce plan même inchangé", "defauts: DEFAUTS.filter",
-                    'id="scenario_auto"', "retourner: fautifs.map"):
+                    'id="scenario_auto"', "retourner: fautifs.map", "function texteContinuite",
+                    "c.continuite.ok === false"):
         assert morceau in html
 
 

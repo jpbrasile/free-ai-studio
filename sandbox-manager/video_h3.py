@@ -649,15 +649,19 @@ def scenario_noter(sid: str, **champs) -> dict:
 MODELE_JUGE = "free-ai-max"   # le modèle plus fort du routeur, gratuit, son propre quota
 
 
-def consigne_jugement(noms: list) -> str:
+def consigne_jugement(noms: list, texte: str = "") -> str:
     refs = " ".join(f"Image {k + 1} shows {nom}, a reference picture." for k, nom in enumerate(noms))
+    # Le texte du plan : la vidéo doit faire ce qu'il dit, dans le même ordre (28/09).
+    voulu = (" The shot is meant to show: «%s». Also say if the video does not show these actions, or not in "
+             "this order." % " ".join(texte.split())) if texte.strip() else ""
     # Le modèle rend le NUMÉRO de l'image, le Studio en fait l'heure : le 28/09,
     # un départ mal annoncé dans la consigne a décalé sa réponse d'une seconde.
     return (refs + f" Image {len(noms) + 1} is a contact sheet of ONE video shot: frames numbered from 1, "
             "one every 0.5 s, read left to right then top to bottom; black cells after the end are empty. "
             # Neutre, sans questions qui cherchent la faute : le 28/09, la consigne
             # d'avant faisait trouver un défaut même au plan repris tel quel.
-            "Say whether the characters stay consistent with their reference pictures throughout the shot. "
+            "Say whether the characters stay consistent with their reference pictures throughout the shot." + voulu
+            + " "
             "Many shots have no problem: then answer ok with an empty list. Report only what you clearly see, "
             "each problem once, at the first frame where it appears, in one short sentence. "
             "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", "
@@ -690,8 +694,50 @@ def consigne_correction(plans: list, retours: str) -> str:
             "so that the feedback is fixed: be explicit about who is in the frame and what they wear. Keep the "
             "same number of shots in the same order, keep each \"enchainement\", and copy every line of "
             "dialogue between « » EXACTLY in its own shot; never add, move or remove dialogue. Change only what "
-            "the feedback requires; write in the language of the shots. Answer with the JSON array only.\n\n"
+            "the feedback requires; write in the language of the shots. "
+            # Le 28/09, pour effacer un défaut d'image, la correction a fait asseoir un
+            # personnage avant qu'on l'y invite : on change la façon de montrer, pas l'histoire.
+            "Change how the scene is shown (framing, clothing, who else is in the frame), never what happens: "
+            "keep every action of the characters, and their order, as in the shots given. If a problem cannot be "
+            "fixed without changing what happens, leave that shot unchanged: it will be shot again. "
+            "Answer with the JSON array only.\n\n"
             "Shots: %s\n\nFeedback: %s" % (json.dumps(plans, ensure_ascii=False), retours))
+
+
+def consigne_continuite(plans: list, histoire: str) -> str:
+    """Le texte des plans se tient-il ? Un état au début et à la fin de chaque
+    plan (28/09/2026) : un plan part de l'état où le précédent s'arrête, et
+    aucune action ne vient avant ce qui la cause. Rien n'est loué."""
+    return ("Here are the shots of a short film (JSON), in order, and the story they tell. For each shot, write "
+            "the state at its start and at its end: who is there, where, standing or sitting, what they wear. "
+            "Then check the continuity: does each shot start in the state where the previous one ends (a cut may "
+            "move on in time or place, but nothing may be undone without being shown), and does every action come "
+            "after what causes it, as in the story? Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
+            "\"debut\": \"...\", \"fin\": \"...\"}], \"problemes\": [{\"plan\": number, \"quoi\": \"...\"}]}; "
+            "an empty \"problemes\" list if the shots hold together.\n\nStory: %s\n\nShots: %s"
+            % (histoire, json.dumps([{k: p[k] for k in ("image_paroles", "enchainement")} for p in plans],
+                                    ensure_ascii=False)))
+
+
+def lire_continuite(reponse: str, nombre: int) -> dict:
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or not isinstance(d.get("problemes"), list):
+        raise ValueError("Le contrôle de continuité n'a pas pu être lu : réessayez.")
+    problemes = []
+    for x in d["problemes"]:
+        try:
+            plan = int(x["plan"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 1 <= plan <= nombre and str(x.get("quoi") or "").strip():
+            problemes.append({"plan": plan, "quoi": " ".join(str(x["quoi"]).split())[:300]})
+    etats = [e for e in d.get("etats") or [] if isinstance(e, dict)][:nombre]
+    return {"ok": not problemes, "problemes": problemes, "etats": etats}
 
 
 def lire_correction(reponse: str, plans: list) -> list:
@@ -2180,8 +2226,14 @@ document.getElementById("scenario_decouper").addEventListener("click", async () 
   SCENARIO_TOURNE = null;
   document.getElementById("scenario_suite").hidden = true;
   dessinerPlans();
-  scenarioEtat("Relisez et corrigez les plans, puis tournez.");
+  if (d.continuite && d.continuite.ok === false)
+    scenarioEtat("Continuité à revoir avant de tourner : " + texteContinuite(d.continuite), true);
+  else scenarioEtat("Relisez et corrigez les plans, puis tournez.");
 });
+
+function texteContinuite(c){
+  return c.problemes.map(p => "plan " + p.plan + ", " + p.quoi).join(" ; ");
+}
 
 async function chargerScenarios(){
   const r = await fetch("/video-h3/scenarios", {headers: H});
@@ -2271,7 +2323,9 @@ document.getElementById("scenario_corriger").addEventListener("click", async () 
   PLANS = d.plans;
   dessinerPlans();
   document.getElementById("scenario_tourner").hidden = true;
-  scenarioEtat("Plans remis à jour : les changements sont en gras. Relisez, puis rejouez.");
+  if (d.continuite && d.continuite.ok === false)
+    scenarioEtat("Plans remis à jour, mais la continuité est à revoir : " + texteContinuite(d.continuite), true);
+  else scenarioEtat("Plans remis à jour : les changements sont en gras. Relisez, puis rejouez.");
 });
 
 document.getElementById("scenario_rejouer").addEventListener("click", async () => {
@@ -2318,6 +2372,10 @@ async function corrigerToutSeul(sid, tours){
     const c = await appeler("/video-h3/scenario/" + sid + "/corriger", {retours: "", defauts: DEFAUTS});
     PLANS = c.plans;
     dessinerPlans();
+    // Rien n'est payé sur un texte qui ne se tient plus : la main revient au propriétaire.
+    if (c.continuite && c.continuite.ok === false)
+      return scenarioEtat("Tout seul, arrêté avant de rejouer : la correction casse la continuité ("
+        + texteContinuite(c.continuite) + "). Relisez les plans en gras.", true);
     const r = await appeler("/video-h3/scenario/" + sid + "/rejouer", {plans: PLANS, retourner: fautifs.map(x => x.plan)});
     const sc = await attendreScenario(r.id);
     if (sc.etat !== "réussi") return scenarioEtat("Tout seul : rejeu " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
