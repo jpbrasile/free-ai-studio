@@ -199,6 +199,21 @@ LANGUES_PAROLES = {
     "Japanese": "japonais", "Korean": "coréen", "Russian": "russe",
 }
 _PAROLES = re.compile(r"«\s*([^«»]+?)\s*»|“\s*([^“”]+?)\s*”|\"\s*([^\"]+?)\s*\"")
+_REPLIQUE_OU_BALISE = re.compile(_PAROLES.pattern + r"|<d>\s*(?:\[[^\]]*\]\s*)?(.+?)\s*</d>")
+
+
+_NOM_DE_LANGUE = {**{k.lower(): k for k in LANGUES_PAROLES}, **{v: k for k, v in LANGUES_PAROLES.items()}}
+
+
+def langue_de_replique(dite: str, defaut: str) -> tuple:
+    """Une réplique peut dire sa langue en tête : « [English] Nice to meet you! »
+    ou « [anglais] … ». Le même personnage passe ainsi d'une langue à l'autre,
+    de la même voix (essai du 28/09).
+    Rend (langue, réplique sans la marque)."""
+    m = re.match(r"\s*\[([^\]]+)\]\s*(.*)", dite, re.S)
+    if m and m.group(1).strip().lower() in _NOM_DE_LANGUE:
+        return _NOM_DE_LANGUE[m.group(1).strip().lower()], m.group(2).strip()
+    return defaut, dite
 
 
 def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(S1)") -> str:
@@ -208,7 +223,8 @@ def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(
         return texte
 
     def balise(m):
-        return f"{locuteur} <d>[{langue}] {next(g for g in m.groups() if g)}</d>"
+        sa_langue, dite = langue_de_replique(next(g for g in m.groups() if g), langue)
+        return f"{locuteur} <d>[{sa_langue}] {dite}</d>"
     return _PAROLES.sub(balise, texte)
 
 
@@ -272,10 +288,10 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False) -> 
             sortie.append((texte[debut:fin] if garder_noms else f"<Subject {valeur + 1}>") + marque)
         else:
             k = parleur[debut]
-            dite = next(g for g in valeur.groups() if g)
+            sa_langue, dite = langue_de_replique(next(g for g in valeur.groups() if g), sujets[k][1])
             qui = "" if debut in dit_par_son_nom else "%s (S%d) " % (
                 sujets[k][0] if garder_noms else f"<Subject {k + 1}>", locuteurs[k])
-            sortie.append(f"{qui}<d>[{sujets[k][1]}] {dite}</d>")
+            sortie.append(f"{qui}<d>[{sa_langue}] {dite}</d>")
     sortie.append(texte[pos:])
     return "".join(sortie)
 
@@ -541,6 +557,62 @@ def fiche_image_data_url(fid, angle: str) -> str:
     return f"data:{_TYPES[Path(nom).suffix]};base64," + base64.b64encode(octets).decode()
 
 
+# --- Le visage : gros plan pour la fiche, comparaison avec l'image de départ -------
+# Essai du 28/09 : sur des photos en pied, le visage est minuscule, et les images
+# générées ne ressemblaient pas à la personne ; des gros plans du visage ont
+# réglé l'essentiel. Le modèle qui voit du Studio situe le visage ; ffmpeg coupe.
+
+def consigne_visage() -> str:
+    return ("Locate the face of the main person in this image. Answer with JSON only: "
+            '{"x0": ..., "y0": ..., "x1": ..., "y1": ...}, the box tight around the face (hairline to chin, '
+            "ear to ear), as fractions of the image width and height, between 0 and 1. "
+            "If there is no face, answer {}.")
+
+
+def lire_visage(reponse: str):
+    """La boîte du visage (x0, y0, x1, y1), en fractions ; None si rien de lisible."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+        x0, y0, x1, y1 = (float(d[k]) for k in ("x0", "y0", "x1", "y1"))
+    except (ValueError, TypeError, KeyError):
+        return None
+    if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1) or (x1 - x0) < 0.02 or (y1 - y0) < 0.02:
+        return None
+    return x0, y0, x1, y1
+
+
+def zone_gros_plan(visage: tuple) -> tuple:
+    """Du visage au gros plan : les cheveux au-dessus, le cou en dessous, un peu
+    d'air sur les côtés (comme les recadrages faits à la main le 28/09)."""
+    x0, y0, x1, y1 = visage
+    w, h = x1 - x0, y1 - y0
+    return (round(max(0.0, x0 - 0.45 * w), 4), round(max(0.0, y0 - 0.5 * h), 4),
+            round(min(1.0, x1 + 0.45 * w), 4), round(min(1.0, y1 + 0.35 * h), 4))
+
+
+def consigne_ressemblance(nombre_references: int) -> str:
+    return ("The first %d image(s) are reference photos of a real person. The last image is a generated picture "
+            "that should show the SAME person. Compare only the face: shape of the face, eyes (size, shape, "
+            "openness, colour), nose, mouth, eyebrows, hair, skin. Answer with JSON only: "
+            '{"ressemblance": "forte" | "moyenne" | "faible", "ecarts": "..."} where "ecarts" lists, in French, '
+            "the visible differences (empty if none)." % nombre_references)
+
+
+def lire_ressemblance(reponse: str) -> dict:
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else {}
+    except ValueError:
+        d = {}
+    niveau = d.get("ressemblance") if isinstance(d, dict) else None
+    if niveau not in ("forte", "moyenne", "faible"):
+        return {"ressemblance": None, "ecarts": "L'avis sur la ressemblance n'a pas pu être lu."}
+    return {"ressemblance": niveau, "ecarts": " ".join(str(d.get("ecarts") or "").split())}
+
+
 def fiche_images(fid) -> list:
     """Les images de la fiche, dans l'ordre des angles, en base64 nu."""
     fiche = fiche_lire(fid)
@@ -585,7 +657,10 @@ def a_traduire(payload: dict) -> bool:
 
 
 def repliques(texte: str) -> list:
-    return [next(g for g in m.groups() if g) for m in _PAROLES.finditer(str(texte or ""))]
+    """Les répliques, dans l'ordre : entre guillemets, ou déjà balisées `<d>[langue] …</d>`
+    (le 28/09, clip 841ec33e : balisées à la main, l'écoute n'en attendait aucune)."""
+    return [langue_de_replique(next(g for g in m.groups() if g).strip(), "")[1]
+            for m in _REPLIQUE_OU_BALISE.finditer(str(texte or ""))]
 
 
 def consigne_traduction(payload: dict) -> str:
@@ -613,7 +688,21 @@ def lire_traduction(reponse: str, payload: dict) -> dict:
             raise ValueError("La traduction en anglais a changé une réplique : rien n'est lancé.")
         if str(payload.get(k) or "").strip() and not d.get(k, "").strip():
             raise ValueError("La traduction en anglais a perdu une case : rien n'est lancé.")
+        if reste_du_francais(d.get(k, "")):
+            raise ValueError("La traduction en anglais a laissé du français : rien n'est lancé.")
     return dict(payload, **{k: d.get(k, "") for k in CASES_TRADUITES})
+
+
+# Le 28/09 (clip 1180fae1), le chat du Studio a rendu une case « traduite » encore
+# en français ; lire_traduction l'a acceptée. Des mots-outils français hors des
+# répliques trahissent une case restée en français.
+_MOTS_FRANCAIS = re.compile(r"(?<!\w)(le|la|les|des|du|une|et|sur|dans|avec|vers|sa|ses|au|aux|"
+                            r"elle|il|ne|pas|qui|que)(?!\w)", re.I)
+
+
+def reste_du_francais(texte: str) -> bool:
+    hors_repliques = re.sub(r"<d>.*?</d>", " ", _PAROLES.sub(" ", str(texte or "")))
+    return len(_MOTS_FRANCAIS.findall(hors_repliques)) >= 3
 
 
 # --- Le scénario, monté après coup (PLAN 18.9) --------------------------------------
@@ -1628,6 +1717,8 @@ PAGE_HTML = r"""<!doctype html>
   <textarea id="image_paroles">Une femme en manteau rouge marche sous la pluie à Paris, la nuit ; elle se retourne et dit : « On y est presque. »</textarea>
   <label for="langue">Langue des paroles</label>
   <select id="langue">__LANGUES__</select>
+  <span class="note">Une réplique dans une autre langue la dit en tête : « Bonjour ! » puis
+  « [anglais] Nice to meet you! » — même personnage, même voix.</span>
   <label for="ambiance">2. Ambiance sonore</label>
   <textarea id="ambiance">Pluie, circulation au loin.</textarea>
   <label for="musique">3. Musique (vide : aucune musique)</label>
@@ -1651,6 +1742,7 @@ PAGE_HTML = r"""<!doctype html>
     <div class="televerser" hidden><input type="file" id="fichier_premiere" accept="image/png,image/jpeg,image/webp"></div>
     <img id="apercu_premiere" class="apercu" alt="" hidden>
     <p class="note" id="etat_premiere"></p>
+    <div id="comparer_premiere" hidden></div>
     <div class="ameliorer" id="ameliorer_bloc_premiere" hidden>
       <label for="amelioration_premiere">Améliorer cette image : dites ce qui doit changer</label>
       <input type="text" id="amelioration_premiere" maxlength="300">
@@ -1672,6 +1764,7 @@ PAGE_HTML = r"""<!doctype html>
     <div class="televerser" hidden><input type="file" id="fichier_derniere" accept="image/png,image/jpeg,image/webp"></div>
     <img id="apercu_derniere" class="apercu" alt="" hidden>
     <p class="note" id="etat_derniere"></p>
+    <div id="comparer_derniere" hidden></div>
     <div class="ameliorer" id="ameliorer_bloc_derniere" hidden>
       <label for="amelioration_derniere">Améliorer cette image : dites ce qui doit changer</label>
       <input type="text" id="amelioration_derniere" maxlength="300">
@@ -1807,6 +1900,12 @@ PAGE_HTML = r"""<!doctype html>
     <input id="musique_debut" type="number" min="0" step="0.01" value="0">
     <label for="musique_volume">Volume (de 0,05 à 1)</label>
     <input id="musique_volume" type="number" min="0.05" max="1" step="0.05" value="0.3">
+    <label for="musique_depart">Prendre la chanson à partir de (secondes dans la chanson)</label>
+    <input id="musique_depart" type="number" min="0" step="0.1" value="0">
+    <span class="note">par exemple là où le chant commence, pour sauter une longue introduction.</span>
+    <label for="musique_fondu">Fondu d'entrée (secondes)</label>
+    <input id="musique_fondu" type="number" min="0" max="5" step="0.1" value="0.3">
+    <label><input id="musique_sous_paroles" type="checkbox" checked> Baisser la musique quand on parle</label>
     <button id="musique_poser">Poser la musique</button>
     <p class="note" id="musique_etat"></p>
   </div>
@@ -1879,7 +1978,40 @@ function poserImage(nom, src){
     a.hidden = false;
     const [L, Ht] = tailleChoisie();
     document.getElementById("etat_" + nom).textContent = "Image prête, recadrée en " + L + " × " + Ht + ".";
+    const zone = document.getElementById("comparer_" + nom);
+    zone.innerHTML = "";
+    zone.append(blocComparer(FICHES.map(f => f.id), "/video-h3/visage/comparer", {image: png}));
+    zone.hidden = false;
   });
+}
+
+// Le visage d'une image à côté des photos d'une fiche, et l'avis du modèle qui
+// voit (28/09) : pour toute image, tout mode, tout personnage.
+function blocComparer(ids, adresse, corps){
+  const zone = document.createElement("div");
+  const sortie = document.createElement("div");
+  for (const fid of ids){
+    const f = FICHES.find(x => x.id === fid) || {};
+    if (f.angles && !f.angles.length) continue;
+    zone.append(bouton("Comparer au visage de « " + (f.nom || "la fiche") + " »", async () => {
+      sortie.textContent = "Comparaison du visage (quelques secondes)…";
+      const r = await fetch(adresse, {method: "POST", headers: H,
+        body: JSON.stringify(Object.assign({fiche: fid}, corps))});
+      const d = await r.json();
+      sortie.innerHTML = "";
+      if (!r.ok){ sortie.textContent = typeof d.detail === "string" ? d.detail : "Refusé."; return; }
+      const img = document.createElement("img");
+      img.className = "apercu";
+      img.src = d.planche;
+      img.alt = "Photos de la fiche, puis le visage de l'image";
+      const avis = document.createElement("p");
+      avis.className = "note";
+      avis.textContent = "Avis du Studio — ressemblance " + (d.ressemblance || "?") + (d.ecarts ? " : " + d.ecarts : ".");
+      sortie.append(img, avis);
+    }));
+  }
+  zone.append(sortie);
+  return zone;
 }
 
 function brancherBord(nom){
@@ -2302,8 +2434,36 @@ function dessinerFiche(f){
     }
     cas.appendChild(bouton(f.images[angle] ? "Rejouer" : "Créer", () => faireImage(f.id, angle)));
     if (f.images[angle]) cas.appendChild(bouton("Supprimer", () => retirerImage(f.id, angle)));
+    // Une vraie photo de la personne ; le visage petit ne donne pas la ressemblance (28/09).
+    const fichier = document.createElement("input");
+    fichier.type = "file";
+    fichier.accept = "image/png,image/jpeg,image/webp";
+    fichier.setAttribute("aria-label", "Photo « " + titre + " »");
+    const recadrer = document.createElement("input");
+    recadrer.type = "checkbox";
+    recadrer.checked = angle !== "pied";
+    const coche = document.createElement("label");
+    coche.append(recadrer, " recadrer sur le visage");
+    fichier.addEventListener("change", () => {
+      const f0 = fichier.files[0];
+      if (!f0) return;
+      const lecteur = new FileReader();
+      lecteur.onload = () => poserPhoto(f.id, angle, lecteur.result, recadrer.checked);
+      lecteur.readAsDataURL(f0);
+    });
+    cas.append(document.createElement("br"), "Ou une photo : ", fichier, coche);
     grille.appendChild(cas);
   }
+}
+
+async function poserPhoto(id, angle, image, visage){
+  ficheEtat(visage ? "Recherche du visage et recadrage…" : "Envoi de la photo…");
+  const r = await fetch("/video-h3/fiches/" + id + "/images/" + angle, {method: "POST", headers: H,
+    body: JSON.stringify({image: image, visage: visage})});
+  const d = await r.json();
+  if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  ficheEtat("");
+  await chargerFiches(id);
 }
 
 async function faireImage(id, angle){
@@ -2406,7 +2566,10 @@ document.getElementById("musique_poser").addEventListener("click", async () => {
   const r = await fetch("/video-h3/musique", {method: "POST", headers: H, body: JSON.stringify({
     film: document.getElementById("musique_film").value, chanson: document.getElementById("musique_chanson").value,
     debut_s: Number(document.getElementById("musique_debut").value) || 0,
-    volume: Number(document.getElementById("musique_volume").value) || 0.3})});
+    volume: Number(document.getElementById("musique_volume").value) || 0.3,
+    depart_chanson_s: Number(document.getElementById("musique_depart").value) || 0,
+    fondu_s: Number(document.getElementById("musique_fondu").value) || 0,
+    sous_paroles: document.getElementById("musique_sous_paroles").checked})});
   const j = await r.json();
   if (!r.ok){ e.className = "refus"; e.textContent = typeof j.detail === "string" ? j.detail : "Refusé."; return; }
   e.textContent = "Musique posée : le film est ci-dessus.";
@@ -2595,6 +2758,7 @@ function blocDepart(p){
       DEPART_APERCU.delete(p);
       dessinerPlans();
     }));
+    zone.append(blocComparer(fichesDuScenario(), "/video-h3/depart/" + p.image_depart + "/comparer", {}));
   }
   return zone;
 }

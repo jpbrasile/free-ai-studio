@@ -50,7 +50,8 @@ def client(sandbox):
     ("post", "/video-h3/scenario/decouper"), ("post", "/video-h3/scenario/tourner"),
     ("get", "/video-h3/scenario/" + "a" * 32), ("post", "/video-h3/musique"), ("get", "/video-h3/scenarios"),
     ("post", "/video-h3/scenario/" + "a" * 32 + "/juger"), ("post", "/video-h3/scenario/" + "a" * 32 + "/corriger"),
-    ("post", "/video-h3/scenario/" + "a" * 32 + "/rejouer"),
+    ("post", "/video-h3/scenario/" + "a" * 32 + "/rejouer"), ("post", "/video-h3/depart/" + "a" * 24 + "/comparer"),
+    ("post", "/video-h3/visage/comparer"),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -802,6 +803,17 @@ def test_la_traduction_garde_les_repliques_mot_pour_mot(h3):
         v.lire_traduction(traduite, p)
     with pytest.raises(ValueError, match="lue"):
         v.lire_traduction("Désolé, je ne peux pas.", p)
+    # 28/09 (clip 1180fae1) : une case rendue encore en français passait.
+    reste = ('{"image_paroles": "Léa marche sur l\'allée vers la caméra et sourit. Elle ne parle pas.", '
+             '"ambiance": "x", "musique": ""}')
+    with pytest.raises(ValueError, match="laissé du français"):
+        v.lire_traduction(reste, dict(p, image_paroles="Léa marche sur l'allée vers la caméra et sourit. "
+                                                       "Elle ne parle pas."))
+    # Répliques balisées à la main : l'écoute les attend aussi (clip 841ec33e, 28/09).
+    assert v.repliques("Elle dit « Salut » puis (S1) <d>[French] Bonjour !</d> et (S1) <d>[English] Nice "
+                       "to meet you!</d>") == ["Salut", "Bonjour !", "Nice to meet you!"]
+    # Les répliques françaises, elles, restent en français sans lever l'alarme.
+    assert not v.reste_du_francais("She says (S1) <d>[French] Merci pour le colis et la carte !</d>")
 
 
 def test_en_mode_references_le_clip_part_traduit(h3, monkeypatch):
@@ -1094,6 +1106,102 @@ def test_la_musique_part_a_son_heure_et_decroit_jusqu_a_la_fin(h3, tmp_path):
         m.poser_musique(film.read_bytes(), musique.read_bytes(), 2.8)
 
 
+def _volume_440(chemin, debut, duree):
+    """Le niveau de la musique (440 Hz) seule, la « voix » du film (2 000 Hz) filtrée."""
+    err = subprocess.run(["ffmpeg", "-hide_banner", "-ss", str(debut), "-t", str(duree), "-i", str(chemin),
+                          "-af", "bandpass=f=440:width_type=q:w=6,bandpass=f=440:width_type=q:w=6,volumedetect",
+                          "-f", "null", "-"], capture_output=True, text=True).stderr
+    return float(err.split("mean_volume:")[1].split("dB")[0])
+
+
+def _film_qui_parle(chemin):
+    """4 s d'images ; silence jusqu'à 2 s, puis une « voix » forte (2 000 Hz)."""
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=blue:s=64x48:r=24",
+                    "-f", "lavfi", "-i", "sine=f=2000:r=48000", "-frames:v", "96", "-t", "4",
+                    "-af", "volume='if(lt(t,2),0,1)':eval=frame", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    str(chemin)], check=True)
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_la_musique_part_d_un_passage_de_la_chanson_et_baisse_sous_les_paroles(h3, tmp_path):
+    film, musique = tmp_path / "film.mp4", tmp_path / "musique.flac"
+    _film_qui_parle(film)
+    # La chanson : 3 s d'introduction muette, puis le « chant » (440 Hz).
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:r=48000", "-t", "12",
+                    "-af", "volume='if(lt(t,3),0,1)':eval=frame", str(musique)], check=True)
+    m, sortie = h3.montage, tmp_path / "avec.mp4"
+    sortie.write_bytes(m.poser_musique(film.read_bytes(), musique.read_bytes(), 0.0, 0.5))
+    assert _volume_440(sortie, 0.4, 1.2) < -60            # prise au début : l'introduction muette
+    sortie.write_bytes(m.poser_musique(film.read_bytes(), musique.read_bytes(), 0.0, 0.5, depart_chanson_s=3.0,
+                                       fondu_s=0.2))
+    assert m.images(sortie) == 96
+    assert _volume_440(sortie, 0.4, 1.2) > -30            # prise à 3 s : le chant tout de suite
+    libre = _volume_440(sortie, 2.6, 0.8)
+    sortie.write_bytes(m.poser_musique(film.read_bytes(), musique.read_bytes(), 0.0, 0.5, depart_chanson_s=3.0,
+                                       fondu_s=0.2, sous_paroles=True))
+    assert _volume_440(sortie, 0.4, 1.2) > -30            # personne ne parle : la musique reste
+    assert _volume_440(sortie, 2.6, 0.8) < libre - 6      # la « voix » parle : la musique baisse
+    with pytest.raises(m.MontageImpossible, match="hors bornes"):
+        m.poser_musique(film.read_bytes(), musique.read_bytes(), 0.0, depart_chanson_s=-1)
+
+
+def test_les_passages_parles_se_lisent_dans_le_journal_de_silencedetect(h3):
+    journal = ("[silencedetect] silence_start: 0\n[silencedetect] silence_end: 1.3 | silence_duration: 1.3\n"
+               "[silencedetect] silence_start: 1.32\n[silencedetect] silence_end: 6.73\n"
+               "[silencedetect] silence_start: 7.79\n[silencedetect] silence_end: 8.37\n")
+    # Le bruit de 1,30 à 1,32 s est écarté ; le dernier passage court jusqu'à la fin du clip.
+    assert h3.montage.lire_silences(journal, 10.1) == [(6.48, 8.04), (8.12, 10.1)]
+    assert h3.montage.lire_silences("", 3.0) == [(0.0, 3.0)]
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_les_passages_parles_d_un_vrai_clip(h3, tmp_path):
+    film = tmp_path / "film.mp4"
+    _film_qui_parle(film)
+    passages = h3.montage.passages_parles(film.read_bytes())
+    assert len(passages) == 1 and 1.6 <= passages[0][0] <= 2.0 and passages[0][1] == 4.0
+    son = h3.montage.son_du_passage(film.read_bytes(), *passages[0])
+    assert son[:3] == b"ID3" or son[:2] in (b"\xff\xfb", b"\xff\xf3")
+
+
+def test_l_ecoute_entend_aussi_chaque_passage(h3, monkeypatch):
+    """Essai du 28/09 : sur un clip bilingue, Whisper sur le clip entier garde une
+    seule langue et perd une réplique ; passage par passage, il entend les deux."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [(6.48, 8.04), (8.12, 10.1)])
+    monkeypatch.setattr(h3.montage, "son_du_passage", lambda video, a, b: ("P%.2f" % a).encode())
+    ecoutes, vu = [], {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille(
+        "", ["Nice to meet you.", "Bonjour, ça va ?", "Nice to meet you."], ecoutes, vu))
+    import asyncio
+    texte = "Il dit « Bonjour, ça va ? » puis « [anglais] Nice to meet you! »"
+    r = asyncio.run(h3._ecouter(b"CLIP", texte))
+    assert [e[0] for e in ecoutes] == [b"CLIP", b"P6.48", b"P8.12"]
+    assert r["attendu"] == ["Bonjour, ça va ?", "Nice to meet you!"] and r["ok"] is True and r["part"] == 1.0
+    assert r["entendu"] == "Nice to meet you." and \
+        [p["entendu"] for p in r["passages"]] == ["Bonjour, ça va ?", "Nice to meet you."]
+    # Sans les passages, la réplique française manque : 4 mots entendus sur 7.
+    monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [])
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille("", ["Nice to meet you."], [], {}))
+    sans = asyncio.run(h3._ecouter(b"CLIP", texte))
+    assert sans["ok"] is False and abs(sans["part"] - 4 / 7) < 0.01
+
+
+def test_une_replique_dit_sa_langue_et_le_personnage_garde_sa_voix(h3):
+    v = h3.video_h3
+    texte = "Elle dit « Bonjour ! » puis, en riant, « [anglais] Nice to meet you! »"
+    assert v.balises_paroles(texte, "French") == ("Elle dit (S1) <d>[French] Bonjour !</d> puis, en riant, "
+                                                  "(S1) <d>[English] Nice to meet you!</d>")
+    avec_fiche = v.attribuer_repliques("Léa dit « Bonjour ! » puis « [English] Nice to meet you! »",
+                                       [("Léa", "French")], garder_noms=True)
+    assert avec_fiche == ("Léa (S1) dit <d>[French] Bonjour !</d> puis Léa (S1) <d>[English] Nice "
+                          "to meet you!</d>")
+    assert v.repliques(texte) == ["Bonjour !", "Nice to meet you!"]
+    # Une marque qui n'est pas une langue reste dans la réplique.
+    assert v.balises_paroles("« [rire] Enfin ! »", "French") == "(S1) <d>[French] [rire] Enfin !</d>"
+    assert v.langue_de_replique("[Japanese] はい", "French") == ("Japanese", "はい")
+
+
 def test_une_musique_du_studio_se_pose_sous_un_film(h3, monkeypatch, tmp_path):
     _deux_clips(h3, monkeypatch, tmp_path)
     son = tmp_path / "son.flac"
@@ -1102,14 +1210,23 @@ def test_une_musique_du_studio_se_pose_sous_un_film(h3, monkeypatch, tmp_path):
     monkeypatch.setattr(h3, "_chansons_pretes", lambda: [{"id": c_id, "titre": "Jazz", "cree_a": 0}])
     monkeypatch.setattr(h3, "chanson_fichiers", lambda jid: {"son": {"path": str(son)}})
     vus = []
-    monkeypatch.setattr(h3.montage, "poser_musique", lambda f, s, d, vol: vus.append((f, s, d, vol)) or f + s)
+    monkeypatch.setattr(h3.montage, "poser_musique", lambda f, s, d, vol, *reste: vus.append((f, s, d, vol, *reste))
+                        or f + s)
     monkeypatch.setattr(h3.montage, "images", lambda chemin: 248)
     c = client(h3)
     assert [x["id"] for x in c.get("/video-h3/clips", headers=CLE).json()["chansons"]] == [c_id]
     r = c.post("/video-h3/musique", headers=CLE, json={"film": "a" * 32, "chanson": c_id, "debut_s": 5.17})
     assert r.status_code == 200, r.text
-    assert vus == [(b"A", b"SON", 5.17, 0.3)]
-    assert r.json()["video"]["musique"] == {"chanson": c_id, "debut_s": 5.17, "volume": 0.3}
+    assert vus == [(b"A", b"SON", 5.17, 0.3, 0.0, 0.3, False)]
+    assert r.json()["video"]["musique"] == {"chanson": c_id, "debut_s": 5.17, "volume": 0.3,
+                                            "depart_chanson_s": 0.0, "fondu_s": 0.3, "sous_paroles": False}
+    # Essai du 28/09 : la chanson prise à 7,5 s, un fondu d'1 s, baissée sous la parole.
+    r = c.post("/video-h3/musique", headers=CLE, json={"film": "a" * 32, "chanson": c_id, "debut_s": 0,
+                                                        "depart_chanson_s": 7.5, "fondu_s": 1, "sous_paroles": True})
+    assert r.status_code == 200, r.text
+    assert vus[-1] == (b"A", b"SON", 0.0, 0.3, 7.5, 1.0, True)
+    assert c.post("/video-h3/musique", headers=CLE, json={"film": "a" * 32, "chanson": c_id,
+                                                          "fondu_s": "long"}).status_code == 400
     for corps, code in (({"chanson": "e" * 32}, 404), ({"film": "e" * 32}, 404), ({"volume": 2}, 400)):
         base = {"film": "a" * 32, "chanson": c_id, "debut_s": 1}
         assert c.post("/video-h3/musique", headers=CLE, json=dict(base, **corps)).status_code == code
@@ -1286,7 +1403,8 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     j = r.json()["jugement"]
     assert j[0]["paroles"]["ok"] is True and j[0]["defauts"] == [{"t_s": 4.0, "quoi": "veste grise"}]
     # « Non. » n'a pas été dit : un défaut de plus, au début du plan.
-    assert j[1]["paroles"] == {"attendu": ["Non."], "entendu": "Oui, bien sûr.", "part": 0.0, "ok": False}
+    assert j[1]["paroles"] == {"attendu": ["Non."], "entendu": "Oui, bien sûr.", "part": 0.0, "ok": False,
+                                "passages": []}   # un faux plan : aucun passage à découper
     assert j[1]["defauts"] == [{"t_s": 9.2, "quoi": "veste grise"},
                                {"t_s": 5.2, "quoi": "Réplique attendue « Non. » ; le clip dit : « Oui, bien sûr. »."}]
     assert j[2]["paroles"]["ok"] is True and len(j[2]["defauts"]) == 1
@@ -1671,3 +1789,141 @@ def test_la_page_propose_les_quatre_chantiers(h3):
                     "fiches_image:", 'id="juger_clip"', '"/video-h3/jobs/" + CLIP_COURANT + "/juger"',
                     "function blocDepart(p)", '"/video-h3/depart"', "texteParoles(j.paroles)"):
         assert morceau in html, morceau
+
+
+# --- Le visage : gros plan pour la fiche, comparaison avec l'image de départ (28/09) ---
+
+def test_la_boite_du_visage_se_lit_et_s_elargit_en_gros_plan(h3):
+    v = h3.video_h3
+    assert v.lire_visage('Voici : {"x0": 0.4, "y0": 0.1, "x1": 0.6, "y1": 0.3}') == (0.4, 0.1, 0.6, 0.3)
+    for mauvais in ("{}", "pas de visage", '{"x0": 0.6, "y0": 0.1, "x1": 0.4, "y1": 0.3}',
+                    '{"x0": 0.4, "y0": 0.1, "x1": 1.4, "y1": 0.3}', '{"x0": 0.4, "y0": 0.1, "x1": 0.41, "y1": 0.3}',
+                    '{"x0": "a", "y0": 0.1, "x1": 0.6, "y1": 0.3}', None):
+        assert v.lire_visage(mauvais) is None, mauvais
+    # Cheveux au-dessus, cou en dessous, de l'air sur les côtés ; jamais hors de l'image.
+    assert v.zone_gros_plan((0.4, 0.2, 0.6, 0.4)) == (0.31, 0.1, 0.69, 0.47)
+    assert v.zone_gros_plan((0.0, 0.0, 0.5, 0.9)) == (0.0, 0.0, 0.725, 1.0)
+
+
+def test_l_avis_sur_la_ressemblance_se_lit(h3):
+    v = h3.video_h3
+    assert "first 2 image(s)" in v.consigne_ressemblance(2)
+    assert v.lire_ressemblance('```json\n{"ressemblance": "moyenne", "ecarts": "nez  plus\\nlarge"}\n```') == \
+        {"ressemblance": "moyenne", "ecarts": "nez plus large"}
+    for mauvais in ('{"ressemblance": "parfaite"}', "illisible", "[]"):
+        assert v.lire_ressemblance(mauvais)["ressemblance"] is None
+
+
+def _image(chemin, largeur, hauteur):
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=%dx%d" % (largeur, hauteur),
+                    "-frames:v", "1", str(chemin)], check=True)
+    return Path(chemin).read_bytes()
+
+
+def _taille(octets, tmp_path):
+    p = tmp_path / "vue.png"
+    p.write_bytes(octets)
+    sortie = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                             "stream=width,height", "-of", "csv=p=0", str(p)],
+                            capture_output=True, text=True, check=True).stdout
+    return tuple(int(x) for x in sortie.strip().split(","))
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_le_gros_plan_et_la_planche_sont_faits_par_ffmpeg(h3, tmp_path):
+    m = h3.montage
+    photo = _image(tmp_path / "pied.png", 400, 800)
+    gros_plan = m.recadrer_zone(photo, (0.25, 0.1, 0.75, 0.3))
+    assert gros_plan.startswith(b"\x89PNG")
+    assert _taille(gros_plan, tmp_path) == (512, 410)   # 200 x 160 agrandi à 512 de large
+    assert _taille(m.recadrer_zone(_image(tmp_path / "grand.png", 2000, 1000), (0, 0, 0.5, 0.5)), tmp_path) == \
+        (1000, 500)   # déjà assez grand : pas réduit
+    planche = m.planche_visages([photo, gros_plan, photo], cote=100)
+    assert _taille(planche, tmp_path) == (300, 100)
+    assert _taille(m.planche_visages([photo], cote=100), tmp_path) == (100, 100)
+    with pytest.raises(m.MontageImpossible):
+        m.planche_visages([])
+    with pytest.raises(m.MontageImpossible):
+        m.recadrer_zone(b"pas une image", (0, 0, 1, 1))
+
+
+def test_une_photo_televersee_se_recadre_sur_le_visage(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    fid = h3.video_h3.fiche_creer("Léa", "une femme")["id"]
+    coupes, vus = [], []
+    monkeypatch.setattr(h3.montage, "recadrer_zone", lambda image, zone: coupes.append((image, zone)) or CADRE)
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteurSuite(['{"x0": 0.4, "y0": 0.2, "x1": 0.6, "y1": 0.4}', "{}"], vus))
+    c = client(h3)
+    f = c.post(f"/video-h3/fiches/{fid}/images/face", headers=CLE,
+               json={"image": "data:image/jpeg;base64," + JPG, "visage": True}).json()
+    assert coupes == [(base64.b64decode(JPG), (0.31, 0.1, 0.69, 0.47))]
+    assert f["images"]["face"] == "data:image/png;base64," + base64.b64encode(CADRE).decode()
+    image_vue = vus[0]["messages"][-1]["content"][-1]["image_url"]["url"]
+    assert image_vue == "data:image/jpeg;base64," + JPG
+    # Aucun visage : refus, et la fiche ne change pas.
+    r = c.post(f"/video-h3/fiches/{fid}/images/profil", headers=CLE, json={"image": JPG, "visage": True})
+    assert r.status_code == 400 and "Aucun visage" in r.json()["detail"]
+    assert list(h3.video_h3.fiche_lire(fid)["images"]) == ["face"]
+    # Sans la case : la photo est posée telle quelle, sans appel.
+    f = c.post(f"/video-h3/fiches/{fid}/images/pied", headers=CLE, json={"image": JPG}).json()
+    assert len(vus) == 2 and f["images"]["pied"].startswith("data:image/jpeg;base64,")
+
+
+def test_l_image_de_depart_se_compare_au_visage_de_la_fiche(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    v = h3.video_h3
+    fid = v.fiche_creer("Léa", "une femme")["id"]
+    did = v.depart_poser("data:image/png;base64," + PNG)
+    c = client(h3)
+    r = c.post(f"/video-h3/depart/{did}/comparer", headers=CLE, json={"fiche": fid})
+    assert r.status_code == 400 and "aucune photo" in r.json()["detail"]
+    v.fiche_poser_image(fid, "face", JPG)
+    planches, vus = [], []
+    monkeypatch.setattr(h3.montage, "recadrer_zone", lambda image, zone: CADRE)
+    monkeypatch.setattr(h3.montage, "planche_visages", lambda images: planches.append(images) or b"\x89PNGplanche")
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        ['{"x0": 0.4, "y0": 0.2, "x1": 0.6, "y1": 0.4}',
+         '{"ressemblance": "faible", "ecarts": "nez plus large, nez plus fin"}'], vus))
+    d = c.post(f"/video-h3/depart/{did}/comparer", headers=CLE, json={"fiche": fid}).json()
+    assert d == {"planche": "data:image/png;base64," + base64.b64encode(b"\x89PNGplanche").decode(),
+                 "ressemblance": "faible", "ecarts": "nez plus large, nez plus fin"}
+    assert planches == [[base64.b64decode(JPG), CADRE]]   # la fiche, puis le visage généré
+    montrees = [p["image_url"]["url"] for p in vus[1]["messages"][-1]["content"] if p.get("type") == "image_url"]
+    assert montrees == ["data:image/jpeg;base64," + JPG, "data:image/png;base64," + base64.b64encode(CADRE).decode()]
+    assert c.post("/video-h3/depart/" + "b" * 24 + "/comparer", headers=CLE,
+                  json={"fiche": fid}).status_code == 404
+
+
+def test_la_page_propose_le_visage_la_comparaison_et_la_musique_reglable(h3):
+    html = client(h3).get("/video-h3").text
+    for morceau in ('id="musique_depart"', 'id="musique_fondu"', 'id="musique_sous_paroles"',
+                    "depart_chanson_s:", "sous_paroles:", " recadrer sur le visage", "function poserPhoto(",
+                    '"/comparer"', "Comparer au visage de", "Avis du Studio — ressemblance", "[anglais] Nice",
+                    "function blocComparer(", 'id="comparer_premiere"', 'id="comparer_derniere"',
+                    '"/video-h3/visage/comparer", {image: png}'):
+        assert morceau in html, morceau
+
+
+def test_toute_image_se_compare_au_visage_d_une_fiche(h3, monkeypatch):
+    # Pas seulement l'image de départ d'un plan : la première ou la dernière image
+    # d'un clip, créée ou téléversée, quel que soit le mode.
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    v = h3.video_h3
+    fid = v.fiche_creer("Tom", "un homme")["id"]
+    v.fiche_poser_image(fid, "face", JPG)
+    v.fiche_poser_image(fid, "profil", PNG)
+    c = client(h3)
+    assert c.post("/video-h3/visage/comparer", headers=CLE, json={"fiche": fid}).status_code == 400
+    planches, vus = [], []
+    monkeypatch.setattr(h3.montage, "planche_visages", lambda images: planches.append(images) or b"\x89PNGp")
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        ["{}", '{"ressemblance": "forte", "ecarts": ""}'], vus))
+    d = c.post("/video-h3/visage/comparer", headers=CLE,
+               json={"fiche": fid, "image": "data:image/png;base64," + PNG}).json()
+    # Aucun visage trouvé : l'image entière est comparée.
+    assert d["ressemblance"] == "forte" and d["ecarts"] == ""
+    assert planches == [[base64.b64decode(JPG), base64.b64decode(PNG), base64.b64decode(PNG)]]
+    assert "first 2 image(s)" in json.dumps(vus[1])
+    r = c.post("/video-h3/visage/comparer", headers=CLE, json={"fiche": "0123456789ab", "image": PNG})
+    assert r.status_code in (400, 404)

@@ -13,6 +13,7 @@ presente comme prolonge.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import tempfile
@@ -66,6 +67,43 @@ def recadrer_image(image: bytes, largeur: int, hauteur: int) -> bytes:
                 "Le recadrage de l'image de départ")
         if not sortie.is_file() or not sortie.stat().st_size:
             raise MontageImpossible("L'image de départ n'a pas pu être recadrée.")
+        return sortie.read_bytes()
+
+
+def recadrer_zone(image: bytes, zone: tuple, largeur_min: int = 512) -> bytes:
+    """La zone (x0, y0, x1, y1, en fractions) de l'image, en PNG, agrandie à
+    `largeur_min` de large au moins : le gros plan d'un visage pour une fiche."""
+    x0, y0, x1, y1 = zone
+    with tempfile.TemporaryDirectory() as dossier:
+        entree, sortie = Path(dossier, "image"), Path(dossier, "zone.png")
+        entree.write_bytes(image)
+        _lancer(["-i", str(entree), "-vf",
+                 "crop=iw*%.4f:ih*%.4f:iw*%.4f:ih*%.4f,scale='max(%d,iw)':-2:flags=lanczos"
+                 % (x1 - x0, y1 - y0, x0, y0, largeur_min), "-frames:v", "1", str(sortie)],
+                "Le recadrage sur le visage")
+        if not sortie.is_file() or not sortie.stat().st_size:
+            raise MontageImpossible("Le visage n'a pas pu être recadré.")
+        return sortie.read_bytes()
+
+
+def planche_visages(images: list, cote: int = 320) -> bytes:
+    """Des images côte à côte, chacune dans un carré de `cote` (sans déformer) :
+    les photos de la fiche, puis le visage de l'image générée."""
+    if not images:
+        raise MontageImpossible("Aucun visage à comparer.")
+    with tempfile.TemporaryDirectory() as dossier:
+        entrees = []
+        for i, octets in enumerate(images):
+            p = Path(dossier, "v%d" % i)
+            p.write_bytes(octets)
+            entrees += ["-i", str(p)]
+        cases = "".join("[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:"
+                        "color=white,setsar=1[c%d];" % (i, cote, cote, cote, cote, i) for i in range(len(images)))
+        pile = ("".join("[c%d]" % i for i in range(len(images))) + "hstack=inputs=%d[p]" % len(images)
+                if len(images) > 1 else "[c0]null[p]")
+        sortie = Path(dossier, "planche.png")
+        _lancer([*entrees, "-filter_complex", cases + pile, "-map", "[p]", "-frames:v", "1", str(sortie)],
+                "La planche des visages")
         return sortie.read_bytes()
 
 
@@ -127,7 +165,9 @@ def recoller_son(premiere: bytes, suite: bytes, retirer: int = 1) -> bytes:
         return sortie.read_bytes()
 
 
-def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0.3) -> bytes:
+def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0.3,
+                  depart_chanson_s: float = 0.0, fondu_s: float = 0.3,
+                  sous_paroles: bool = False) -> bytes:
     """Une musique SOUS le son du film, de `debut_s` à la fin (28/09/2026).
 
     Demande du propriétaire : une musique qui commence au deuxième plan et
@@ -135,7 +175,15 @@ def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0
     musique, qui change à la coupe ; un seul morceau posé après coup est le
     même signal d'un bout à l'autre. Les images ne sont pas réencodées, et le
     son d'origine (paroles, ambiance) est gardé tel quel, la musique en dessous,
-    avec une entrée et une sortie en fondu."""
+    avec une entrée et une sortie en fondu.
+
+    Essai du 28/09 : le chant d'une chanson YuE2 commençait à 8 s ; il a
+    fallu la prendre à `depart_chanson_s` (un passage choisi DANS la chanson),
+    l'entrée en fondu plus longue (`fondu_s`), et la baisser quand on parle
+    (`sous_paroles` : le son du film commande le volume de la musique,
+    compresseur à déclenchement externe)."""
+    if depart_chanson_s < 0 or not 0 <= fondu_s <= 5:
+        raise MontageImpossible("Départ dans la chanson ou fondu hors bornes.")
     with tempfile.TemporaryDirectory() as dossier:
         a, m, sortie = Path(dossier, "film.mp4"), Path(dossier, "musique"), Path(dossier, "avec.mp4")
         a.write_bytes(film)
@@ -148,18 +196,79 @@ def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0
         # Decrescendo final (demande du 28/09) : un fondu d'une seconde sonnait
         # comme une coupure ; 2,5 s, ou le tiers de la musique si elle est courte.
         fin_s = min(2.5, longueur_s / 3)
-        _lancer(["-i", str(a), "-i", str(m), "-filter_complex",
-                 "[1:a]atrim=0:%.3f,asetpts=PTS-STARTPTS,aresample=48000,"
-                 "afade=t=in:d=0.3,afade=t=out:st=%.3f:d=%.3f,volume=%.2f,adelay=%d:all=1[m];"
-                 "[0:a]aresample=48000[f];"
-                 "[f][m]amix=inputs=2:duration=first:normalize=0[a]"
-                 % (longueur_s, longueur_s - fin_s, fin_s, volume, round(debut_s * 1000)),
+        entree_s = min(fondu_s, longueur_s / 3)
+        musique_f = ("[1:a]atrim=start=%.3f:end=%.3f,asetpts=PTS-STARTPTS,aresample=48000,"
+                     "afade=t=in:d=%.3f,afade=t=out:st=%.3f:d=%.3f,volume=%.2f,adelay=%d:all=1[m0];"
+                     % (depart_chanson_s, depart_chanson_s + longueur_s, entree_s,
+                        longueur_s - fin_s, fin_s, volume, round(debut_s * 1000)))
+        if sous_paroles:
+            # La voix du film (au-dessus de -26 dB environ) écrase la musique d'un
+            # facteur 8 ; l'ambiance, plus basse, la laisse presque intacte.
+            filtre = (musique_f + "[0:a]aresample=48000,asplit=2[f][cle];"
+                      "[m0][cle]sidechaincompress=threshold=0.05:ratio=8:attack=15:release=450[m];"
+                      "[f][m]amix=inputs=2:duration=first:normalize=0[a]")
+        else:
+            filtre = (musique_f.replace("[m0];", "[m];") + "[0:a]aresample=48000[f];"
+                      "[f][m]amix=inputs=2:duration=first:normalize=0[a]")
+        _lancer(["-i", str(a), "-i", str(m), "-filter_complex", filtre,
                  "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
                  "-movflags", "+faststart", str(sortie)],
                 "La pose de la musique")
         if images(sortie) != images(a):
             raise MontageImpossible("La pose de la musique a changé le nombre d'images : "
                                     "le film n'est pas rendu.")
+        return sortie.read_bytes()
+
+
+PASSAGES_MAX = 8
+
+
+def lire_silences(journal: str, duree_s: float, min_s: float = 0.3, marge_s: float = 0.25) -> list:
+    """Les passages NON silencieux d'après le journal de `silencedetect`, élargis
+    de `marge_s`, ceux de moins de `min_s` écartés (bruits de pas). Rend
+    [(debut, fin)], au plus PASSAGES_MAX, dans l'ordre."""
+    silences, debut = [], None
+    for m in re.finditer(r"silence_(start|end): (-?[\d.]+)", journal):
+        t = max(0.0, float(m.group(2)))
+        if m.group(1) == "start":
+            debut = t
+        elif debut is not None:
+            silences.append((debut, t))
+            debut = None
+    if debut is not None:
+        silences.append((debut, duree_s))
+    passages, t = [], 0.0
+    for a, b in silences + [(duree_s, duree_s)]:
+        if a - t >= min_s:
+            passages.append((round(max(0.0, t - marge_s), 2), round(min(duree_s, a + marge_s), 2)))
+        t = b
+    return passages[:PASSAGES_MAX]
+
+
+def passages_parles(video: bytes) -> list:
+    """Où le clip fait du son au-dessus de -35 dB (voix, le plus souvent). Pour
+    écouter passage par passage : sur le clip entier, Whisper n'a gardé qu'une
+    langue et a perdu une réplique d'un clip bilingue (essai du 28/09)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "a.mp4")
+        a.write_bytes(video)
+        num, den = _cadence(a)
+        duree_s = images(a) * den / num
+        fini = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(a), "-vn",
+                               "-af", "silencedetect=n=-35dB:d=0.3", "-f", "null", "-"],
+                              capture_output=True, text=True, timeout=DELAI_S)
+        if fini.returncode != 0:
+            raise MontageImpossible("La recherche des passages parlés a échoué.")
+        return lire_silences(fini.stderr or "", duree_s)
+
+
+def son_du_passage(video: bytes, debut_s: float, fin_s: float) -> bytes:
+    """Le son de [debut_s, fin_s), en MP3, pour l'envoyer à l'écoute."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "a.mp4"), Path(dossier, "passage.mp3")
+        a.write_bytes(video)
+        _lancer(["-ss", "%.3f" % debut_s, "-to", "%.3f" % fin_s, "-i", str(a), "-vn",
+                 "-ac", "1", "-b:a", "96k", str(sortie)], "L'extraction d'un passage parlé")
         return sortie.read_bytes()
 
 

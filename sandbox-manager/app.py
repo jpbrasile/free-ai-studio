@@ -4348,7 +4348,8 @@ def _chansons_pretes() -> list:
     return pretes
 
 
-def _mettre_musique(film_jid: str, chanson_jid: str, debut_s: float, volume: float) -> str:
+def _mettre_musique(film_jid: str, chanson_jid: str, debut_s: float, volume: float,
+                    depart_chanson_s: float = 0.0, fondu_s: float = 0.3, sous_paroles: bool = False) -> str:
     """Pose la musique d'une chanson sous un film H3 ; rend le numéro du nouveau film."""
     film = _video_h3_octets(film_jid)
     if not film or film_jid not in {c["id"] for c in _clips_h3()}:
@@ -4356,11 +4357,14 @@ def _mettre_musique(film_jid: str, chanson_jid: str, debut_s: float, volume: flo
     if chanson_jid not in {c["id"] for c in _chansons_pretes()}:
         raise ValueError("Cette musique n'est plus sur ce Studio.")
     son = ART / chanson_fichiers(chanson_jid)["son"]["path"]
-    avec = montage.poser_musique(film.read_bytes(), son.read_bytes(), debut_s, volume)
+    avec = montage.poser_musique(film.read_bytes(), son.read_bytes(), debut_s, volume,
+                                 depart_chanson_s, fondu_s, sous_paroles)
     avant = read_job(film_jid).get("video") or {}
     return _film_h3(avec, {"mode": "musique", "mode_titre": "Film et musique", "invite": avant.get("invite", ""),
                            "clips": [film_jid], "plans": avant.get("plans") or 1,
-                           "musique": {"chanson": chanson_jid, "debut_s": round(debut_s, 3), "volume": volume}},
+                           "musique": {"chanson": chanson_jid, "debut_s": round(debut_s, 3), "volume": volume,
+                                       "depart_chanson_s": round(depart_chanson_s, 3),
+                                       "fondu_s": round(fondu_s, 3), "sous_paroles": sous_paroles}},
                     (read_job(film_jid).get("titre") or "Film H3")[:50] + " + musique")
 
 
@@ -4372,13 +4376,16 @@ async def video_h3_musique(request: Request, authorization: Optional[str] = Head
     corps = await request.json()
     try:
         debut_s, volume = float(corps.get("debut_s") or 0), float(corps.get("volume") or 0.3)
+        depart_chanson_s = float(corps.get("depart_chanson_s") or 0)
+        fondu_s = float(corps.get("fondu_s") if corps.get("fondu_s") is not None else 0.3)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(400, "Début ou volume illisible.") from exc
+        raise HTTPException(400, "Début, volume, départ dans la chanson ou fondu illisible.") from exc
     if not 0 < volume <= 1:
         raise HTTPException(400, "Volume hors bornes (au-dessus de 0, 1 au plus).")
     try:
         jid = await asyncio.to_thread(_mettre_musique, str(corps.get("film") or ""),
-                                      str(corps.get("chanson") or ""), debut_s, volume)
+                                      str(corps.get("chanson") or ""), debut_s, volume,
+                                      depart_chanson_s, fondu_s, bool(corps.get("sous_paroles")))
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     except montage.MontageImpossible as exc:
@@ -4628,17 +4635,40 @@ async def _ecouter(video: bytes, texte: str) -> dict:
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
         return {"erreur": "L'écoute n'est pas joignable d'ici (clé interne du routeur absente)."}
-    try:
-        async with httpx.AsyncClient(timeout=300) as client:
+    async def transcrire(client, nom, octets, type_mime):
+        try:
             r = await client.post(ROUTEUR_INTERNE + "/v1/audio/transcriptions",
                                   headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
-                                  files={"file": ("clip.mp4", video, "video/mp4")}, data={"model": "whisper-1"})
-        entendu = r.json().get("text") if r.status_code < 400 else None
-    except (httpx.HTTPError, ValueError):
-        entendu = None
-    if not isinstance(entendu, str):
-        return {"erreur": "L'écoute du clip a échoué (transcription du routeur)."}
-    return video_h3.comparer_paroles(texte, entendu)
+                                  files={"file": (nom, octets, type_mime)}, data={"model": "whisper-1"})
+            t = r.json().get("text") if r.status_code < 400 else None
+        except (httpx.HTTPError, ValueError):
+            t = None
+        return t if isinstance(t, str) else None
+
+    # Le clip entier, puis chaque passage parlé à part : sur le clip entier,
+    # Whisper garde une seule langue (essai du 28/09 : une réplique perdue).
+    try:
+        passages = await asyncio.to_thread(montage.passages_parles, video)
+    except montage.MontageImpossible:
+        passages = []
+    async with httpx.AsyncClient(timeout=300) as client:
+        entendu = await transcrire(client, "clip.mp4", video, "video/mp4")
+        if entendu is None:
+            return {"erreur": "L'écoute du clip a échoué (transcription du routeur)."}
+        morceaux = []
+        for debut, fin in passages:
+            try:
+                son = await asyncio.to_thread(montage.son_du_passage, video, debut, fin)
+            except montage.MontageImpossible:
+                continue
+            t = await transcrire(client, "passage.mp3", son, "audio/mpeg")
+            if t and t.strip():
+                morceaux.append({"de_s": debut, "a_s": fin, "entendu": " ".join(t.split())})
+    resultat = video_h3.comparer_paroles(
+        texte, entendu + (" " + " ".join(m["entendu"] for m in morceaux) if morceaux else ""))
+    resultat["entendu"] = " ".join(entendu.split())
+    resultat["passages"] = morceaux
+    return resultat
 
 
 def _ajouter_defaut_de_paroles(verdict: dict, debut: float) -> None:
@@ -4968,8 +4998,86 @@ async def video_h3_fiche_image(fid: str, angle: str, request: Request,
     if not image:
         demande = _fiche_ou_400(lambda: video_h3.fiche_demande_image(fiche, angle))
         image = await _image_du_studio(demande)
+    elif corps.get("visage"):
+        # « Recadrer sur le visage » (essai du 28/09) : une photo où le
+        # visage est petit ne donne pas la ressemblance.
+        try:
+            octets = base64.b64decode(str(image).split(",", 1)[-1], validate=False)
+        except ValueError as exc:
+            raise HTTPException(400, "Image illisible.") from exc
+        gros_plan = await _gros_plan_visage(octets)
+        if gros_plan is None:
+            raise HTTPException(400, "Aucun visage trouvé sur cette photo : envoyez-la sans recadrage, "
+                                     "ou une photo où le visage se voit.")
+        image = _data_url(gros_plan)
     fiche = _fiche_ou_400(lambda: video_h3.fiche_poser_image(fid, angle, image))
     return _fiche_publique(fiche)
+
+
+def _data_url(octets: bytes) -> str:
+    type_mime = "image/png" if octets.startswith(b"\x89PNG") else (
+        "image/webp" if octets[8:12] == b"WEBP" else "image/jpeg")
+    return "data:%s;base64,%s" % (type_mime, base64.b64encode(octets).decode())
+
+
+async def _gros_plan_visage(octets: bytes):
+    """Le gros plan du visage principal (PNG) ; None si le modèle qui voit n'en trouve pas."""
+    reponse = await _chat_du_studio(video_h3.consigne_visage(), "la recherche du visage",
+                                    images=[_data_url(octets)])
+    visage = video_h3.lire_visage(reponse)
+    if visage is None:
+        return None
+    try:
+        return await asyncio.to_thread(montage.recadrer_zone, octets, video_h3.zone_gros_plan(visage))
+    except montage.MontageImpossible:
+        return None
+
+
+@app.post("/video-h3/depart/{did}/comparer")
+async def video_h3_depart_comparer(did: str, request: Request,
+                                   authorization: Optional[str] = Header(default=None)):
+    """Le visage d'une image de départ à côté des photos d'une fiche, et l'avis du
+    modèle qui voit sur la ressemblance. Gratuit."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    try:
+        depart = video_h3.depart_lire(did)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return await _comparer_visage(depart, str((corps or {}).get("fiche") or ""))
+
+
+@app.post("/video-h3/visage/comparer")
+async def video_h3_visage_comparer(request: Request, authorization: Optional[str] = Header(default=None)):
+    """La même comparaison pour n'importe quelle image (`image`, data URL ou
+    base64) : la première ou la dernière image d'un clip, quel que soit le mode."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    corps = corps if isinstance(corps, dict) else {}
+    try:
+        image = base64.b64decode(str(corps.get("image") or "").split(",", 1)[-1], validate=False)
+    except ValueError as exc:
+        raise HTTPException(400, "Image illisible.") from exc
+    if not image:
+        raise HTTPException(400, "Aucune image à comparer.")
+    return await _comparer_visage(image, str(corps.get("fiche") or ""))
+
+
+async def _comparer_visage(depart: bytes, fid: str) -> dict:
+    references = [base64.b64decode(b) for b in _fiche_ou_400(lambda: video_h3.fiche_images(fid))]
+    if not references:
+        raise HTTPException(400, "La fiche n'a encore aucune photo à comparer.")
+    visage = await _gros_plan_visage(depart) or depart
+    try:
+        planche = await asyncio.to_thread(montage.planche_visages, references + [visage])
+    except montage.MontageImpossible as exc:
+        raise HTTPException(400, str(exc)) from exc
+    avis = video_h3.lire_ressemblance(await _chat_du_studio(
+        video_h3.consigne_ressemblance(len(references)), "l'avis sur la ressemblance",
+        images=[_data_url(o) for o in references + [visage]]))
+    return {"planche": _data_url(planche), **avis}
 
 
 @app.delete("/video-h3/fiches/{fid}/images/{angle}")
