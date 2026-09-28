@@ -698,9 +698,7 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
     invite = plan["resume_public"]["invite"]
     assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. "
                              "retention_analysis: <Subject 1> keeps the face, hair and clothing of the "
-                             "reference pictures. detailed_description: In the foreground: only <Subject 1>, "
-                             "each of them one single person shown once. "
-                             "Elle sourit")
+                             "reference pictures, as one single person. detailed_description: Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
     assert "manteau rouge" not in invite and "Léa" not in invite
@@ -960,18 +958,17 @@ def test_chaque_replique_va_au_personnage_nomme_dans_sa_phrase(h3):
     assert v.attribuer_repliques("Jameson entre.", [("James", "English")]) == "Jameson entre."
 
 
-def test_premier_plan_et_cadrage_sont_generiques(h3):
+def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     v = h3.video_h3
-    # Compté sur les sujets du plan, pas sur les fiches du scénario : un plan à un seul personnage.
-    assert v.premier_plan("<Subject 2> marche seul.") == ("In the foreground: only <Subject 2>, each of them one "
-                                                          "single person shown once.")
-    assert "only <Subject 1>, <Subject 2> and <Subject 3>," in v.premier_plan("<Subject 3> <Subject 1> <Subject 2>")
-    assert v.premier_plan("Une rue vide.") == ""
+    # Le 28/09, « In the foreground: only <Subject 1>… » puis la description ont placé Léa deux fois.
+    assert not hasattr(v, "premier_plan")
+    assert "foreground" not in v.sujets_des_fiches([2, 1])
     # Règle 2, dans le découpage comme dans la correction ; aucun nom de personnage dans la règle.
     assert v.CADRAGE in v.consigne_decoupage("Un film.") and "at most %d shots" % v.SCENARIO_PLANS_MAX in \
         v.consigne_decoupage("Un film.")
     assert v.CADRAGE in v.consigne_correction([], "retour")
     assert "close-up shows one character only" in v.CADRAGE
+    assert "Place each character once" in v.CADRAGE
 
 
 def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
@@ -986,10 +983,10 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
     assert plan["resume_public"]["invite"] == (
         "subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. <Subject 2> is the "
         "person in <Picture 3>. retention_analysis: <Subject 1> keeps the face, hair and clothing of the "
-        "reference pictures. <Subject 2> keeps the face, hair and clothing of the reference pictures. "
-        # Règle 1 (28/09) : le Studio compte lui-même qui est au premier plan.
-        "detailed_description: In the foreground: only <Subject 1> and <Subject 2>, each of them one single "
-        "person shown once. <Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
+        "reference pictures, as one single person. <Subject 2> keeps the face, hair and clothing of the "
+        "reference pictures, as one single person. "
+        # Chaque personnage n'est placé qu'une fois, par la description elle-même.
+        "detailed_description: <Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
         "<Subject 1> (S2) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]

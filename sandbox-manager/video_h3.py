@@ -463,22 +463,13 @@ def sujets_des_fiches(nombres: list) -> str:
         images = ", ".join(f"<Picture {premiere + i}>" for i in range(nombre))
         premiere += nombre
         definitions.append(f"<Subject {k + 1}> is the person in {images}.")
-        garde.append(f"<Subject {k + 1}> keeps the face, hair and clothing of the reference pictures.")
+        # Une seule personne, dit ici et pas dans la description : le 28/09, une
+        # phrase « In the foreground: only <Subject 1>… » plaçait Léa une première
+        # fois, la description la replaçait à sa table, et H3 en a dessiné deux
+        # (règle 1 du matin, retirée le soir ; remarque du propriétaire).
+        garde.append(f"<Subject {k + 1}> keeps the face, hair and clothing of the reference pictures, "
+                     "as one single person.")
     return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
-
-
-def premier_plan(texte: str) -> str:
-    """Qui est au premier plan, compté par le Studio sur les <Subject N> du plan
-    (règle 1, 28/09/2026) : quatre fois ce jour-là, H3 a ajouté un personnage ou
-    en a montré un deux fois. Rien si le plan ne nomme personne. Le fond n'est
-    pas mentionné : « anyone else stays in the background » a peuplé une
-    terrasse que le texte voulait vide (trois plans refusés par le juge, 28/09)."""
-    presents = sorted({int(n) for n in re.findall(r"<Subject (\d+)>", str(texte or ""))})
-    if not presents:
-        return ""
-    noms = [f"<Subject {n}>" for n in presents]
-    qui = noms[0] if len(noms) == 1 else ", ".join(noms[:-1]) + " and " + noms[-1]
-    return "In the foreground: only %s, each of them one single person shown once." % qui
 
 
 # --- La traduction en anglais, en mode « Références » -----------------------------
@@ -595,7 +586,11 @@ CADRAGE = ("Framing: a close-up shows one character only; when two or more chara
            "medium or wide shot that shows each of them entirely, and never describe a character as only partly "
            "in frame or seen from behind. If a shot's framing breaks this rule, change the framing, never the "
            # Le 28/09, pour tenir la règle, une correction a retiré un personnage et son action.
-           "characters in it or what they do. ")
+           "characters in it or what they do. "
+           # Le 28/09, un personnage placé deux fois (au premier plan, puis à sa table)
+           # a été dessiné deux fois par H3 (remarque du propriétaire).
+           "Place each character once: say where they are in a single place of the shot's text, and never "
+           "repeat or restate that position later in the same shot. ")
 
 
 def consigne_decoupage(scenario: str) -> str:
@@ -975,8 +970,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
     if fiches:
-        devant = premier_plan(image_paroles)
-        texte = sujets_des_fiches(nombres) + " detailed_description: " + (devant + " " if devant else "") + texte
+        texte = sujets_des_fiches(nombres) + " detailed_description: " + texte
     if len(texte) > 4000:
         raise ValueError("Invite trop longue (4 000 caractères au plus).")
     try:
