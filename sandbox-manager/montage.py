@@ -111,6 +111,42 @@ def recoller_son(premiere: bytes, suite: bytes, retirer: int = 1) -> bytes:
         return sortie.read_bytes()
 
 
+def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0.3) -> bytes:
+    """Une musique SOUS le son du film, de `debut_s` à la fin (28/09/2026).
+
+    Demande du propriétaire : une musique qui commence au deuxième plan et
+    continue sur le troisième. Trois clips H3 tournés à part ont chacun leur
+    musique, qui change à la coupe ; un seul morceau posé après coup est le
+    même signal d'un bout à l'autre. Les images ne sont pas réencodées, et le
+    son d'origine (paroles, ambiance) est gardé tel quel, la musique en dessous,
+    avec une entrée et une sortie en fondu."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, m, sortie = Path(dossier, "film.mp4"), Path(dossier, "musique"), Path(dossier, "avec.mp4")
+        a.write_bytes(film)
+        m.write_bytes(musique)
+        num, den = _cadence(a)
+        duree_s = images(a) * den / num
+        if not 0 <= debut_s < duree_s - 0.5:
+            raise MontageImpossible("La musique commencerait après la fin du film.")
+        longueur_s = duree_s - debut_s
+        # Decrescendo final (demande du 28/09) : un fondu d'une seconde sonnait
+        # comme une coupure ; 2,5 s, ou le tiers de la musique si elle est courte.
+        fin_s = min(2.5, longueur_s / 3)
+        _lancer(["-i", str(a), "-i", str(m), "-filter_complex",
+                 "[1:a]atrim=0:%.3f,asetpts=PTS-STARTPTS,aresample=48000,"
+                 "afade=t=in:d=0.3,afade=t=out:st=%.3f:d=%.3f,volume=%.2f,adelay=%d:all=1[m];"
+                 "[0:a]aresample=48000[f];"
+                 "[f][m]amix=inputs=2:duration=first:normalize=0[a]"
+                 % (longueur_s, longueur_s - fin_s, fin_s, volume, round(debut_s * 1000)),
+                 "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac",
+                 "-movflags", "+faststart", str(sortie)],
+                "La pose de la musique")
+        if images(sortie) != images(a):
+            raise MontageImpossible("La pose de la musique a changé le nombre d'images : "
+                                    "le film n'est pas rendu.")
+        return sortie.read_bytes()
+
+
 def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:

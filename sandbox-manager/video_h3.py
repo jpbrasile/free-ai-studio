@@ -30,6 +30,7 @@ import os
 import random
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -203,6 +204,58 @@ def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(
     def balise(m):
         return f"{locuteur} <d>[{langue}] {next(g for g in m.groups() if g)}</d>"
     return _PAROLES.sub(balise, texte)
+
+
+def _motif_nom(nom: str) -> str:
+    """Le nom d'un personnage, accents facultatifs : la traduction en anglais peut
+    rendre « Lea » pour « Léa »."""
+    morceaux = []
+    for c in nom.strip():
+        base = unicodedata.normalize("NFD", c)[0]
+        morceaux.append(re.escape(c) if base == c else "[%s%s]" % (re.escape(c), re.escape(base)))
+    return r"(?<!\w)" + "".join(morceaux) + r"(?!\w)"
+
+
+def attribuer_repliques(texte: str, sujets: list) -> str:
+    """Plusieurs personnages (guide de MiniMax, ref-en.txt, 5.4) : `sujets` est la
+    liste des (nom, langue) dans l'ordre des <Subject N>.
+
+    Chaque nom devient `<Subject N>` : dit tel quel, un nom a été récité (28/09).
+    Chaque réplique va au PREMIER personnage nommé dans sa phrase (« Léa dit à
+    Tom : « … » » : Léa), sinon au dernier nommé avant, sinon au premier ; elle
+    part dans SA langue, sous la forme `<Subject N> (Sx) <d>[langue] …</d>`, les
+    (Sx) numérotés dans l'ordre où l'on parle."""
+    texte = str(texte or "")
+    repliques_vues = list(_PAROLES.finditer(texte))
+    dans_une_replique = [(m.start(), m.end()) for m in repliques_vues]
+    noms = sorted((m.start(), m.end(), k) for k, (nom, _langue) in enumerate(sujets) if nom.strip()
+                  for m in re.finditer(_motif_nom(nom), texte, re.I)
+                  if not any(a <= m.start() < b for a, b in dans_une_replique))
+    locuteurs, parleur, fin_precedente = {}, {}, 0
+    for m in repliques_vues:
+        avant = texte[fin_precedente:m.start()]
+        coupure = max(avant.rfind(c) for c in ".!?;\n")
+        debut_phrase = fin_precedente + coupure + 1
+        dans_la_phrase = [n for n in noms if debut_phrase <= n[0] < m.start()]
+        plus_tot = [n for n in noms if n[0] < debut_phrase]
+        k = dans_la_phrase[0][2] if dans_la_phrase else plus_tot[-1][2] if plus_tot else 0
+        parleur[m.start()] = k
+        locuteurs.setdefault(k, len(locuteurs) + 1)
+        fin_precedente = m.end()
+    evenements = sorted([(a, b, "nom", k) for a, b, k in noms]
+                        + [(m.start(), m.end(), "replique", m) for m in repliques_vues], key=lambda e: e[0])
+    sortie, pos = [], 0
+    for debut, fin, genre, valeur in evenements:
+        sortie.append(texte[pos:debut])
+        pos = fin
+        if genre == "nom":
+            sortie.append(f"<Subject {valeur + 1}>")
+        else:
+            k = parleur[debut]
+            dite = next(g for g in valeur.groups() if g)
+            sortie.append(f"<Subject {k + 1}> (S{locuteurs[k]}) <d>[{sujets[k][1]}] {dite}</d>")
+    sortie.append(texte[pos:])
+    return "".join(sortie)
 
 
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
@@ -381,13 +434,19 @@ def fiche_images(fid) -> list:
     return [fiche_image_data_url(fid, a).split(",", 1)[1] for a in ANGLES if a in fiche["images"]]
 
 
-def sujet_de_la_fiche(fiche: dict, nombre: int) -> str:
-    """Le personnage, désigné par ses images seulement. La description de la
-    fiche ne sert qu'à fabriquer les images : mise dans l'invite, elle a été
-    DITE par le personnage (essai du 28/09, « Femme de 35 ans, cheveux bruns… »)."""
-    images = ", ".join(f"<Picture {i + 1}>" for i in range(nombre))
-    return (f"subject_definitions: <Subject 1> is the person in {images}. "
-            "retention_analysis: <Subject 1> keeps the face, hair and clothing of the reference pictures.")
+def sujets_des_fiches(nombres: list) -> str:
+    """Les personnages, désignés par leurs images seulement : `nombres` dit
+    combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
+    description d'une fiche ne sert qu'à fabriquer ses images : mise dans
+    l'invite, elle a été DITE par le personnage (essai du 28/09, « Femme de 35
+    ans, cheveux bruns… »)."""
+    definitions, garde, premiere = [], [], 1
+    for k, nombre in enumerate(nombres):
+        images = ", ".join(f"<Picture {premiere + i}>" for i in range(nombre))
+        premiere += nombre
+        definitions.append(f"<Subject {k + 1}> is the person in {images}.")
+        garde.append(f"<Subject {k + 1}> keeps the face, hair and clothing of the reference pictures.")
+    return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
 
 
 # --- La traduction en anglais, en mode « Références » -----------------------------
@@ -710,24 +769,38 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     langue = str(payload.get("langue") or LANGUE_PAROLES)
     if langue not in LANGUES_PAROLES:
         raise ValueError("Langue des paroles inconnue.")
-    fiche, de_la_fiche = None, []
-    if payload.get("fiche"):
+    # Une fiche (`fiche`) ou plusieurs (`fiches`, une par personnage, dans
+    # l'ordre des <Subject N>) ; chacune peut parler sa langue (`langues`).
+    ids = payload.get("fiches") or ([payload["fiche"]] if payload.get("fiche") else [])
+    if not isinstance(ids, list) or len(set(map(str, ids))) != len(ids):
+        raise ValueError("Liste de fiches illisible.")
+    langues = payload.get("langues") or {}
+    if not isinstance(langues, dict) or any(v not in LANGUES_PAROLES for v in langues.values()):
+        raise ValueError("Langue d'un personnage inconnue.")
+    fiches, de_la_fiche, nombres = [], [], []
+    for fid in ids:
         if mode != "references":
             raise ValueError("Une fiche de casting se joue en mode « Références ».")
-        fiche = fiche_lire(payload["fiche"])
-        de_la_fiche = fiche_images(fiche["id"])
-        if not de_la_fiche:
-            raise ValueError("Cette fiche n'a encore aucune image : créez-les d'abord.")
-    texte = invite(payload.get("image_paroles", ""), payload.get("ambiance", ""),
-                   payload.get("musique", ""), langue,
-                   "<Subject 1> (S1)" if fiche else "(S1)",
+        fiche = fiche_lire(fid)
+        images_fiche = fiche_images(fiche["id"])
+        if not images_fiche:
+            raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
+        fiches.append(fiche)
+        de_la_fiche += images_fiche
+        nombres.append(len(images_fiche))
+    image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
+    if fiches:
+        sujets = [(f["nom"], langues.get(f["id"], langue)) for f in fiches]
+        image_paroles = attribuer_repliques(image_paroles, sujets)
+        ambiance = attribuer_repliques(ambiance, sujets)
+    texte = invite(image_paroles, ambiance, payload.get("musique", ""), langue, "(S1)",
                    # Rubriques du mode références, dans l'ordre de la consigne de MiniMax
                    # (skills/h3-prompt-writing/SKILL.md) ; `summary` n'est pas écrit.
-                   "overall_soundscape: " if fiche else "Sound: ")
+                   "overall_soundscape: " if fiches else "Sound: ")
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
-    if fiche:
-        texte = sujet_de_la_fiche(fiche, len(de_la_fiche)) + " detailed_description: " + texte
+    if fiches:
+        texte = sujets_des_fiches(nombres) + " detailed_description: " + texte
     if len(texte) > 4000:
         raise ValueError("Invite trop longue (4 000 caractères au plus).")
     try:
@@ -791,7 +864,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             "mode_titre": m["titre"],
             "invite": texte,
             "langue": langue,
-            "fiche": {"id": fiche["id"], "nom": fiche["nom"]} if fiche else None,
+            "fiche": {"id": fiches[0]["id"], "nom": fiches[0]["nom"]} if fiches else None,
+            "fiches": [{"id": f["id"], "nom": f["nom"]} for f in fiches],
             "images": longueur,
             "secondes": secondes_de(longueur),
             "coupe_s": coupe,
@@ -1295,8 +1369,18 @@ PAGE_HTML = r"""<!doctype html>
     <b>Ou tourner un scénario neuf</b>
     <span class="note">le même scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
     (chaque plan se paie comme un clip : durée, graine, langue et musique sont celles du formulaire du clip).</span>
-    <label for="scenario_fiche">Personnage (fiche de casting)</label>
+    <label for="scenario_fiche">Personnage (fiche de casting) et sa langue</label>
     <select id="scenario_fiche"><option value="">Choisissez une fiche…</option></select>
+    <select id="scenario_langue1">__LANGUES__</select>
+    <label for="scenario_fiche2">Second personnage (facultatif) et sa langue</label>
+    <select id="scenario_fiche2"><option value="">Aucun</option></select>
+    <select id="scenario_langue2">__LANGUES__</select>
+    <span class="note">Nommez le personnage qui parle dans la phrase de sa réplique : le Studio lui attribue
+    la réplique et sa langue.</span>
+    <label for="scenario_chanson">Musique de fond (une chanson du Studio, posée après le tournage)</label>
+    <select id="scenario_chanson"><option value="">Aucune (musique décrite au clip)</option></select>
+    <label for="scenario_musique_plan">à partir du plan</label>
+    <input id="scenario_musique_plan" type="number" min="1" max="4" value="1">
     <button id="scenario_decouper">Découper en plans</button>
     <div id="plans_liste"></div>
     <button id="plan_ajouter" hidden>Ajouter un plan</button>
@@ -1648,16 +1732,22 @@ async function chargerFiches(choisir){
   }
   choix.value = garde;
   ref.value = FICHES.some(f => f.id === gardeRef) ? gardeRef : "";
-  const sf = document.getElementById("scenario_fiche");
-  const gardeSf = sf.value;
-  sf.innerHTML = '<option value="">Choisissez une fiche…</option>';
-  for (const f of FICHES.filter(x => x.angles.length)){
-    const o = document.createElement("option");
-    o.value = f.id;
-    o.textContent = f.nom;
-    sf.appendChild(o);
+  for (const [idSel, vide] of [["scenario_fiche", "Choisissez une fiche…"], ["scenario_fiche2", "Aucun"]]){
+    const sf = document.getElementById(idSel);
+    const gardeSf = sf.value;
+    sf.innerHTML = "";
+    const v = document.createElement("option");
+    v.value = "";
+    v.textContent = vide;
+    sf.appendChild(v);
+    for (const f of FICHES.filter(x => x.angles.length)){
+      const o = document.createElement("option");
+      o.value = f.id;
+      o.textContent = f.nom;
+      sf.appendChild(o);
+    }
+    sf.value = FICHES.some(f => f.id === gardeSf) ? gardeSf : "";
   }
-  sf.value = FICHES.some(f => f.id === gardeSf) ? gardeSf : "";
   await montrerFiche();
 }
 
@@ -1768,6 +1858,16 @@ async function chargerClips(){
     .concat(avant.map(id => d.clips.find(c => c.id === id)).filter(Boolean));
   COCHES = new Set([...COCHES].filter(id => CLIPS.some(c => c.id === id)));
   dessinerClips();
+  const sc = document.getElementById("scenario_chanson");
+  const gardeSc = sc.value;
+  sc.innerHTML = '<option value="">Aucune (musique décrite au clip)</option>';
+  for (const c of (d.chansons || [])){
+    const o = document.createElement("option");
+    o.value = c.id;
+    o.textContent = c.titre + " (" + quandLocal(c.cree_a) + ")";
+    sc.appendChild(o);
+  }
+  sc.value = (d.chansons || []).some(c => c.id === gardeSc) ? gardeSc : "";
 }
 
 function dessinerClips(){
@@ -1929,9 +2029,15 @@ function suivreScenario(sid){
 document.getElementById("scenario_tourner").addEventListener("click", async () => {
   const graine = document.getElementById("graine").value;
   scenarioEtat("Contrôle et traduction des plans…");
+  const f1 = document.getElementById("scenario_fiche").value, f2 = document.getElementById("scenario_fiche2").value;
+  const l1 = document.getElementById("scenario_langue1").value, l2 = document.getElementById("scenario_langue2").value;
+  const deux = f1 && f2 && f1 !== f2;
   const r = await fetch("/video-h3/scenario/tourner", {method: "POST", headers: H, body: JSON.stringify({
-    plans: PLANS, fiche: document.getElementById("scenario_fiche").value || null,
-    langue: document.getElementById("langue").value,
+    plans: PLANS, fiche: deux ? null : (f1 || null), fiches: deux ? [f1, f2] : null,
+    langues: deux ? {[f1]: l1, [f2]: l2} : null,
+    musique_chanson: document.getElementById("scenario_chanson").value || null,
+    musique_a_partir_du_plan: Number(document.getElementById("scenario_musique_plan").value) || 1,
+    langue: f1 ? l1 : document.getElementById("langue").value,
     musique: document.getElementById("musique").value,
     longueur: Number(document.getElementById("longueur").value),
     graine: graine === "" ? null : Number(graine)})});

@@ -4196,7 +4196,7 @@ def _clips_h3() -> list:
 def video_h3_clips(authorization: Optional[str] = Header(default=None)):
     _h3_ou_404()
     auth(authorization)
-    return {"clips": _clips_h3(), "clips_max": video_h3.MONTAGE_CLIPS_MAX}
+    return {"clips": _clips_h3(), "clips_max": video_h3.MONTAGE_CLIPS_MAX, "chansons": _chansons_pretes()}
 
 
 @app.post("/video-h3/scenario/ordonner")
@@ -4244,6 +4244,13 @@ async def video_h3_montage(request: Request, authorization: Optional[str] = Head
         film = await asyncio.to_thread(_recoller_tous, [c.read_bytes() for c in chemins])
     except montage.MontageImpossible as exc:
         raise HTTPException(503, str(exc)) from exc
+    return read_job(_film_h3(film, {"mode": "montage", "mode_titre": "Montage de clips", "invite": scenario,
+                                    "clips": ordre, "plans": len(ordre)}, scenario[:60] or "Montage H3"))
+
+
+def _film_h3(film: bytes, video: dict, titre: str) -> str:
+    """Un film fait ici (montage, musique) devient un travail réussi de plus :
+    jouable, téléchargeable, prolongeable. Rend son numéro."""
     jid = uuid.uuid4().hex
     write_job(jid, {"id": jid, "provider": "local", "title": "Free AI Studio montage H3",
                     "gpu": False, "internet": False, "status": "queued", "created_at": time.time(),
@@ -4259,10 +4266,66 @@ async def video_h3_montage(request: Request, authorization: Optional[str] = Head
         "id": jid, "provider": "local", "title": "Free AI Studio montage H3", "gpu": False,
         "internet": False, "status": "succeeded", "created_at": time.time(), "finished_at": time.time(),
         "artifacts": [art],
-        "video": {"moteur": "MiniMax H3 (montage)", "mode": "montage", "mode_titre": "Montage de clips",
-                  "invite": scenario, "clips": ordre, "plans": len(ordre), "secondes": secondes},
-        "titre": (scenario[:60] or "Montage H3"),
+        "video": dict({"moteur": "MiniMax H3 (montage)"}, **video, secondes=secondes),
+        "titre": titre,
     })
+    return jid
+
+
+def _chansons_pretes() -> list:
+    """Les chansons réussies de ce Studio, pour servir de musique à un film."""
+    pretes = []
+    for p in sorted(JOBS.glob("*/job.json"), key=_date_de_fiche, reverse=True):
+        try:
+            job = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(job, dict) or job.get("status") != "succeeded" or "chanson" not in job:
+            continue
+        try:
+            if chanson_fichiers(job["id"]).get("son"):
+                pretes.append({"id": job["id"], "titre": job.get("titre") or "Chanson",
+                               "cree_a": job.get("created_at")})
+        except HTTPException:
+            continue
+    return pretes
+
+
+def _mettre_musique(film_jid: str, chanson_jid: str, debut_s: float, volume: float) -> str:
+    """Pose la musique d'une chanson sous un film H3 ; rend le numéro du nouveau film."""
+    film = _video_h3_octets(film_jid)
+    if not film or film_jid not in {c["id"] for c in _clips_h3()}:
+        raise ValueError("Ce film n'est plus sur ce Studio.")
+    if chanson_jid not in {c["id"] for c in _chansons_pretes()}:
+        raise ValueError("Cette musique n'est plus sur ce Studio.")
+    son = ART / chanson_fichiers(chanson_jid)["son"]["path"]
+    avec = montage.poser_musique(film.read_bytes(), son.read_bytes(), debut_s, volume)
+    avant = read_job(film_jid).get("video") or {}
+    return _film_h3(avec, {"mode": "musique", "mode_titre": "Film et musique", "invite": avant.get("invite", ""),
+                           "clips": [film_jid], "plans": avant.get("plans") or 1,
+                           "musique": {"chanson": chanson_jid, "debut_s": round(debut_s, 3), "volume": volume}},
+                    (read_job(film_jid).get("titre") or "Film H3")[:50] + " + musique")
+
+
+@app.post("/video-h3/musique")
+async def video_h3_musique(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Une musique du Studio (page Chanson) sous un film H3, à partir de `debut_s`."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    try:
+        debut_s, volume = float(corps.get("debut_s") or 0), float(corps.get("volume") or 0.3)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "Début ou volume illisible.") from exc
+    if not 0 < volume <= 1:
+        raise HTTPException(400, "Volume hors bornes (au-dessus de 0, 1 au plus).")
+    try:
+        jid = await asyncio.to_thread(_mettre_musique, str(corps.get("film") or ""),
+                                      str(corps.get("chanson") or ""), debut_s, volume)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except montage.MontageImpossible as exc:
+        raise HTTPException(400, str(exc)) from exc
     return read_job(jid)
 
 
@@ -4303,11 +4366,26 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     auth(authorization)
     _garde_licence_h3()
     corps = await request.json()
-    commun = {k: corps.get(k) for k in ("fiche", "langue", "musique", "longueur", "graine")}
+    commun = {k: corps.get(k) for k in ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine")}
+    chanson = str(corps.get("musique_chanson") or "")
     try:
         plans = video_h3.verifier_plans(corps.get("plans"))
-        if not commun["fiche"]:
+        if not (commun["fiche"] or commun["fiches"]):
             raise ValueError("Choisissez le personnage du scénario (une fiche de casting).")
+        musique = None
+        if chanson:
+            # Une seule piste posée après coup, du début du plan N à la fin : trois
+            # clips tournés à part auraient chacun leur musique, changée à la coupe.
+            if chanson not in {c["id"] for c in _chansons_pretes()}:
+                raise ValueError("Cette musique n'est plus sur ce Studio.")
+            try:
+                a_partir = int(corps.get("musique_a_partir_du_plan") or 1)
+            except (TypeError, ValueError):
+                a_partir = 0
+            if not 1 <= a_partir <= len(plans):
+                raise ValueError("La musique doit commencer à un des plans du scénario.")
+            musique = {"chanson": chanson, "a_partir_du_plan": a_partir}
+            commun["musique"] = ""
         a_tourner = []
         for p in plans:
             payload = dict(commun, image_paroles=p["image_paroles"], ambiance=p["ambiance"],
@@ -4318,7 +4396,7 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
             else:
                 # La suite part de la dernière image, sans fiche ; ses cases sont
                 # contrôlées ici, son image n'existera qu'au tournage.
-                payload.update(mode="premiere", fiche=None)
+                payload.update(mode="premiere", fiche=None, fiches=None, langues=None)
                 video_h3.preparer(dict(payload, mode="texte"))
             a_tourner.append({"enchainement": p["enchainement"], "payload": payload})
     except ValueError as exc:
@@ -4332,11 +4410,14 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
                     await _chat_du_studio(video_h3.consigne_traduction(p["payload"])), p["payload"])
             except ValueError as exc:
                 raise HTTPException(502, str(exc)) from exc
+        if musique:
+            p["payload"]["musique"] = ""   # la traduction n'en rajoute pas : N/A pour H3
     sid = uuid.uuid4().hex
     sc = video_h3.scenario_ecrire({
         "id": sid, "cree_le": time.time(), "etat": "en cours", "erreur": "",
         "plans": plans, "travaux": [], "film": None, "arret_demande": False,
-        "fiche": commun["fiche"],
+        "fiche": commun["fiche"] or (commun["fiches"] or [None])[0], "fiches": commun["fiches"] or [],
+        "musique": musique,
     })
     _SCENARIOS_VIVANTS.add(sid)
     threading.Thread(target=run_scenario_h3, args=(sid, a_tourner), daemon=True).start()
@@ -4378,6 +4459,21 @@ def run_scenario_h3(sid: str, a_tourner: list):
                                         + (job.get("error") or "échec, voir son journal."))
                 return
             precedent = jid
+        musique = video_h3.scenario_lire(sid).get("musique")
+        if musique:
+            travaux = video_h3.scenario_lire(sid)["travaux"]
+            k = musique["a_partir_du_plan"]
+            # Le film recollé à la fin du plan k-1 dure ce que la musique attend.
+            debut = float((read_job(travaux[k - 2]).get("video") or {}).get("secondes") or 0) if k > 1 else 0.0
+            try:
+                sans = precedent
+                precedent = _mettre_musique(sans, musique["chanson"], debut, 0.3)
+            except (ValueError, montage.MontageImpossible, HTTPException) as exc:
+                video_h3.scenario_noter(sid, etat="échoué", film=sans,
+                                        erreur="Film tourné, mais la musique n'a pas pu être posée : "
+                                        + str(getattr(exc, "detail", exc)))
+                return
+            video_h3.scenario_noter(sid, film_sans_musique=sans)
         video_h3.scenario_noter(sid, etat="réussi", film=precedent)
     finally:
         _SCENARIOS_VIVANTS.discard(sid)

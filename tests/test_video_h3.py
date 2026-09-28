@@ -46,7 +46,7 @@ def client(sandbox):
     ("get", "/video-h3/fiches"), ("post", "/video-h3/fiches"),
     ("get", "/video-h3/clips"), ("post", "/video-h3/scenario/ordonner"), ("post", "/video-h3/montage"),
     ("post", "/video-h3/scenario/decouper"), ("post", "/video-h3/scenario/tourner"),
-    ("get", "/video-h3/scenario/" + "a" * 32),
+    ("get", "/video-h3/scenario/" + "a" * 32), ("post", "/video-h3/musique"),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -590,7 +590,10 @@ def test_la_langue_des_paroles_se_choisit_parmi_les_onze(h3):
     html = client(h3).get("/video-h3").text
     assert "__LANGUES__" not in html and '<option value="French" selected>français</option>' in html
     assert all(f'value="{code}"' in html for code in v.LANGUES_PAROLES)
-    assert html.count('langue: document.getElementById("langue").value') == 3   # créer, prolonger, scénario
+    assert html.count('langue: document.getElementById("langue").value') == 2   # créer, prolonger
+    # Le scénario prend la langue du personnage, sinon celle du clip.
+    assert 'langue: f1 ? l1 : document.getElementById("langue").value' in html
+    assert 'id="scenario_langue1"' in html and 'id="scenario_langue2"' in html
     plan = v.preparer(demande(image_paroles="Il dit « Hola. »", langue="Spanish"))
     assert "<d>[Spanish] Hola.</d>" in plan["resume_public"]["invite"]
     assert plan["resume_public"]["langue"] == "Spanish"
@@ -875,7 +878,8 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     (j1, p1, r1, v1), (j2, p2, r2, v2) = tournes
     # Le premier plan, avec la fiche, part traduit ; la suite part de sa dernière image et s'y recolle.
     assert p1 is None and v1["mode"] == "references" and v1["traduit_en_anglais"] is True
-    assert v1["invite"].startswith("subject_definitions:") and "Lea walks" in v1["invite"]
+    # Le nom, même traduit sans accent, devient <Subject 1> : dit tel quel, il a été récité.
+    assert v1["invite"].startswith("subject_definitions:") and "<Subject 1> walks" in v1["invite"]
     assert (p2, r2) == (j1, 1) and v2["mode"] == "prolonger" and v2["plans"] == 2
     assert "(S1) <d>[French] Bonjour.</d>" in v2["invite"]
     assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
@@ -907,6 +911,139 @@ def test_un_plan_en_echec_arrete_le_scenario(h3, monkeypatch):
     # Un scénario « en cours » dont le fil a disparu (Studio redémarré) le dit.
     v.scenario_noter(sid, etat="en cours")
     assert client(h3).get("/video-h3/scenario/" + sid, headers=CLE).json()["etat"] == "interrompu"
+
+
+# --- 10. Deux personnages, deux langues, une musique posée après coup (28/09) ---
+
+def test_chaque_replique_va_au_personnage_nomme_dans_sa_phrase(h3):
+    v = h3.video_h3
+    texte = ("Léa sourit à James. James dit « Hello Léa, is this seat taken? » Lea répond "
+             "« Non, asseyez-vous. » Puis « Bon café. »")
+    assert v.attribuer_repliques(texte, [("Léa", "French"), ("James", "English")]) == (
+        "<Subject 1> sourit à <Subject 2>. <Subject 2> dit <Subject 2> (S1) <d>[English] Hello Léa, is this "
+        "seat taken?</d> <Subject 1> répond <Subject 1> (S2) <d>[French] Non, asseyez-vous.</d> "
+        "Puis <Subject 1> (S2) <d>[French] Bon café.</d>")
+    # Un nom dans un autre mot n'est pas un personnage.
+    assert v.attribuer_repliques("Jameson entre.", [("James", "English")]) == "Jameson entre."
+
+
+def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
+    v = h3.video_h3
+    lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_image(lea, "pied", JPG)
+    v.fiche_poser_image(james, "face", PNG)
+    d = demande(mode="references", fiches=[lea, james], langues={lea: "French", james: "English"},
+                image_paroles="James demande « Is this seat taken? » Léa répond « Oui. »")
+    plan = v.preparer(d)
+    assert plan["resume_public"]["invite"] == (
+        "subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. <Subject 2> is the "
+        "person in <Picture 3>. retention_analysis: <Subject 1> keeps the face, hair and clothing of the "
+        "reference pictures. <Subject 2> keeps the face, hair and clothing of the reference pictures. "
+        "detailed_description: <Subject 2> demande <Subject 2> (S1) <d>[English] Is this seat taken?</d> "
+        "<Subject 1> répond <Subject 1> (S2) <d>[French] Oui.</d> non_diegetic_music: N/A")
+    assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
+    assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
+    for mauvais, message in (({"langues": {lea: "Klingon"}}, "inconnue"), ({"fiches": [lea, lea]}, "illisible")):
+        with pytest.raises(ValueError, match=message):
+            v.preparer(dict(d, **mauvais))
+
+
+def _volume_max(chemin, debut, duree):
+    err = subprocess.run(["ffmpeg", "-hide_banner", "-ss", str(debut), "-t", str(duree), "-i", str(chemin),
+                          "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True).stderr
+    return float(err.split("max_volume:")[1].split("dB")[0])
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_la_musique_part_a_son_heure_et_decroit_jusqu_a_la_fin(h3, tmp_path):
+    film, musique = tmp_path / "film.mp4", tmp_path / "musique.flac"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=64x48:r=24",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-frames:v", "72", "-t", "3",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(film)], check=True)
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=880:r=48000",
+                    "-t", "10", str(musique)], check=True)
+    m = h3.montage
+    sortie = tmp_path / "avec.mp4"
+    sortie.write_bytes(m.poser_musique(film.read_bytes(), musique.read_bytes(), 1.0))
+    assert m.images(sortie) == 72
+    avant, pendant, fin = _volume_max(sortie, 0, 0.8), _volume_max(sortie, 1.5, 0.5), _volume_max(sortie, 2.85, 0.15)
+    assert avant < -60 < pendant and fin < pendant - 6   # silence, puis la musique, puis le decrescendo
+    with pytest.raises(m.MontageImpossible, match="après la fin"):
+        m.poser_musique(film.read_bytes(), musique.read_bytes(), 2.8)
+
+
+def test_une_musique_du_studio_se_pose_sous_un_film(h3, monkeypatch, tmp_path):
+    _deux_clips(h3, monkeypatch, tmp_path)
+    son = tmp_path / "son.flac"
+    son.write_bytes(b"SON")
+    c_id = "c" * 32
+    monkeypatch.setattr(h3, "_chansons_pretes", lambda: [{"id": c_id, "titre": "Jazz", "cree_a": 0}])
+    monkeypatch.setattr(h3, "chanson_fichiers", lambda jid: {"son": {"path": str(son)}})
+    vus = []
+    monkeypatch.setattr(h3.montage, "poser_musique", lambda f, s, d, vol: vus.append((f, s, d, vol)) or f + s)
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 248)
+    c = client(h3)
+    assert [x["id"] for x in c.get("/video-h3/clips", headers=CLE).json()["chansons"]] == [c_id]
+    r = c.post("/video-h3/musique", headers=CLE, json={"film": "a" * 32, "chanson": c_id, "debut_s": 5.17})
+    assert r.status_code == 200, r.text
+    assert vus == [(b"A", b"SON", 5.17, 0.3)]
+    assert r.json()["video"]["musique"] == {"chanson": c_id, "debut_s": 5.17, "volume": 0.3}
+    for corps, code in (({"chanson": "e" * 32}, 404), ({"film": "e" * 32}, 404), ({"volume": 2}, 400)):
+        base = {"film": "a" * 32, "chanson": c_id, "debut_s": 1}
+        assert c.post("/video-h3/musique", headers=CLE, json=dict(base, **corps)).status_code == code
+
+
+def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch):
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_image(james, "face", PNG)
+    c_id = "c" * 32
+    monkeypatch.setattr(h3, "_chansons_pretes", lambda: [{"id": c_id, "titre": "Jazz", "cree_a": 0}])
+    plans = [{"image_paroles": "James demande « Is this seat taken? »", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Léa répond « Non. »", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Ils marchent", "ambiance": "", "enchainement": "coupe"}]
+    corps = {"plans": plans, "fiches": [lea, james], "langues": {lea: "French", james: "English"},
+             "musique": "Piano", "musique_chanson": c_id, "musique_a_partir_du_plan": 2, "longueur": 124}
+    c = client(h3)
+    for autre, message in (({"musique_chanson": "e" * 32}, "musique"), ({"musique_a_partir_du_plan": 4}, "plans")):
+        r = c.post("/video-h3/scenario/tourner", headers=CLE, json=dict(corps, **autre))
+        assert r.status_code == 400 and message in r.json()["detail"]
+
+    tournes = []
+
+    def tourner(jid, *a):
+        job = h3.read_job(jid)
+        tournes.append(job["video"])
+        job["video"]["secondes"] = round(5.17 * len(tournes), 2)   # la chaine recollee
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "run_video_h3", tourner)
+    poses = []
+    monkeypatch.setattr(h3, "_mettre_musique", lambda *a: poses.append(a) or "e" * 32)
+    fils, vrai = [], h3.run_scenario_h3
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    r = c.post("/video-h3/scenario/tourner", headers=CLE, json=corps)
+    assert r.status_code == 200, r.text
+    vrai(*fils[0])
+    sc = v.scenario_lire(r.json()["id"])
+    assert sc["etat"] == "réussi" and len(tournes) == 3
+    # Chaque plan porte les deux personnages ; H3 ne fait aucune musique, elle est posée une fois.
+    for vid in tournes:
+        assert vid["invite"].startswith("subject_definitions: <Subject 1> is the person in <Picture 1>. "
+                                        "<Subject 2> is the person in <Picture 2>.")
+        assert vid["invite"].endswith("non_diegetic_music: N/A") and "Piano" not in vid["invite"]
+    assert "<Subject 2> (S1) <d>[English] Is this seat taken?</d>" in tournes[0]["invite"]
+    assert "<Subject 1> (S1) <d>[French] Non.</d>" in tournes[1]["invite"]
+    assert poses == [(sc["travaux"][2], c_id, 5.17, 0.3)]
+    assert sc["film"] == "e" * 32 and sc["film_sans_musique"] == sc["travaux"][2]
+    assert sc["fiches"] == [lea, james] and sc["musique"]["a_partir_du_plan"] == 2
 
 
 def test_le_routeur_envoie_l_image_de_depart_a_google(routeur, monkeypatch):
