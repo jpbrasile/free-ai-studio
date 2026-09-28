@@ -299,6 +299,7 @@ def test_un_clip_permis_part_et_se_suit_comme_une_video(h3, monkeypatch):
     _autoriser(h3)
     h3.video_h3.poids_noter(True)
     monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(h3.video_h3, "a_traduire", lambda p: False)   # la traduction a ses tests
     lance = []
     monkeypatch.setattr(h3, "run_video_h3", lambda *a: lance.append(a))
     r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(mode="premiere", images=[PNG]))
@@ -758,7 +759,15 @@ def test_la_traduction_garde_les_repliques_mot_pour_mot(h3):
     v = h3.video_h3
     p = {"mode": "references", "image_paroles": "Elle s'assoit et dit « Un café, s'il vous plaît. »",
          "ambiance": "Brouhaha d'un café", "musique": ""}
-    assert v.a_traduire(p) and not v.a_traduire(dict(p, mode="premiere"))
+    # Tous les modes : en « Première image », le français hors guillemets a été dit (28/09).
+    assert v.a_traduire(p) and v.a_traduire(dict(p, mode="premiere"))
+    assert not v.a_traduire({"mode": "premiere", "image_paroles": " "})
+    d = {"mode": "premiere", "image_paroles": "Il dit « Hi. »", "description_premiere": "Une terrasse bondée"}
+    assert '"description_premiere": "Une terrasse bondée"' in v.consigne_traduction(d)
+    t = v.lire_traduction('{"image_paroles": "He says « Hi. »", "description_premiere": "A crowded terrace"}', d)
+    assert t["description_premiere"] == "A crowded terrace"
+    with pytest.raises(ValueError, match="perdu"):
+        v.lire_traduction('{"image_paroles": "He says « Hi. »"}', d)
     assert '« Un café' in v.consigne_traduction(p) and "EXACTLY" in v.consigne_traduction(p)
     bon = ('```json\n{"image_paroles": "She sits down and says « Un café, s\'il vous plaît. »", '
            '"ambiance": "Café chatter", "musique": ""}\n```')
@@ -909,9 +918,10 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     v.poids_noter(True)
     monkeypatch.setattr(h3, "modal_configured", lambda: True)
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
-    reponse = {"choices": [{"message": {"content":
-               '{"image_paroles": "Lea walks into the café", "ambiance": "Chatter", "musique": ""}'}}]}
-    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, reponse, {}))
+    # Chaque plan part traduit, la suite aussi (28/09) : deux réponses du chat.
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([
+        '{"image_paroles": "Lea walks into the café", "ambiance": "Chatter", "musique": ""}',
+        '{"image_paroles": "She says « Bonjour. »", "ambiance": "", "musique": ""}'], []))
     fid = v.fiche_creer("Léa", "femme de 35 ans")["id"]
     v.fiche_poser_image(fid, "face", PNG)
     plans = [{"image_paroles": "Léa entre dans le café", "ambiance": "Brouhaha", "enchainement": "coupe"},

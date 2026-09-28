@@ -4009,6 +4009,10 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     _garde_licence_h3()
     try:
         video_h3.preparer(payload)   # les refus d'abord, avant d'appeler le chat
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _h3_peut_louer()                 # poids, Modal, budget : avant la traduction aussi
+    try:
         traduit = video_h3.a_traduire(payload)
         if traduit:
             payload = video_h3.lire_traduction(

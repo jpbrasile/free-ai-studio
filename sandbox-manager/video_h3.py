@@ -485,19 +485,21 @@ def sujets_des_fiches(nombres: list) -> str:
     return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
 
 
-# --- La traduction en anglais, en mode « Références » -----------------------------
+# --- La traduction en anglais, dans tous les modes ---------------------------------
 # Essai du 28/09 (PLAN 18.9) : en mode « Références », le texte français hors
 # guillemets est DIT par le personnage (la scène, l'ambiance), la réplique se
 # perd. Décision du propriétaire, même jour : « oui traduis en anglais ». Tout ce
 # qui n'est pas réplique part en anglais ; les répliques restent mot pour mot.
-# Les autres modes ont été validés en français : ils n'y passent pas.
+# D'abord réservé au mode « Références » ; le même jour, en « Première image »,
+# la description française de l'image en tête (clip bfd5d22d) a fait dire à H3
+# du français inventé, sans la réplique anglaise (entendu par le Whisper du
+# Studio ; remarque du propriétaire : « le langage en anglais a disparu »).
 
-CASES_TRADUITES = ("image_paroles", "ambiance", "musique")
+CASES_TRADUITES = ("image_paroles", "ambiance", "musique", "description_premiere", "description_derniere")
 
 
 def a_traduire(payload: dict) -> bool:
-    return str(payload.get("mode") or "") == "references" and any(
-        str(payload.get(k) or "").strip() for k in CASES_TRADUITES)
+    return any(str(payload.get(k) or "").strip() for k in CASES_TRADUITES)
 
 
 def repliques(texte: str) -> list:
@@ -527,6 +529,8 @@ def lire_traduction(reponse: str, payload: dict) -> dict:
     for k in CASES_TRADUITES:
         if repliques(d.get(k, "")) != repliques(payload.get(k, "")):
             raise ValueError("La traduction en anglais a changé une réplique : rien n'est lancé.")
+        if str(payload.get(k) or "").strip() and not d.get(k, "").strip():
+            raise ValueError("La traduction en anglais a perdu une case : rien n'est lancé.")
     return dict(payload, **{k: d.get(k, "") for k in CASES_TRADUITES})
 
 
