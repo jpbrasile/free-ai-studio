@@ -1005,6 +1005,7 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     assert v.CADRAGE in v.consigne_correction([], "retour")
     assert "close-up shows one character only" in v.CADRAGE
     assert "Place each character once" in v.CADRAGE
+    assert "say how the movement ends" in v.CADRAGE
 
 
 def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):

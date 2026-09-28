@@ -603,7 +603,13 @@ CADRAGE = ("Framing: a close-up shows one character only; when two or more chara
            # Le 28/09, un personnage placé deux fois (au premier plan, puis à sa table)
            # a été dessiné deux fois par H3 (remarque du propriétaire).
            "Place each character once: say where they are in a single place of the shot's text, and never "
-           "repeat or restate that position later in the same shot. ")
+           "repeat or restate that position later in the same shot. "
+           # Le 28/09, un personnage qui s'approche d'une table s'y est assis de lui-même
+           # avant la fin du plan : H3 invente la fin d'un mouvement qu'on ne décrit pas
+           # (remarque du propriétaire : « il faut dire qu'il attend debout »).
+           "When a character moves (walks, approaches, arrives, leaves), say how the movement ends: the "
+           "posture they hold once arrived (standing, sitting…) and what they do until the end of the shot, "
+           "as the story wants it at that moment. ")
 
 
 def consigne_decoupage(scenario: str) -> str:
