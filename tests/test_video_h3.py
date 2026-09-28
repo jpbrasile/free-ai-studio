@@ -51,7 +51,8 @@ def client(sandbox):
     ("get", "/video-h3/scenario/" + "a" * 32), ("post", "/video-h3/musique"), ("get", "/video-h3/scenarios"),
     ("post", "/video-h3/scenario/" + "a" * 32 + "/juger"), ("post", "/video-h3/scenario/" + "a" * 32 + "/corriger"),
     ("post", "/video-h3/scenario/" + "a" * 32 + "/rejouer"), ("post", "/video-h3/depart/" + "a" * 24 + "/comparer"),
-    ("post", "/video-h3/visage/comparer"),
+    ("post", "/video-h3/visage/comparer"), ("post", "/video-h3/fiches/" + "a" * 12 + "/planche"),
+    ("delete", "/video-h3/fiches/" + "a" * 12 + "/planche"),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -1942,3 +1943,40 @@ def test_toute_image_se_compare_au_visage_d_une_fiche(h3, monkeypatch):
     assert "first 2 image(s)" in json.dumps(vus[1])
     r = c.post("/video-h3/visage/comparer", headers=CLE, json={"fiche": "0123456789ab", "image": PNG})
     assert r.status_code in (400, 404)
+
+
+def test_la_planche_de_personnage_se_cree_sert_aux_images_et_se_supprime(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    v, c = h3.video_h3, client(h3)
+    fid = v.fiche_creer("Tom", "un homme, veste verte")["id"]
+    r = c.post(f"/video-h3/fiches/{fid}/planche", headers=CLE, json={})
+    assert r.status_code == 400 and "aucune image" in r.json()["detail"]
+    v.fiche_poser_image(fid, "face", JPG)
+    v.fiche_poser_image(fid, "pied", PNG)
+    vu = {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteur(200, {"data": [{"url": "data:image/png;base64," + PNG}]}, vu))
+    f = c.post(f"/video-h3/fiches/{fid}/planche", headers=CLE, json={}).json()
+    # Toutes les photos de la fiche, la consigne générique et la description.
+    assert vu["json"]["image_reference"] == ["data:image/jpeg;base64," + JPG, "data:image/png;base64," + PNG]
+    assert vu["json"]["prompt"].startswith("Planche de référence d'un personnage")
+    assert "de profil strict" in vu["json"]["prompt"] and vu["json"]["prompt"].endswith("veste verte")
+    assert f["planche"] == "data:image/png;base64," + PNG and list(f["images"]) == ["face", "pied"]
+    # Une planche téléversée remplace l'ancienne, sans appel.
+    vu.clear()
+    f = c.post(f"/video-h3/fiches/{fid}/planche", headers=CLE, json={"image": JPG}).json()
+    assert vu == {} and f["planche"].startswith("data:image/jpeg;base64,")
+    assert sorted(p.name for p in (v.DOSSIER_FICHES / fid).iterdir()) == \
+        ["face.jpg", "fiche.json", "pied.png", "planche.jpg"]
+    # Jointe aux images que le Studio crée avec ce personnage, jamais aux références de H3.
+    demande, _ = v.demande_image("Tom dans un parc", fiches=[fid])
+    assert len(demande["image_reference"]) == 3 and demande["image_reference"][2].startswith("data:image/jpeg")
+    assert demande["prompt"].startswith("Tom est la personne des images jointes 1 à 3")
+    assert len(v.fiche_images(fid)) == 2
+    f = c.delete(f"/video-h3/fiches/{fid}/planche", headers=CLE).json()
+    assert f["planche"] is None and not (v.DOSSIER_FICHES / fid / "planche.jpg").exists()
+    assert len(v.demande_image("Tom", fiches=[fid])[0]["image_reference"]) == 2
+    html = c.get("/video-h3").text
+    for morceau in ('id="fiche_planche"', "function dessinerPlanche(", "Créer la planche de personnage",
+                    "Télécharger la planche", '"/planche", {method: "DELETE"'):
+        assert morceau in html, morceau

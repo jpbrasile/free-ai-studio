@@ -381,6 +381,9 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
         urls = [fiche_image_data_url(fid, a) for a in ANGLES if a in fiche["images"]]
         if not urls:
             raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
+        planche = fiche_planche_data_url(fid)
+        if planche:   # la même personne sous tous les angles (28/09)
+            urls.append(planche)
         n = len(photos)
         presentation.append("%s est la personne des images jointes %d à %d" % (fiche["nom"], n + 1, n + len(urls))
                             if len(urls) > 1 else "%s est la personne de l'image jointe %d" % (fiche["nom"], n + 1))
@@ -553,6 +556,61 @@ def fiche_image_data_url(fid, angle: str) -> str:
     nom = fiche_lire(fid)["images"].get(_angle(angle))
     if not nom:
         raise ValueError("Cette image n'existe pas.")
+    octets = (_dossier_fiche(fid) / nom).read_bytes()
+    return f"data:{_TYPES[Path(nom).suffix]};base64," + base64.b64encode(octets).decode()
+
+
+# --- La planche de personnage : la même personne sous tous les angles (28/09) -----
+# Demande du propriétaire : « ce qui permet de créer un personnage consistant ».
+# Faite par l'image du Studio à partir de toutes les photos de la fiche ; jointe
+# ensuite aux images que le Studio crée avec ce personnage. Elle ne part pas à H3 :
+# six fois la même personne sur une image de référence risquerait de la dédoubler.
+TAILLE_PLANCHE = TAILLE_IMAGE_DEMANDEE
+CONSIGNE_PLANCHE = (
+    "Planche de référence d'un personnage, style photo réaliste, fond blanc uni, lumière de studio douce et égale. "
+    "La même personne que sur les photos jointes, avec exactement son visage, ses yeux, son nez, sa bouche, sa "
+    "coiffure et sa couleur de cheveux ; la même tenue sur toutes les vues : celle de la description si elle en "
+    "donne une, sinon celle de la photo en pied, sinon celle des photos. "
+    "Rangée du haut, trois gros plans du visage, épaules et tenue visibles : de face, de trois-quarts, de profil "
+    "strict. Rangée du bas, en pied, de la tête aux chaussures : de face, de profil, de dos. "
+    "Expression neutre, bras le long du corps. Aucun texte, aucune légende.")
+
+
+def fiche_demande_planche(fiche: dict) -> dict:
+    urls = [fiche_image_data_url(fiche["id"], a) for a in ANGLES if a in fiche.get("images", {})]
+    if not urls:
+        raise ValueError("La fiche n'a encore aucune image : la planche part de ses photos.")
+    return {"prompt": f"{CONSIGNE_PLANCHE} Description : {fiche['description']}", "n": 1,
+            "size": TAILLE_PLANCHE, "image_reference": urls}
+
+
+def fiche_poser_planche(fid, image: str) -> dict:
+    fiche = fiche_lire(fid)
+    octets = base64.b64decode(_image(image, "Planche de personnage"))
+    ext = next(e for debut, e in _EXTENSIONS.items() if octets.startswith(debut))
+    dossier = _dossier_fiche(fid)
+    if fiche.get("planche"):
+        (dossier / fiche["planche"]).unlink(missing_ok=True)
+    fiche["planche"] = "planche" + ext
+    (dossier / fiche["planche"]).write_bytes(octets)
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_retirer_planche(fid) -> dict:
+    fiche = fiche_lire(fid)
+    nom = fiche.pop("planche", None)
+    if nom:
+        (_dossier_fiche(fid) / nom).unlink(missing_ok=True)
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_planche_data_url(fid):
+    """La planche en data URL ; None si la fiche n'en a pas."""
+    nom = fiche_lire(fid).get("planche")
+    if not nom:
+        return None
     octets = (_dossier_fiche(fid) / nom).read_bytes()
     return f"data:{_TYPES[Path(nom).suffix]};base64," + base64.b64encode(octets).decode()
 
@@ -1708,6 +1766,7 @@ PAGE_HTML = r"""<!doctype html>
   <button id="fiche_supprimer" hidden>Supprimer la fiche</button>
   <p class="note" id="fiche_etat"></p>
   <div id="fiche_images" class="grille"></div>
+  <div id="fiche_planche"></div>
   <p class="note">Les images sont faites par l'image du Studio (clé Google, gratuite) : d'abord le
   portrait de face, d'après la description, puis les autres angles à partir de lui, pour garder le même
   visage. Rejouez ou supprimez celles qui ne vont pas.</p>
@@ -2407,6 +2466,7 @@ async function chargerFiches(choisir){
 async function montrerFiche(){
   const id = document.getElementById("fiche_choix").value;
   document.getElementById("fiche_images").innerHTML = "";
+  document.getElementById("fiche_planche").innerHTML = "";
   document.getElementById("fiche_supprimer").hidden = !id;
   document.getElementById("fiche_creer").hidden = !!id;
   for (const champ of ["fiche_nom", "fiche_description"]){
@@ -2458,6 +2518,47 @@ function dessinerFiche(f){
     cas.append(document.createElement("br"), "Ou une photo : ", fichier, coche);
     grille.appendChild(cas);
   }
+  dessinerPlanche(f);
+}
+
+// La planche de personnage : la même personne sous tous les angles, faite à partir
+// des photos de la fiche, puis jointe aux images que le Studio crée avec elle (28/09).
+function dessinerPlanche(f){
+  const zone = document.getElementById("fiche_planche");
+  zone.innerHTML = "";
+  const t = document.createElement("b");
+  t.textContent = "Planche de personnage";
+  const note = document.createElement("p");
+  note.className = "note";
+  note.textContent = "Face, trois-quarts et profil du visage ; de face, de profil et de dos en pied. Faite par "
+    + "l'image du Studio (gratuite) à partir des photos ci-dessus, puis jointe aux images créées avec ce "
+    + "personnage (première image, départ d'un plan) pour garder le même visage et la même tenue.";
+  zone.append(t, note);
+  if (f.planche){
+    const img = document.createElement("img");
+    img.className = "apercu";
+    img.src = f.planche;
+    img.alt = "Planche de personnage de « " + f.nom + " »";
+    const lien = document.createElement("a");
+    lien.href = f.planche;
+    lien.download = "planche-" + f.nom + (f.planche.startsWith("data:image/png") ? ".png" : ".jpg");
+    lien.textContent = "Télécharger la planche";
+    zone.append(img, lien, " ");
+  }
+  const angles = Object.keys(f.images || {}).length;
+  if (angles) zone.append(bouton(f.planche ? "Refaire la planche" : "Créer la planche de personnage", async () => {
+    ficheEtat("Planche de personnage en cours (10 à 40 s)…");
+    const r = await fetch("/video-h3/fiches/" + f.id + "/planche", {method: "POST", headers: H, body: "{}"});
+    const d = await r.json();
+    if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+    ficheEtat("");
+    await chargerFiches(f.id);
+  }));
+  else zone.append("Ajoutez d'abord des photos : la planche part d'elles.");
+  if (f.planche) zone.append(bouton("Supprimer la planche", async () => {
+    const r = await fetch("/video-h3/fiches/" + f.id + "/planche", {method: "DELETE", headers: H});
+    if (r.ok) await chargerFiches(f.id);
+  }));
 }
 
 async function poserPhoto(id, angle, image, visage){

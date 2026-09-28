@@ -4939,6 +4939,8 @@ def _fiche_publique(fiche: dict, avec_images: bool = True) -> dict:
     d = {k: fiche[k] for k in ("id", "nom", "description", "cree_le")}
     d["images"] = {a: video_h3.fiche_image_data_url(fiche["id"], a) if avec_images else True
                    for a in video_h3.ANGLES if a in fiche.get("images", {})}
+    d["planche"] = (video_h3.fiche_planche_data_url(fiche["id"]) if avec_images else True) \
+        if fiche.get("planche") else None
     return d
 
 
@@ -5012,6 +5014,31 @@ async def video_h3_fiche_image(fid: str, angle: str, request: Request,
         image = _data_url(gros_plan)
     fiche = _fiche_ou_400(lambda: video_h3.fiche_poser_image(fid, angle, image))
     return _fiche_publique(fiche)
+
+
+@app.post("/video-h3/fiches/{fid}/planche")
+async def video_h3_fiche_planche(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """La planche de personnage : faite par l'image du Studio à partir des photos
+    de la fiche (gratuit), ou posée telle quelle si la page en envoie une (`image`)."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    fiche = _fiche_ou_400(lambda: video_h3.fiche_lire(fid))
+    image = corps.get("image") if isinstance(corps, dict) else None
+    if not image:
+        demande = _fiche_ou_400(lambda: video_h3.fiche_demande_planche(fiche))
+        image = await _image_du_studio(demande)
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_poser_planche(fid, image)))
+
+
+@app.delete("/video-h3/fiches/{fid}/planche")
+def video_h3_fiche_planche_retirer(fid: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_retirer_planche(fid)))
 
 
 def _data_url(octets: bytes) -> str:
