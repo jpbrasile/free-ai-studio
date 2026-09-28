@@ -3327,6 +3327,10 @@ IMAGE_MAX_N = 4
 
 IMAGE_REFERENCE = re.compile(r"data:(image/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)\Z")
 IMAGE_REFERENCE_MAX_B64 = 8 * 1024 * 1024 * 4 // 3 + 4
+# Plusieurs personnes dans une meme image (image de depart d'un plan a deux
+# personnages, 28/09) : les photos de chaque fiche ; 14 au plus, la limite de
+# Gemini 3.1 Flash Lite Image (ai.google.dev, fiche du modèle, lue le 28/09).
+IMAGE_REFERENCE_MAX = 14
 
 
 def aspect_ratio(size: Any) -> Optional[str]:
@@ -3368,13 +3372,18 @@ async def images_generations(request: Request, authorization: Optional[str] = He
     # Une image de depart, facultative (fiches de casting de la video H3, PLAN
     # 18.9) : Google la recoit avant le texte et garde la meme personne sous un
     # autre angle. Champ propre au Studio ; Open WebUI ne l'envoie pas.
-    reference = str(payload.get("image_reference") or "")
-    if reference:
-        m = IMAGE_REFERENCE.match(reference)
+    # Une liste est acceptee aussi : les images passent dans leur ordre, avant le texte.
+    references = payload.get("image_reference") or []
+    if not isinstance(references, list):
+        references = [references]
+    if len(references) > IMAGE_REFERENCE_MAX:
+        raise HTTPException(status_code=400, detail="Quatorze images de depart au plus.")
+    for rang, reference in enumerate(references):
+        m = IMAGE_REFERENCE.match(str(reference or ""))
         if not m or len(m.group(2)) > IMAGE_REFERENCE_MAX_B64:
             raise HTTPException(status_code=400,
                                 detail="Image de depart illisible ou trop lourde (PNG, JPEG ou WebP, 8 Mo).")
-        corps["contents"][0]["parts"].insert(0, {"inlineData": {"mimeType": m.group(1), "data": m.group(2)}})
+        corps["contents"][0]["parts"].insert(rang, {"inlineData": {"mimeType": m.group(1), "data": m.group(2)}})
     ratio = aspect_ratio(payload.get("size"))
     if ratio:
         corps["generationConfig"] = {"imageConfig": {"aspectRatio": ratio}}

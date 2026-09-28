@@ -1380,6 +1380,17 @@ def test_le_routeur_envoie_l_image_de_depart_a_google(routeur, monkeypatch):
         {"inlineData": {"mimeType": "image/jpeg", "data": JPG}}, {"text": "la même, de profil"}]
     r = c.post("/v1/images/generations", headers=entete, json={"prompt": "x", "image_reference": "http://ailleurs"})
     assert r.status_code == 400
+    # Deux personnes dans la même image : une photo chacune, dans l'ordre, avant le texte.
+    r = c.post("/v1/images/generations", headers=entete,
+               json={"prompt": "les deux", "image_reference": ["data:image/jpeg;base64," + JPG,
+                                                           "data:image/png;base64," + PNG]})
+    assert r.status_code == 200
+    assert vu["json"]["contents"][0]["parts"] == [
+        {"inlineData": {"mimeType": "image/jpeg", "data": JPG}},
+        {"inlineData": {"mimeType": "image/png", "data": PNG}}, {"text": "les deux"}]
+    r = c.post("/v1/images/generations", headers=entete,
+               json={"prompt": "x", "image_reference": ["data:image/png;base64," + PNG] * 15})
+    assert r.status_code == 400
     vu.clear()
     c.post("/v1/images/generations", headers=entete, json={"prompt": "sans départ"})
     assert vu["json"]["contents"][0]["parts"] == [{"text": "sans départ"}]
