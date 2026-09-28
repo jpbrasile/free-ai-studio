@@ -1067,6 +1067,18 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                - la 2e, après la précision « change the framing », donne un plan moyen avec les deux personnages, mais **« James s'assoit » manque toujours**.
 
                Les deux fois, le contrôle de continuité l'a relevé (`ok: false`) : **rien n'a été rejoué ni payé**. Cause trouvée : la correction ne reçoit que le texte des plans, déjà abîmé par une correction précédente, et jamais l'histoire du scénario initial. **Prochaine étape** : lui donner cette histoire comme référence (générique), recorriger gratuitement, puis rejouer le plan 2 si la continuité tient.
+
+               **Fait le 28/09 (commit bf7345c).** La correction reçoit l'histoire du scénario initial comme référence. La règle générique suivante s'ajoute : chaque plan s'écrit dans l'ordre où les choses arrivent, répliques comprises.
+               - 1er essai, avec la seule référence : James s'assoit, mais avant la réplique. La continuité est `ok: false` ; rien n'est payé.
+               - 2e essai, avec la règle d'ordre : « … James debout près d'elle. Léa … répond « Non, asseyez-vous… » James s'assoit en face d'elle. » La continuité est `ok: true`.
+
+               **Rejeu du seul plan 2** : scénario 58fa1aeb, environ 0,12 $ estimé, non relevé ; les plans 1 et 3 sont repris tels quels.
+               - Sur la planche à 0,5 s :
+                 - **un seul James** ;
+                 - il reste debout pendant la réplique, qui est entendue de 5,17 à 7,17 s d'après whisper, puis **s'assoit en face de Léa** de 7,7 à 9,7 s environ.
+               - Défaut restant : pendant les 3 premières secondes, James est coupé au cou par le bord du cadre, contrairement à la règle de cadrage.
+               - Le juge du Studio a été lancé deux fois ; la 2e donne le plan 2 `ok` et le plan 3 `ok`.
+               - Sur le plan 1, repris tel quel, le juge signale « James en double » à 4,0 s. L'image à 4,0 s montre un seul James ; l'homme au loin porte un manteau sombre. C'est **probablement une fausse alerte**, jugée à l'œil et non mesurée.
        - **V3, chantiers à part**, chacun avec son accord et son budget : Blender → Fun ControlNet, corrections après coup (RVC/OpenVoice, LatentSync, GFPGAN), LoRA ai-toolkit, mesures ArcFace et empreinte de voix. Aucun n'a été essayé par personne avec H3.
        - Construit sur `main` (Studio administrateur, 20) ; n'entre dans `stable` qu'après validation par le propriétaire à l'écran. Chaque clip d'essai est relevé dans la facture Modal ; arrêt avant 2 $. **Relevé réel du 28/09** (`modal billing report --for "this month" --show-resources`) : environ 2,5 $ pour H3, soit les applications `h3-essai-*` (1,17 $) plus le Studio les 27 et 28/09 (0,68 $ et environ 0,70 $, qui comptent aussi le CPU et la mémoire partagés avec la page Chanson). Le budget de 2 $ est donc dépassé ; le propriétaire a accordé **5 $ de plus** le 28/09 (« ok pour extrat budjet 5$ »).
 19. **À faire — les chantiers trop gros pour être corrigés en passant (règle du propriétaire, 26/09/2026 : « les petites corrections peuvent être faites quand elles sont rencontrées ; les plus grosses à mettre dans la todo du plan »).**
