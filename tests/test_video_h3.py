@@ -27,6 +27,7 @@ def h3(sandbox, monkeypatch, tmp_path):
     monkeypatch.setattr(v, "FICHE_AUTORISATION", tmp_path / "h3-autorisation" / "fiche.json")
     monkeypatch.setattr(v, "FICHE_POIDS", tmp_path / "h3-poids.json")
     monkeypatch.setattr(v, "DOSSIER_FICHES", tmp_path / "h3-fiches")
+    monkeypatch.setattr(v, "DOSSIER_SCENARIOS", tmp_path / "h3-scenarios")
     monkeypatch.setattr(sandbox.budget_modal, "FICHIER", tmp_path / "modal-budget.json")
     monkeypatch.setattr(sandbox.budget_modal, "_releve_reel", lambda: None)
     monkeypatch.setenv("VIDEO_H3_ACTIF", "true")
@@ -43,6 +44,9 @@ def client(sandbox):
     ("get", "/video-h3"), ("get", "/video-h3/etat"), ("post", "/video-h3/autorisation"),
     ("post", "/video-h3/poids/preparer"), ("post", "/video-h3/creer"), ("post", "/video-h3/image"),
     ("get", "/video-h3/fiches"), ("post", "/video-h3/fiches"),
+    ("get", "/video-h3/clips"), ("post", "/video-h3/scenario/ordonner"), ("post", "/video-h3/montage"),
+    ("post", "/video-h3/scenario/decouper"), ("post", "/video-h3/scenario/tourner"),
+    ("get", "/video-h3/scenario/" + "a" * 32),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -586,7 +590,7 @@ def test_la_langue_des_paroles_se_choisit_parmi_les_onze(h3):
     html = client(h3).get("/video-h3").text
     assert "__LANGUES__" not in html and '<option value="French" selected>français</option>' in html
     assert all(f'value="{code}"' in html for code in v.LANGUES_PAROLES)
-    assert html.count('langue: document.getElementById("langue").value') == 2   # créer et prolonger
+    assert html.count('langue: document.getElementById("langue").value') == 3   # créer, prolonger, scénario
     plan = v.preparer(demande(image_paroles="Il dit « Hola. »", langue="Spanish"))
     assert "<d>[Spanish] Hola.</d>" in plan["resume_public"]["invite"]
     assert plan["resume_public"]["langue"] == "Spanish"
@@ -721,6 +725,188 @@ def test_en_mode_references_le_clip_part_traduit(h3, monkeypatch):
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(503, {}, {}))
     r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(mode="references", images=[PNG]))
     assert r.status_code == 502 and "rien n'est lancé" in r.json()["detail"]
+
+
+# --- 8. Le scénario monté après coup : des clips déjà faits, recollés dans l'ordre ---
+
+def _deux_clips(h3, monkeypatch, tmp_path):
+    fichiers = {}
+    for jid, octets, invite in (("a" * 32, b"A", "Elle entre dans le café"), ("b" * 32, b"B", "Elle commande")):
+        _clip_reussi(h3, jid, invite=invite)
+        fichiers[jid] = tmp_path / (jid[0] + ".mp4")
+        fichiers[jid].write_bytes(octets)
+    _clip_reussi(h3, "d" * 32, moteur="Wan 2.1")   # pas un clip H3 : jamais proposé
+    fichiers["d" * 32] = tmp_path / "d.mp4"
+    fichiers["d" * 32].write_bytes(b"D")
+    vrai = h3._video_h3_octets
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: fichiers.get(jid) or vrai(jid))
+    return fichiers
+
+
+def test_l_ordre_des_clips_est_controle(h3):
+    v = h3.video_h3
+    a, b = "a" * 32, "b" * 32
+    for mauvais, message in (([a], "de 2"), ([a, a], "deux fois"), (["../x", a], "illisible"), ("ab", "illisible")):
+        with pytest.raises(ValueError, match=message):
+            v.verifier_ordre(mauvais)
+    assert v.lire_ordre('```json\n["%s", "%s"]\n```' % (b, a), {a: "", b: ""}) == [b, a]
+    with pytest.raises(ValueError, match="pas dans la liste"):
+        v.lire_ordre('["%s", "%s"]' % (b, "c" * 32), {a: "", b: ""})
+    with pytest.raises(ValueError, match="pas pu être lu"):
+        v.lire_ordre("Je ne sais pas.", {a: "", b: ""})
+    assert "Elle entre" in v.consigne_ordre("Léa entre, puis commande.", {a: "Elle entre"})
+
+
+def test_le_film_recolle_les_clips_dans_l_ordre_sans_rien_louer(h3, monkeypatch, tmp_path):
+    _deux_clips(h3, monkeypatch, tmp_path)
+    vus = []
+
+    def recoller(a, b, retirer):
+        vus.append(retirer)
+        return a + b
+
+    monkeypatch.setattr(h3.montage, "recoller_son", recoller)
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 248)
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: pytest.fail("rien ne se loue"))
+    c = client(h3)
+    liste = c.get("/video-h3/clips", headers=CLE).json()["clips"]
+    assert {x["id"] for x in liste} == {"a" * 32, "b" * 32}
+    r = c.post("/video-h3/montage", headers=CLE, json={"clips": ["b" * 32, "a" * 32], "scenario": "Léa"})
+    assert r.status_code == 200, r.text
+    film = r.json()
+    assert film["status"] == "succeeded" and vus == [0]
+    assert film["video"]["clips"] == ["b" * 32, "a" * 32] and film["video"]["plans"] == 2
+    assert film["video"]["secondes"] == round(248 / 24, 2)
+    j = c.get("/video/jobs/" + film["id"], headers=CLE).json()
+    assert c.get(j["video_url"]).content == b"BA"
+    # Un clip qui n'est pas H3, ou qui n'existe plus : refusé.
+    for clips in (["a" * 32, "d" * 32], ["a" * 32, "e" * 32]):
+        assert c.post("/video-h3/montage", headers=CLE, json={"clips": clips}).status_code == 404
+    assert c.post("/video-h3/montage", headers=CLE, json={"clips": ["a" * 32]}).status_code == 400
+
+
+def test_le_chat_range_les_clips_selon_le_scenario(h3, monkeypatch, tmp_path):
+    _deux_clips(h3, monkeypatch, tmp_path)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    vu = {}
+    reponse = {"choices": [{"message": {"content": '["%s", "%s"]' % ("a" * 32, "b" * 32)}}]}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, reponse, vu))
+    corps = {"scenario": "Léa entre dans le café, puis commande.", "clips": ["b" * 32, "a" * 32]}
+    r = client(h3).post("/video-h3/scenario/ordonner", headers=CLE, json=corps)
+    assert r.status_code == 200, r.text
+    assert r.json()["ordre"] == ["a" * 32, "b" * 32]
+    assert vu["url"].endswith("/v1/chat/completions")
+    invente = {"choices": [{"message": {"content": '["%s", "%s"]' % ("a" * 32, "d" * 32)}}]}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, invente, {}))
+    r = client(h3).post("/video-h3/scenario/ordonner", headers=CLE, json=corps)
+    assert r.status_code == 502 and "pas dans la liste" in r.json()["detail"]
+    r = client(h3).post("/video-h3/scenario/ordonner", headers=CLE, json=dict(corps, scenario=""))
+    assert r.status_code == 400
+
+
+def test_la_page_propose_de_monter_un_scenario(h3):
+    html = client(h3).get("/video-h3").text
+    for morceau in ('id="scenario"', 'id="clips_liste"', "/video-h3/scenario/ordonner", "/video-h3/montage",
+                    "rien n'est loué", "/video-h3/scenario/decouper", "/video-h3/scenario/tourner",
+                    '"suite": "Suite directe'):
+        assert morceau in html
+    assert "__ENCHAINEMENTS__" not in html
+
+
+# --- 9. Le scénario neuf, tourné plan par plan (conservé pour les futurs scénarios) ---
+
+def test_le_decoupage_est_controle(h3):
+    v = h3.video_h3
+    scenario = "Léa entre dans le café. Elle dit « Un café, s'il vous plaît. »"
+    bon = ('[{"image_paroles": "Léa entre", "ambiance": "Brouhaha", "enchainement": "suite"}, '
+           '{"image_paroles": "Elle dit « Un café, s\'il vous plaît. »", "ambiance": "", "enchainement": "suite"}]')
+    plans = v.lire_decoupage(bon, scenario)
+    assert [p["enchainement"] for p in plans] == ["coupe", "suite"]   # le premier n'a rien avant lui
+    invente = '[{"image_paroles": "Elle dit « Deux cafés. »", "ambiance": "", "enchainement": "coupe"}]'
+    with pytest.raises(ValueError, match="inventé"):
+        v.lire_decoupage(invente, scenario)
+    with pytest.raises(ValueError, match="pas pu être lu"):
+        v.lire_decoupage("[]", scenario)
+    trop = [{"image_paroles": "x", "ambiance": "", "enchainement": "coupe"}] * (v.SCENARIO_PLANS_MAX + 1)
+    for mauvais, message in ((trop, "au plus"), ([{"image_paroles": " "}], "décrivez"),
+                             ([{"image_paroles": "x", "enchainement": "fondu"}], "inconnu")):
+        with pytest.raises(ValueError, match=message):
+            v.verifier_plans(mauvais)
+
+
+def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path):
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    reponse = {"choices": [{"message": {"content":
+               '{"image_paroles": "Lea walks into the café", "ambiance": "Chatter", "musique": ""}'}}]}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, reponse, {}))
+    fid = v.fiche_creer("Léa", "femme de 35 ans")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    plans = [{"image_paroles": "Léa entre dans le café", "ambiance": "Brouhaha", "enchainement": "coupe"},
+             {"image_paroles": "Elle dit « Bonjour. »", "ambiance": "", "enchainement": "suite"}]
+    c = client(h3)
+    r = c.post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "longueur": 124})
+    assert r.status_code == 400 and "fiche" in r.json()["detail"]
+
+    video = tmp_path / "plan.mp4"
+    video.write_bytes(b"mp4")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
+    monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG))
+    tournes = []
+
+    def tourner(jid, code, precedent, retirer):
+        tournes.append((jid, precedent, retirer, h3.read_job(jid)["video"]))
+        job = h3.read_job(jid)
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "run_video_h3", tourner)
+
+    fils, vrai = [], h3.run_scenario_h3
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    r = c.post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 200, r.text
+    vrai(*fils[0])   # le fil, joué ici pour attendre sa fin
+    sc = c.get("/video-h3/scenario/" + r.json()["id"], headers=CLE).json()
+    assert sc["etat"] == "réussi" and len(tournes) == 2
+    (j1, p1, r1, v1), (j2, p2, r2, v2) = tournes
+    # Le premier plan, avec la fiche, part traduit ; la suite part de sa dernière image et s'y recolle.
+    assert p1 is None and v1["mode"] == "references" and v1["traduit_en_anglais"] is True
+    assert v1["invite"].startswith("subject_definitions:") and "Lea walks" in v1["invite"]
+    assert (p2, r2) == (j1, 1) and v2["mode"] == "prolonger" and v2["plans"] == 2
+    assert "(S1) <d>[French] Bonjour.</d>" in v2["invite"]
+    assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
+
+
+def test_un_plan_en_echec_arrete_le_scenario(h3, monkeypatch):
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    fid = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    tournes = []
+
+    def rate(jid, *a):
+        tournes.append(jid)
+        job = h3.read_job(jid)
+        job.update(status="failed", error="Plus de mémoire.")
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "run_video_h3", rate)
+    sid = "f" * 32
+    v.scenario_ecrire({"id": sid, "etat": "en cours", "erreur": "", "plans": [], "travaux": [], "film": None})
+    p = {"mode": "references", "fiche": fid, "image_paroles": "Elle entre", "longueur": 124, "images": []}
+    h3.run_scenario_h3(sid, [{"enchainement": "coupe", "payload": p}, {"enchainement": "coupe", "payload": p}])
+    sc = v.scenario_lire(sid)
+    assert len(tournes) == 1 and sc["etat"] == "échoué" and sc["erreur"] == "Plan 1 : Plus de mémoire."
+    # Un scénario « en cours » dont le fil a disparu (Studio redémarré) le dit.
+    v.scenario_noter(sid, etat="en cours")
+    assert client(h3).get("/video-h3/scenario/" + sid, headers=CLE).json()["etat"] == "interrompu"
 
 
 def test_le_routeur_envoie_l_image_de_depart_a_google(routeur, monkeypatch):

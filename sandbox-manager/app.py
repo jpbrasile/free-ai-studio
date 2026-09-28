@@ -4020,12 +4020,12 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     return _lancer_h3(plan)
 
 
-async def _chat_du_studio(consigne: str) -> str:
+async def _chat_du_studio(consigne: str, quoi: str = "la traduction en anglais") -> str:
     """Une réponse du chat gratuit du Studio (routeur) ; HTTPException sinon."""
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
         raise HTTPException(503, "Le chat du Studio n'est pas joignable d'ici (clé interne du routeur "
-                                 "absente) : la traduction en anglais est impossible, rien n'est lancé.")
+                                 "absente) : %s est impossible, rien n'est lancé." % quoi)
     try:
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(ROUTEUR_INTERNE + "/v1/chat/completions",
@@ -4040,7 +4040,7 @@ async def _chat_du_studio(consigne: str) -> str:
     except ValueError:
         d = {}
     if r.status_code >= 400:
-        raise HTTPException(502, "Le chat du Studio a refusé la traduction en anglais : rien n'est lancé.")
+        raise HTTPException(502, "Le chat du Studio a refusé %s : rien n'est lancé." % quoi)
     choix = (d.get("choices") or [{}])[0]
     return (choix.get("message") or {}).get("content") or ""
 
@@ -4053,8 +4053,8 @@ def _garde_licence_h3():
                                  "déposez-la en haut de la page. Sans elle, H3 n'est pas permis ici.")
 
 
-def _lancer_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
-    """Poids, Modal, budget ; puis le travail part. Commun a creer et prolonger."""
+def _h3_peut_louer():
+    """Poids, Modal, budget d'un clip : HTTPException sinon."""
     if not video_h3.poids_etat()["prets"]:
         raise HTTPException(409, "Les poids de H3 ne sont pas encore sur le disque Modal : "
                                  "cliquez « Préparer les poids » (une fois).")
@@ -4064,6 +4064,19 @@ def _lancer_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
                               quoi="Ce clip", coeurs=video_h3.COEURS)
     except budget_modal.BudgetDepasse as exc:
         raise HTTPException(429, str(exc)) from exc
+
+
+def _lancer_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
+    """Le travail part dans un fil. Commun a creer et prolonger."""
+    jid, args = _travail_h3(plan, precedent, retirer)
+    threading.Thread(target=run_video_h3, args=args, daemon=True).start()
+    return read_job(jid)
+
+
+def _travail_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
+    """Controles, puis la fiche du travail ; rend (jid, arguments de run_video_h3).
+    Le scenario tourne s'en sert pour attendre chaque plan avant le suivant."""
+    _h3_peut_louer()
     jid = uuid.uuid4().hex
     demande = video_h3.garder_latent(plan["demande"], jid)
     resume = dict(plan["resume_public"])
@@ -4075,9 +4088,7 @@ def _lancer_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
         "video": resume,
         "titre": (resume["invite"][:60] or "Vidéo H3"),
     })
-    threading.Thread(target=run_video_h3, args=(jid, video_h3.construire_script(demande), precedent, retirer),
-                     daemon=True).start()
-    return read_job(jid)
+    return jid, (jid, video_h3.construire_script(demande), precedent, retirer)
 
 
 @app.post("/video-h3/prolonger")
@@ -4157,6 +4168,256 @@ async def _image_du_studio(demande: dict) -> str:
     if not images:
         raise HTTPException(502, "L'image du Studio n'a rendu aucune image.")
     return images[0]
+
+
+# --- Scénario monté après coup (PLAN 18.9) : des clips réussis, recollés dans l'ordre ---
+
+def _clips_h3() -> list:
+    """Les clips H3 réussis de ce Studio dont la vidéo est encore là, du plus récent au plus ancien."""
+    clips = []
+    for p in sorted(JOBS.glob("*/job.json"), key=_date_de_fiche, reverse=True):
+        try:
+            job = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        v = job.get("video") if isinstance(job, dict) else None
+        if not isinstance(v, dict) or not str(v.get("moteur", "")).startswith("MiniMax H3"):
+            continue
+        if job.get("status") != "succeeded" or not _video_h3_octets(job.get("id", "")):
+            continue
+        clips.append({"id": job["id"], "invite": v.get("invite", ""), "secondes": v.get("secondes"),
+                      "cree_a": job.get("created_at"), "fiche": (v.get("fiche") or {}).get("nom"),
+                      "mode": v.get("mode", ""),
+                      "video_url": f"/video/jobs/{job['id']}/fichier?cle={jeton_video(job['id'])}"})
+    return clips
+
+
+@app.get("/video-h3/clips")
+def video_h3_clips(authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return {"clips": _clips_h3(), "clips_max": video_h3.MONTAGE_CLIPS_MAX}
+
+
+@app.post("/video-h3/scenario/ordonner")
+async def video_h3_scenario_ordonner(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le chat du Studio range les clips cochés selon le scénario ; rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    scenario = str(corps.get("scenario") or "").strip()
+    if not scenario:
+        raise HTTPException(400, "Écrivez d'abord le scénario.")
+    if len(scenario) > video_h3.SCENARIO_MAX:
+        raise HTTPException(400, "Scénario trop long (2 000 caractères au plus).")
+    try:
+        choisis = video_h3.verifier_ordre(corps.get("clips"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    invites = {c["id"]: c["invite"] for c in _clips_h3() if c["id"] in choisis}
+    if len(invites) != len(choisis):
+        raise HTTPException(404, "Un des clips n'est plus sur ce Studio.")
+    reponse = await _chat_du_studio(video_h3.consigne_ordre(scenario, invites), "le rangement des clips")
+    try:
+        return {"ordre": video_h3.lire_ordre(reponse, invites)}
+    except ValueError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/video-h3/montage")
+async def video_h3_montage(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Recolle les clips dans l'ordre donné, son compris, sans rien couper : chacun
+    a été tourné à part. Le film devient un travail de plus, jouable et prolongeable."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    try:
+        ordre = video_h3.verifier_ordre(corps.get("clips"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    scenario = str(corps.get("scenario") or "").strip()[:video_h3.SCENARIO_MAX]
+    chemins = [_video_h3_octets(jid) for jid in ordre]
+    avec = {c["id"] for c in _clips_h3()}
+    if any(jid not in avec for jid in ordre) or not all(chemins):
+        raise HTTPException(404, "Un des clips n'est plus sur ce Studio.")
+    try:
+        film = await asyncio.to_thread(_recoller_tous, [c.read_bytes() for c in chemins])
+    except montage.MontageImpossible as exc:
+        raise HTTPException(503, str(exc)) from exc
+    jid = uuid.uuid4().hex
+    write_job(jid, {"id": jid, "provider": "local", "title": "Free AI Studio montage H3",
+                    "gpu": False, "internet": False, "status": "queued", "created_at": time.time(),
+                    "artifacts": []})
+    chemin = JOBS / jid / "video.mp4"   # provisoire : l'artefact en est une copie
+    chemin.write_bytes(film)
+    try:
+        secondes = round(montage.images(chemin) / video_h3.IMAGES_PAR_SECONDE, 2)
+        art = add_artifact(jid, chemin, "montage")
+    finally:
+        chemin.unlink(missing_ok=True)
+    write_job(jid, {
+        "id": jid, "provider": "local", "title": "Free AI Studio montage H3", "gpu": False,
+        "internet": False, "status": "succeeded", "created_at": time.time(), "finished_at": time.time(),
+        "artifacts": [art],
+        "video": {"moteur": "MiniMax H3 (montage)", "mode": "montage", "mode_titre": "Montage de clips",
+                  "invite": scenario, "clips": ordre, "plans": len(ordre), "secondes": secondes},
+        "titre": (scenario[:60] or "Montage H3"),
+    })
+    return read_job(jid)
+
+
+def _recoller_tous(videos: list) -> bytes:
+    film = videos[0]
+    for suite in videos[1:]:
+        film = montage.recoller_son(film, suite, 0)
+    return film
+
+
+# --- Scénario tourné plan par plan (PLAN 18.9) : pour les scénarios neufs --------
+
+_SCENARIOS_VIVANTS: set = set()   # les fils en cours ; un Studio redémarré les a perdus
+
+
+@app.post("/video-h3/scenario/decouper")
+async def video_h3_scenario_decouper(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le chat du Studio découpe l'histoire en plans ; rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    scenario = str((await request.json()).get("scenario") or "").strip()
+    if not scenario:
+        raise HTTPException(400, "Écrivez d'abord le scénario.")
+    if len(scenario) > video_h3.SCENARIO_MAX:
+        raise HTTPException(400, "Scénario trop long (2 000 caractères au plus).")
+    reponse = await _chat_du_studio(video_h3.consigne_decoupage(scenario), "le découpage en plans")
+    try:
+        return {"plans": video_h3.lire_decoupage(reponse, scenario)}
+    except ValueError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/video-h3/scenario/tourner")
+async def video_h3_scenario_tourner(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Tous les plans sont contrôlés et traduits AVANT le premier sou ; puis un
+    fil les tourne dans l'ordre. Un plan en échec arrête le scénario."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    corps = await request.json()
+    commun = {k: corps.get(k) for k in ("fiche", "langue", "musique", "longueur", "graine")}
+    try:
+        plans = video_h3.verifier_plans(corps.get("plans"))
+        if not commun["fiche"]:
+            raise ValueError("Choisissez le personnage du scénario (une fiche de casting).")
+        a_tourner = []
+        for p in plans:
+            payload = dict(commun, image_paroles=p["image_paroles"], ambiance=p["ambiance"],
+                           coupe_s=0, images=[])
+            if p["enchainement"] == "coupe":
+                payload["mode"] = "references"
+                video_h3.preparer(payload)
+            else:
+                # La suite part de la dernière image, sans fiche ; ses cases sont
+                # contrôlées ici, son image n'existera qu'au tournage.
+                payload.update(mode="premiere", fiche=None)
+                video_h3.preparer(dict(payload, mode="texte"))
+            a_tourner.append({"enchainement": p["enchainement"], "payload": payload})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    _h3_peut_louer()
+    for p in a_tourner:
+        p["traduit"] = video_h3.a_traduire(p["payload"])
+        if p["traduit"]:
+            try:
+                p["payload"] = video_h3.lire_traduction(
+                    await _chat_du_studio(video_h3.consigne_traduction(p["payload"])), p["payload"])
+            except ValueError as exc:
+                raise HTTPException(502, str(exc)) from exc
+    sid = uuid.uuid4().hex
+    sc = video_h3.scenario_ecrire({
+        "id": sid, "cree_le": time.time(), "etat": "en cours", "erreur": "",
+        "plans": plans, "travaux": [], "film": None, "arret_demande": False,
+        "fiche": commun["fiche"],
+    })
+    _SCENARIOS_VIVANTS.add(sid)
+    threading.Thread(target=run_scenario_h3, args=(sid, a_tourner), daemon=True).start()
+    return sc
+
+
+def run_scenario_h3(sid: str, a_tourner: list):
+    """Chaque plan attend le précédent ; chacun est recollé au film déjà tourné."""
+    precedent = None
+    try:
+        for i, p in enumerate(a_tourner):
+            if video_h3.scenario_lire(sid).get("arret_demande"):
+                video_h3.scenario_noter(sid, etat="arrêté")
+                return
+            try:
+                if p["enchainement"] == "suite":
+                    chemin = _video_h3_octets(precedent)
+                    if not chemin:
+                        raise ValueError("la vidéo du plan précédent est introuvable.")
+                    derniere = base64.b64encode(montage.derniere_image(chemin.read_bytes())).decode()
+                    plan = video_h3.preparer_prolonger(p["payload"], read_job(precedent), derniere)
+                    retirer = 1 if plan["resume_public"]["voie"] == "image" else 0
+                else:
+                    plan, retirer = video_h3.preparer(p["payload"]), 0
+                plan["resume_public"].update({"plans": i + 1, "scenario": sid,
+                                              "traduit_en_anglais": p.get("traduit", False)})
+                jid, args = _travail_h3(plan, precedent, retirer)
+            except HTTPException as exc:
+                video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc.detail}")
+                return
+            except (ValueError, montage.MontageImpossible) as exc:
+                video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc}")
+                return
+            video_h3.scenario_noter(sid, travaux=video_h3.scenario_lire(sid)["travaux"] + [jid])
+            run_video_h3(*args)
+            job = read_job(jid)
+            if job.get("status") != "succeeded":
+                video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : "
+                                        + (job.get("error") or "échec, voir son journal."))
+                return
+            precedent = jid
+        video_h3.scenario_noter(sid, etat="réussi", film=precedent)
+    finally:
+        _SCENARIOS_VIVANTS.discard(sid)
+
+
+@app.get("/video-h3/scenario/{sid}")
+def video_h3_scenario(sid: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        sc = video_h3.scenario_lire(sid)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if sc["etat"] == "en cours" and sid not in _SCENARIOS_VIVANTS:
+        sc["etat"] = "interrompu"
+        sc["erreur"] = "Le Studio a redémarré pendant le tournage : relancez le scénario."
+    sc["statuts"] = []
+    for jid in sc["travaux"]:
+        try:
+            j = read_job(jid)
+            sc["statuts"].append({"id": jid, "status": j.get("status"), "etape": j.get("etape", "")})
+        except HTTPException:
+            sc["statuts"].append({"id": jid, "status": "introuvable", "etape": ""})
+    if sc.get("film"):
+        sc["video_url"] = f"/video/jobs/{sc['film']}/fichier?cle={jeton_video(sc['film'])}"
+    return sc
+
+
+@app.post("/video-h3/scenario/{sid}/arreter")
+def video_h3_scenario_arreter(sid: str, authorization: Optional[str] = Header(default=None)):
+    """Aucun plan de plus ; le plan en cours est arrêté comme par son propre bouton."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        sc = video_h3.scenario_noter(sid, arret_demande=True)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    en_cours = [j for j in sc["travaux"] if read_job(j).get("status") in ("queued", "running")]
+    return {"arret_demande": True,
+            "plan_en_cours": arreter_job(en_cours[-1], authorization) if en_cours else None}
 
 
 # --- Fiches de casting (PLAN 18.9) : un personnage et ses images, gardés ici ---

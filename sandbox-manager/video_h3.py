@@ -435,6 +435,151 @@ def lire_traduction(reponse: str, payload: dict) -> dict:
     return dict(payload, **{k: d.get(k, "") for k in CASES_TRADUITES})
 
 
+# --- Le scénario, monté après coup (PLAN 18.9) --------------------------------------
+# Demande du propriétaire, 28/09 : « les clips générés devraient pouvoir se coller
+# les uns aux autres suivant le scénario initial », puis « pas besoin de rejouer
+# les clips de base, reconstruit le scénario a posteriori ». Rien n'est tourné ici :
+# le Studio recolle, son compris, des clips H3 déjà réussis, dans l'ordre choisi.
+# Le chat du Studio peut proposer cet ordre à partir du scénario ; gratuit.
+
+SCENARIO_MAX = 2000
+MONTAGE_CLIPS_MAX = 12
+
+
+def verifier_ordre(ids) -> list:
+    """Des numéros de clips, sans doublon, de 2 à MONTAGE_CLIPS_MAX."""
+    if not isinstance(ids, list) or not all(isinstance(i, str) and re.fullmatch(r"[0-9a-f]{32}", i)
+                                            for i in ids):
+        raise ValueError("Liste de clips illisible.")
+    if len(set(ids)) != len(ids):
+        raise ValueError("Un même clip apparaît deux fois.")
+    if not 2 <= len(ids) <= MONTAGE_CLIPS_MAX:
+        raise ValueError(f"Choisissez de 2 à {MONTAGE_CLIPS_MAX} clips.")
+    return ids
+
+
+def consigne_ordre(scenario: str, clips: dict) -> str:
+    """`clips` : numéro -> invite du clip. Le chat rend les numéros dans l'ordre du récit."""
+    return ("Here is a film script, then video clips already made, each with the prompt that made it. "
+            "Choose the clips that tell the script and put them in the order of the story. Leave out "
+            "clips that do not belong. Answer with a JSON array of clip ids only.\n\nScript:\n"
+            + scenario + "\n\nClips:\n" + json.dumps(clips, ensure_ascii=False))
+
+
+def lire_ordre(reponse: str, permis) -> list:
+    """L'ordre du chat, contrôlé : seulement des clips proposés, chacun une fois."""
+    t = str(reponse or "")
+    debut, fin = t.find("["), t.rfind("]")
+    try:
+        ids = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        ids = None
+    try:
+        ids = verifier_ordre(ids)
+    except ValueError as exc:
+        raise ValueError("L'ordre proposé par le chat n'a pas pu être lu (" + str(exc) + ") : "
+                         "réessayez, ou rangez les clips vous-même.") from exc
+    if any(i not in permis for i in ids):
+        raise ValueError("Le chat a proposé un clip qui n'est pas dans la liste : réessayez.")
+    return ids
+
+
+# --- Le scénario tourné plan par plan (PLAN 18.9) -----------------------------------
+# Pour les scénarios neufs (« la partie tourner est à conserver pour les futurs
+# scénarios », 28/09) : le chat du Studio découpe l'histoire en plans, le
+# propriétaire les relit, puis le Studio les tourne l'un après l'autre et recolle
+# chacun au film déjà tourné.
+
+SCENARIO_PLANS_MAX = PLANS_MAX
+ENCHAINEMENTS = {
+    "coupe": "Nouveau plan (la fiche garde le personnage)",
+    "suite": "Suite directe (repart de la dernière image du plan précédent)",
+}
+DOSSIER_SCENARIOS = budget_modal.CONFIG_DIR / "h3-scenarios"
+
+
+def consigne_decoupage(scenario: str) -> str:
+    # Une action et une réplique courte par plan : l'essai du 27/09 (clip 2) a
+    # montré qu'un plan chargé rend un son incompréhensible.
+    return ("Split this short film script into at most %d shots of about 5 seconds each. "
+            "Each shot shows ONE simple action and has at most ONE short line of dialogue. "
+            "Write in the language of the script. Dialogue must be copied EXACTLY from the script, "
+            "between « »; never invent dialogue. For each shot give \"image_paroles\" (what we see, "
+            "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
+            "\"coupe\" for a new camera shot or place, \"suite\" when it continues the previous shot "
+            "without a cut. The first shot is \"coupe\". Answer with the JSON array only.\n\n%s"
+            % (SCENARIO_PLANS_MAX, scenario))
+
+
+def verifier_plans(plans) -> list:
+    """Les plans relus par le propriétaire : de 1 à SCENARIO_PLANS_MAX, le premier
+    en « coupe » (il n'a pas de plan avant lui)."""
+    if not isinstance(plans, list) or not plans:
+        raise ValueError("Le scénario n'a aucun plan.")
+    if len(plans) > SCENARIO_PLANS_MAX:
+        raise ValueError(f"{SCENARIO_PLANS_MAX} plans au plus par scénario.")
+    propres = []
+    for i, p in enumerate(plans):
+        if not isinstance(p, dict) or not all(isinstance(p.get(k, ""), str)
+                                              for k in ("image_paroles", "ambiance", "enchainement")):
+            raise ValueError(f"Plan {i + 1} illisible.")
+        if not p.get("image_paroles", "").strip():
+            raise ValueError(f"Plan {i + 1} : décrivez ce qu'on voit.")
+        enchainement = p.get("enchainement") or "coupe"
+        if enchainement not in ENCHAINEMENTS:
+            raise ValueError(f"Plan {i + 1} : enchaînement inconnu.")
+        propres.append({"image_paroles": p["image_paroles"].strip(), "ambiance": p.get("ambiance", "").strip(),
+                        "enchainement": "coupe" if i == 0 else enchainement})
+    return propres
+
+
+def lire_decoupage(reponse: str, scenario: str) -> list:
+    """Le découpage du chat, contrôlé : aucune réplique qui ne soit dans le scénario."""
+    t = str(reponse or "")
+    debut, fin = t.find("["), t.rfind("]")
+    try:
+        plans = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        plans = None
+    try:
+        plans = verifier_plans(plans)
+    except ValueError as exc:
+        raise ValueError("Le découpage du chat n'a pas pu être lu (" + str(exc) + ") : réessayez.") from exc
+    permises = set(repliques(scenario))
+    for i, p in enumerate(plans):
+        if any(r not in permises for r in repliques(p["image_paroles"] + " " + p["ambiance"])):
+            raise ValueError(f"Le découpage a inventé ou changé une réplique (plan {i + 1}) : réessayez.")
+    return plans
+
+
+def _chemin_scenario(sid) -> Path:
+    if not isinstance(sid, str) or not re.fullmatch(r"[0-9a-f]{32}", sid):
+        raise ValueError("Scénario inconnu.")
+    return DOSSIER_SCENARIOS / (sid + ".json")
+
+
+def scenario_lire(sid) -> dict:
+    chemin = _chemin_scenario(sid)
+    if not chemin.is_file():
+        raise ValueError("Scénario inconnu.")
+    return json.loads(chemin.read_text(encoding="utf-8"))
+
+
+def scenario_ecrire(sc: dict) -> dict:
+    chemin = _chemin_scenario(sc["id"])
+    chemin.parent.mkdir(parents=True, exist_ok=True)
+    provisoire = chemin.with_suffix(".tmp")
+    provisoire.write_text(json.dumps(sc, ensure_ascii=False), encoding="utf-8")
+    provisoire.replace(chemin)
+    return sc
+
+
+def scenario_noter(sid: str, **champs) -> dict:
+    sc = scenario_lire(sid)
+    sc.update(champs)
+    return scenario_ecrire(sc)
+
+
 # --- Le graphe ComfyUI -------------------------------------------------------------
 
 def _n(classe: str, entrees: dict) -> dict:
@@ -1003,6 +1148,10 @@ PAGE_HTML = r"""<!doctype html>
   .grille { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: 8px; }
   .grille img { display: block; width: 100%; border: 1px solid #ccc; margin: 4px 0; }
   .grille button { margin: 4px 4px 0 0; padding: 4px 10px; }
+  .clip { display: flex; gap: 10px; align-items: flex-start; border-top: 1px solid #eee; padding: 8px 0; }
+  .clip video { width: 200px; flex: none; margin: 0; }
+  .clip button { margin: 0 4px 0 0; padding: 2px 10px; }
+  .clip .note { flex: 1; overflow-wrap: anywhere; }
   pre { white-space: pre-wrap; font-size: .8rem; max-height: 240px; overflow: auto; background: #f3f3f3; padding: 8px; }
 </style>
 </head>
@@ -1125,6 +1274,37 @@ PAGE_HTML = r"""<!doctype html>
     </div>
   </div>
   <pre id="journal" hidden></pre>
+</div>
+
+<div class="bloc" id="montage_bloc">
+  <b>Monter un scénario</b>
+  <span class="note">avec les clips déjà faits : rien n'est tourné de nouveau, rien n'est loué.</span>
+  <label for="scenario">Scénario (sert à ranger les clips dans l'ordre du récit)</label>
+  <textarea id="scenario" maxlength="2000"></textarea>
+  <p class="note">Cochez les clips du film. Rangez-les avec ↑ ↓, ou demandez l'ordre au chat du Studio
+  d'après le scénario ; puis assemblez. Les clips sont recollés bout à bout, son compris, sans rien couper.</p>
+  <div id="clips_liste"></div>
+  <button id="scenario_ordonner">Ranger selon le scénario</button>
+  <button id="montage_lancer">Assembler le film</button>
+  <p class="note" id="montage_etat"></p>
+  <div id="montage_resultat" hidden>
+    <video id="montage_lecteur" controls playsinline></video>
+    <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
+  </div>
+  <div class="image_bord">
+    <b>Ou tourner un scénario neuf</b>
+    <span class="note">le même scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
+    (chaque plan se paie comme un clip : durée, graine, langue et musique sont celles du formulaire du clip).</span>
+    <label for="scenario_fiche">Personnage (fiche de casting)</label>
+    <select id="scenario_fiche"><option value="">Choisissez une fiche…</option></select>
+    <button id="scenario_decouper">Découper en plans</button>
+    <div id="plans_liste"></div>
+    <button id="plan_ajouter" hidden>Ajouter un plan</button>
+    <p class="note" id="scenario_prix"></p>
+    <button id="scenario_tourner" hidden>Tourner le scénario</button>
+    <button id="scenario_arreter" hidden>Arrêter le tournage</button>
+    <p class="note" id="scenario_etat"></p>
+  </div>
 </div>
 
 <script>
@@ -1292,6 +1472,7 @@ function suivre(jid){
         + (v.plans ? " Chaîne de " + v.plans + " plans, " + fr(v.secondes, 1) + " s en tout." : "");
       majProlonger(jid, v, r);
       rafraichir();
+      chargerClips();
       return;
     }
     if (j.etape === "recollage"){
@@ -1467,6 +1648,16 @@ async function chargerFiches(choisir){
   }
   choix.value = garde;
   ref.value = FICHES.some(f => f.id === gardeRef) ? gardeRef : "";
+  const sf = document.getElementById("scenario_fiche");
+  const gardeSf = sf.value;
+  sf.innerHTML = '<option value="">Choisissez une fiche…</option>';
+  for (const f of FICHES.filter(x => x.angles.length)){
+    const o = document.createElement("option");
+    o.value = f.id;
+    o.textContent = f.nom;
+    sf.appendChild(o);
+  }
+  sf.value = FICHES.some(f => f.id === gardeSf) ? gardeSf : "";
   await montrerFiche();
 }
 
@@ -1550,13 +1741,220 @@ document.getElementById("fiche_supprimer").addEventListener("click", async () =>
   await chargerFiches("");
 });
 
+// Monter un scénario (PLAN 18.9) : des clips déjà faits, recollés dans l'ordre choisi.
+let CLIPS = [], COCHES = new Set();
+
+function quandLocal(ts){
+  // L'heure du navigateur : le conteneur du Studio tourne en UTC.
+  if (!ts) return "";
+  const d = new Date(ts * 1000), p = n => String(n).padStart(2, "0");
+  return dateFr(d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate())
+    + " " + p(d.getHours()) + ":" + p(d.getMinutes()));
+}
+
+function montageEtat(t, refus){
+  const e = document.getElementById("montage_etat");
+  e.className = refus ? "refus" : "note";
+  e.textContent = t || "";
+}
+
+async function chargerClips(){
+  const r = await fetch("/video-h3/clips", {headers: H});
+  if (!r.ok) return;
+  const d = await r.json();
+  const avant = CLIPS.map(c => c.id);
+  // L'ordre déjà rangé est gardé ; les clips neufs arrivent en tête.
+  CLIPS = d.clips.filter(c => !avant.includes(c.id))
+    .concat(avant.map(id => d.clips.find(c => c.id === id)).filter(Boolean));
+  COCHES = new Set([...COCHES].filter(id => CLIPS.some(c => c.id === id)));
+  dessinerClips();
+}
+
+function dessinerClips(){
+  const liste = document.getElementById("clips_liste");
+  liste.innerHTML = "";
+  if (!CLIPS.length){ liste.textContent = "Aucun clip H3 réussi sur ce Studio pour l'instant."; return; }
+  CLIPS.forEach((c, i) => {
+    const ligne = document.createElement("div");
+    ligne.className = "clip";
+    const coche = document.createElement("input");
+    coche.type = "checkbox";
+    coche.checked = COCHES.has(c.id);
+    coche.addEventListener("change", () => { coche.checked ? COCHES.add(c.id) : COCHES.delete(c.id); });
+    const vid = document.createElement("video");
+    vid.src = c.video_url;
+    vid.controls = true;
+    vid.preload = "metadata";
+    const texte = document.createElement("div");
+    texte.className = "note";
+    texte.textContent = quandLocal(c.cree_a) + " ; "
+      + fr(c.secondes, 1) + " s" + (c.fiche ? " ; " + c.fiche : "") + " — " + c.invite.slice(0, 220);
+    const outils = document.createElement("div");
+    outils.appendChild(coche);
+    outils.appendChild(bouton("↑", () => deplacer(i, -1)));
+    outils.appendChild(bouton("↓", () => deplacer(i, 1)));
+    ligne.append(outils, vid, texte);
+    liste.appendChild(ligne);
+  });
+}
+
+function deplacer(i, pas){
+  const j = i + pas;
+  if (j < 0 || j >= CLIPS.length) return;
+  [CLIPS[i], CLIPS[j]] = [CLIPS[j], CLIPS[i]];
+  dessinerClips();
+}
+
+function cochesDansLOrdre(){
+  return CLIPS.filter(c => COCHES.has(c.id)).map(c => c.id);
+}
+
+document.getElementById("scenario_ordonner").addEventListener("click", async () => {
+  montageEtat("Le chat du Studio range les clips…");
+  const r = await fetch("/video-h3/scenario/ordonner", {method: "POST", headers: H, body: JSON.stringify({
+    scenario: document.getElementById("scenario").value, clips: cochesDansLOrdre()})});
+  const d = await r.json();
+  if (!r.ok){ montageEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  const laisses = cochesDansLOrdre().filter(id => !d.ordre.includes(id)).length;
+  CLIPS = d.ordre.map(id => CLIPS.find(c => c.id === id)).concat(CLIPS.filter(c => !d.ordre.includes(c.id)));
+  COCHES = new Set(d.ordre);
+  dessinerClips();
+  montageEtat("Rangés selon le scénario" + (laisses ? " ; " + laisses + " clip(s) laissé(s) de côté par le chat." : ".")
+    + " Vérifiez, puis assemblez.");
+});
+
+document.getElementById("montage_lancer").addEventListener("click", async () => {
+  montageEtat("Assemblage…");
+  document.getElementById("montage_resultat").hidden = true;
+  const r = await fetch("/video-h3/montage", {method: "POST", headers: H, body: JSON.stringify({
+    scenario: document.getElementById("scenario").value, clips: cochesDansLOrdre()})});
+  const d = await r.json();
+  if (!r.ok){ montageEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  const j = await (await fetch("/video/jobs/" + d.id, {headers: H})).json();
+  montageEtat("Film assemblé : " + d.video.plans + " clips, " + fr(d.video.secondes, 1) + " s.");
+  document.getElementById("montage_resultat").hidden = false;
+  document.getElementById("montage_lecteur").src = j.video_url;
+  document.getElementById("montage_telecharger").href = j.video_url + "&telecharger=1&nom=film-h3";
+  chargerClips();
+});
+
+// Tourner un scénario neuf : le chat découpe, le propriétaire relit, le Studio tourne.
+let PLANS = [], ENCHAINEMENTS = __ENCHAINEMENTS__, SCENARIO = null;
+
+function scenarioEtat(t, refus){
+  const e = document.getElementById("scenario_etat");
+  e.className = refus ? "refus" : "note";
+  e.textContent = t || "";
+}
+
+function dessinerPlans(){
+  const liste = document.getElementById("plans_liste");
+  liste.innerHTML = "";
+  PLANS.forEach((p, i) => {
+    const bloc = document.createElement("div");
+    bloc.className = "image_bord";
+    const t = document.createElement("b");
+    t.textContent = "Plan " + (i + 1);
+    const vue = document.createElement("textarea");
+    vue.value = p.image_paroles;
+    vue.addEventListener("input", () => { p.image_paroles = vue.value; });
+    const son = document.createElement("input");
+    son.type = "text";
+    son.value = p.ambiance;
+    son.placeholder = "Ambiance sonore";
+    son.addEventListener("input", () => { p.ambiance = son.value; });
+    const ench = document.createElement("select");
+    for (const [cle, titre] of Object.entries(ENCHAINEMENTS)){
+      const o = document.createElement("option");
+      o.value = cle;
+      o.textContent = titre;
+      ench.appendChild(o);
+    }
+    ench.value = p.enchainement;
+    ench.disabled = i === 0;
+    ench.addEventListener("change", () => { p.enchainement = ench.value; });
+    bloc.append(t, vue, son, ench, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
+    liste.appendChild(bloc);
+  });
+  const max = ETAT ? ETAT.prolonger.plans_max : 4;
+  document.getElementById("plan_ajouter").hidden = !PLANS.length || PLANS.length >= max;
+  document.getElementById("scenario_tourner").hidden = !PLANS.length;
+  const opt = document.getElementById("longueur").selectedOptions[0];
+  const prix = opt && ETAT ? (ETAT.durees.find(x => String(x.images) === opt.value) || {}).prix_estime_usd : null;
+  document.getElementById("scenario_prix").textContent = PLANS.length
+    ? PLANS.length + " plan(s) à tourner" + (prix ? ", environ " + fr(prix * PLANS.length, 2) + " $ en tout." : ".")
+    : "";
+}
+
+document.getElementById("scenario_decouper").addEventListener("click", async () => {
+  scenarioEtat("Le chat du Studio découpe le scénario…");
+  const r = await fetch("/video-h3/scenario/decouper", {method: "POST", headers: H,
+    body: JSON.stringify({scenario: document.getElementById("scenario").value})});
+  const d = await r.json();
+  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  PLANS = d.plans;
+  dessinerPlans();
+  scenarioEtat("Relisez et corrigez les plans, puis tournez.");
+});
+
+document.getElementById("plan_ajouter").addEventListener("click", () => {
+  PLANS.push({image_paroles: "", ambiance: "", enchainement: "suite"});
+  dessinerPlans();
+});
+
+function suivreScenario(sid){
+  fetch("/video-h3/scenario/" + sid, {headers: H}).then(r => r.json()).then(sc => {
+    const faits = (sc.statuts || []).filter(s => s.status === "succeeded").length;
+    document.getElementById("scenario_arreter").hidden = sc.etat !== "en cours";
+    if (sc.etat === "réussi"){
+      scenarioEtat("Scénario tourné : " + sc.plans.length + " plans recollés.");
+      document.getElementById("montage_resultat").hidden = false;
+      document.getElementById("montage_lecteur").src = sc.video_url;
+      document.getElementById("montage_telecharger").href = sc.video_url + "&telecharger=1&nom=film-h3";
+      chargerClips();
+      rafraichir();
+      return;
+    }
+    if (sc.etat !== "en cours"){
+      scenarioEtat("Scénario " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
+      chargerClips();
+      rafraichir();
+      return;
+    }
+    scenarioEtat("Tournage : plan " + Math.min(faits + 1, sc.plans.length) + " sur " + sc.plans.length + "…");
+    setTimeout(() => suivreScenario(sid), 10000);
+  });
+}
+
+document.getElementById("scenario_tourner").addEventListener("click", async () => {
+  const graine = document.getElementById("graine").value;
+  scenarioEtat("Contrôle et traduction des plans…");
+  const r = await fetch("/video-h3/scenario/tourner", {method: "POST", headers: H, body: JSON.stringify({
+    plans: PLANS, fiche: document.getElementById("scenario_fiche").value || null,
+    langue: document.getElementById("langue").value,
+    musique: document.getElementById("musique").value,
+    longueur: Number(document.getElementById("longueur").value),
+    graine: graine === "" ? null : Number(graine)})});
+  const d = await r.json();
+  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  SCENARIO = d.id;
+  suivreScenario(d.id);
+});
+
+document.getElementById("scenario_arreter").addEventListener("click", async () => {
+  if (!SCENARIO) return;
+  await fetch("/video-h3/scenario/" + SCENARIO + "/arreter", {method: "POST", headers: H, body: "{}"});
+  scenarioEtat("Arrêt demandé : aucun plan de plus.");
+});
+
 brancherBord("premiere");
 brancherBord("derniere");
 document.getElementById("image_paroles").addEventListener("input", majInvitesImages);
-rafraichir().then(majInvitesImages).then(() => chargerFiches(""));
+rafraichir().then(majInvitesImages).then(() => chargerFiches("")).then(chargerClips);
 </script>
 </body>
 </html>
 """.replace("__LANGUES__", "".join(
     f'<option value="{code}"{" selected" if code == LANGUE_PAROLES else ""}>{nom}</option>'
-    for code, nom in LANGUES_PAROLES.items()))
+    for code, nom in LANGUES_PAROLES.items())).replace("__ENCHAINEMENTS__", json.dumps(ENCHAINEMENTS,
+                                                                                      ensure_ascii=False))
