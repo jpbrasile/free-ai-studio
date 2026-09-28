@@ -1607,7 +1607,8 @@ def test_4_l_image_de_depart_se_garde_sur_le_studio(h3, monkeypatch):
     r = c.post("/video-h3/depart", headers=CLE, json={"texte": "Plan moyen", "fiches": [lea], "decor": did})
     assert r.status_code == 200, r.text
     assert vu["json"]["image_reference"][2] == "data:image/png;base64," + PNG
-    assert "L'image jointe 3 est le plan précédent : garder le même lieu" in vu["json"]["prompt"]
+    assert "L'image jointe 3 est le plan précédent : garder le même univers" in vu["json"]["prompt"]
+    assert "l'endroit précis, le cadrage et la place des personnes suivent la description" in vu["json"]["prompt"]
     assert "précédent" not in r.json()["texte"]
     r = c.post("/video-h3/depart", headers=CLE, json={"texte": "x", "decor": "f" * 24})
     assert r.status_code == 400 and "introuvable" in r.json()["detail"]

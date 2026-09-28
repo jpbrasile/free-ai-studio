@@ -341,8 +341,11 @@ def texte_image(texte: str, ameliorations=()) -> str:
 PHOTOS_IMAGE_MAX = 14   # le routeur (Gemini 3.1 Flash Lite Image) n'en prend pas plus
 # L'image de départ place les figurants que H3 fera bouger : loin, jamais au bord
 # ni à moitié cachés, car le modèle vidéo les perd (plan 2 du 28/09, CADRAGE).
-FIGURANTS_IMAGE = ("Les autres personnes (passants, clients) restent à distance, au second plan, jamais au premier "
-                   "plan, au bord de l'image ou à moitié cachées ; peu d'objets au premier plan.")
+# « S'il y a » : dit « les autres personnes », la consigne en a ajouté derrière un
+# portrait sur fond uni (essai du 28/09).
+FIGURANTS_IMAGE = ("S'il y a d'autres personnes que celles décrites (passants, clients), elles restent à distance, "
+                   "au second plan, jamais au premier plan, au bord de l'image ou à moitié cachées ; "
+                   "peu d'objets au premier plan.")
 
 
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
@@ -366,15 +369,19 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
         presentation.append("%s est la personne des images jointes %d à %d" % (fiche["nom"], n + 1, n + len(urls))
                             if len(urls) > 1 else "%s est la personne de l'image jointe %d" % (fiche["nom"], n + 1))
         photos += urls
-    tete = ("; ".join(presentation) + " (mêmes visage, coiffure et tenue). "
-            "Chaque personne apparaît une seule fois. ") if photos else ""
+    # Les photos d'une fiche peuvent montrer plusieurs tenues : celle de la
+    # description l'emporte (essai du 28/09 : photos en sweat et en débardeur).
+    tete = ("; ".join(presentation) + " (mêmes visage et coiffure ; même tenue, sauf si la description en "
+            "donne une). Chaque personne apparaît une seule fois. ") if photos else ""
     if decor:
         octets = depart_lire(decor)
         genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
         photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
-        tete += ("L'image jointe %d est le plan précédent : garder le même lieu, le même décor, les mêmes "
-                 "enseignes et la même lumière ; le cadrage et la place des personnes suivent la description. "
-                 % len(photos))
+        # Le 28/09, « garder le même lieu » a recopié la pelouse du plan 1 dans
+        # un plan 2 voulu devant une résidence : le lieu précis suit la description.
+        tete += ("L'image jointe %d est le plan précédent : garder le même univers, la même lumière et le même "
+                 "style ; l'endroit précis, le cadrage et la place des personnes suivent la description, et si elle "
+                 "dit le même endroit, garder aussi le même décor et les mêmes enseignes. " % len(photos))
     if len(photos) > PHOTOS_IMAGE_MAX:
         raise ValueError("Quatorze photos au plus sur une image (fiches et plan précédent) : retirez un personnage.")
     demande = {"prompt": tete + description + " " + FIGURANTS_IMAGE, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
