@@ -449,6 +449,19 @@ def sujets_des_fiches(nombres: list) -> str:
     return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
 
 
+def premier_plan(texte: str) -> str:
+    """Qui est au premier plan, compté par le Studio sur les <Subject N> du plan
+    (règle 1, 28/09/2026) : quatre fois ce jour-là, H3 a ajouté un personnage ou
+    en a montré un deux fois. Rien si le plan ne nomme personne."""
+    presents = sorted({int(n) for n in re.findall(r"<Subject (\d+)>", str(texte or ""))})
+    if not presents:
+        return ""
+    noms = [f"<Subject {n}>" for n in presents]
+    qui = noms[0] if len(noms) == 1 else ", ".join(noms[:-1]) + " and " + noms[-1]
+    return ("In the foreground: only %s, each of them one single person shown once; anyone else stays in the "
+            "background." % qui)
+
+
 # --- La traduction en anglais, en mode « Références » -----------------------------
 # Essai du 28/09 (PLAN 18.9) : en mode « Références », le texte français hors
 # guillemets est DIT par le personnage (la scène, l'ambiance), la réplique se
@@ -557,17 +570,26 @@ ENCHAINEMENTS = {
 DOSSIER_SCENARIOS = budget_modal.CONFIG_DIR / "h3-scenarios"
 
 
+# Règle 2 (28/09/2026) : les doublons de personnages sont venus de plans où
+# l'un d'eux n'était qu'à moitié dans le cadre (gros plan à deux, plan par-dessus l'épaule).
+CADRAGE = ("Framing: a close-up shows one character only; when two or more characters are in a shot, choose a "
+           "medium or wide shot that shows each of them entirely, and never describe a character as only partly "
+           "in frame or seen from behind. If a shot's framing breaks this rule, change the framing, never the "
+           # Le 28/09, pour tenir la règle, une correction a retiré un personnage et son action.
+           "characters in it or what they do. ")
+
+
 def consigne_decoupage(scenario: str) -> str:
     # Une action et une réplique courte par plan : l'essai du 27/09 (clip 2) a
     # montré qu'un plan chargé rend un son incompréhensible.
     return ("Split this short film script into at most %d shots of about 5 seconds each. "
-            "Each shot shows ONE simple action and has at most ONE short line of dialogue. "
+            "Each shot shows ONE simple action and has at most ONE short line of dialogue. %s"
             "Write in the language of the script. Dialogue must be copied EXACTLY from the script, "
             "between « »; never invent dialogue. For each shot give \"image_paroles\" (what we see, "
             "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
             "\"coupe\" for a new camera shot or place, \"suite\" when it continues the previous shot "
             "without a cut. The first shot is \"coupe\". Answer with the JSON array only.\n\n%s"
-            % (SCENARIO_PLANS_MAX, scenario))
+            % (SCENARIO_PLANS_MAX, CADRAGE, scenario))
 
 
 def verifier_plans(plans) -> list:
@@ -699,7 +721,7 @@ def consigne_correction(plans: list, retours: str) -> str:
             # personnage avant qu'on l'y invite : on change la façon de montrer, pas l'histoire.
             "Change how the scene is shown (framing, clothing, who else is in the frame), never what happens: "
             "keep every action of the characters, and their order, as in the shots given. If a problem cannot be "
-            "fixed without changing what happens, leave that shot unchanged: it will be shot again. "
+            "fixed without changing what happens, leave that shot unchanged: it will be shot again. " + CADRAGE +
             "Answer with the JSON array only.\n\n"
             "Shots: %s\n\nFeedback: %s" % (json.dumps(plans, ensure_ascii=False), retours))
 
@@ -926,7 +948,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
     if fiches:
-        texte = sujets_des_fiches(nombres) + " detailed_description: " + texte
+        devant = premier_plan(image_paroles)
+        texte = sujets_des_fiches(nombres) + " detailed_description: " + (devant + " " if devant else "") + texte
     if len(texte) > 4000:
         raise ValueError("Invite trop longue (4 000 caractères au plus).")
     try:
