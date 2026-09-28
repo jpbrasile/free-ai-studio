@@ -1079,6 +1079,26 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                - Défaut restant : pendant les 3 premières secondes, James est coupé au cou par le bord du cadre, contrairement à la règle de cadrage.
                - Le juge du Studio a été lancé deux fois ; la 2e donne le plan 2 `ok` et le plan 3 `ok`.
                - Sur le plan 1, repris tel quel, le juge signale « James en double » à 4,0 s. L'image à 4,0 s montre un seul James ; l'homme au loin porte un manteau sombre. C'est **probablement une fausse alerte**, jugée à l'œil et non mesurée.
+
+               **Netteté des visages, essais du 28/09 hors Studio.** Le propriétaire a demandé : « les visages sont flous, post-traitement possible ? ». Les essais passent SeedVR2 3B fp16 (ByteDance, Apache 2.0), avec les nœuds natifs de ComfyUI v0.37.0, en ×2 (1664 × 960) et correction de couleur « lab ». Les scripts sont dans le brouillon de session ; rien n'est dans le code.
+               - **Modal, A100 40 Go :**
+                 - plan 2 : 123 s de calcul, 203 s en tout, dont 45 s de téléchargement des poids ;
+                 - plan 1 : 126 s de calcul, 150 s en tout, pointe à 28,6 Go ;
+                 - les poids restent sur le disque Modal `free-ai-studio-seedvr2`.
+               - **Modal, L4 24 Go, plan 2 :** 429 s de calcul, 459 s en tout, pointe à 17,2 Go. Le résultat est presque identique à celui de l'A100 (SSIM 0,97).
+               - **Coûts, selon la table `budget_modal`** (carte, mémoire et processeur ; non relevés sur la facture) : environ 0,22 $ et 0,16 $ sur l'A100, environ 0,27 $ sur la L4. **L'A100 revient moins cher que la L4**, parce qu'elle est 3,5 fois plus rapide.
+               - **Kaggle, T4, plan 2 :**
+                 - 1er essai en échec : `torchsde` manquait, retiré par mon filtre des exigences ;
+                 - le téléchargement des poids a pris 985 s (environ 7 Mo/s) ;
+                 - le 2e essai est en cours au moment d'écrire.
+               - **Qualité, vue sur planche à 0,5 s et en zooms :**
+                 - plan 2 : visages, cheveux et tissus nets, pas de scintillement, couleurs fidèles ; le flou de bougé reste ;
+                 - plan 1 (plan large) : visages lisibles, mais SeedVR2 invente un peu, par exemple des lunettes sur une cliente du fond.
+               - **Pistes de l'état de l'art (recherche web du 28/09) :**
+                 - tourner H3 en 768p : le LoRA turbo porte ce nom, non vérifié ;
+                 - traiter chaque visage à part avant de le recoller ;
+                 - restaurer d'après une photo de référence (RGFVR, IP-FVR) ;
+                 - essayer SeedVR2 7B.
        - **V3, chantiers à part**, chacun avec son accord et son budget : Blender → Fun ControlNet, corrections après coup (RVC/OpenVoice, LatentSync, GFPGAN), LoRA ai-toolkit, mesures ArcFace et empreinte de voix. Aucun n'a été essayé par personne avec H3.
        - Construit sur `main` (Studio administrateur, 20) ; n'entre dans `stable` qu'après validation par le propriétaire à l'écran. Chaque clip d'essai est relevé dans la facture Modal ; arrêt avant 2 $. **Relevé réel du 28/09** (`modal billing report --for "this month" --show-resources`) : environ 2,5 $ pour H3, soit les applications `h3-essai-*` (1,17 $) plus le Studio les 27 et 28/09 (0,68 $ et environ 0,70 $, qui comptent aussi le CPU et la mémoire partagés avec la page Chanson). Le budget de 2 $ est donc dépassé ; le propriétaire a accordé **5 $ de plus** le 28/09 (« ok pour extrat budjet 5$ »).
 19. **À faire — les chantiers trop gros pour être corrigés en passant (règle du propriétaire, 26/09/2026 : « les petites corrections peuvent être faites quand elles sont rencontrées ; les plus grosses à mettre dans la todo du plan »).**
