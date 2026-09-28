@@ -222,7 +222,7 @@ def _motif_nom(nom: str) -> str:
     return r"(?<!\w)" + "".join(morceaux) + r"(?!\w)"
 
 
-def attribuer_repliques(texte: str, sujets: list) -> str:
+def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False) -> str:
     """Plusieurs personnages (guide de MiniMax, ref-en.txt, 5.4) : `sujets` est la
     liste des (nom, langue) dans l'ordre des <Subject N>.
 
@@ -235,7 +235,10 @@ def attribuer_repliques(texte: str, sujets: list) -> str:
     Quand le locuteur est nommé dans la phrase, (Sx) suit ce nom et la réplique
     n'a que sa balise `<d>` ; le 28/09, « James demande <Subject 2> (S1) … »
     faisait parler James à lui-même, et le juge a vu une personne de trop.
-    Sinon, la réplique porte `<Subject N> (Sx) <d>[langue] …</d>`."""
+    Sinon, la réplique porte `<Subject N> (Sx) <d>[langue] …</d>`.
+
+    `garder_noms` : le clip part d'une image de départ, sans photos de fiche à
+    désigner ; les noms restent des noms, seuls les (Sx) et les langues sont posés."""
     texte = str(texte or "")
     repliques_vues = list(_PAROLES.finditer(texte))
     dans_une_replique = [(m.start(), m.end()) for m in repliques_vues]
@@ -266,11 +269,12 @@ def attribuer_repliques(texte: str, sujets: list) -> str:
         pos = fin
         if genre == "nom":
             marque = f" (S{locuteurs[valeur]})" if nom_du_locuteur.get(debut) == valeur else ""
-            sortie.append(f"<Subject {valeur + 1}>{marque}")
+            sortie.append((texte[debut:fin] if garder_noms else f"<Subject {valeur + 1}>") + marque)
         else:
             k = parleur[debut]
             dite = next(g for g in valeur.groups() if g)
-            qui = "" if debut in dit_par_son_nom else f"<Subject {k + 1}> (S{locuteurs[k]}) "
+            qui = "" if debut in dit_par_son_nom else "%s (S%d) " % (
+                sujets[k][0] if garder_noms else f"<Subject {k + 1}>", locuteurs[k])
             sortie.append(f"{qui}<d>[{sujets[k][1]}] {dite}</d>")
     sortie.append(texte[pos:])
     return "".join(sortie)
@@ -329,6 +333,61 @@ def texte_image(texte: str, ameliorations=()) -> str:
     if len(t) > 2000:
         raise ValueError("Description d'image trop longue (2 000 caractères au plus).")
     return t
+
+
+# L'image du Studio avec les photos des fiches (demande du propriétaire, 28/09 :
+# « le portrait n'est pas suffisant ») : toutes les photos de chaque personnage,
+# dans l'ordre, et chacun présenté par son nom et ses numéros d'images.
+PHOTOS_IMAGE_MAX = 14   # le routeur (Gemini 3.1 Flash Lite Image) n'en prend pas plus
+
+
+def demande_image(texte: str, ameliorations=(), fiches=()) -> tuple:
+    """(demande au routeur, description de l'image). La description est ce que
+    l'image montre, sans la présentation des photos : c'est elle qui passe à H3."""
+    description = texte_image(texte, ameliorations)
+    if not isinstance(fiches, (list, tuple)) or len(set(map(str, fiches))) != len(fiches):
+        raise ValueError("Liste de fiches illisible.")
+    photos, presentation = [], []
+    for fid in fiches:
+        fiche = fiche_lire(fid)
+        urls = [fiche_image_data_url(fid, a) for a in ANGLES if a in fiche["images"]]
+        if not urls:
+            raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
+        n = len(photos)
+        presentation.append("%s est la personne des images jointes %d à %d" % (fiche["nom"], n + 1, n + len(urls))
+                            if len(urls) > 1 else "%s est la personne de l'image jointe %d" % (fiche["nom"], n + 1))
+        photos += urls
+    if len(photos) > PHOTOS_IMAGE_MAX:
+        raise ValueError("Quatorze photos de fiches au plus sur une image : retirez un personnage.")
+    demande = {"prompt": description, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
+    if photos:
+        demande["prompt"] = ("; ".join(presentation) + " (mêmes visage, coiffure et tenue). "
+                             "Chaque personne apparaît une seule fois. " + description)
+        demande["image_reference"] = photos
+    return demande, description
+
+
+# Les images de départ des plans d'un scénario : gardées sur le Studio, un plan
+# n'en porte que le numéro (le scénario reste un petit fichier).
+DOSSIER_DEPARTS = budget_modal.CONFIG_DIR / "h3-departs"
+_ID_DEPART = re.compile(r"[0-9a-f]{24}")
+
+
+def depart_poser(image: str) -> str:
+    octets = base64.b64decode(_image(image, "Image de départ"))
+    ext = next(e for debut, e in _EXTENSIONS.items() if octets.startswith(debut))
+    did = hashlib.sha256(octets).hexdigest()[:24]
+    DOSSIER_DEPARTS.mkdir(parents=True, exist_ok=True)
+    (DOSSIER_DEPARTS / (did + ext)).write_bytes(octets)
+    return did
+
+
+def depart_lire(did) -> bytes:
+    if not _ID_DEPART.fullmatch(str(did or "")):
+        raise ValueError("Image de départ inconnue.")
+    for chemin in DOSSIER_DEPARTS.glob(str(did) + ".*"):
+        return chemin.read_bytes()
+    raise ValueError("Image de départ introuvable sur ce Studio : recréez-la.")
 
 
 # --- Les fiches de casting (PLAN 18.9, V2) ----------------------------------------
@@ -646,8 +705,17 @@ def verifier_plans(plans) -> list:
         enchainement = p.get("enchainement") or "coupe"
         if enchainement not in ENCHAINEMENTS:
             raise ValueError(f"Plan {i + 1} : enchaînement inconnu.")
-        propres.append({"image_paroles": p["image_paroles"].strip(), "ambiance": p.get("ambiance", "").strip(),
-                        "enchainement": "coupe" if i == 0 else enchainement})
+        propre = {"image_paroles": p["image_paroles"].strip(), "ambiance": p.get("ambiance", "").strip(),
+                  "enchainement": "coupe" if i == 0 else enchainement}
+        # Un plan « coupe » peut partir d'une image de départ validée (28/09).
+        if p.get("image_depart") and propre["enchainement"] == "coupe":
+            if not _ID_DEPART.fullmatch(str(p["image_depart"])):
+                raise ValueError(f"Plan {i + 1} : image de départ inconnue.")
+            description = " ".join(str(p.get("description_depart") or "").split())
+            if len(description) > 2000:
+                raise ValueError(f"Plan {i + 1} : description de l'image trop longue.")
+            propre.update(image_depart=str(p["image_depart"]), description_depart=description)
+        propres.append(propre)
     return propres
 
 
@@ -719,7 +787,8 @@ def consigne_jugement(noms: list, texte: str = "") -> str:
             "one every 0.5 s, read left to right then top to bottom; black cells after the end are empty. "
             # Neutre, sans questions qui cherchent la faute : le 28/09, la consigne
             # d'avant faisait trouver un défaut même au plan repris tel quel.
-            "Say whether the characters stay consistent with their reference pictures throughout the shot." + voulu
+            + ("Say whether the characters stay consistent with their reference pictures throughout the shot."
+             if noms else "Say whether the characters stay consistent throughout the shot.") + voulu
             + " "
             "Many shots have no problem: then answer ok with an empty list. Report only what you clearly see, "
             "each problem once, at the first frame where it appears, in one short sentence. "
@@ -746,6 +815,35 @@ def lire_jugement(reponse: str, debut_s: float, nombre: int) -> dict:
         if 1 <= i <= nombre and quoi:   # une image qui n'existe pas n'a rien montré
             defauts.append({"t_s": round(debut_s + (i - 1) * 0.5, 1), "quoi": quoi})
     return {"verdict": d["verdict"], "defauts": defauts}
+
+
+def _mots(texte: str) -> list:
+    t = unicodedata.normalize("NFD", str(texte or "").lower())
+    return re.findall(r"[a-z0-9]+", "".join(c for c in t if unicodedata.category(c) != "Mn"))
+
+
+PAROLES_SEUIL = 0.7   # part des mots attendus qu'il faut entendre
+
+
+def comparer_paroles(texte: str, entendu: str) -> dict:
+    """Les répliques du texte (entre guillemets) comparées à ce que le Whisper du
+    Studio a entendu. Le 28/09, un clip dont l'invite était juste (réplique
+    balisée [English]) disait du français inventé : le juge, qui ne voit que les
+    images, ne pouvait pas l'entendre. `ok` vaut None quand rien n'est attendu."""
+    attendues = repliques(texte)
+    mots, entendus = _mots(" ".join(attendues)), set(_mots(entendu))
+    part = (sum(m in entendus for m in mots) / len(mots)) if mots else None
+    return {"attendu": attendues, "entendu": " ".join(str(entendu or "").split()),
+            "part": None if part is None else round(part, 2),
+            "ok": None if part is None else part >= PAROLES_SEUIL}
+
+
+def defaut_de_paroles(paroles: dict, t_s: float):
+    """Un défaut du jugement quand la réplique manque ; None sinon."""
+    if paroles.get("ok") is not False:
+        return None
+    return {"t_s": round(t_s, 1), "quoi": "Réplique attendue « %s » ; le clip dit : « %s »."
+            % (" / ".join(paroles["attendu"]), paroles["entendu"] or "rien")}
 
 
 def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
@@ -814,7 +912,9 @@ def lire_correction(reponse: str, plans: list) -> list:
     for i, (n, p) in enumerate(zip(nouveaux, plans)):
         if repliques(n["image_paroles"] + " " + n["ambiance"]) != repliques(p["image_paroles"] + " " + p["ambiance"]):
             raise ValueError(f"La correction a déplacé ou retiré une réplique (plan {i + 1}) : réessayez.")
-    return [dict(n, enchainement=p["enchainement"]) for n, p in zip(nouveaux, plans)]
+    return [dict(n, enchainement=p["enchainement"],
+                 **{k: p[k] for k in ("image_depart", "description_depart") if k in p})
+            for n, p in zip(nouveaux, plans)]
 
 
 def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:
@@ -823,8 +923,8 @@ def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:
     (elle part de sa dernière image)."""
     repris = []
     for i, p in enumerate(nouveaux):
-        pareil = i < len(anciens) and all(p[k] == anciens[i].get(k) for k in ("image_paroles", "ambiance",
-                                                                              "enchainement"))
+        pareil = i < len(anciens) and all(p.get(k) == anciens[i].get(k) for k in (
+            "image_paroles", "ambiance", "enchainement", "image_depart", "description_depart"))
         if pareil and (i + 1) not in retourner and (p["enchainement"] == "coupe" or (i - 1) in repris):
             repris.append(i)
     return repris
@@ -970,29 +1070,34 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     langues = payload.get("langues") or {}
     if not isinstance(langues, dict) or any(v not in LANGUES_PAROLES for v in langues.values()):
         raise ValueError("Langue d'un personnage inconnue.")
+    # En « Première image », les fiches ne donnent que les voix : qui dit quelle
+    # réplique, dans quelle langue (plan « coupe » parti de son image, 28/09).
+    refs = mode == "references"
     fiches, de_la_fiche, nombres = [], [], []
     for fid in ids:
-        if mode != "references":
-            raise ValueError("Une fiche de casting se joue en mode « Références ».")
+        if mode not in ("references", "premiere", "premiere_derniere"):
+            raise ValueError("Une fiche de casting se joue en mode « Références » ou « Première image ».")
         fiche = fiche_lire(fid)
+        fiches.append(fiche)
+        if not refs:
+            continue
         images_fiche = fiche_images(fiche["id"])
         if not images_fiche:
             raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
-        fiches.append(fiche)
         de_la_fiche += images_fiche
         nombres.append(len(images_fiche))
     image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
     if fiches:
         sujets = [(f["nom"], langues.get(f["id"], langue)) for f in fiches]
-        image_paroles = attribuer_repliques(image_paroles, sujets)
-        ambiance = attribuer_repliques(ambiance, sujets)
+        image_paroles = attribuer_repliques(image_paroles, sujets, garder_noms=not refs)
+        ambiance = attribuer_repliques(ambiance, sujets, garder_noms=not refs)
     texte = invite(image_paroles, ambiance, payload.get("musique", ""), langue, "(S1)",
                    # Rubriques du mode références, dans l'ordre de la consigne de MiniMax
                    # (skills/h3-prompt-writing/SKILL.md) ; `summary` n'est pas écrit.
-                   "overall_soundscape: " if fiches else "Sound: ")
+                   "overall_soundscape: " if refs and fiches else "Sound: ")
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
-    if fiches:
+    if refs and fiches:
         texte = sujets_des_fiches(nombres) + " detailed_description: " + texte
     # Ce que montrent la première et la dernière image, quand le Studio les a
     # créées : leur description (améliorations comprises) passe aussi à H3, pour
@@ -1506,6 +1611,8 @@ PAGE_HTML = r"""<!doctype html>
     <div class="creer">
       <label for="invite_premiere">Description de l'image (préremplie d'après la case 1, modifiable)</label>
       <textarea id="invite_premiere"></textarea>
+      <span class="note">Personnages sur l'image (toutes les photos de leur fiche sont jointes) :</span>
+      <div id="personnages_premiere"></div>
       <button id="creer_premiere">Créer l'image</button>
     </div>
     <div class="televerser" hidden><input type="file" id="fichier_premiere" accept="image/png,image/jpeg,image/webp"></div>
@@ -1525,6 +1632,8 @@ PAGE_HTML = r"""<!doctype html>
     <div class="creer">
       <label for="invite_derniere">Description de l'image (préremplie d'après la case 1, modifiable)</label>
       <textarea id="invite_derniere"></textarea>
+      <span class="note">Personnages sur l'image (toutes les photos de leur fiche sont jointes) :</span>
+      <div id="personnages_derniere"></div>
       <button id="creer_derniere">Créer l'image</button>
     </div>
     <div class="televerser" hidden><input type="file" id="fichier_derniere" accept="image/png,image/jpeg,image/webp"></div>
@@ -1569,6 +1678,8 @@ PAGE_HTML = r"""<!doctype html>
     <video id="lecteur" controls playsinline></video>
     <p><a id="telecharger" href="#">Enregistrer le clip</a></p>
     <p class="note" id="fiche"></p>
+    <button id="juger_clip">Faire juger ce clip (gratuit : images et répliques)</button>
+    <p class="note" id="jugement_clip"></p>
     <div id="prolonger_bloc" hidden>
       <p class="note" id="prolonger_note"></p>
       <button id="prolonger">Prolonger ce clip</button>
@@ -1774,13 +1885,17 @@ function brancherBord(nom){
 const AMELIORATIONS = {premiere: [], derniere: []};
 const DESCRIPTION = {premiere: "", derniere: ""};
 
+function fichesCochees(nom){
+  return Array.from(document.querySelectorAll("#personnages_" + nom + " input:checked")).map(c => c.value);
+}
+
 async function creerImage(nom){
   const etat = document.getElementById("etat_" + nom);
   etat.className = "note";
   etat.textContent = "Création de l'image (quelques secondes)…";
   const r = await fetch("/video-h3/image", {method: "POST", headers: H,
     body: JSON.stringify({texte: document.getElementById("invite_" + nom).value,
-                          ameliorations: AMELIORATIONS[nom]})});
+                          ameliorations: AMELIORATIONS[nom], fiches: fichesCochees(nom)})});
   const d = await r.json();
   if (!r.ok){ etat.className = "refus"; etat.textContent = d.detail || "Refusé."; return false; }
   await poserImage(nom, d.image);
@@ -1877,6 +1992,8 @@ function suivre(jid){
         + " s de calcul, " + fr(r.total_s, 0) + " s de location."
         + (v.plans ? " Chaîne de " + v.plans + " plans, " + fr(v.secondes, 1) + " s en tout." : "");
       majProlonger(jid, v, r);
+      if (CLIP_COURANT !== jid) document.getElementById("jugement_clip").textContent = "";
+      CLIP_COURANT = jid;
       rafraichir();
       chargerClips();
       return;
@@ -2001,6 +2118,7 @@ document.getElementById("lancer").addEventListener("click", async () => {
     mode: m, images: images,
     description_premiere: m === "references" ? "" : DESCRIPTION.premiere,
     description_derniere: m === "premiere_derniere" ? DESCRIPTION.derniere : "",
+    fiches_image: m === "references" ? [] : fichesCochees("premiere"),
     image_paroles: document.getElementById("image_paroles").value,
     ambiance: document.getElementById("ambiance").value,
     musique: document.getElementById("musique").value,
@@ -2025,6 +2143,31 @@ function ficheEtat(t, refus){
   e.className = refus ? "refus" : "note";
   e.textContent = t || "";
 }
+
+// Le juge du Studio sur le clip seul : sa planche, et l'écoute de ses répliques (28/09).
+let CLIP_COURANT = null;
+
+function texteParoles(p){
+  if (!p) return "";
+  if (p.erreur) return "Écoute : " + p.erreur;
+  if (p.ok === null) return "Écoute : aucune réplique attendue.";
+  return "Écoute : « " + (p.entendu || "rien") + " »" + (p.ok ? ", réplique bien dite." : ", réplique manquante.");
+}
+
+document.getElementById("juger_clip").addEventListener("click", async () => {
+  const zone = document.getElementById("jugement_clip");
+  if (!CLIP_COURANT) return;
+  zone.className = "note";
+  zone.style.whiteSpace = "pre-line";
+  zone.textContent = "Le juge du Studio regarde et écoute le clip (gratuit)…";
+  const r = await fetch("/video-h3/jobs/" + CLIP_COURANT + "/juger", {method: "POST", headers: H, body: "{}"});
+  const d = await r.json();
+  if (!r.ok){ zone.className = "refus"; zone.textContent = typeof d.detail === "string" ? d.detail : "Refusé."; return; }
+  zone.className = d.verdict === "ok" ? "note" : "refus";
+  zone.textContent = ["Verdict du juge : " + (d.verdict === "ok" ? "ok." : "défaut.")]
+    .concat(d.defauts.map(x => "À " + fr(x.t_s, 1) + " s : " + x.quoi), [texteParoles(d.paroles)])
+    .filter(Boolean).join("\n");
+});
 
 function bouton(texte, action){
   const b = document.createElement("button");
@@ -2058,6 +2201,21 @@ async function chargerFiches(choisir){
   }
   choix.value = garde;
   ref.value = FICHES.some(f => f.id === gardeRef) ? gardeRef : "";
+  for (const nom of ["premiere", "derniere"]){
+    const zone = document.getElementById("personnages_" + nom);
+    const coches = new Set(fichesCochees(nom));
+    zone.innerHTML = "";
+    for (const f of FICHES){
+      if (!f.angles.length) continue;
+      const c = document.createElement("input");
+      c.type = "checkbox";
+      c.value = f.id;
+      c.checked = coches.has(f.id);
+      const l = document.createElement("label");
+      l.append(c, " " + f.nom + " ");
+      zone.appendChild(l);
+    }
+  }
   for (const [idSel, vide] of [["scenario_fiche", "Choisissez une fiche…"], ["scenario_fiche2", "Aucun"]]){
     const sf = document.getElementById(idSel);
     const gardeSf = sf.value;
@@ -2324,6 +2482,86 @@ function scenarioEtat(t, refus){
   e.textContent = t || "";
 }
 
+// L'image de départ d'un plan « coupe » (demande du propriétaire, 28/09) : créée
+// avec les photos des fiches du scénario, améliorée jusqu'à la valider ; le plan
+// part alors de cette image, et sa description passe à H3.
+const DEPART_APERCU = new WeakMap(), DEPART_AMELIORATIONS = new WeakMap();
+
+function fichesDuScenario(){
+  return [document.getElementById("scenario_fiche").value, document.getElementById("scenario_fiche2").value]
+    .filter((f, i, t) => f && t.indexOf(f) === i);
+}
+
+function blocDepart(p){
+  const zone = document.createElement("div");
+  const note = document.createElement("p");
+  note.className = "note";
+  note.textContent = p.image_depart
+    ? "Image de départ : le plan part de cette image (mode « Première image »). Vérifiez-la avant de tourner."
+    : "Sans image de départ, le plan part des photos des fiches (mode « Références »).";
+  const texte = document.createElement("textarea");
+  texte.value = p.texte_depart || (PREFIXE.premiere + sansParoles(p.image_paroles));
+  texte.addEventListener("input", () => { p.texte_depart = texte.value; });
+  const apercu = document.createElement("img");
+  apercu.className = "apercu";
+  apercu.hidden = true;
+  if (DEPART_APERCU.get(p)){ apercu.src = DEPART_APERCU.get(p); apercu.hidden = false; }
+  else if (p.image_depart){
+    fetch("/video-h3/depart/" + p.image_depart, {headers: H}).then(r => r.ok ? r.json() : null).then(d => {
+      if (d){ DEPART_APERCU.set(p, d.image); apercu.src = d.image; apercu.hidden = false; }
+    });
+  }
+  const etat = document.createElement("p");
+  etat.className = "note";
+  if (!DEPART_AMELIORATIONS.has(p)) DEPART_AMELIORATIONS.set(p, []);
+  const ameliorations = DEPART_AMELIORATIONS.get(p);
+  async function creer(){
+    etat.className = "note";
+    etat.textContent = "Création de l'image (quelques secondes)…";
+    const r = await fetch("/video-h3/depart", {method: "POST", headers: H, body: JSON.stringify({
+      texte: texte.value, ameliorations: ameliorations, fiches: fichesDuScenario()})});
+    const d = await r.json();
+    if (!r.ok){ etat.className = "refus"; etat.textContent = typeof d.detail === "string" ? d.detail : "Refusé."; return false; }
+    p.image_depart = d.id;
+    p.description_depart = d.texte;
+    p.texte_depart = texte.value;
+    DEPART_APERCU.set(p, d.image);
+    return true;
+  }
+  const libelle = document.createElement("label");
+  libelle.textContent = "Description de l'image de départ (les personnages du scénario y sont joints)";
+  zone.append(note, libelle, texte,
+              bouton(p.image_depart ? "Refaire l'image" : "Créer l'image de départ",
+                     async () => { if (await creer()) dessinerPlans(); }),
+              apercu, etat);
+  if (p.image_depart){
+    const voeu = document.createElement("input");
+    voeu.type = "text";
+    voeu.maxLength = 300;
+    const titre = document.createElement("label");
+    titre.textContent = "Améliorer cette image : dites ce qui doit changer";
+    const liste = document.createElement("ul");
+    ameliorations.forEach((a, k) => {
+      const li = document.createElement("li");
+      li.append(a + " ", bouton("retirer", () => { ameliorations.splice(k, 1); dessinerPlans(); }));
+      liste.appendChild(li);
+    });
+    zone.append(titre, voeu, bouton("Refaire l'image avec cette amélioration", async () => {
+      const v = voeu.value.trim();
+      if (!v) return;
+      ameliorations.push(v);
+      if (await creer()) dessinerPlans();
+      else ameliorations.pop();
+    }), liste, bouton("Retirer l'image de départ", () => {
+      delete p.image_depart;
+      delete p.description_depart;
+      DEPART_APERCU.delete(p);
+      dessinerPlans();
+    }));
+  }
+  return zone;
+}
+
 function dessinerPlans(){
   const liste = document.getElementById("plans_liste");
   liste.innerHTML = "";
@@ -2356,7 +2594,11 @@ function dessinerPlans(){
     }
     ench.value = p.enchainement;
     ench.disabled = i === 0;
-    ench.addEventListener("change", () => { p.enchainement = ench.value; });
+    ench.addEventListener("change", () => {
+      p.enchainement = ench.value;
+      if (p.enchainement !== "coupe"){ delete p.image_depart; delete p.description_depart; }
+      dessinerPlans();
+    });
     bloc.append(t, vue, son, ecart, ench, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
     if (SCENARIO_TOURNE){
       const coche = document.createElement("input");
@@ -2367,6 +2609,7 @@ function dessinerPlans(){
       etiquette.append(coche, " Retourner ce plan même inchangé");
       bloc.appendChild(etiquette);
     }
+    if (p.enchainement === "coupe") bloc.appendChild(blocDepart(p));
     liste.appendChild(bloc);
   });
   const max = ETAT ? ETAT.prolonger.plans_max : 4;
@@ -2425,7 +2668,8 @@ function dessinerJugement(jugement){
     if (!j.defauts.length){
       const p = document.createElement("p");
       p.className = "note";
-      p.textContent = "Plan " + j.plan + " : " + (j.verdict === "ok" ? "rien à signaler." : "défaut signalé sans image précise.");
+      p.textContent = "Plan " + j.plan + " : " + (j.verdict === "ok" ? "rien à signaler." : "défaut signalé sans image précise.")
+        + (j.paroles ? " " + texteParoles(j.paroles) : "");
       zone.appendChild(p);
       continue;
     }

@@ -18,6 +18,7 @@ RACINE = Path(__file__).resolve().parents[1]
 CLE = {"Authorization": "Bearer cle-sandbox-de-test"}
 PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\0" * 64).decode()
 PDF = base64.b64encode(b"%PDF-1.4 copie").decode()
+CADRE = b"\x89PNG\r\n\x1a\n" + b"\1" * 64   # une image recadrée, pour les tests
 
 
 @pytest.fixture
@@ -28,6 +29,7 @@ def h3(sandbox, monkeypatch, tmp_path):
     monkeypatch.setattr(v, "FICHE_POIDS", tmp_path / "h3-poids.json")
     monkeypatch.setattr(v, "DOSSIER_FICHES", tmp_path / "h3-fiches")
     monkeypatch.setattr(v, "DOSSIER_SCENARIOS", tmp_path / "h3-scenarios")
+    monkeypatch.setattr(v, "DOSSIER_DEPARTS", tmp_path / "h3-departs")
     monkeypatch.setattr(sandbox.budget_modal, "FICHIER", tmp_path / "modal-budget.json")
     monkeypatch.setattr(sandbox.budget_modal, "_releve_reel", lambda: None)
     monkeypatch.setenv("VIDEO_H3_ACTIF", "true")
@@ -372,7 +374,7 @@ class _FauxRouteur:
     async def __aexit__(self, *a):
         return False
 
-    async def post(self, url, headers=None, json=None):
+    async def post(self, url, headers=None, json=None, files=None, data=None):
         self.vu.update(url=url, headers=headers, json=json)
         statut, corps = self.statut, self.corps
 
@@ -394,6 +396,23 @@ class _FauxRouteurSuite(_FauxRouteur):
     async def post(self, url, headers=None, json=None):
         self.vus.append(json)
         self.corps = {"choices": [{"message": {"content": self.contenus.pop(0)}}]}
+        return await super().post(url, headers, json)
+
+
+class _FauxRouteurOreille(_FauxRouteur):
+    """Le chat rend `chat` ; le Whisper du routeur rend `entendus` l'un après l'autre."""
+
+    def __init__(self, chat, entendus, ecoutes, vu):
+        super().__init__(200, None, vu)
+        self.chat, self.entendus, self.ecoutes = chat, list(entendus), ecoutes
+
+    async def post(self, url, headers=None, json=None, files=None, data=None):
+        if url.endswith("/v1/audio/transcriptions"):
+            self.ecoutes.append((files["file"][1], data))
+            self.corps = {"text": self.entendus.pop(0)}
+        else:
+            self.vu.setdefault("chats", []).append(json)
+            self.corps = {"choices": [{"message": {"content": self.chat}}]}
         return await super().post(url, headers, json)
 
 
@@ -1230,9 +1249,12 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     planches = []
     monkeypatch.setattr(h3.montage, "planche", lambda film, debut, duree: planches.append(
         (film, round(debut, 3), round(duree, 3))) or (b"\x89PNG", 11))
-    vu = {}
-    rep = {"choices": [{"message": {"content": '{"verdict": "defaut", "defauts": [{"image": 9, "quoi": "veste grise"}]}'}}]}
-    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, rep, vu))
+    vu, ecoutes = {}, []
+    rep = '{"verdict": "defaut", "defauts": [{"image": 9, "quoi": "veste grise"}]}'
+    # Chaque plan est aussi écouté, découpé à ses images.
+    monkeypatch.setattr(h3.montage, "extraire", lambda film, de, a: b"PLAN %d-%d" % (de, a))
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille(
+        rep, ["Excuse me, is this seat taken?", "Oui, bien sûr.", "Thank you!"], ecoutes, vu))
     monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: pytest.fail("rien ne se loue"))
     # Le juge lit l'histoire du scénario INITIAL, pas le texte corrigé depuis.
     initiaux = [dict(p) for p in plans]
@@ -1242,16 +1264,23 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     assert r.status_code == 200, r.text
     # Le film SANS musique, découpé plan par plan aux images notées.
     assert planches == [(b"FILM", 0.0, 5.167), (b"FILM", 5.167, 5.167), (b"FILM", 10.333, 5.167)]
-    contenu = vu["json"]["messages"][0]["content"]
-    assert vu["json"]["model"] == "free-ai-max"   # « Auto » manquait les défauts le 28/09
+    contenu = vu["chats"][-1]["messages"][0]["content"]
+    assert vu["chats"][-1]["model"] == "free-ai-max"   # « Auto » manquait les défauts le 28/09
     assert contenu[0]["type"] == "text" and "Image 1 shows Léa" in contenu[0]["text"]
     # Le texte du plan jugé (le dernier) part aussi : la vidéo doit faire ce qu'il dit, dans l'ordre.
     assert "Léa et James marchent, puis James dit « Thank you. »" in contenu[0]["text"]
     assert plans[2]["image_paroles"] not in contenu[0]["text"]
     assert "not in this order" in contenu[0]["text"]
     assert [c["type"] for c in contenu[1:]] == ["image_url"] * 3   # deux fiches, puis la planche
-    assert r.json()["jugement"][1] == {"plan": 2, "verdict": "defaut",
-                                       "defauts": [{"t_s": 9.2, "quoi": "veste grise"}]}
+    assert [e[0] for e in ecoutes] == [b"PLAN 0-124", b"PLAN 124-248", b"PLAN 248-372"]
+    assert ecoutes[0][1] == {"model": "whisper-1"}
+    j = r.json()["jugement"]
+    assert j[0]["paroles"]["ok"] is True and j[0]["defauts"] == [{"t_s": 4.0, "quoi": "veste grise"}]
+    # « Non. » n'a pas été dit : un défaut de plus, au début du plan.
+    assert j[1]["paroles"] == {"attendu": ["Non."], "entendu": "Oui, bien sûr.", "part": 0.0, "ok": False}
+    assert j[1]["defauts"] == [{"t_s": 9.2, "quoi": "veste grise"},
+                               {"t_s": 5.2, "quoi": "Réplique attendue « Non. » ; le clip dit : « Oui, bien sûr. »."}]
+    assert j[2]["paroles"]["ok"] is True and len(j[2]["defauts"]) == 1
     assert client(h3).post("/video-h3/scenario/" + "9" * 32 + "/juger", headers=CLE).status_code == 404
 
 
@@ -1441,3 +1470,186 @@ def test_le_routeur_envoie_l_image_de_depart_a_google(routeur, monkeypatch):
     vu.clear()
     c.post("/v1/images/generations", headers=entete, json={"prompt": "sans départ"})
     assert vu["json"]["contents"][0]["parts"] == [{"text": "sans départ"}]
+
+
+# --- Demande du propriétaire, 28/09 : « fais le 1 et le 2, 3 et 4 » -----------------
+
+def _deux_fiches(v):
+    lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_image(lea, "pied", PNG)
+    v.fiche_poser_image(james, "face", PNG)
+    return lea, james
+
+
+def test_1_l_image_du_studio_joint_toutes_les_photos_des_personnages(h3, monkeypatch):
+    v = h3.video_h3
+    lea, james = _deux_fiches(v)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    vu = {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteur(200, {"data": [{"url": "data:image/png;base64," + PNG}]}, vu))
+    r = client(h3).post("/video-h3/image", headers=CLE, json={
+        "texte": "Un café bondé", "ameliorations": ["le nom du café lisible"], "fiches": [lea, james]})
+    assert r.status_code == 200, r.text
+    assert vu["json"]["prompt"].startswith("Léa est la personne des images jointes 1 à 2; James est la "
+                                           "personne de l'image jointe 3 (mêmes visage")
+    assert len(vu["json"]["image_reference"]) == 3
+    # La description rendue (celle qui passe à H3) ne présente pas les photos.
+    assert r.json()["texte"].startswith("Un café bondé") and "jointe" not in r.json()["texte"]
+    assert "le nom du café lisible" in r.json()["texte"]
+    sans_image = v.fiche_creer("Tom", "z")["id"]
+    for fiches, message in (([lea, lea], "illisible"), ([sans_image], "aucune image"), (["0" * 12], "inconnue")):
+        r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "x", "fiches": fiches})
+        assert r.status_code == 400 and message in r.json()["detail"]
+    monkeypatch.setattr(v, "PHOTOS_IMAGE_MAX", 2)
+    r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "x", "fiches": [lea, james]})
+    assert r.status_code == 400 and "au plus" in r.json()["detail"]
+
+
+def test_1_le_clip_garde_son_texte_et_les_personnages_de_son_image(h3, monkeypatch):
+    v = h3.video_h3
+    lea, james = _deux_fiches(v)
+    monkeypatch.setattr(h3, "_h3_peut_louer", lambda: None)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    lances = []
+    monkeypatch.setattr(h3, "_lancer_h3", lambda plan, *a, **k: lances.append(plan) or {"id": "x"})
+    monkeypatch.setattr(h3, "_garde_licence_h3", lambda: None)
+    r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(
+        mode="premiere", images=[PNG], image_paroles="Léa sourit", fiches_image=[james]))
+    assert r.status_code == 200, r.text
+    assert lances[0]["resume_public"]["texte_client"] == "Léa sourit"
+    assert lances[0]["resume_public"]["fiches_image"] == [{"id": james, "nom": "James"}]
+    r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(
+        mode="premiere", images=[PNG], fiches_image=["0" * 12]))
+    assert r.status_code == 400
+
+
+def test_2_le_juge_regarde_et_ecoute_un_clip_seul(h3, monkeypatch, tmp_path):
+    v = h3.video_h3
+    lea, james = _deux_fiches(v)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    film = tmp_path / "clip.mp4"
+    film.write_bytes(b"CLIP")
+    jid = "a" * 32
+    job = {"status": "succeeded", "video": {
+        "moteur": "MiniMax H3 (ComfyUI)", "secondes": 5.2, "texte_client": "James demande « Is this seat taken? »",
+        "fiches": [], "fiches_image": [{"id": james, "nom": "James"}]}}
+    ecrits = {}
+    monkeypatch.setattr(h3, "read_job", lambda j: json.loads(json.dumps(job)) if j == jid else None)
+    monkeypatch.setattr(h3, "write_job", lambda j, d: ecrits.update({j: d}))
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda j: film)
+    planches = []
+    monkeypatch.setattr(h3.montage, "planche", lambda f, debut, duree: planches.append((f, debut, duree))
+                        or (b"\x89PNG", 11))
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: pytest.fail("rien ne se loue"))
+    vu, ecoutes = {}, []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille(
+        '{"verdict": "ok", "defauts": []}', ["Excusez-moi, cette place est libre ?"], ecoutes, vu))
+    r = client(h3).post(f"/video-h3/jobs/{jid}/juger", headers=CLE)
+    assert r.status_code == 200, r.text
+    assert planches == [(b"CLIP", 0.0, 5.2)] and ecoutes[0][0] == b"CLIP"
+    contenu = vu["chats"][0]["messages"][0]["content"]
+    assert "Image 1 shows James" in contenu[0]["text"] and "Is this seat taken?" in contenu[0]["text"]
+    assert [c["type"] for c in contenu[1:]] == ["image_url"] * 2   # la fiche, puis la planche
+    # Les images sont justes, mais la réplique anglaise n'a pas été dite : défaut.
+    d = r.json()
+    assert d["verdict"] == "defaut" and d["paroles"]["ok"] is False
+    assert d["defauts"][0]["t_s"] == 0.0 and "Is this seat taken?" in d["defauts"][0]["quoi"]
+    assert ecrits[jid]["jugement"] == d
+    assert client(h3).post("/video-h3/jobs/" + "b" * 32 + "/juger", headers=CLE).status_code == 404
+    assert client(h3).post("/video-h3/jobs/pas-un-numero/juger", headers=CLE).status_code == 404
+
+
+def test_3_l_ecoute_compare_les_repliques_attendues():
+    import importlib
+    v = importlib.import_module("video_h3")
+    p = v.comparer_paroles("James demande « Is this seat taken? »", "Excuse me, is this seat seat taken?")
+    assert p == {"attendu": ["Is this seat taken?"], "entendu": "Excuse me, is this seat seat taken?",
+                 "part": 1.0, "ok": True}
+    assert v.defaut_de_paroles(p, 3.0) is None
+    # Accents et ponctuation ne comptent pas ; un mot sur deux ne suffit pas.
+    assert v.comparer_paroles("Léa dit « Déjà ? »", "deja")["ok"] is True
+    assert v.comparer_paroles("« Is this seat taken? »", "Is this")["ok"] is False
+    rien = v.comparer_paroles("Ils marchent", "de la musique")
+    assert rien["ok"] is None and v.defaut_de_paroles(rien, 0) is None
+    manque = v.comparer_paroles("« Non. »", "")
+    assert v.defaut_de_paroles(manque, 5.17) == {"t_s": 5.2, "quoi": "Réplique attendue « Non. » ; le clip dit : « rien »."}
+
+
+def test_4_l_image_de_depart_se_garde_sur_le_studio(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    lea, james = _deux_fiches(h3.video_h3)
+    c = client(h3)
+    r = c.post("/video-h3/depart", headers=CLE, json={"image": "data:image/png;base64," + PNG})
+    assert r.status_code == 200, r.text
+    did = r.json()["id"]
+    assert len(did) == 24 and r.json()["texte"] == ""
+    assert c.get("/video-h3/depart/" + did, headers=CLE).json() == {"image": "data:image/png;base64," + PNG}
+    assert h3.video_h3.depart_lire(did) == base64.b64decode(PNG)
+    vu = {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteur(200, {"data": [{"url": "data:image/png;base64," + PNG}]}, vu))
+    r = c.post("/video-h3/depart", headers=CLE, json={"texte": "Un café bondé", "fiches": [lea]})
+    # Même image rendue : même numéro ; la description revient sans la présentation des photos.
+    assert r.status_code == 200 and r.json()["id"] == did and r.json()["texte"].startswith("Un café bondé")
+    assert len(vu["json"]["image_reference"]) == 2
+    assert c.get("/video-h3/depart/" + "f" * 24, headers=CLE).status_code == 404
+    assert c.get("/video-h3/depart/nimporte", headers=CLE).status_code == 404
+    assert c.post("/video-h3/depart", headers=CLE, json={"image": "pas une image"}).status_code == 400
+
+
+def test_4_un_plan_coupe_garde_son_image_de_depart():
+    import importlib
+    v = importlib.import_module("video_h3")
+    did = "0123456789abcdef01234567"
+    plans = v.verifier_plans([
+        {"image_paroles": "Léa attend", "image_depart": did, "description_depart": "  Un café\n bondé "},
+        {"image_paroles": "Elle sourit", "enchainement": "suite", "image_depart": did}])
+    assert plans[0]["image_depart"] == did and plans[0]["description_depart"] == "Un café bondé"
+    assert "image_depart" not in plans[1]   # une suite part de la dernière image du plan d'avant
+    with pytest.raises(ValueError, match="image de départ inconnue"):
+        v.verifier_plans([{"image_paroles": "x", "image_depart": "../x"}])
+    with pytest.raises(ValueError, match="trop longue"):
+        v.verifier_plans([{"image_paroles": "x", "image_depart": did, "description_depart": "a" * 2001}])
+    # La correction garde l'image ; une image changée fait retourner le plan.
+    corriges = v.lire_correction(json.dumps([{"image_paroles": "Léa attend, debout", "ambiance": ""},
+                                             {"image_paroles": "Elle sourit", "ambiance": "",
+                                              "enchainement": "suite"}]), plans)
+    assert corriges[0]["image_depart"] == did
+    assert v.plans_a_reprendre(plans, plans) == [0, 1]
+    assert v.plans_a_reprendre(plans, [dict(plans[0], image_depart="f" * 24), plans[1]]) == []
+
+
+def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, monkeypatch):
+    v = h3.video_h3
+    lea, james = _deux_fiches(v)
+    did = v.depart_poser("data:image/png;base64," + PNG)
+    recadres = []
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: recadres.append((image, l, h)) or CADRE)
+    plans = v.verifier_plans([
+        {"image_paroles": "James demande « Is this seat taken? »", "image_depart": did,
+         "description_depart": "Un café bondé, une chaise vide"},
+        {"image_paroles": "Léa répond « Non. »"}])
+    corps = {"fiches": [lea, james], "langues": {james: "English"}, "langue": "French", "longueur": 124}
+    commun, musique, a_tourner = h3._scenario_prepare(corps, plans)
+    assert recadres == [(base64.b64decode(PNG), *v.DEFINITIONS[v.DEFINITION_PAR_DEFAUT])]
+    p0, p1 = a_tourner[0]["payload"], a_tourner[1]["payload"]
+    assert p0["mode"] == "premiere" and p0["images"] == [base64.b64encode(CADRE).decode()]
+    assert p0["description_premiere"] == "Un café bondé, une chaise vide"
+    assert p1["mode"] == "references"
+    invite = v.preparer(dict(p0, images=[PNG]))["resume_public"]["invite"]
+    # Sans photos de fiche, les noms restent des noms ; James parle anglais.
+    assert invite.startswith("First frame: Un café bondé, une chaise vide. ")
+    assert "<Subject" not in invite and "James (S1)" in invite and "[English]" in invite
+    assert "overall_soundscape" not in invite and "detailed_description" not in invite
+    with pytest.raises(ValueError, match="Première image"):
+        v.preparer(demande(fiches=[lea]))
+
+
+def test_la_page_propose_les_quatre_chantiers(h3):
+    html = client(h3).get("/video-h3").text
+    for morceau in ('id="personnages_premiere"', 'id="personnages_derniere"', "fiches: fichesCochees(nom)",
+                    "fiches_image:", 'id="juger_clip"', '"/video-h3/jobs/" + CLIP_COURANT + "/juger"',
+                    "function blocDepart(p)", '"/video-h3/depart"', "texteParoles(j.paroles)"):
+        assert morceau in html, morceau

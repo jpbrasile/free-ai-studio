@@ -53,6 +53,22 @@ def derniere_image(video: bytes) -> bytes:
         return sortie.read_bytes()
 
 
+def recadrer_image(image: bytes, largeur: int, hauteur: int) -> bytes:
+    """L'image à la taille du clip, en PNG : agrandie jusqu'à couvrir, puis coupée
+    au centre, sans déformer (comme la page le fait pour un clip seul). Sert à
+    l'image de départ d'un plan de scénario (28/09/2026)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        entree, sortie = Path(dossier, "image"), Path(dossier, "recadree.png")
+        entree.write_bytes(image)
+        _lancer(["-i", str(entree), "-vf",
+                 "scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d"
+                 % (largeur, hauteur, largeur, hauteur), "-frames:v", "1", str(sortie)],
+                "Le recadrage de l'image de départ")
+        if not sortie.is_file() or not sortie.stat().st_size:
+            raise MontageImpossible("L'image de départ n'a pas pu être recadrée.")
+        return sortie.read_bytes()
+
+
 def recoller(premiere: bytes, suite: bytes) -> bytes:
     """Les deux clips en un seul ; la premiere image de la suite est retiree (elle
     EST la derniere de la premiere)."""

@@ -4009,9 +4009,15 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     _garde_licence_h3()
     try:
         video_h3.preparer(payload)   # les refus d'abord, avant d'appeler le chat
+        # Les personnages de l'image de départ : le juge les compare au clip.
+        fiches_image = payload.get("fiches_image") or []
+        if not isinstance(fiches_image, list):
+            raise ValueError("Liste de fiches illisible.")
+        fiches_image = [{"id": f["id"], "nom": f["nom"]} for f in map(video_h3.fiche_lire, fiches_image)]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     _h3_peut_louer()                 # poids, Modal, budget : avant la traduction aussi
+    texte_client = str(payload.get("image_paroles") or "")
     try:
         traduit = video_h3.a_traduire(payload)
         if traduit:
@@ -4020,7 +4026,8 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
         plan = video_h3.preparer(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    plan["resume_public"]["traduit_en_anglais"] = traduit
+    plan["resume_public"].update(traduit_en_anglais=traduit, texte_client=texte_client,
+                                 fiches_image=fiches_image)
     return _lancer_h3(plan)
 
 
@@ -4145,11 +4152,52 @@ async def video_h3_image(request: Request, authorization: Optional[str] = Header
     auth(authorization)
     corps = await request.json()
     try:
-        texte = video_h3.texte_image(corps.get("texte", ""), corps.get("ameliorations") or [])
+        demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
+                                                corps.get("fiches") or [])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"image": await _image_du_studio(
-        {"prompt": texte, "n": 1, "size": video_h3.TAILLE_IMAGE_DEMANDEE}), "texte": texte}
+    return {"image": await _image_du_studio(demande), "texte": texte}
+
+
+@app.post("/video-h3/depart")
+async def video_h3_depart(request: Request, authorization: Optional[str] = Header(default=None)):
+    """L'image de départ d'un plan « coupe » de scénario : créée par l'image du
+    Studio (avec les photos des fiches), ou téléversée (champ `image`). Gardée
+    sur le Studio ; le plan n'en porte que le numéro. Gratuit, rien n'est loué.
+    Demande du propriétaire, 28/09 : « l'image générée par Studio n'est jamais
+    utilisée dans le scénario : c'est pas normal »."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    try:
+        if corps.get("image"):
+            image, texte = str(corps["image"]), ""
+        else:
+            demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
+                                                    corps.get("fiches") or [])
+            image = None
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if image is None:
+        image = await _image_du_studio(demande)
+    try:
+        did = video_h3.depart_poser(image)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"id": did, "image": image, "texte": texte}
+
+
+@app.get("/video-h3/depart/{did}")
+def video_h3_depart_voir(did: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        octets = video_h3.depart_lire(did)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    genre = next((g for debut, g in ((b"\x89PNG", "png"), (b"\xff\xd8\xff", "jpeg"), (b"RIFF", "webp"))
+                  if octets.startswith(debut)), "png")
+    return {"image": "data:image/%s;base64," % genre + base64.b64encode(octets).decode()}
 
 
 async def _image_du_studio(demande: dict) -> str:
@@ -4410,7 +4458,21 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
     a_tourner = []
     for p in plans:
         payload = dict(commun, image_paroles=p["image_paroles"], ambiance=p["ambiance"], coupe_s=0, images=[])
-        if p["enchainement"] == "coupe":
+        if p["enchainement"] == "coupe" and p.get("image_depart"):
+            # Parti de son image validée : H3 la suit à coup sûr ; les fiches ne
+            # donnent plus que les voix, et la description de l'image passe à H3.
+            definition = str(commun.get("definition") or video_h3.DEFINITION_PAR_DEFAUT)
+            if definition not in video_h3.DEFINITIONS:
+                raise ValueError("Définition non proposée.")
+            try:
+                image = montage.recadrer_image(video_h3.depart_lire(p["image_depart"]),
+                                               *video_h3.DEFINITIONS[definition])
+            except montage.MontageImpossible as exc:
+                raise ValueError(str(exc)) from exc
+            payload.update(mode="premiere", images=[base64.b64encode(image).decode()],
+                           description_premiere=p.get("description_depart", ""))
+            video_h3.preparer(payload)
+        elif p["enchainement"] == "coupe":
             payload["mode"] = "references"
             video_h3.preparer(payload)
         else:
@@ -4500,16 +4562,7 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
     sc = _scenario_tourne(sid)
     fins, ips = _fins_images(sc), video_h3.IMAGES_PAR_SECONDE
     film = _video_h3_octets(sc.get("film_sans_musique") or sc.get("film")).read_bytes()
-    fiches, refs = [], []
-    for fid in sc.get("fiches") or [sc.get("fiche")]:
-        try:
-            f = video_h3.fiche_lire(fid)
-        except ValueError:
-            continue
-        angle = next((a for a in video_h3.ANGLES if a in f["images"]), None)
-        if angle:
-            fiches.append(f["nom"])
-            refs.append(video_h3.fiche_image_data_url(fid, angle))
+    fiches, refs = _photos_des_fiches(sc.get("fiches") or [sc.get("fiche")])
     if not refs:
         raise HTTPException(409, "Les fiches de ce scénario n'ont plus d'image : rien à comparer.")
     jugement = []
@@ -4517,25 +4570,108 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
     if len(initiaux) != len(sc["plans"]):
         initiaux = sc["plans"]
     for k in range(len(fins)):
-        debut = (fins[k - 1] if k else 0) / ips
-        try:
-            png, nombre = await asyncio.to_thread(montage.planche, film, debut, (fins[k] / ips) - debut)
-        except montage.MontageImpossible as exc:
-            raise HTTPException(400, str(exc)) from exc
-        # Free AI Max : le 28/09, sur la même planche du plan 2, « Auto » (Gemini
-        # flash-lite) a dit « rien à signaler » quatre fois ; « Max » (Gemini
-        # 3.8 flash) a vu deux fois l'homme en trop et la veste grise de Léa.
+        premiere = fins[k - 1] if k else 0
+        debut = premiere / ips
         # Le texte du scénario INITIAL : une correction a pu changer l'histoire
         # (James assis avant d'être invité, 28/09) ; la vidéo doit suivre l'histoire voulue.
-        reponse = await _chat_du_studio(video_h3.consigne_jugement(fiches, initiaux[k]["image_paroles"]),
-                                        "le jugement des plans",
-                                        images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
-                                        modele=video_h3.MODELE_JUGE)
+        texte = initiaux[k]["image_paroles"]
+        verdict = await _juger_passage(film, debut, (fins[k] / ips) - debut, fiches, refs, texte)
         try:
-            jugement.append(dict(video_h3.lire_jugement(reponse, debut, nombre), plan=k + 1))
-        except ValueError as exc:
-            raise HTTPException(502, str(exc)) from exc
+            morceau = await asyncio.to_thread(montage.extraire, film, premiere, fins[k])
+        except montage.MontageImpossible as exc:
+            morceau, verdict["paroles"] = None, {"erreur": str(exc)}
+        if morceau is not None:
+            verdict["paroles"] = await _ecouter(morceau, texte)
+            _ajouter_defaut_de_paroles(verdict, debut)
+        jugement.append(dict(verdict, plan=k + 1))
     return video_h3.scenario_noter(sid, jugement=jugement)
+
+
+def _photos_des_fiches(ids) -> tuple:
+    """(noms, une photo par fiche) : la première photo de chaque fiche encore là."""
+    noms, refs = [], []
+    for fid in ids or []:
+        try:
+            f = video_h3.fiche_lire(fid)
+        except ValueError:
+            continue
+        angle = next((a for a in video_h3.ANGLES if a in f["images"]), None)
+        if angle:
+            noms.append(f["nom"])
+            refs.append(video_h3.fiche_image_data_url(fid, angle))
+    return noms, refs
+
+
+async def _juger_passage(film: bytes, debut: float, duree: float, noms: list, refs: list, texte: str) -> dict:
+    try:
+        png, nombre = await asyncio.to_thread(montage.planche, film, debut, duree)
+    except montage.MontageImpossible as exc:
+        raise HTTPException(400, str(exc)) from exc
+    # Free AI Max : le 28/09, sur la même planche du plan 2, « Auto » (Gemini
+    # flash-lite) a dit « rien à signaler » quatre fois ; « Max » (Gemini
+    # 3.8 flash) a vu deux fois l'homme en trop et la veste grise de Léa.
+    reponse = await _chat_du_studio(video_h3.consigne_jugement(noms, texte), "le jugement des plans",
+                                    images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
+                                    modele=video_h3.MODELE_JUGE)
+    try:
+        return video_h3.lire_jugement(reponse, debut, nombre)
+    except ValueError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+async def _ecouter(video: bytes, texte: str) -> dict:
+    """Ce que dit le clip (Whisper du Studio, par le routeur), comparé aux répliques
+    du texte. Le 28/09, le juge a dit « ok » à des images justes quand la réplique
+    anglaise avait disparu (remarque du propriétaire) : il ne voit que les images."""
+    if not video_h3.repliques(texte):
+        return video_h3.comparer_paroles(texte, "")
+    cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
+    if not cle:
+        return {"erreur": "L'écoute n'est pas joignable d'ici (clé interne du routeur absente)."}
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(ROUTEUR_INTERNE + "/v1/audio/transcriptions",
+                                  headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
+                                  files={"file": ("clip.mp4", video, "video/mp4")}, data={"model": "whisper-1"})
+        entendu = r.json().get("text") if r.status_code < 400 else None
+    except (httpx.HTTPError, ValueError):
+        entendu = None
+    if not isinstance(entendu, str):
+        return {"erreur": "L'écoute du clip a échoué (transcription du routeur)."}
+    return video_h3.comparer_paroles(texte, entendu)
+
+
+def _ajouter_defaut_de_paroles(verdict: dict, debut: float) -> None:
+    defaut = video_h3.defaut_de_paroles(verdict.get("paroles") or {}, debut)
+    if defaut:
+        verdict["defauts"] = list(verdict.get("defauts") or []) + [defaut]
+        verdict["verdict"] = "defaut"
+
+
+@app.post("/video-h3/jobs/{jid}/juger")
+async def video_h3_clip_juger(jid: str, authorization: Optional[str] = Header(default=None)):
+    """Le juge du Studio sur un clip seul : sa planche avec les photos des fiches,
+    et l'écoute de ses répliques. Gratuit ; rien n'est loué (demande du
+    propriétaire, 28/09 : le juge ne tournait que sur un scénario)."""
+    _h3_ou_404()
+    auth(authorization)
+    if not re.fullmatch(r"[0-9a-f]{32}", jid):
+        raise HTTPException(404, "Clip inconnu.")
+    job = read_job(jid)
+    v = (job or {}).get("video") or {}
+    chemin = _video_h3_octets(jid) if job and job.get("status") == "succeeded" else None
+    if not chemin or not str(v.get("moteur", "")).startswith("MiniMax H3"):
+        raise HTTPException(404, "Ce clip H3 n'est pas (ou plus) sur ce Studio.")
+    film = chemin.read_bytes()
+    ids = [f["id"] for f in (v.get("fiches") or []) + (v.get("fiches_image") or []) if f.get("id")]
+    noms, refs = _photos_des_fiches(list(dict.fromkeys(ids)))
+    texte = str(v.get("texte_client") or "")
+    verdict = await _juger_passage(film, 0.0, float(v.get("secondes") or 0) or 5.0, noms, refs, texte)
+    verdict["paroles"] = await _ecouter(film, texte)
+    _ajouter_defaut_de_paroles(verdict, 0.0)
+    job["jugement"] = verdict
+    write_job(jid, job)
+    return verdict
 
 
 DEFAUTS_PAR_PLAN = 3
