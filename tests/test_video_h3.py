@@ -660,7 +660,8 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
                               image_paroles="Elle sourit et dit « Bonjour. »"))
     invite = plan["resume_public"]["invite"]
     assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. "
-                             "detailed_description: Elle sourit")
+                             "retention_analysis: <Subject 1> keeps the face, hair and clothing of the "
+                             "reference pictures. detailed_description: Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
     assert "manteau rouge" not in invite and "Léa" not in invite
@@ -678,6 +679,48 @@ def test_la_page_propose_les_fiches(h3):
     for morceau in ('id="fiche_choix"', 'id="fiche_ref"', "/video-h3/fiches/", "Rejouer", "Supprimer",
                     'fiche: m === "references"'):
         assert morceau in html
+
+
+def test_la_traduction_garde_les_repliques_mot_pour_mot(h3):
+    v = h3.video_h3
+    p = {"mode": "references", "image_paroles": "Elle s'assoit et dit « Un café, s'il vous plaît. »",
+         "ambiance": "Brouhaha d'un café", "musique": ""}
+    assert v.a_traduire(p) and not v.a_traduire(dict(p, mode="premiere"))
+    assert '« Un café' in v.consigne_traduction(p) and "EXACTLY" in v.consigne_traduction(p)
+    bon = ('```json\n{"image_paroles": "She sits down and says « Un café, s\'il vous plaît. »", '
+           '"ambiance": "Café chatter", "musique": ""}\n```')
+    t = v.lire_traduction(bon, p)
+    assert t["ambiance"] == "Café chatter" and t["mode"] == "references"
+    assert v.invite(t["image_paroles"]).startswith("She sits down and says (S1) <d>[French] Un café, s'il")
+    traduite = '{"image_paroles": "She says « A coffee, please. »", "ambiance": "x", "musique": ""}'
+    with pytest.raises(ValueError, match="réplique"):
+        v.lire_traduction(traduite, p)
+    with pytest.raises(ValueError, match="lue"):
+        v.lire_traduction("Désolé, je ne peux pas.", p)
+
+
+def test_en_mode_references_le_clip_part_traduit(h3, monkeypatch):
+    _autoriser(h3)
+    h3.video_h3.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(h3, "run_video_h3", lambda *a: None)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    vu = {}
+    reponse = {"choices": [{"message": {"content":
+               '{"image_paroles": "In a café she says « Bonjour. »", "ambiance": "Café chatter", "musique": ""}'}}]}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(200, reponse, vu))
+    r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(
+        mode="references", images=[PNG], image_paroles="Dans un café elle dit « Bonjour. »",
+        ambiance="Brouhaha"))
+    assert r.status_code == 200, r.text
+    assert vu["url"].endswith("/v1/chat/completions")
+    v = r.json()["video"]
+    assert v["invite"].startswith("In a café she says (S1) <d>[French] Bonjour.</d> Sound: Café chatter.")
+    assert v["traduit_en_anglais"] is True
+    # Un refus du chat : rien ne part.
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(503, {}, {}))
+    r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(mode="references", images=[PNG]))
+    assert r.status_code == 502 and "rien n'est lancé" in r.json()["detail"]
 
 
 def test_le_routeur_envoie_l_image_de_depart_a_google(routeur, monkeypatch):

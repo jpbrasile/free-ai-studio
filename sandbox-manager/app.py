@@ -4008,10 +4008,41 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     payload = await request.json()
     _garde_licence_h3()
     try:
+        video_h3.preparer(payload)   # les refus d'abord, avant d'appeler le chat
+        traduit = video_h3.a_traduire(payload)
+        if traduit:
+            payload = video_h3.lire_traduction(
+                await _chat_du_studio(video_h3.consigne_traduction(payload)), payload)
         plan = video_h3.preparer(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    plan["resume_public"]["traduit_en_anglais"] = traduit
     return _lancer_h3(plan)
+
+
+async def _chat_du_studio(consigne: str) -> str:
+    """Une réponse du chat gratuit du Studio (routeur) ; HTTPException sinon."""
+    cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
+    if not cle:
+        raise HTTPException(503, "Le chat du Studio n'est pas joignable d'ici (clé interne du routeur "
+                                 "absente) : la traduction en anglais est impossible, rien n'est lancé.")
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(ROUTEUR_INTERNE + "/v1/chat/completions",
+                                  headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
+                                  json={"model": "free-ai-auto", "stream": False,
+                                        "messages": [{"role": "user", "content": consigne}]})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Le chat du Studio ne répond pas (%s) : rien n'est lancé."
+                            % type(exc).__name__) from exc
+    try:
+        d = r.json()
+    except ValueError:
+        d = {}
+    if r.status_code >= 400:
+        raise HTTPException(502, "Le chat du Studio a refusé la traduction en anglais : rien n'est lancé.")
+    choix = (d.get("choices") or [{}])[0]
+    return (choix.get("message") or {}).get("content") or ""
 
 
 def _garde_licence_h3():

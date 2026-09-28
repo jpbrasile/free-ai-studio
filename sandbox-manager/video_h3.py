@@ -206,7 +206,7 @@ def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(
 
 
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
-           langue: str = LANGUE_PAROLES, locuteur: str = "(S1)") -> str:
+           langue: str = LANGUE_PAROLES, locuteur: str = "(S1)", son: str = "Sound: ") -> str:
     """Une seule invite pour le modèle, à partir des trois cases de la page.
 
     H3 fabrique l'image ET le son à partir du même texte : la case « image et
@@ -219,7 +219,7 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     sans rien dire, H3 ajoute une musique (entendue le 27/09, PLAN 18.9).
     """
     morceaux = []
-    for texte, prefixe in ((balises_paroles(image_paroles, langue, locuteur), ""), (ambiance, "Sound: "),
+    for texte, prefixe in ((balises_paroles(image_paroles, langue, locuteur), ""), (ambiance, son),
                            (musique, "non_diegetic_music: ")):
         t = " ".join(str(texte or "").split())
         if t:
@@ -386,7 +386,53 @@ def sujet_de_la_fiche(fiche: dict, nombre: int) -> str:
     fiche ne sert qu'à fabriquer les images : mise dans l'invite, elle a été
     DITE par le personnage (essai du 28/09, « Femme de 35 ans, cheveux bruns… »)."""
     images = ", ".join(f"<Picture {i + 1}>" for i in range(nombre))
-    return f"subject_definitions: <Subject 1> is the person in {images}."
+    return (f"subject_definitions: <Subject 1> is the person in {images}. "
+            "retention_analysis: <Subject 1> keeps the face, hair and clothing of the reference pictures.")
+
+
+# --- La traduction en anglais, en mode « Références » -----------------------------
+# Essai du 28/09 (PLAN 18.9) : en mode « Références », le texte français hors
+# guillemets est DIT par le personnage (la scène, l'ambiance), la réplique se
+# perd. Décision du propriétaire, même jour : « oui traduis en anglais ». Tout ce
+# qui n'est pas réplique part en anglais ; les répliques restent mot pour mot.
+# Les autres modes ont été validés en français : ils n'y passent pas.
+
+CASES_TRADUITES = ("image_paroles", "ambiance", "musique")
+
+
+def a_traduire(payload: dict) -> bool:
+    return str(payload.get("mode") or "") == "references" and any(
+        str(payload.get(k) or "").strip() for k in CASES_TRADUITES)
+
+
+def repliques(texte: str) -> list:
+    return [next(g for g in m.groups() if g) for m in _PAROLES.finditer(str(texte or ""))]
+
+
+def consigne_traduction(payload: dict) -> str:
+    cases = {k: " ".join(str(payload.get(k) or "").split()) for k in CASES_TRADUITES}
+    return ("Translate the values of this JSON object into English, for a video-generation prompt. "
+            "Text between quotation marks (« », “ ” or \" \") is spoken dialogue: copy it EXACTLY, "
+            "untranslated, with its quotation marks. Empty values stay empty. Answer with the JSON "
+            "object only, same keys, nothing else.\n" + json.dumps(cases, ensure_ascii=False))
+
+
+def lire_traduction(reponse: str, payload: dict) -> dict:
+    """Le JSON du modèle, contrôlé : mêmes cases, et les répliques intactes."""
+    t = str(reponse or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`").split("\n", 1)[-1] if "\n" in t else t.strip("`")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or not all(isinstance(d.get(k, ""), str) for k in CASES_TRADUITES):
+        raise ValueError("La traduction en anglais n'a pas pu être lue.")
+    for k in CASES_TRADUITES:
+        if repliques(d.get(k, "")) != repliques(payload.get(k, "")):
+            raise ValueError("La traduction en anglais a changé une réplique : rien n'est lancé.")
+    return dict(payload, **{k: d.get(k, "") for k in CASES_TRADUITES})
 
 
 # --- Le graphe ComfyUI -------------------------------------------------------------
@@ -529,7 +575,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             raise ValueError("Cette fiche n'a encore aucune image : créez-les d'abord.")
     texte = invite(payload.get("image_paroles", ""), payload.get("ambiance", ""),
                    payload.get("musique", ""), langue,
-                   "<Subject 1> (S1)" if fiche else "(S1)")
+                   "<Subject 1> (S1)" if fiche else "(S1)",
+                   # Rubriques du mode références, dans l'ordre de la consigne de MiniMax
+                   # (skills/h3-prompt-writing/SKILL.md) ; `summary` n'est pas écrit.
+                   "overall_soundscape: " if fiche else "Sound: ")
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
     if fiche:
