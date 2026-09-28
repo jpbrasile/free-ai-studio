@@ -160,7 +160,8 @@ def test_une_image_qui_n_en_est_pas_une_est_refusee(h3):
         h3.video_h3.preparer(demande(mode="premiere", images=[faux]))
 
 
-@pytest.mark.parametrize("champ,valeur", [("longueur", 125), ("coupe_s", 0.3), ("graine", "abc")])
+@pytest.mark.parametrize("champ,valeur", [("longueur", 125), ("coupe_s", 0.3), ("graine", "abc"),
+                                          ("definition", "1080p")])
 def test_les_reglages_hors_menu_sont_refuses(h3, champ, valeur):
     with pytest.raises(ValueError):
         h3.video_h3.preparer(demande(**{champ: valeur}))
@@ -173,6 +174,18 @@ def test_une_demande_juste_part_avec_ses_images_et_sa_graine(h3):
     assert sorted(d["images"]) == ["derniere.png", "premiere.png"]
     assert d["graine"] == 7 and d["coupe_s"] == 0.5 and d["classes"] == ["MiniMaxH3ImageToVideo"]
     assert plan["resume_public"]["prix_estime_usd"] is not None
+    assert plan["resume_public"]["taille"] == "832x480"
+
+
+def test_la_definition_768p_change_la_taille_et_tait_le_prix(h3):
+    # Le LoRA Turbo a été entraîné en 1344 × 768 ; aucune durée n'y est encore mesurée.
+    plan = h3.video_h3.preparer(demande(definition="768p"))
+    noeud = plan["demande"]["graphe"]["10"]["inputs"]
+    assert (noeud["width"], noeud["height"]) == (1344, 768)
+    assert plan["resume_public"]["taille"] == "1344x768"
+    assert plan["resume_public"]["prix_estime_usd"] is None
+    g = h3.video_h3.graphe("texte", "x", 124, 1)
+    assert (g["10"]["inputs"]["width"], g["10"]["inputs"]["height"]) == (832, 480)
 
 
 # --- 2. Le script envoyé sur la machine louée ---------------------------------
@@ -418,7 +431,9 @@ def test_la_page_offre_creer_ou_televerser_pour_chaque_bord(h3):
         assert 'id="invite_' + nom + '"' in html and 'id="fichier_' + nom + '"' in html
     # Les exemples des trois cases sont du vrai texte, modifiable, pas une indication grisée.
     assert "placeholder=" not in html.split('id="image_paroles"', 1)[1].split(">", 1)[0]
-    assert client(h3).get("/video-h3/etat", headers=CLE).json()["taille"] == {"largeur": 832, "hauteur": 480}
+    assert client(h3).get("/video-h3/etat", headers=CLE).json()["definitions"] == {
+        "480p": {"largeur": 832, "hauteur": 480}, "768p": {"largeur": 1344, "hauteur": 768}}
+    assert '<select id="definition">' in html and html.count('definition: document.getElementById("definition")') == 3
 
 
 # --- 6. Prolonger (V2) : par la dernière image, ou par tronçon en option --------------
@@ -1284,6 +1299,7 @@ def test_la_continuite_se_lit_et_ne_garde_que_les_plans_du_film(h3):
 def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeypatch, tmp_path):
     v = h3.video_h3
     sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
+    v.scenario_ecrire(dict(v.scenario_lire(sid), reglages=dict(v.scenario_lire(sid)["reglages"], definition="768p")))
     _autoriser(h3)
     v.poids_noter(True)
     monkeypatch.setattr(h3, "modal_configured", lambda: True)
@@ -1322,6 +1338,7 @@ def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeyp
     (precedent, video), = tournes                 # un seul plan loué
     assert h3.read_job(precedent)["video"]["mode"] == "reprise"   # il se recolle au plan 1 repris
     assert video["graine"] != 2809 and "manteau rouge" in video["invite"]
+    assert video["taille"] == "1344x768"   # le plan neuf garde la définition du scénario
     assert sc["fins_images"] == [124, 248, 372]
     assert poses and poses[0][1:] == ("c" * 32, pytest.approx(124 / 24), 0.3)
     assert sc["film"] == "d" * 32

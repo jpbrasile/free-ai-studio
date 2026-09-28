@@ -3961,7 +3961,7 @@ def video_h3_etat(authorization: Optional[str] = Header(default=None)):
         "pire_cas_usd": video_h3.pire_cas(),
         "pire_cas_poids_usd": video_h3.pire_cas_poids(),
         "poids_go": video_h3.POIDS_GO,
-        "taille": {"largeur": video_h3.LARGEUR, "hauteur": video_h3.HAUTEUR},
+        "definitions": {nom: {"largeur": l, "hauteur": h} for nom, (l, h) in video_h3.DEFINITIONS.items()},
         "autorisation": video_h3.autorisation_etat(),
         "poids": video_h3.poids_etat(),
         "modal_configure": modal_configured(),
@@ -4379,7 +4379,8 @@ def _histoire(plans: list) -> str:
     return " ".join(p["image_paroles"] for p in plans)
 
 
-REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine")
+REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine",
+                     "definition")
 
 
 def _scenario_prepare(corps: dict, plans: list) -> tuple:

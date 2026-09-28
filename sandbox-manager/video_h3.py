@@ -88,6 +88,12 @@ PAQUETS_POIDS = ("huggingface_hub==1.9.2",)
 # --- Ce que la page propose ------------------------------------------------------
 
 LARGEUR, HAUTEUR, IMAGES_PAR_SECONDE = 832, 480, 24
+# La définition de l'image. 480p est celle des essais du 27/09 ; le LoRA Turbo
+# chargé (FICHIERS[4], « 768p ») a été entraîné en 1344 × 768 selon ses auteurs
+# (lightx2v, 11/08/2026) : 768p est proposé depuis le 28/09. Tous les plans d'un
+# scénario ont la même, pour que le montage les recolle.
+DEFINITIONS = {"480p": (LARGEUR, HAUTEUR), "768p": (1344, 768)}
+DEFINITION_PAR_DEFAUT = "480p"
 # Grille du modèle : 17k+5 images à 24 images/s. 124 = 5,2 s ; le modèle a été
 # entraîné de 124 à 362 (15,1 s) ; au-delà, « non essayé » selon ComfyUI.
 LONGUEURS = tuple(124 + 17 * k for k in range(15))
@@ -809,7 +815,8 @@ def noms_images(mode: str, nombre: int) -> list:
     return []
 
 
-def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0) -> dict:
+def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0,
+           definition: str = DEFINITION_PAR_DEFAUT) -> dict:
     """Le graphe des essais du 27/09, pour un clip.
 
     Chargeurs, LoRA Turbo 4 étapes, échantillonneur `res_multistep`, ordonnanceur
@@ -826,7 +833,8 @@ def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0
         "8": _n("KSamplerSelect", {"sampler_name": "res_multistep"}),
         "9": _n("BasicScheduler", {"model": ["2", 0], "scheduler": "simple", "steps": 4, "denoise": 1.0}),
     }
-    taille = {"width": LARGEUR, "height": HAUTEUR, "length": int(longueur)}
+    largeur, hauteur = DEFINITIONS[definition]
+    taille = {"width": largeur, "height": hauteur, "length": int(longueur)}
     images = noms_images(mode, nb_images)
     for i, fichier in enumerate(images):
         g[f"6{i}"] = _n("LoadImage", {"image": fichier})
@@ -970,6 +978,9 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         raise ValueError("Coupe du début illisible.") from exc
     if coupe not in COUPES:
         raise ValueError("Coupe du début non proposée.")
+    definition = str(payload.get("definition") or DEFINITION_PAR_DEFAUT)
+    if definition not in DEFINITIONS:
+        raise ValueError("Définition non proposée.")
     graine = payload.get("graine")
     if graine in (None, ""):
         graine = (graine_hasard or random.randint)(0, 2**31 - 1)
@@ -999,7 +1010,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
 
     demande = {
         "mode": mode,
-        "graphe": graphe(mode, texte, longueur, graine, len(brutes)),
+        "graphe": graphe(mode, texte, longueur, graine, len(brutes), definition),
         "classes": [m["noeud"]],
         "images": images,
         "fichiers": list(FICHIERS),
@@ -1025,9 +1036,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             "secondes": secondes_de(longueur),
             "coupe_s": coupe,
             "graine": graine,
-            "taille": f"{LARGEUR}x{HAUTEUR}",
+            "taille": "%dx%d" % DEFINITIONS[definition],
             "carte": GPU,
-            "prix_estime_usd": prix_estime(longueur),
+            # Les durées ont été mesurées en 480p seulement.
+            "prix_estime_usd": prix_estime(longueur) if definition == DEFINITION_PAR_DEFAUT else None,
             "cout_max_usd": pire_cas(),
         },
     }
@@ -1486,6 +1498,12 @@ PAGE_HTML = r"""<!doctype html>
   <select id="longueur"></select>
   <p class="note" id="prix"></p>
 
+  <label for="definition">Définition de l'image</label>
+  <select id="definition">
+    <option value="480p">480p (832 × 480), celle des prix mesurés</option>
+    <option value="768p">768p (1344 × 768), plus nette, plus longue à calculer, prix non mesuré</option>
+  </select>
+
   <label for="coupe">Couper le début</label>
   <select id="coupe">
     <option value="0">Ne rien couper</option>
@@ -1637,11 +1655,16 @@ function majInvitesImages(){
   }
 }
 
+function tailleChoisie(){
+  const t = ETAT.definitions[document.getElementById("definition").value];
+  return [t.largeur, t.hauteur];
+}
+
 function recadrer(src){
   return new Promise((ok, ko) => {
     const im = new Image();
     im.onload = () => {
-      const L = ETAT.taille.largeur, Ht = ETAT.taille.hauteur;
+      const [L, Ht] = tailleChoisie();
       const c = document.createElement("canvas");
       c.width = L; c.height = Ht;
       const s = Math.max(L / im.width, Ht / im.height);
@@ -1660,8 +1683,8 @@ function poserImage(nom, src){
     const a = document.getElementById("apercu_" + nom);
     a.src = png;
     a.hidden = false;
-    document.getElementById("etat_" + nom).textContent = "Image prête, recadrée en "
-      + ETAT.taille.largeur + " × " + ETAT.taille.hauteur + ".";
+    const [L, Ht] = tailleChoisie();
+    document.getElementById("etat_" + nom).textContent = "Image prête, recadrée en " + L + " × " + Ht + ".";
   });
 }
 
@@ -1848,6 +1871,7 @@ document.getElementById("prolonger").addEventListener("click", async () => {
     musique: document.getElementById("musique").value,
     langue: document.getElementById("langue").value,
     longueur: Number(document.getElementById("longueur").value),
+    definition: document.getElementById("definition").value,
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
   if (!r.ok){ alerteTexte(typeof d.detail === "string" ? d.detail : "Refusé."); return; }
@@ -1891,6 +1915,7 @@ document.getElementById("lancer").addEventListener("click", async () => {
     langue: document.getElementById("langue").value,
     fiche: m === "references" ? (document.getElementById("fiche_ref").value || null) : null,
     longueur: Number(document.getElementById("longueur").value),
+    definition: document.getElementById("definition").value,
     coupe_s: Number(document.getElementById("coupe").value),
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
@@ -2569,6 +2594,7 @@ async function tournerScenario(){
     langue: f1 ? l1 : document.getElementById("langue").value,
     musique: document.getElementById("musique").value,
     longueur: Number(document.getElementById("longueur").value),
+    definition: document.getElementById("definition").value,
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
   if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Refusé.");
