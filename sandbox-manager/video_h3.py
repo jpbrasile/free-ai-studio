@@ -205,15 +205,21 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "") -> str:
     paroles » décrit ce qu'on voit et ce qui est dit (les paroles entre
     guillemets, balisées ici pour le modèle), les deux autres le reste de la
     bande son.
+
+    La musique va dans le champ `non_diegetic_music` du guide de MiniMax
+    (docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md) ; case vide, il vaut `N/A` :
+    sans rien dire, H3 ajoute une musique (entendue le 27/09, PLAN 18.9).
     """
     morceaux = []
     for texte, prefixe in ((balises_paroles(image_paroles), ""), (ambiance, "Sound: "),
-                           (musique, "Music: ")):
+                           (musique, "non_diegetic_music: ")):
         t = " ".join(str(texte or "").split())
         if t:
             if t[-1] not in ".!?\"»>":
                 t += "."
             morceaux.append(prefixe + t)
+    if morceaux and not " ".join(str(musique or "").split()):
+        morceaux.append("non_diegetic_music: N/A")
     return " ".join(morceaux)
 
 
