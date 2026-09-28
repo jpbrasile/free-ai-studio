@@ -565,12 +565,14 @@ def fiche_image_data_url(fid, angle: str) -> str:
 def consigne_visage() -> str:
     return ("Locate the face of the main person in this image. Answer with JSON only: "
             '{"x0": ..., "y0": ..., "x1": ..., "y1": ...}, the box tight around the face (hairline to chin, '
-            "ear to ear), as fractions of the image width and height, between 0 and 1. "
+            "ear to ear), as integers from 0 to 1000 relative to the image width (x) and height (y). "
             "If there is no face, answer {}.")
 
 
 def lire_visage(reponse: str):
-    """La boîte du visage (x0, y0, x1, y1), en fractions ; None si rien de lisible."""
+    """La boîte du visage (x0, y0, x1, y1), en fractions ; None si rien de lisible.
+    Le modèle qui voit répond sur 0-1000 (sa convention, essai réel du 28/09 : la
+    consigne demandait 0-1, il a rendu 0-1000) ; une réponse sur 0-1 est lue aussi."""
     t = str(reponse or "")
     debut, fin = t.find("{"), t.rfind("}")
     try:
@@ -578,6 +580,8 @@ def lire_visage(reponse: str):
         x0, y0, x1, y1 = (float(d[k]) for k in ("x0", "y0", "x1", "y1"))
     except (ValueError, TypeError, KeyError):
         return None
+    if max(x0, y0, x1, y1) > 1:
+        x0, y0, x1, y1 = (v / 1000 for v in (x0, y0, x1, y1))
     if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1) or (x1 - x0) < 0.02 or (y1 - y0) < 0.02:
         return None
     return x0, y0, x1, y1

@@ -1164,6 +1164,18 @@ def test_les_passages_parles_d_un_vrai_clip(h3, tmp_path):
     assert son[:3] == b"ID3" or son[:2] in (b"\xff\xfb", b"\xff\xf3")
 
 
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_les_passages_d_un_son_sans_image(h3, tmp_path):
+    # Une chanson n'a pas d'images : le 28/09, l'écoute n'y trouvait aucun passage.
+    chanson = tmp_path / "chanson.flac"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=440:r=48000", "-t", "5",
+                    "-af", "volume='if(between(t,2,3),0,1)':eval=frame", str(chanson)], check=True)
+    passages = h3.montage.passages_parles(chanson.read_bytes())
+    assert len(passages) == 2 and passages[0][0] == 0.0 and 2.0 <= passages[0][1] <= 2.4
+    assert 2.6 <= passages[1][0] <= 3.0 and passages[1][1] == 5.0
+    assert h3.montage.son_du_passage(chanson.read_bytes(), *passages[1])[:3] in (b"ID3", b"\xff\xfb\x90")
+
+
 def test_l_ecoute_entend_aussi_chaque_passage(h3, monkeypatch):
     """Essai du 28/09 : sur un clip bilingue, Whisper sur le clip entier garde une
     seule langue et perd une réplique ; passage par passage, il entend les deux."""
@@ -1796,6 +1808,9 @@ def test_la_page_propose_les_quatre_chantiers(h3):
 def test_la_boite_du_visage_se_lit_et_s_elargit_en_gros_plan(h3):
     v = h3.video_h3
     assert v.lire_visage('Voici : {"x0": 0.4, "y0": 0.1, "x1": 0.6, "y1": 0.3}') == (0.4, 0.1, 0.6, 0.3)
+    # La convention du modèle qui voit : 0-1000 (réponse réelle du 28/09).
+    assert v.lire_visage('```json\n{"x0": 296, "y0": 72, "x1": 461, "y1": 224}\n```') == (0.296, 0.072, 0.461, 0.224)
+    assert v.lire_visage('{"x0": 296, "y0": 72, "x1": 1461, "y1": 224}') is None
     for mauvais in ("{}", "pas de visage", '{"x0": 0.6, "y0": 0.1, "x1": 0.4, "y1": 0.3}',
                     '{"x0": 0.4, "y0": 0.1, "x1": 1.4, "y1": 0.3}', '{"x0": 0.4, "y0": 0.1, "x1": 0.41, "y1": 0.3}',
                     '{"x0": "a", "y0": 0.1, "x1": 0.6, "y1": 0.3}', None):

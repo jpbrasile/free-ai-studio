@@ -248,24 +248,25 @@ def lire_silences(journal: str, duree_s: float, min_s: float = 0.3, marge_s: flo
 def passages_parles(video: bytes) -> list:
     """Où le clip fait du son au-dessus de -35 dB (voix, le plus souvent). Pour
     écouter passage par passage : sur le clip entier, Whisper n'a gardé qu'une
-    langue et a perdu une réplique d'un clip bilingue (essai du 28/09)."""
+    langue et a perdu une réplique d'un clip bilingue (essai du 28/09). Un son
+    seul (une chanson) marche aussi : la durée est celle du fichier, pas des images."""
     with tempfile.TemporaryDirectory() as dossier:
-        a = Path(dossier, "a.mp4")
+        a = Path(dossier, "entree")
         a.write_bytes(video)
-        num, den = _cadence(a)
-        duree_s = images(a) * den / num
         fini = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(a), "-vn",
                                "-af", "silencedetect=n=-35dB:d=0.3", "-f", "null", "-"],
                               capture_output=True, text=True, timeout=DELAI_S)
-        if fini.returncode != 0:
+        duree = re.search(r"Duration: (\d+):(\d+):([\d.]+)", fini.stderr or "")
+        if fini.returncode != 0 or not duree:
             raise MontageImpossible("La recherche des passages parlés a échoué.")
-        return lire_silences(fini.stderr or "", duree_s)
+        h, m, s = duree.groups()
+        return lire_silences(fini.stderr, int(h) * 3600 + int(m) * 60 + float(s))
 
 
 def son_du_passage(video: bytes, debut_s: float, fin_s: float) -> bytes:
     """Le son de [debut_s, fin_s), en MP3, pour l'envoyer à l'écoute."""
     with tempfile.TemporaryDirectory() as dossier:
-        a, sortie = Path(dossier, "a.mp4"), Path(dossier, "passage.mp3")
+        a, sortie = Path(dossier, "entree"), Path(dossier, "passage.mp3")
         a.write_bytes(video)
         _lancer(["-ss", "%.3f" % debut_s, "-to", "%.3f" % fin_s, "-i", str(a), "-vn",
                  "-ac", "1", "-b:a", "96k", str(sortie)], "L'extraction d'un passage parlé")

@@ -1161,7 +1161,12 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
       Deux correctifs en plus :
       - une traduction qui laisse du français hors des répliques est refusée (`reste_du_francais`) ;
       - l'écoute lit aussi les répliques déjà balisées `<d>…</d>`.
-      **Non vérifié** : les routes 4 et 5 face au vrai modèle qui voit, et l'écoute par passages dans le Studio reconstruit (le 28/09, elle avait marché par un script à côté).
+      **Essai réel dans le Studio reconstruit, le 28/09.** Gratuit : routeur (Whisper, modèle qui voit) et ffmpeg, rien sur Modal.
+      - **5 (comparer)** : l'image de départ d'un plan, par sa route et par la route « toute image », comparée à sa fiche : « forte », sans écart.
+      - **1 (musique)** : départ à 7,5 s dans la chanson, fondu d'1 s, baisse sous la parole. Le travail a réussi (film de 15,29 s). Résultat non écouté à l'oreille.
+      - **3 (écoute)** : juge d'un clip bilingue de 10 s. Sur le clip entier, Whisper entend seulement la réplique anglaise ; par passages, il entend les deux (6,48-8,04 s et 8,12-10,12 s). L'écoute dit donc « ok ». Le juge des images dit pourtant « ne prononce pas les répliques » : il se trompe, puisqu'il ne voit que les images.
+      - **4 (visage)** : le premier essai a **échoué**. Le modèle qui voit a répondu sur l'échelle 0-1000, sa convention, alors que la consigne demandait 0-1, et la photo a été refusée (« aucun visage »). Corrigé : la consigne demande maintenant 0-1000 et la lecture accepte les deux échelles. Au second essai, sur une photo en pied de 512 × 741, le gros plan est juste (visage centré, cheveux et cou).
+      - **Écoute d'une chanson** : sur un son seul, la recherche des passages échouait en silence, car elle comptait les images de la vidéo. Corrigé : elle lit maintenant la durée du fichier. Sur une chanson YuE2 de 39 s : un seul passage ; Whisper entend 69 % des mots attendus, donc « pas ok » (seuil 70 %).
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
     - **20.0 La forme retenue : un seul code, deux réglages.** Pas deux copies du dépôt, qui dériveraient. Le Studio **administrateur** (le poste du propriétaire) suit `main` et ajoute ses outils de mise au point ; le Studio **client** suit une version **validée**. L'administrateur est le mainteneur des deux dépôts (18.8).
