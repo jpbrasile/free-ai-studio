@@ -184,6 +184,12 @@ def durees() -> list:
 # (H3-Context-IR, non publiée) manque et la parole sort au hasard : le 27/09, un
 # « Enfin au sec » entre guillemets est sorti en charabia (PLAN 18.9).
 LANGUE_PAROLES = "French"
+# Les 11 langues que la fiche dit « stables », sous leur nom anglais attendu dans la balise.
+LANGUES_PAROLES = {
+    "French": "français", "English": "anglais", "Spanish": "espagnol", "German": "allemand",
+    "Italian": "italien", "Portuguese": "portugais", "Arabic": "arabe", "Chinese": "chinois",
+    "Japanese": "japonais", "Korean": "coréen", "Russian": "russe",
+}
 _PAROLES = re.compile(r"«\s*([^«»]+?)\s*»|“\s*([^“”]+?)\s*”|\"\s*([^\"]+?)\s*\"")
 
 
@@ -198,7 +204,8 @@ def balises_paroles(texte: str, langue: str = LANGUE_PAROLES) -> str:
     return _PAROLES.sub(balise, texte)
 
 
-def invite(image_paroles: str, ambiance: str = "", musique: str = "") -> str:
+def invite(image_paroles: str, ambiance: str = "", musique: str = "",
+           langue: str = LANGUE_PAROLES) -> str:
     """Une seule invite pour le modèle, à partir des trois cases de la page.
 
     H3 fabrique l'image ET le son à partir du même texte : la case « image et
@@ -211,7 +218,7 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "") -> str:
     sans rien dire, H3 ajoute une musique (entendue le 27/09, PLAN 18.9).
     """
     morceaux = []
-    for texte, prefixe in ((balises_paroles(image_paroles), ""), (ambiance, "Sound: "),
+    for texte, prefixe in ((balises_paroles(image_paroles, langue), ""), (ambiance, "Sound: "),
                            (musique, "non_diegetic_music: ")):
         t = " ".join(str(texte or "").split())
         if t:
@@ -366,8 +373,11 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     mode = str(payload.get("mode") or "texte")
     if mode not in MODES:
         raise ValueError("Mode inconnu.")
+    langue = str(payload.get("langue") or LANGUE_PAROLES)
+    if langue not in LANGUES_PAROLES:
+        raise ValueError("Langue des paroles inconnue.")
     texte = invite(payload.get("image_paroles", ""), payload.get("ambiance", ""),
-                   payload.get("musique", ""))
+                   payload.get("musique", ""), langue)
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
     if len(texte) > 4000:
@@ -431,6 +441,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             "mode": mode,
             "mode_titre": m["titre"],
             "invite": texte,
+            "langue": langue,
             "images": longueur,
             "secondes": secondes_de(longueur),
             "coupe_s": coupe,
@@ -817,13 +828,18 @@ PAGE_HTML = r"""<!doctype html>
   <label for="mode">Mode</label>
   <select id="mode"></select>
   <p class="note" id="mode_note"></p>
-  <label for="image_paroles">1. Image et paroles</label>
+  <label for="image_paroles">1. Image et paroles (les paroles entre « guillemets »)</label>
   <textarea id="image_paroles">Une femme en manteau rouge marche sous la pluie à Paris, la nuit ; elle se retourne et dit : « On y est presque. »</textarea>
+  <label for="langue">Langue des paroles</label>
+  <select id="langue">__LANGUES__</select>
   <label for="ambiance">2. Ambiance sonore</label>
   <textarea id="ambiance">Pluie, circulation au loin.</textarea>
-  <label for="musique">3. Musique (effacez pour ne pas en demander)</label>
+  <label for="musique">3. Musique (vide : aucune musique)</label>
   <textarea id="musique"></textarea>
-  <p class="note">Les trois textes sont des exemples : modifiez-les librement.</p>
+  <p class="note">Les trois textes sont des exemples : modifiez-les librement.
+  Pour des paroles nettes : une seule personne parle, visage vers la caméra, une seule action par plan,
+  et pas plus de 2 mots par seconde (une dizaine pour 5 s). Case musique vide, le Studio demande au modèle
+  de n'en mettre aucune : sinon il en ajoute une de lui-même.</p>
 
   <div class="image_bord" id="bord_premiere" hidden>
     <b>Première image</b>
@@ -1128,6 +1144,7 @@ document.getElementById("prolonger").addEventListener("click", async () => {
     image_paroles: document.getElementById("image_paroles").value,
     ambiance: document.getElementById("ambiance").value,
     musique: document.getElementById("musique").value,
+    langue: document.getElementById("langue").value,
     longueur: Number(document.getElementById("longueur").value),
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
@@ -1169,6 +1186,7 @@ document.getElementById("lancer").addEventListener("click", async () => {
     image_paroles: document.getElementById("image_paroles").value,
     ambiance: document.getElementById("ambiance").value,
     musique: document.getElementById("musique").value,
+    langue: document.getElementById("langue").value,
     longueur: Number(document.getElementById("longueur").value),
     coupe_s: Number(document.getElementById("coupe").value),
     graine: graine === "" ? null : Number(graine)})});
@@ -1185,4 +1203,6 @@ rafraichir().then(majInvitesImages);
 </script>
 </body>
 </html>
-"""
+""".replace("__LANGUES__", "".join(
+    f'<option value="{code}"{" selected" if code == LANGUE_PAROLES else ""}>{nom}</option>'
+    for code, nom in LANGUES_PAROLES.items()))

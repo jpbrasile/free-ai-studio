@@ -90,6 +90,8 @@ def test_les_paroles_sont_balisees_au_format_du_modele(h3):
         "Elle dit doucement : (S1) <d>[French] Enfin au sec.</d> non_diegetic_music: N/A"
     assert v.balises_paroles("Il dit “Bonjour” puis «Au revoir»") == \
         "Il dit (S1) <d>[French] Bonjour</d> puis (S1) <d>[French] Au revoir</d>"
+    assert v.invite("Il dit « Hello. »", langue="English").startswith(
+        "Il dit (S1) <d>[English] Hello.</d>")
     deja = "Elle (S1) dit <d>[English] Hello.</d>"
     assert v.balises_paroles(deja) == deja
     assert v.balises_paroles("Une rue sous la pluie") == "Une rue sous la pluie"
@@ -575,3 +577,17 @@ def test_la_page_propose_de_prolonger(h3):
     html = client(h3).get("/video-h3").text
     assert 'id="prolonger"' in html and "/video-h3/prolonger" in html
     assert client(h3).get("/video-h3/etat", headers=CLE).json()["prolonger"]["plans_max"] == 4
+
+
+def test_la_langue_des_paroles_se_choisit_parmi_les_onze(h3):
+    v = h3.video_h3
+    html = client(h3).get("/video-h3").text
+    assert "__LANGUES__" not in html and '<option value="French" selected>français</option>' in html
+    assert all(f'value="{code}"' in html for code in v.LANGUES_PAROLES)
+    assert html.count('langue: document.getElementById("langue").value') == 2   # créer et prolonger
+    plan = v.preparer(demande(image_paroles="Il dit « Hola. »", langue="Spanish"))
+    assert "<d>[Spanish] Hola.</d>" in plan["resume_public"]["invite"]
+    assert plan["resume_public"]["langue"] == "Spanish"
+    assert v.preparer(demande())["resume_public"]["langue"] == "French"
+    with pytest.raises(ValueError, match="Langue"):
+        v.preparer(demande(langue="Klingon"))
