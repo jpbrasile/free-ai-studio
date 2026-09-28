@@ -424,7 +424,10 @@ def test_l_image_du_studio_passe_par_le_routeur(h3, monkeypatch):
     r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "  une rue  mouillée "})
     assert r.status_code == 200 and r.json()["image"].startswith("data:image/png;base64,")
     assert vu["url"].endswith("/v1/images/generations")
-    assert vu["json"] == {"prompt": "une rue mouillée", "n": 1, "size": "1664x960"}
+    # Les figurants restent loin : le modèle vidéo perd ce qui est proche (28/09).
+    assert vu["json"] == {"prompt": "une rue mouillée " + h3.video_h3.FIGURANTS_IMAGE, "n": 1, "size": "1664x960"}
+    assert "jamais au premier plan" in h3.video_h3.FIGURANTS_IMAGE
+    assert r.json()["texte"] == "une rue mouillée"
     assert vu["headers"]["Authorization"] == "Bearer cle-routeur-de-test"
 
 
@@ -457,7 +460,8 @@ def test_le_client_fait_refaire_l_image_en_disant_ce_qui_change(h3, monkeypatch)
                         _FauxRouteur(200, {"data": [{"url": "data:image/png;base64," + PNG}]}, vu))
     r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "une rue", "ameliorations": ["la nuit"]})
     assert r.status_code == 200
-    assert vu["json"]["prompt"] == r.json()["texte"] == "une rue Améliorations demandées : la nuit."
+    assert r.json()["texte"] == "une rue Améliorations demandées : la nuit."
+    assert vu["json"]["prompt"] == r.json()["texte"] + " " + h3.video_h3.FIGURANTS_IMAGE
     html = client(h3).get("/video-h3").text
     for nom in ("premiere", "derniere"):
         assert 'id="amelioration_' + nom + '"' in html and 'id="ameliorer_' + nom + '"' in html
@@ -1035,6 +1039,11 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     assert "close-up shows one character only" in v.CADRAGE
     assert "Place each character once" in v.CADRAGE
     assert "say how the movement ends" in v.CADRAGE
+    assert "Background people" in v.CADRAGE and "never in the foreground" in v.CADRAGE
+    assert "Never add or remove a character of the story" in v.CADRAGE
+    # Le juge signale aussi ce qui disparaît sans sortir du cadre.
+    assert "disappears or appears without leaving or entering the frame" in v.consigne_jugement([])
+    assert "disappears or appears" in v.consigne_jugement(["Léa"], "Léa sourit")
 
 
 def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):

@@ -339,6 +339,10 @@ def texte_image(texte: str, ameliorations=()) -> str:
 # « le portrait n'est pas suffisant ») : toutes les photos de chaque personnage,
 # dans l'ordre, et chacun présenté par son nom et ses numéros d'images.
 PHOTOS_IMAGE_MAX = 14   # le routeur (Gemini 3.1 Flash Lite Image) n'en prend pas plus
+# L'image de départ place les figurants que H3 fera bouger : loin, jamais au bord
+# ni à moitié cachés, car le modèle vidéo les perd (plan 2 du 28/09, CADRAGE).
+FIGURANTS_IMAGE = ("Les autres personnes (passants, clients) restent à distance, au second plan, jamais au premier "
+                   "plan, au bord de l'image ou à moitié cachées ; peu d'objets au premier plan.")
 
 
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
@@ -373,7 +377,7 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
                  % len(photos))
     if len(photos) > PHOTOS_IMAGE_MAX:
         raise ValueError("Quatorze photos au plus sur une image (fiches et plan précédent) : retirez un personnage.")
-    demande = {"prompt": tete + description, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
+    demande = {"prompt": tete + description + " " + FIGURANTS_IMAGE, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
     if photos:
         demande["image_reference"] = photos
     return demande, description
@@ -684,7 +688,13 @@ CADRAGE = ("Framing: a close-up shows one character only; when two or more chara
            # (remarque du propriétaire : « il faut dire qu'il attend debout »).
            "When a character moves (walks, approaches, arrives, leaves), say how the movement ends: the "
            "posture they hold once arrived (standing, sitting…) and what they do until the end of the shot, "
-           "as the story wants it at that moment. ")
+           "as the story wants it at that moment. "
+           # Le 28/09, au plan 2, des clients au premier plan (journal, tasse) ont disparu
+           # dans le clip : les modèles vidéo perdent ce qui est proche et à moitié caché
+           # (défaut connu, sans correctif dans H3). La mise en scène l'évite.
+           "Background people (passers-by, other customers) stay in the distance, never in the foreground, "
+           "at the edge of the frame or partly hidden; when they move, they walk through and leave the frame. "
+           "Keep few objects in the foreground. Never add or remove a character of the story for this. ")
 
 
 def consigne_decoupage(scenario: str) -> str:
@@ -800,7 +810,11 @@ def consigne_jugement(noms: list, texte: str = "") -> str:
             # Neutre, sans questions qui cherchent la faute : le 28/09, la consigne
             # d'avant faisait trouver un défaut même au plan repris tel quel.
             + ("Say whether the characters stay consistent with their reference pictures throughout the shot."
-             if noms else "Say whether the characters stay consistent throughout the shot.") + voulu
+             if noms else "Say whether the characters stay consistent throughout the shot.")
+            # Le 28/09, des clients du premier plan ont disparu dans le clip sans
+            # sortir du cadre ; le juge ne regardait que les personnages des fiches.
+            + " Also report any person or object that disappears or appears without leaving or entering "
+            "the frame." + voulu
             + " "
             "Many shots have no problem: then answer ok with an empty list. Report only what you clearly see, "
             "each problem once, at the first frame where it appears, in one short sentence. "
