@@ -1090,7 +1090,9 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                - **Kaggle, T4, plan 2 :**
                  - 1er essai en échec : `torchsde` manquait, retiré par mon filtre des exigences ;
                  - le téléchargement des poids a pris 985 s (environ 7 Mo/s) ;
-                 - le 2e essai est en cours au moment d'écrire.
+                 - 2e essai réussi : 56 s pour les poids, 976 s de calcul, 1 122 s en tout (19 min, contre 3,5 min sur A100) ; visuellement équivalent à l'A100 (SSIM 0,95) ; gratuit, sur le quota.
+               - **SeedVR2 7B, plan 1, A100 :** 138 s de calcul, 320 s en tout (dont 87 s de poids et 94 s de démarrage), pointe 32,8 Go, environ 0,34 $. Le rendu est très proche du 3B, un peu moins accentué ; les mêmes lunettes inventées. À cette taille de visage, pas de gain net.
+               - **Écart trouvé (web, 28/09) :** le LoRA turbo chargé (`…_768p_comfyui_bf16`) a été entraîné en **1344 × 768**, avec des shifts 6/3. Le Studio tourne H3 en 832 × 480, sans shift explicite. L'essai en 1344 × 768 est proposé au propriétaire, non lancé.
                - **Qualité, vue sur planche à 0,5 s et en zooms :**
                  - plan 2 : visages, cheveux et tissus nets, pas de scintillement, couleurs fidèles ; le flou de bougé reste ;
                  - plan 1 (plan large) : visages lisibles, mais SeedVR2 invente un peu, par exemple des lunettes sur une cliente du fond.
