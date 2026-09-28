@@ -4591,6 +4591,14 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     auth(authorization)
     _garde_licence_h3()
     parent = _scenario_tourne(sid)
+    # Un seul rejeu à la fois par scénario : le 28/09, sans signe que le premier
+    # tournait, un second clic a payé une seconde fois le même plan.
+    for vivant in list(_SCENARIOS_VIVANTS):
+        try:
+            if video_h3.scenario_lire(vivant).get("parent") == sid:
+                raise HTTPException(409, "Un rejeu de ce scénario tourne déjà : attendez sa fin.")
+        except ValueError:
+            continue
     corps = await request.json()
     try:
         plans = video_h3.verifier_plans(corps.get("plans"))

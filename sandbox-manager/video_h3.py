@@ -711,8 +711,9 @@ def consigne_continuite(plans: list, histoire: str) -> str:
     return ("Here are the shots of a short film (JSON), in order, and the story they tell. For each shot, write "
             "the state at its start and at its end: who is there, where, standing or sitting, what they wear. "
             "Then check the continuity: does each shot start in the state where the previous one ends (a cut may "
-            "move on in time or place, but nothing may be undone without being shown), and does every action come "
-            "after what causes it, as in the story? Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
+            "move on in time or place, but nothing may be undone without being shown), does every action come "
+            "after what causes it, as in the story, and is every action of the story still shown in some shot, "
+            "none missing? Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
             "\"debut\": \"...\", \"fin\": \"...\"}], \"problemes\": [{\"plan\": number, \"quoi\": \"...\"}]}; "
             "an empty \"problemes\" list if the shots hold together.\n\nStory: %s\n\nShots: %s"
             % (histoire, json.dumps([{k: p[k] for k in ("image_paroles", "enchainement")} for p in plans],
@@ -1339,6 +1340,10 @@ PAGE_HTML = r"""<!doctype html>
   .note { color: #555; font-size: .92rem; }
   .avert { color: #8a4b00; }
   .refus { color: #a40000; font-weight: 600; }
+  .occupe { background: #eef4ff; border-left: 4px solid #2b5fd9; padding: .5rem .7rem; font-weight: 600; }
+  .rond { display: inline-block; width: .8rem; height: .8rem; border: 2px solid #2b5fd9; border-top-color: transparent;
+          border-radius: 50%; animation: tourne 1s linear infinite; vertical-align: -1px; }
+  @keyframes tourne { to { transform: rotate(360deg); } }
   button { font: inherit; padding: 8px 16px; margin-top: 12px; cursor: pointer; }
   video { width: 100%; margin-top: 10px; background: #000; }
   .image_bord { border-top: 1px solid #eee; margin-top: 12px; padding-top: 8px; }
@@ -1512,33 +1517,41 @@ PAGE_HTML = r"""<!doctype html>
     <p class="note" id="scenario_prix"></p>
     <button id="scenario_tourner" hidden>Tourner le scénario</button>
     <button id="scenario_arreter" hidden>Arrêter le tournage</button>
+    <p id="scenario_occupe" class="occupe" hidden><span class="rond"></span> <span id="scenario_occupe_texte"></span>
+      <span id="scenario_chrono"></span></p>
     <p class="note" id="scenario_etat"></p>
     <label for="scenario_choix">Reprendre un scénario déjà tourné</label>
     <select id="scenario_choix"><option value="">Choisissez un scénario…</option></select>
     <div id="scenario_suite" hidden>
-      <button id="scenario_juger">Faire juger les plans</button>
-      <span class="note">le chat du Studio (Free AI Max, un modèle qui voit, gratuit) compare chaque plan aux fiches, sur une
-      planche d'une image toutes les 0,5 s. Une aide : il peut manquer un défaut.</span>
+      <label for="suite_action">Que faire ?</label>
+      <select id="suite_action">
+        <option value="auto">Corriger tout seul, avec pause avant de payer</option>
+        <option value="juger">Faire juger les plans (gratuit)</option>
+        <option value="corriger">Corriger le texte d'après mes remarques (gratuit)</option>
+        <option value="rejouer">Rejouer les plans changés ou cochés (payant)</option>
+      </select>
+      <div id="suite_auto_options">
+        <select id="auto_tours"><option value="1">1 tour</option><option value="2" selected>2 tours au plus</option>
+          <option value="3">3 tours au plus</option></select>
+        <label><input type="checkbox" id="auto_sans_arret"> sans pause (chaque fausse alerte fait payer un plan)</label>
+      </div>
+      <div id="suite_corriger_options" hidden>
+        <label for="retours">Vos remarques</label>
+        <textarea id="retours" maxlength="2000"></textarea>
+      </div>
+      <button id="suite_lancer">Lancer</button>
       <div id="jugement"></div>
-      <label for="retours">Vos remarques sur le film</label>
-      <textarea id="retours" maxlength="2000"></textarea>
-      <button id="scenario_corriger">Remettre le scénario à jour d'après les retours</button>
-      <p class="note">Les plans ci-dessus montrent en <b>gras</b> ce qui a changé depuis le scénario initial
-      (<s>barré</s> : retiré). Au rejeu, seuls les plans changés ou cochés sont retournés et payés ; les autres
-      sont repris tels quels, et la musique est reposée.</p>
-      <button id="scenario_rejouer">Rejouer le scénario</button>
-      <label for="auto_tours">Tout seul : juger, corriger les plans fautifs, les rejouer, rejuger</label>
-      <select id="auto_tours"><option value="1">1 tour</option><option value="2" selected>2 tours au plus</option>
-        <option value="3">3 tours au plus</option></select>
-      <label><input type="checkbox" id="auto_sans_arret"> Sans arrêt : rejouer sans me demander (le juge se
-      trompe parfois, chaque fausse alerte fait payer un plan pour rien)</label>
-      <button id="scenario_auto">Corriger tout seul</button>
-      <span class="note">à chaque tour, le juge regarde, le texte des plans fautifs est corrigé et sa continuité
-      contrôlée, sans rien payer ; puis <b>pause</b> : décochez les fausses alertes, relisez le gras, et cliquez pour
-      rejouer. Seuls les plans aux défauts gardés sont retournés et payés ; le film est recollé avec les autres, la
-      musique reposée, et le tour suivant commence. Gardez la page ouverte.</span>
-      <button id="scenario_auto_payer" hidden>Rejouer les plans aux défauts cochés (payant)</button>
-      <button id="scenario_auto_arreter" hidden>Arrêter ici</button>
+      <div id="suite_pause" hidden>
+        <p class="refus">Pause avant de payer : décochez les fausses alertes et relisez le texte en gras.</p>
+        <button id="scenario_auto_payer">Rejouer les plans aux défauts cochés (payant)</button>
+        <button id="scenario_auto_arreter">Arrêter ici</button>
+      </div>
+      <details class="note"><summary>Comment ça marche</summary>
+        Le juge (Free AI Max, gratuit) compare chaque plan aux fiches et à l'histoire, sur une image toutes les
+        0,5 s ; il se trompe parfois. La correction change la façon de montrer, pas l'histoire, et sa continuité est
+        contrôlée. Le texte en <b>gras</b> a changé depuis le scénario initial (<s>barré</s> : retiré). Au rejeu,
+        seuls les plans changés ou cochés sont tournés et payés, les autres sont repris, la musique est reposée.
+      </details>
     </div>
   </div>
   <div class="image_bord">
@@ -2309,41 +2322,96 @@ document.getElementById("scenario_choix").addEventListener("change", e => {
   if (e.target.value) ouvrirScenario(e.target.value);
 });
 
-document.getElementById("scenario_juger").addEventListener("click", async () => {
-  if (!SCENARIO_TOURNE) return;
-  scenarioEtat("Le chat du Studio regarde chaque plan…");
-  const r = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/juger", {method: "POST", headers: H, body: "{}"});
-  const d = await r.json();
-  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
-  dessinerJugement(d.jugement);
-  scenarioEtat("Jugement reçu : corrigez le scénario d'après les retours, ou rejouez.");
-});
+// Pendant qu'une action tourne : un bandeau avec chronomètre, et les commandes
+// verrouillées. Le 28/09, sans ce signe, un second clic a payé deux fois le même plan.
+let CHRONO = null;
+const LIBRES_PENDANT = new Set(["scenario_arreter", "scenario_auto_payer", "scenario_auto_arreter"]);
 
-document.getElementById("scenario_corriger").addEventListener("click", async () => {
-  if (!SCENARIO_TOURNE) return;
-  scenarioEtat("Le chat du Studio remet les plans à jour…");
-  const r = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/corriger", {method: "POST", headers: H,
-    body: JSON.stringify({retours: document.getElementById("retours").value, defauts: DEFAUTS.filter(d => d.garde)})});
-  const d = await r.json();
-  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+function verrouiller(oui){
+  for (const e of document.querySelectorAll("#montage_bloc button, #montage_bloc select"))
+    if (!LIBRES_PENDANT.has(e.id)) e.disabled = oui;
+}
+
+function occupe(texte){
+  const b = document.getElementById("scenario_occupe");
+  document.getElementById("scenario_occupe_texte").textContent = texte;
+  scenarioEtat("");
+  if (!b.hidden) return;
+  b.hidden = false;
+  const debut = Date.now();
+  const maj = () => {
+    const s = Math.round((Date.now() - debut) / 1000);
+    document.getElementById("scenario_chrono").textContent = "· " + Math.floor(s / 60) + " min "
+      + String(s % 60).padStart(2, "0") + " s";
+  };
+  maj();
+  CHRONO = setInterval(maj, 1000);
+  verrouiller(true);
+}
+
+function libre(){
+  document.getElementById("scenario_occupe").hidden = true;
+  document.getElementById("scenario_arreter").hidden = true;
+  clearInterval(CHRONO);
+  verrouiller(false);
+}
+
+async function actionJuger(){
+  occupe("Le juge regarde chaque plan (gratuit)…");
+  const j = await appeler("/video-h3/scenario/" + SCENARIO_TOURNE + "/juger");
+  dessinerJugement(j.jugement);
+  scenarioEtat("Jugement reçu : décochez les fausses alertes, puis corrigez le texte ou rejouez.");
+}
+
+async function actionCorriger(){
+  occupe("Correction du texte et contrôle de continuité (gratuit)…");
+  const d = await appeler("/video-h3/scenario/" + SCENARIO_TOURNE + "/corriger",
+    {retours: document.getElementById("retours").value, defauts: DEFAUTS.filter(x => x.garde)});
   PLANS = d.plans;
   dessinerPlans();
-  document.getElementById("scenario_tourner").hidden = true;
   if (d.continuite && d.continuite.ok === false)
-    scenarioEtat("Plans remis à jour, mais la continuité est à revoir : " + texteContinuite(d.continuite), true);
-  else scenarioEtat("Plans remis à jour : les changements sont en gras. Relisez, puis rejouez.");
-});
+    scenarioEtat("Texte corrigé, mais la continuité est à revoir : " + texteContinuite(d.continuite), true);
+  else scenarioEtat("Texte corrigé : les changements sont en gras. Relisez, puis choisissez « Rejouer ».");
+}
 
-document.getElementById("scenario_rejouer").addEventListener("click", async () => {
+async function actionRejouer(){
+  occupe("Contrôle et traduction des plans à retourner…");
+  const r = await appeler("/video-h3/scenario/" + SCENARIO_TOURNE + "/rejouer", {plans: PLANS, retourner: [...RETOURNER]});
+  const sc = await attendreScenario(r.id);
+  if (sc.etat !== "réussi") return scenarioEtat("Rejeu " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
+  chargerClips();
+  await chargerScenarios();
+  await ouvrirScenario(r.id);
+  scenarioEtat("Rejeu fini : " + (r.repris.length ? "plan(s) " + r.repris.join(", ") + " repris tels quels." : "tout a été retourné."));
+}
+
+const ACTIONS = {
+  auto: ["Lancer", () => corrigerToutSeul(SCENARIO_TOURNE, Number(document.getElementById("auto_tours").value),
+                                          document.getElementById("auto_sans_arret").checked)],
+  juger: ["Faire juger", actionJuger],
+  corriger: ["Corriger le texte", actionCorriger],
+  rejouer: ["Rejouer (payant)", actionRejouer],
+};
+
+function majSuite(){
+  const a = document.getElementById("suite_action").value;
+  document.getElementById("suite_auto_options").hidden = a !== "auto";
+  document.getElementById("suite_corriger_options").hidden = a !== "corriger";
+  document.getElementById("suite_lancer").textContent = ACTIONS[a][0];
+}
+document.getElementById("suite_action").addEventListener("change", majSuite);
+majSuite();
+
+document.getElementById("suite_lancer").addEventListener("click", async () => {
   if (!SCENARIO_TOURNE) return;
-  scenarioEtat("Contrôle et traduction des plans à retourner…");
-  const r = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/rejouer", {method: "POST", headers: H,
-    body: JSON.stringify({plans: PLANS, retourner: [...RETOURNER]})});
-  const d = await r.json();
-  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
-  SCENARIO = d.id;
-  scenarioEtat("Rejeu lancé : " + (d.repris.length ? "plan(s) " + d.repris.join(", ") + " repris tels quels." : "tout est retourné."));
-  suivreScenario(d.id);
+  try {
+    await ACTIONS[document.getElementById("suite_action").value][1]();
+  } catch (e) {
+    scenarioEtat(e.message, true);
+  } finally {
+    document.getElementById("suite_pause").hidden = true;
+    libre();
+  }
 });
 
 async function appeler(chemin, corps){
@@ -2354,21 +2422,31 @@ async function appeler(chemin, corps){
 }
 
 async function attendreScenario(sid){
+  SCENARIO = sid;
+  document.getElementById("scenario_arreter").hidden = false;
+  occupe("Tournage lancé (payant)…");
   for (;;){
     await new Promise(ok => setTimeout(ok, 10000));
     const sc = await fetch("/video-h3/scenario/" + sid, {headers: H}).then(r => r.json());
-    if (sc.etat !== "en cours") return sc;
+    if (sc.etat !== "en cours"){
+      document.getElementById("scenario_arreter").hidden = true;
+      return sc;
+    }
     const faits = (sc.statuts || []).filter(s => s.status === "succeeded").length;
-    scenarioEtat("Tout seul : tournage, plan " + Math.min(faits + 1, sc.plans.length) + " sur " + sc.plans.length + "…");
+    const repris = (sc.repris || []).length;
+    occupe("Tournage (payant) : " + faits + " plan(s) tourné(s) sur " + (sc.plans.length - repris)
+      + (repris ? ", " + repris + " repris tel(s) quel(s)" : "") + "…");
   }
 }
 
 // L'accord du propriétaire avant de payer : une promesse que tient l'un des deux boutons.
 function attendreAccord(){
+  const pause = document.getElementById("suite_pause");
   const payer = document.getElementById("scenario_auto_payer"), arreter = document.getElementById("scenario_auto_arreter");
-  payer.hidden = arreter.hidden = false;
+  pause.hidden = false;
+  occupe("En pause : à vous de décider");
   return new Promise(ok => {
-    const fin = oui => { payer.hidden = arreter.hidden = true; payer.onclick = arreter.onclick = null; ok(oui); };
+    const fin = oui => { pause.hidden = true; payer.onclick = arreter.onclick = null; ok(oui); };
     payer.onclick = () => fin(true);
     arreter.onclick = () => fin(false);
   });
@@ -2387,29 +2465,27 @@ async function corrigerTexte(sid, defauts){
 // « sans arrêt », pause avant de payer, pour décocher les fausses alertes.
 async function corrigerToutSeul(sid, tours, sansArret){
   for (let tour = 1; ; tour++){
-    scenarioEtat("Tout seul, tour " + tour + " : le juge regarde chaque plan…");
+    occupe("Tour " + tour + " : le juge regarde chaque plan (gratuit)…");
     const j = await appeler("/video-h3/scenario/" + sid + "/juger");
     dessinerJugement(j.jugement);
     const fautifs = j.jugement.filter(x => x.defauts.length);
     if (!fautifs.length) return scenarioEtat("Tout seul : aucun défaut vu après " + (tour - 1) + " rejeu(x). Film prêt.");
     if (tour > tours) return scenarioEtat("Tout seul : " + tours + " tour(s) faits, défauts restants aux plans "
       + fautifs.map(x => x.plan).join(", ") + ". À vous de voir.", true);
-    scenarioEtat("Tout seul, tour " + tour + " : correction du texte des plans " + fautifs.map(x => x.plan).join(", ") + "…");
+    occupe("Tour " + tour + " : correction du texte des plans " + fautifs.map(x => x.plan).join(", ") + " (gratuit)…");
     const corriges = JSON.stringify(DEFAUTS);
     let casse = await corrigerTexte(sid, DEFAUTS);
     // Rien n'est payé sur un texte qui ne se tient plus : la main revient au propriétaire.
     if (casse) return scenarioEtat("Tout seul, arrêté avant de rejouer : la correction casse la continuité ("
       + casse + "). Relisez les plans en gras.", true);
     if (!sansArret){
-      scenarioEtat("Tout seul, tour " + tour + ", pause avant de payer : décochez les fausses alertes, relisez les "
-        + "plans en gras (vous pouvez les retoucher), puis rejouez, ou arrêtez ici.");
       if (!await attendreAccord()) return scenarioEtat("Tout seul : arrêté par vous, rien n'a été rejoué à ce tour.");
     }
     const gardes = DEFAUTS.filter(d => d.garde);
     if (!gardes.length) return scenarioEtat("Tout seul : aucun défaut gardé, rien à rejouer. Film prêt.");
     // Des fausses alertes décochées : le texte est refait sans elles (gratuit), avant de payer.
     if (JSON.stringify(gardes) !== corriges){
-      scenarioEtat("Tout seul : correction refaite avec les seuls défauts gardés…");
+      occupe("Correction refaite avec les seuls défauts gardés (gratuit)…");
       casse = await corrigerTexte(sid, gardes);
       if (casse) return scenarioEtat("Tout seul, arrêté avant de rejouer : la correction casse la continuité ("
         + casse + "). Relisez les plans en gras.", true);
@@ -2425,50 +2501,34 @@ async function corrigerToutSeul(sid, tours, sansArret){
   }
 }
 
-document.getElementById("scenario_auto").addEventListener("click", async () => {
-  if (!SCENARIO_TOURNE) return;
-  const bouton = document.getElementById("scenario_auto");
-  bouton.disabled = true;
-  try {
-    await corrigerToutSeul(SCENARIO_TOURNE, Number(document.getElementById("auto_tours").value),
-                           document.getElementById("auto_sans_arret").checked);
-  } catch (e) {
-    scenarioEtat("Tout seul : " + e.message, true);
-  } finally {
-    bouton.disabled = false;
-  }
-});
-
 document.getElementById("plan_ajouter").addEventListener("click", () => {
   PLANS.push({image_paroles: "", ambiance: "", enchainement: "suite"});
   dessinerPlans();
 });
 
-function suivreScenario(sid){
-  fetch("/video-h3/scenario/" + sid, {headers: H}).then(r => r.json()).then(sc => {
-    const faits = (sc.statuts || []).filter(s => s.status === "succeeded").length;
-    document.getElementById("scenario_arreter").hidden = sc.etat !== "en cours";
-    if (sc.etat === "réussi"){
-      scenarioEtat("Scénario tourné : " + sc.plans.length + " plans recollés.");
-      chargerClips();
-      rafraichir();
-      chargerScenarios().then(() => ouvrirScenario(sid));
-      return;
-    }
-    if (sc.etat !== "en cours"){
-      scenarioEtat("Scénario " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
-      chargerClips();
-      rafraichir();
-      return;
-    }
-    scenarioEtat("Tournage : plan " + Math.min(faits + 1, sc.plans.length) + " sur " + sc.plans.length + "…");
-    setTimeout(() => suivreScenario(sid), 10000);
-  });
+async function suivreScenario(sid){
+  const sc = await attendreScenario(sid);
+  chargerClips();
+  rafraichir();
+  if (sc.etat !== "réussi") return scenarioEtat("Scénario " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
+  await chargerScenarios();
+  await ouvrirScenario(sid);
+  scenarioEtat("Scénario tourné : " + sc.plans.length + " plans recollés.");
 }
 
 document.getElementById("scenario_tourner").addEventListener("click", async () => {
+  try {
+    await tournerScenario();
+  } catch (e) {
+    scenarioEtat(e.message, true);
+  } finally {
+    libre();
+  }
+});
+
+async function tournerScenario(){
   const graine = document.getElementById("graine").value;
-  scenarioEtat("Contrôle et traduction des plans…");
+  occupe("Contrôle et traduction des plans (gratuit)…");
   const f1 = document.getElementById("scenario_fiche").value, f2 = document.getElementById("scenario_fiche2").value;
   const l1 = document.getElementById("scenario_langue1").value, l2 = document.getElementById("scenario_langue2").value;
   const deux = f1 && f2 && f1 !== f2;
@@ -2482,10 +2542,9 @@ document.getElementById("scenario_tourner").addEventListener("click", async () =
     longueur: Number(document.getElementById("longueur").value),
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
-  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
-  SCENARIO = d.id;
-  suivreScenario(d.id);
-});
+  if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Refusé.");
+  await suivreScenario(d.id);
+}
 
 document.getElementById("scenario_arreter").addEventListener("click", async () => {
   if (!SCENARIO) return;

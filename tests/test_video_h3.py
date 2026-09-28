@@ -1250,6 +1250,8 @@ def test_la_continuite_se_lit_et_ne_garde_que_les_plans_du_film(h3):
     consigne = v.consigne_continuite([{"image_paroles": "Léa s'assoit.", "ambiance": "x", "enchainement": "coupe"}],
                                      "Léa arrive puis s'assoit.")
     assert "Léa arrive puis s'assoit." in consigne and "after what causes it" in consigne and '"x"' not in consigne
+    # Le 28/09, une correction a retiré « James s'assoit » sans que le contrôle le relève.
+    assert "none missing" in consigne
 
 
 def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeypatch, tmp_path):
@@ -1298,12 +1300,25 @@ def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeyp
     assert sc["film"] == "d" * 32
 
 
+def test_un_seul_rejeu_a_la_fois_par_scenario(h3, monkeypatch, tmp_path):
+    # Le 28/09, un second clic pendant le premier rejeu a payé deux fois le même plan.
+    sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
+    _autoriser(h3)
+    h3.video_h3.scenario_ecrire({"id": "6" * 32, "etat": "en cours", "parent": sid, "plans": plans, "travaux": []})
+    monkeypatch.setattr(h3, "_SCENARIOS_VIVANTS", {"6" * 32})
+    r = client(h3).post(f"/video-h3/scenario/{sid}/rejouer", headers=CLE, json={"plans": plans, "retourner": [2]})
+    assert r.status_code == 409 and "tourne déjà" in r.json()["detail"]
+
+
 def test_la_page_propose_juger_corriger_rejouer_et_la_musique(h3):
     html = client(h3).get("/video-h3").text
-    for morceau in ('id="scenario_juger"', 'id="scenario_corriger"', 'id="scenario_rejouer"', 'id="retours"',
+    # Un menu « Que faire ? » et un seul bouton ; un bandeau avec chronomètre verrouille les
+    # commandes pendant une action (le 28/09, un second clic a payé deux fois le même plan).
+    for morceau in ('id="suite_action"', 'value="juger"', 'value="corriger"', 'value="rejouer"', 'id="suite_lancer"',
+                    'id="scenario_occupe"', "function verrouiller", "occupe(", 'id="suite_pause"', 'id="retours"',
                     'id="scenario_choix"', "/video-h3/scenarios", "function diffGras", 'id="musique_poser"',
                     "/video-h3/musique", "Retourner ce plan même inchangé", "defauts: DEFAUTS.filter",
-                    'id="scenario_auto"', "function texteContinuite", "c.continuite.ok === false",
+                    'value="auto"', "function texteContinuite", "c.continuite.ok === false",
                     # Pause avant de payer : les défauts gardés seuls font rejouer.
                     'id="auto_sans_arret"', 'id="scenario_auto_payer"', "await attendreAccord()",
                     "gardes.map(d => d.plan)"):
