@@ -1530,9 +1530,15 @@ PAGE_HTML = r"""<!doctype html>
       <label for="auto_tours">Tout seul : juger, corriger les plans fautifs, les rejouer, rejuger</label>
       <select id="auto_tours"><option value="1">1 tour</option><option value="2" selected>2 tours au plus</option>
         <option value="3">3 tours au plus</option></select>
+      <label><input type="checkbox" id="auto_sans_arret"> Sans arrêt : rejouer sans me demander (le juge se
+      trompe parfois, chaque fausse alerte fait payer un plan pour rien)</label>
       <button id="scenario_auto">Corriger tout seul</button>
-      <span class="note">chaque tour ne retourne (et ne paie) que les plans où le juge voit un défaut, puis recolle
-      le film avec les autres et repose la musique ; il s'arrête dès qu'aucun défaut n'est vu. Gardez la page ouverte.</span>
+      <span class="note">à chaque tour, le juge regarde, le texte des plans fautifs est corrigé et sa continuité
+      contrôlée, sans rien payer ; puis <b>pause</b> : décochez les fausses alertes, relisez le gras, et cliquez pour
+      rejouer. Seuls les plans aux défauts gardés sont retournés et payés ; le film est recollé avec les autres, la
+      musique reposée, et le tour suivant commence. Gardez la page ouverte.</span>
+      <button id="scenario_auto_payer" hidden>Rejouer les plans aux défauts cochés (payant)</button>
+      <button id="scenario_auto_arreter" hidden>Arrêter ici</button>
     </div>
   </div>
   <div class="image_bord">
@@ -2357,9 +2363,29 @@ async function attendreScenario(sid){
   }
 }
 
+// L'accord du propriétaire avant de payer : une promesse que tient l'un des deux boutons.
+function attendreAccord(){
+  const payer = document.getElementById("scenario_auto_payer"), arreter = document.getElementById("scenario_auto_arreter");
+  payer.hidden = arreter.hidden = false;
+  return new Promise(ok => {
+    const fin = oui => { payer.hidden = arreter.hidden = true; payer.onclick = arreter.onclick = null; ok(oui); };
+    payer.onclick = () => fin(true);
+    arreter.onclick = () => fin(false);
+  });
+}
+
+async function corrigerTexte(sid, defauts){
+  const c = await appeler("/video-h3/scenario/" + sid + "/corriger", {retours: "", defauts: defauts});
+  PLANS = c.plans;
+  dessinerPlans();
+  return c.continuite && c.continuite.ok === false ? texteContinuite(c.continuite) : "";
+}
+
 // La boucle du propriétaire (28/09) : juger, corriger le texte des plans
-// fautifs, ne rejouer qu'eux, recoller, rejuger ; au plus N tours.
-async function corrigerToutSeul(sid, tours){
+// fautifs, ne rejouer qu'eux, recoller, rejuger ; au plus N tours. Le juge se
+// trompe parfois (28/09 : au plan 1, plusieurs défauts qui n'y étaient pas) : sauf
+// « sans arrêt », pause avant de payer, pour décocher les fausses alertes.
+async function corrigerToutSeul(sid, tours, sansArret){
   for (let tour = 1; ; tour++){
     scenarioEtat("Tout seul, tour " + tour + " : le juge regarde chaque plan…");
     const j = await appeler("/video-h3/scenario/" + sid + "/juger");
@@ -2369,14 +2395,27 @@ async function corrigerToutSeul(sid, tours){
     if (tour > tours) return scenarioEtat("Tout seul : " + tours + " tour(s) faits, défauts restants aux plans "
       + fautifs.map(x => x.plan).join(", ") + ". À vous de voir.", true);
     scenarioEtat("Tout seul, tour " + tour + " : correction du texte des plans " + fautifs.map(x => x.plan).join(", ") + "…");
-    const c = await appeler("/video-h3/scenario/" + sid + "/corriger", {retours: "", defauts: DEFAUTS});
-    PLANS = c.plans;
-    dessinerPlans();
+    const corriges = JSON.stringify(DEFAUTS);
+    let casse = await corrigerTexte(sid, DEFAUTS);
     // Rien n'est payé sur un texte qui ne se tient plus : la main revient au propriétaire.
-    if (c.continuite && c.continuite.ok === false)
-      return scenarioEtat("Tout seul, arrêté avant de rejouer : la correction casse la continuité ("
-        + texteContinuite(c.continuite) + "). Relisez les plans en gras.", true);
-    const r = await appeler("/video-h3/scenario/" + sid + "/rejouer", {plans: PLANS, retourner: fautifs.map(x => x.plan)});
+    if (casse) return scenarioEtat("Tout seul, arrêté avant de rejouer : la correction casse la continuité ("
+      + casse + "). Relisez les plans en gras.", true);
+    if (!sansArret){
+      scenarioEtat("Tout seul, tour " + tour + ", pause avant de payer : décochez les fausses alertes, relisez les "
+        + "plans en gras (vous pouvez les retoucher), puis rejouez, ou arrêtez ici.");
+      if (!await attendreAccord()) return scenarioEtat("Tout seul : arrêté par vous, rien n'a été rejoué à ce tour.");
+    }
+    const gardes = DEFAUTS.filter(d => d.garde);
+    if (!gardes.length) return scenarioEtat("Tout seul : aucun défaut gardé, rien à rejouer. Film prêt.");
+    // Des fausses alertes décochées : le texte est refait sans elles (gratuit), avant de payer.
+    if (JSON.stringify(gardes) !== corriges){
+      scenarioEtat("Tout seul : correction refaite avec les seuls défauts gardés…");
+      casse = await corrigerTexte(sid, gardes);
+      if (casse) return scenarioEtat("Tout seul, arrêté avant de rejouer : la correction casse la continuité ("
+        + casse + "). Relisez les plans en gras.", true);
+    }
+    const retourner = [...new Set(gardes.map(d => d.plan))];
+    const r = await appeler("/video-h3/scenario/" + sid + "/rejouer", {plans: PLANS, retourner: retourner});
     const sc = await attendreScenario(r.id);
     if (sc.etat !== "réussi") return scenarioEtat("Tout seul : rejeu " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
     sid = r.id;
@@ -2391,7 +2430,8 @@ document.getElementById("scenario_auto").addEventListener("click", async () => {
   const bouton = document.getElementById("scenario_auto");
   bouton.disabled = true;
   try {
-    await corrigerToutSeul(SCENARIO_TOURNE, Number(document.getElementById("auto_tours").value));
+    await corrigerToutSeul(SCENARIO_TOURNE, Number(document.getElementById("auto_tours").value),
+                           document.getElementById("auto_sans_arret").checked);
   } catch (e) {
     scenarioEtat("Tout seul : " + e.message, true);
   } finally {

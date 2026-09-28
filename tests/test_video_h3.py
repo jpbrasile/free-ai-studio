@@ -1303,8 +1303,10 @@ def test_la_page_propose_juger_corriger_rejouer_et_la_musique(h3):
     for morceau in ('id="scenario_juger"', 'id="scenario_corriger"', 'id="scenario_rejouer"', 'id="retours"',
                     'id="scenario_choix"', "/video-h3/scenarios", "function diffGras", 'id="musique_poser"',
                     "/video-h3/musique", "Retourner ce plan même inchangé", "defauts: DEFAUTS.filter",
-                    'id="scenario_auto"', "retourner: fautifs.map", "function texteContinuite",
-                    "c.continuite.ok === false"):
+                    'id="scenario_auto"', "function texteContinuite", "c.continuite.ok === false",
+                    # Pause avant de payer : les défauts gardés seuls font rejouer.
+                    'id="auto_sans_arret"', 'id="scenario_auto_payer"', "await attendreAccord()",
+                    "gardes.map(d => d.plan)"):
         assert morceau in html
 
 
