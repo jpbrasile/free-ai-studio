@@ -309,10 +309,23 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
 TAILLE_IMAGE_DEMANDEE = "1664x960"
 
 
-def texte_image(texte: str) -> str:
+AMELIORATIONS_MAX = 10
+
+
+def texte_image(texte: str, ameliorations=()) -> str:
+    """La description, suivie des améliorations demandées par le client sur les
+    images précédentes. Demande du propriétaire, 28/09 : le client peut faire
+    refaire l'image de départ en disant ce qui doit changer, jusqu'à la valider."""
     t = " ".join(str(texte or "").split())
     if not t:
         raise ValueError("Décrivez l'image à créer.")
+    if not isinstance(ameliorations, (list, tuple)):
+        raise ValueError("Améliorations illisibles.")
+    ajouts = [a for a in (" ".join(str(x or "").split()) for x in ameliorations) if a]
+    if len(ajouts) > AMELIORATIONS_MAX:
+        raise ValueError("Dix améliorations au plus : reportez les premières dans la description.")
+    if ajouts:
+        t += " Améliorations demandées : " + " ; ".join(ajouts) + "."
     if len(t) > 2000:
         raise ValueError("Description d'image trop longue (2 000 caractères au plus).")
     return t
@@ -971,6 +984,14 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
     if fiches:
         texte = sujets_des_fiches(nombres) + " detailed_description: " + texte
+    # Ce que montrent la première et la dernière image, quand le Studio les a
+    # créées : leur description (améliorations comprises) passe aussi à H3, pour
+    # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).
+    bords = {"premiere": ("premiere",), "premiere_derniere": ("premiere", "derniere")}.get(mode, ())
+    for bord, etiquette in (("derniere", "Last frame: "), ("premiere", "First frame: ")):
+        d = " ".join(str(payload.get("description_" + bord) or "").split())
+        if d and bord in bords:
+            texte = etiquette + d + (" " if d[-1] in ".!?" else ". ") + texte
     if len(texte) > 4000:
         raise ValueError("Invite trop longue (4 000 caractères au plus).")
     try:
@@ -1480,6 +1501,12 @@ PAGE_HTML = r"""<!doctype html>
     <div class="televerser" hidden><input type="file" id="fichier_premiere" accept="image/png,image/jpeg,image/webp"></div>
     <img id="apercu_premiere" class="apercu" alt="" hidden>
     <p class="note" id="etat_premiere"></p>
+    <div class="ameliorer" id="ameliorer_bloc_premiere" hidden>
+      <label for="amelioration_premiere">Améliorer cette image : dites ce qui doit changer</label>
+      <input type="text" id="amelioration_premiere" maxlength="300">
+      <button id="ameliorer_premiere">Refaire l'image avec cette amélioration</button>
+      <ul id="ameliorations_premiere"></ul>
+    </div>
   </div>
   <div class="image_bord" id="bord_derniere" hidden>
     <b>Dernière image</b>
@@ -1493,6 +1520,12 @@ PAGE_HTML = r"""<!doctype html>
     <div class="televerser" hidden><input type="file" id="fichier_derniere" accept="image/png,image/jpeg,image/webp"></div>
     <img id="apercu_derniere" class="apercu" alt="" hidden>
     <p class="note" id="etat_derniere"></p>
+    <div class="ameliorer" id="ameliorer_bloc_derniere" hidden>
+      <label for="amelioration_derniere">Améliorer cette image : dites ce qui doit changer</label>
+      <input type="text" id="amelioration_derniere" maxlength="300">
+      <button id="ameliorer_derniere">Refaire l'image avec cette amélioration</button>
+      <ul id="ameliorations_derniere"></ul>
+    </div>
   </div>
   <div id="references_bloc" hidden>
     <label for="fiche_ref">Personnage (fiche de casting)</label>
@@ -1707,17 +1740,57 @@ function brancherBord(nom){
   document.getElementById("invite_" + nom).addEventListener("input", () => { RETOUCHEE[nom] = true; });
   document.getElementById("fichier_" + nom).addEventListener("change", async (e) => {
     const f = e.target.files[0];
-    if (f) await poserImage(nom, await lireFichier(f));
+    if (!f) return;
+    await poserImage(nom, await lireFichier(f));
+    // Une image téléversée n'a pas de description connue : rien n'est joint à H3.
+    DESCRIPTION[nom] = "";
+    document.getElementById("ameliorer_bloc_" + nom).hidden = true;
   });
-  document.getElementById("creer_" + nom).addEventListener("click", async () => {
-    const etat = document.getElementById("etat_" + nom);
-    etat.className = "note";
-    etat.textContent = "Création de l'image (quelques secondes)…";
-    const r = await fetch("/video-h3/image", {method: "POST", headers: H,
-      body: JSON.stringify({texte: document.getElementById("invite_" + nom).value})});
-    const d = await r.json();
-    if (!r.ok){ etat.className = "refus"; etat.textContent = d.detail || "Refusé."; return; }
-    await poserImage(nom, d.image);
+  document.getElementById("creer_" + nom).addEventListener("click", () => creerImage(nom));
+  document.getElementById("ameliorer_" + nom).addEventListener("click", async () => {
+    const champ = document.getElementById("amelioration_" + nom);
+    const voeu = champ.value.trim();
+    if (!voeu) return;
+    AMELIORATIONS[nom].push(voeu);
+    if (await creerImage(nom)) champ.value = "";
+    else AMELIORATIONS[nom].pop();
+    listerAmeliorations(nom);
+  });
+}
+
+// Le client fait refaire l'image en disant ce qui doit changer, jusqu'à la valider
+// (demande du propriétaire, 28/09). Ses demandes s'ajoutent à la description ;
+// le texte ainsi obtenu est aussi joint à la requête à H3.
+const AMELIORATIONS = {premiere: [], derniere: []};
+const DESCRIPTION = {premiere: "", derniere: ""};
+
+async function creerImage(nom){
+  const etat = document.getElementById("etat_" + nom);
+  etat.className = "note";
+  etat.textContent = "Création de l'image (quelques secondes)…";
+  const r = await fetch("/video-h3/image", {method: "POST", headers: H,
+    body: JSON.stringify({texte: document.getElementById("invite_" + nom).value,
+                          ameliorations: AMELIORATIONS[nom]})});
+  const d = await r.json();
+  if (!r.ok){ etat.className = "refus"; etat.textContent = d.detail || "Refusé."; return false; }
+  await poserImage(nom, d.image);
+  DESCRIPTION[nom] = d.texte;
+  document.getElementById("ameliorer_bloc_" + nom).hidden = false;
+  return true;
+}
+
+function listerAmeliorations(nom){
+  const ul = document.getElementById("ameliorations_" + nom);
+  ul.textContent = "";
+  AMELIORATIONS[nom].forEach((a, i) => {
+    const li = document.createElement("li");
+    li.textContent = a + " ";
+    const x = document.createElement("button");
+    x.textContent = "retirer";
+    x.title = "Retirée de la prochaine image";
+    x.addEventListener("click", () => { AMELIORATIONS[nom].splice(i, 1); listerAmeliorations(nom); });
+    li.appendChild(x);
+    ul.appendChild(li);
   });
 }
 
@@ -1916,6 +1989,8 @@ document.getElementById("lancer").addEventListener("click", async () => {
   const graine = document.getElementById("graine").value;
   const r = await fetch("/video-h3/creer", {method: "POST", headers: H, body: JSON.stringify({
     mode: m, images: images,
+    description_premiere: m === "references" ? "" : DESCRIPTION.premiere,
+    description_derniere: m === "premiere_derniere" ? DESCRIPTION.derniere : "",
     image_paroles: document.getElementById("image_paroles").value,
     ambiance: document.getElementById("ambiance").value,
     musique: document.getElementById("musique").value,

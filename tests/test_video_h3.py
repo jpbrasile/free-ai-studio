@@ -423,6 +423,42 @@ def test_sans_cle_du_routeur_on_propose_de_televerser(h3, monkeypatch):
     assert client(h3).post("/video-h3/image", headers=CLE, json={"texte": " "}).status_code == 400
 
 
+def test_le_client_fait_refaire_l_image_en_disant_ce_qui_change(h3, monkeypatch):
+    v = h3.video_h3
+    assert v.texte_image(" une rue ", [" plus  de pluie ", "", "un nom lisible"]) == (
+        "une rue Améliorations demandées : plus de pluie ; un nom lisible.")
+    with pytest.raises(ValueError):
+        v.texte_image("x", "pas une liste")
+    with pytest.raises(ValueError, match="Dix"):
+        v.texte_image("x", ["a"] * 11)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    vu = {}
+    monkeypatch.setattr(h3.httpx, "AsyncClient",
+                        _FauxRouteur(200, {"data": [{"url": "data:image/png;base64," + PNG}]}, vu))
+    r = client(h3).post("/video-h3/image", headers=CLE, json={"texte": "une rue", "ameliorations": ["la nuit"]})
+    assert r.status_code == 200
+    assert vu["json"]["prompt"] == r.json()["texte"] == "une rue Améliorations demandées : la nuit."
+    html = client(h3).get("/video-h3").text
+    for nom in ("premiere", "derniere"):
+        assert 'id="amelioration_' + nom + '"' in html and 'id="ameliorer_' + nom + '"' in html
+
+
+def test_la_description_de_l_image_creee_passe_a_h3(h3):
+    v = h3.video_h3
+    p = v.preparer(demande(mode="premiere", images=[PNG], description_premiere="Un café bondé",
+                           description_derniere="ignorée : pas de dernière image dans ce mode"))
+    invite = p["resume_public"]["invite"]
+    assert invite.startswith("First frame: Un café bondé. ") and "ignorée" not in invite
+    p = v.preparer(demande(mode="premiere_derniere", images=[PNG, PNG],
+                           description_premiere="Début.", description_derniere="Fin."))
+    assert p["resume_public"]["invite"].startswith("First frame: Début. Last frame: Fin. ")
+    # Image téléversée (sans description) ou autre mode : rien n'est ajouté.
+    assert "frame:" not in v.preparer(demande(mode="premiere", images=[PNG]))["resume_public"]["invite"]
+    assert "frame:" not in v.preparer(demande(description_premiere="x"))["resume_public"]["invite"]
+    html = client(h3).get("/video-h3").text
+    assert "description_premiere: m === " in html and "description_derniere: m === " in html
+
+
 def test_la_page_offre_creer_ou_televerser_pour_chaque_bord(h3):
     html = client(h3).get("/video-h3").text
     for nom in ("premiere", "derniere"):

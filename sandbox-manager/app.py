@@ -4141,11 +4141,11 @@ async def video_h3_image(request: Request, authorization: Optional[str] = Header
     auth(authorization)
     corps = await request.json()
     try:
-        texte = video_h3.texte_image(corps.get("texte", ""))
+        texte = video_h3.texte_image(corps.get("texte", ""), corps.get("ameliorations") or [])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"image": await _image_du_studio(
-        {"prompt": texte, "n": 1, "size": video_h3.TAILLE_IMAGE_DEMANDEE})}
+        {"prompt": texte, "n": 1, "size": video_h3.TAILLE_IMAGE_DEMANDEE}), "texte": texte}
 
 
 async def _image_du_studio(demande: dict) -> str:
