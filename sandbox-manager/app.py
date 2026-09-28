@@ -4174,7 +4174,7 @@ async def video_h3_depart(request: Request, authorization: Optional[str] = Heade
             image, texte = str(corps["image"]), ""
         else:
             demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
-                                                    corps.get("fiches") or [])
+                                                    corps.get("fiches") or [], corps.get("decor"))
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

@@ -341,9 +341,14 @@ def texte_image(texte: str, ameliorations=()) -> str:
 PHOTOS_IMAGE_MAX = 14   # le routeur (Gemini 3.1 Flash Lite Image) n'en prend pas plus
 
 
-def demande_image(texte: str, ameliorations=(), fiches=()) -> tuple:
+def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
-    l'image montre, sans la présentation des photos : c'est elle qui passe à H3."""
+    l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
+
+    `decor` : le numéro d'une image de départ déjà gardée (celle du plan d'avant),
+    jointe en dernier pour garder le même lieu. Le 28/09, le plan 2 décrit par
+    écrit seulement (« Le Chat Noir ») est sorti avec le même nom mais un autre
+    auvent et une autre rue (remarque du propriétaire)."""
     description = texte_image(texte, ameliorations)
     if not isinstance(fiches, (list, tuple)) or len(set(map(str, fiches))) != len(fiches):
         raise ValueError("Liste de fiches illisible.")
@@ -357,12 +362,19 @@ def demande_image(texte: str, ameliorations=(), fiches=()) -> tuple:
         presentation.append("%s est la personne des images jointes %d à %d" % (fiche["nom"], n + 1, n + len(urls))
                             if len(urls) > 1 else "%s est la personne de l'image jointe %d" % (fiche["nom"], n + 1))
         photos += urls
+    tete = ("; ".join(presentation) + " (mêmes visage, coiffure et tenue). "
+            "Chaque personne apparaît une seule fois. ") if photos else ""
+    if decor:
+        octets = depart_lire(decor)
+        genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
+        photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
+        tete += ("L'image jointe %d est le plan précédent : garder le même lieu, le même décor, les mêmes "
+                 "enseignes et la même lumière ; le cadrage et la place des personnes suivent la description. "
+                 % len(photos))
     if len(photos) > PHOTOS_IMAGE_MAX:
-        raise ValueError("Quatorze photos de fiches au plus sur une image : retirez un personnage.")
-    demande = {"prompt": description, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
+        raise ValueError("Quatorze photos au plus sur une image (fiches et plan précédent) : retirez un personnage.")
+    demande = {"prompt": tete + description, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
     if photos:
-        demande["prompt"] = ("; ".join(presentation) + " (mêmes visage, coiffure et tenue). "
-                             "Chaque personne apparaît une seule fois. " + description)
         demande["image_reference"] = photos
     return demande, description
 
@@ -2518,8 +2530,11 @@ function blocDepart(p){
   async function creer(){
     etat.className = "note";
     etat.textContent = "Création de l'image (quelques secondes)…";
+    // L'image du plan d'avant part aussi : même lieu, même décor (28/09).
+    const avant = PLANS.slice(0, PLANS.indexOf(p)).reverse().find(q => q.image_depart);
     const r = await fetch("/video-h3/depart", {method: "POST", headers: H, body: JSON.stringify({
-      texte: texte.value, ameliorations: ameliorations, fiches: fichesDuScenario()})});
+      texte: texte.value, ameliorations: ameliorations, fiches: fichesDuScenario(),
+      decor: avant ? avant.image_depart : null})});
     const d = await r.json();
     if (!r.ok){ etat.className = "refus"; etat.textContent = typeof d.detail === "string" ? d.detail : "Refusé."; return false; }
     p.image_depart = d.id;
@@ -2529,7 +2544,8 @@ function blocDepart(p){
     return true;
   }
   const libelle = document.createElement("label");
-  libelle.textContent = "Description de l'image de départ (les personnages du scénario y sont joints)";
+  libelle.textContent = "Description de l'image de départ (les personnages du scénario y sont joints, "
+    + "et l'image de départ du plan précédent, pour garder le même lieu)";
   zone.append(note, libelle, texte,
               bouton(p.image_depart ? "Refaire l'image" : "Créer l'image de départ",
                      async () => { if (await creer()) dessinerPlans(); }),

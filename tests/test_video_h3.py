@@ -1594,6 +1594,14 @@ def test_4_l_image_de_depart_se_garde_sur_le_studio(h3, monkeypatch):
     # Même image rendue : même numéro ; la description revient sans la présentation des photos.
     assert r.status_code == 200 and r.json()["id"] == did and r.json()["texte"].startswith("Un café bondé")
     assert len(vu["json"]["image_reference"]) == 2
+    # L'image du plan d'avant part en dernier, pour garder le même lieu (28/09).
+    r = c.post("/video-h3/depart", headers=CLE, json={"texte": "Plan moyen", "fiches": [lea], "decor": did})
+    assert r.status_code == 200, r.text
+    assert vu["json"]["image_reference"][2] == "data:image/png;base64," + PNG
+    assert "L'image jointe 3 est le plan précédent : garder le même lieu" in vu["json"]["prompt"]
+    assert "précédent" not in r.json()["texte"]
+    r = c.post("/video-h3/depart", headers=CLE, json={"texte": "x", "decor": "f" * 24})
+    assert r.status_code == 400 and "introuvable" in r.json()["detail"]
     assert c.get("/video-h3/depart/" + "f" * 24, headers=CLE).status_code == 404
     assert c.get("/video-h3/depart/nimporte", headers=CLE).status_code == 404
     assert c.post("/video-h3/depart", headers=CLE, json={"image": "pas une image"}).status_code == 400
