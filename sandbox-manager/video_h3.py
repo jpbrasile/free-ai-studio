@@ -870,6 +870,14 @@ def consigne_decoupage(scenario: str) -> str:
             # dans l'image de départ, et il est apparu d'un coup au dernier plan.
             "The first shot's text names every lasting element of the place that a later shot uses, "
             "so that it is already visible from the start. "
+            # Même essai, remarque du propriétaire : « le positionnement est complètement
+            # foldingue entre les plans, la balle part toute seule, [elle] est à 180° » —
+            # face caméra, le personnage a tiré vers nous, puis s'est retourné vers une
+            # cible surgie derrière lui.
+            "When an action is aimed at something (a place to reach, a person, a target), say where that "
+            "thing is in the frame and which way the character faces it, and keep that layout in every shot "
+            "of the same place: same side of the frame, camera on the same side. Describe a physical action "
+            "step by step: what moves the object, where it goes, where it ends. "
             # Même essai : la caméra s'est approchée de plan en plan, jusqu'à
             # redessiner le visage du personnage.
             "Say the framing of each shot; the camera stays at that framing (no zoom, no move) unless the "
@@ -995,8 +1003,15 @@ def scenario_noter(sid: str, **champs) -> dict:
 MODELE_JUGE = "free-ai-max"   # le modèle plus fort du routeur, gratuit, son propre quota
 
 
-def consigne_jugement(noms: list, texte: str = "") -> str:
+def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
+    """`raccord` : le nombre de premières images de la planche qui sont la fin du
+    plan d'avant. Le 29/09, jugé plan par plan, le juge n'a pas vu un personnage
+    retourné de 180° ni un ballon disparu d'un plan à l'autre (remarque du propriétaire)."""
     refs = " ".join(f"Image {k + 1} shows {nom}, a reference picture." for k, nom in enumerate(noms))
+    avant = (f" Frames 1 to {raccord} are the END OF THE PREVIOUS SHOT, the shot itself starts at frame "
+             f"{raccord + 1}: also report any jump across that cut — a character suddenly elsewhere or "
+             "facing another way, the camera jumping to the other side, an object held or present before "
+             "the cut and gone after it." if raccord else "")
     # Le texte du plan : la vidéo doit faire ce qu'il dit, dans le même ordre (28/09).
     voulu = (" The shot is meant to show: «%s». Also say if the video does not show these actions, or not in "
              "this order." % " ".join(texte.split())) if texte.strip() else ""
@@ -1011,7 +1026,10 @@ def consigne_jugement(noms: list, texte: str = "") -> str:
             # Le 28/09, des clients du premier plan ont disparu dans le clip sans
             # sortir du cadre ; le juge ne regardait que les personnages des fiches.
             + " Also report any person or object that disappears or appears without leaving or entering "
-            "the frame." + voulu
+            "the frame."
+            # Le 29/09, un ballon est parti tout seul, au-dessus des mains, sans geste de lancer.
+            + " Objects obey physics: report an object that moves, floats or flies away without something "
+            "pushing it, or an action aimed at a target that is not where the action goes." + avant + voulu
             + " "
             "Many shots have no problem: then answer ok with an empty list. Report only what you clearly see, "
             "each problem once, at the first frame where it appears, in one short sentence. "

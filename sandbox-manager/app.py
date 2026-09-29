@@ -4582,7 +4582,10 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
         # Le texte du scénario INITIAL : une correction a pu changer l'histoire
         # (James assis avant d'être invité, 28/09) ; la vidéo doit suivre l'histoire voulue.
         texte = initiaux[k]["image_paroles"]
-        verdict = await _juger_passage(film, debut, (fins[k] / ips) - debut, fiches, refs, texte)
+        # Une seconde du plan d'avant ouvre la planche : le raccord se juge aussi (29/09).
+        avant = min(1.0, debut) if k else 0.0
+        verdict = await _juger_passage(film, debut - avant, (fins[k] / ips) - debut + avant, fiches, refs, texte,
+                                       raccord=round(avant * 2))
         try:
             morceau = await asyncio.to_thread(montage.extraire, film, premiere, fins[k])
         except montage.MontageImpossible as exc:
@@ -4609,7 +4612,8 @@ def _photos_des_fiches(ids) -> tuple:
     return noms, refs
 
 
-async def _juger_passage(film: bytes, debut: float, duree: float, noms: list, refs: list, texte: str) -> dict:
+async def _juger_passage(film: bytes, debut: float, duree: float, noms: list, refs: list, texte: str,
+                         raccord: int = 0) -> dict:
     try:
         png, nombre = await asyncio.to_thread(montage.planche, film, debut, duree)
     except montage.MontageImpossible as exc:
@@ -4617,7 +4621,7 @@ async def _juger_passage(film: bytes, debut: float, duree: float, noms: list, re
     # Free AI Max : le 28/09, sur la même planche du plan 2, « Auto » (Gemini
     # flash-lite) a dit « rien à signaler » quatre fois ; « Max » (Gemini
     # 3.8 flash) a vu deux fois l'homme en trop et la veste grise de Léa.
-    reponse = await _chat_du_studio(video_h3.consigne_jugement(noms, texte), "le jugement des plans",
+    reponse = await _chat_du_studio(video_h3.consigne_jugement(noms, texte, raccord), "le jugement des plans",
                                     images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
                                     modele=video_h3.MODELE_JUGE)
     try:

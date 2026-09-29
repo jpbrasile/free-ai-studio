@@ -1094,7 +1094,8 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
         v.consigne_decoupage("Un film.")
     # Essai du 29/09 : geste étalé sur trois plans, élément du lieu absent au départ, caméra qui avance.
     for regle in ("never spread one gesture over several shots", "already visible from the start",
-                  "the camera stays at that framing"):
+                  "the camera stays at that framing", "keep that layout in every shot",
+                  "what moves the object"):
         assert regle in v.consigne_decoupage("Un film."), regle
     assert v.CADRAGE in v.consigne_correction([], "retour")
     assert "close-up shows one character only" in v.CADRAGE
@@ -1105,6 +1106,11 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     # Le juge signale aussi ce qui disparaît sans sortir du cadre.
     assert "disappears or appears without leaving or entering the frame" in v.consigne_jugement([])
     assert "disappears or appears" in v.consigne_jugement(["Léa"], "Léa sourit")
+    # 29/09 : objets qui partent seuls, et raccord avec le plan d'avant.
+    assert "without something pushing it" in v.consigne_jugement([])
+    assert "END OF THE PREVIOUS SHOT" not in v.consigne_jugement(["Léa"], "Léa sourit")
+    assert "Frames 1 to 2 are the END OF THE PREVIOUS SHOT, the shot itself starts at frame 3" in \
+        v.consigne_jugement(["Léa"], "Léa sourit", raccord=2)
 
 
 def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
@@ -1450,7 +1456,8 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     r = client(h3).post(f"/video-h3/scenario/{sid}/juger", headers=CLE)
     assert r.status_code == 200, r.text
     # Le film SANS musique, découpé plan par plan aux images notées.
-    assert planches == [(b"FILM", 0.0, 5.167), (b"FILM", 5.167, 5.167), (b"FILM", 10.333, 5.167)]
+    # À partir du plan 2, la planche s'ouvre sur la dernière seconde du plan d'avant (raccord, 29/09).
+    assert planches == [(b"FILM", 0.0, 5.167), (b"FILM", 4.167, 6.167), (b"FILM", 9.333, 6.167)]
     contenu = vu["chats"][-1]["messages"][0]["content"]
     assert vu["chats"][-1]["model"] == "free-ai-max"   # « Auto » manquait les défauts le 28/09
     assert contenu[0]["type"] == "text" and "Image 1 shows Léa" in contenu[0]["text"]
@@ -1458,6 +1465,8 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     assert "Léa et James marchent, puis James dit « Thank you. »" in contenu[0]["text"]
     assert plans[2]["image_paroles"] not in contenu[0]["text"]
     assert "not in this order" in contenu[0]["text"]
+    assert "Frames 1 to 2 are the END OF THE PREVIOUS SHOT" in contenu[0]["text"]
+    assert "END OF THE PREVIOUS SHOT" not in vu["chats"][0]["messages"][0]["content"][0]["text"]
     assert [c["type"] for c in contenu[1:]] == ["image_url"] * 3   # deux fiches, puis la planche
     assert [e[0] for e in ecoutes] == [b"PLAN 0-124", b"PLAN 124-248", b"PLAN 248-372"]
     assert ecoutes[0][1] == {"model": "whisper-1"}
@@ -1466,7 +1475,7 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     # « Non. » n'a pas été dit : un défaut de plus, au début du plan.
     assert j[1]["paroles"] == {"attendu": ["Non."], "entendu": "Oui, bien sûr.", "part": 0.0, "ok": False,
                                 "passages": []}   # un faux plan : aucun passage à découper
-    assert j[1]["defauts"] == [{"t_s": 9.2, "quoi": "veste grise"},
+    assert j[1]["defauts"] == [{"t_s": 8.2, "quoi": "veste grise"},
                                {"t_s": 5.2, "quoi": "Réplique attendue « Non. » ; le clip dit : « Oui, bien sûr. »."}]
     assert j[2]["paroles"]["ok"] is True and len(j[2]["defauts"]) == 1
     assert client(h3).post("/video-h3/scenario/" + "9" * 32 + "/juger", headers=CLE).status_code == 404
