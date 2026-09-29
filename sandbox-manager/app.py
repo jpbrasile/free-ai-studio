@@ -4172,12 +4172,25 @@ async def video_h3_depart(request: Request, authorization: Optional[str] = Heade
     _h3_ou_404()
     auth(authorization)
     corps = await request.json()
+    # La tenue du plan (29/09) : `plans` (les textes du film) et `plan` (son numéro, 1…)
+    # donnent à l'image de départ la même tenue que celle du plan tourné.
+    tenues = {}
+    if not corps.get("image") and corps.get("fiches") and isinstance(corps.get("plans"), list):
+        plans = [{"image_paroles": str(p)} for p in corps["plans"][:video_h3.SCENARIO_PLANS_MAX]]
+        try:
+            k = int(corps.get("plan") or 0) - 1
+            ids = [str(f) for f in corps["fiches"]]
+            for fid, par_plan in (await _tenues_des_plans(ids, plans)).items():
+                if 0 <= k < len(par_plan) and par_plan[k]:
+                    tenues[fid] = (await _photo_de_tenue(fid, par_plan[k]))[0]
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, "Plans ou fiches illisibles.") from exc
     try:
         if corps.get("image"):
             image, texte = str(corps["image"]), ""
         else:
             demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
-                                                    corps.get("fiches") or [], corps.get("decor"))
+                                                    corps.get("fiches") or [], corps.get("decor"), tenues)
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -4528,7 +4541,7 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
             # contrôlées ici, son image n'existera qu'au tournage.
             payload.update(mode="premiere", fiche=None, fiches=None, langues=None)
             video_h3.preparer(dict(payload, mode="texte"))
-        a_tourner.append({"enchainement": p["enchainement"], "payload": payload})
+        a_tourner.append({"enchainement": p["enchainement"], "payload": payload, "numero": len(a_tourner) + 1})
     return commun, musique, a_tourner
 
 
@@ -4539,30 +4552,48 @@ async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
     on change les vêtements on le fait pour tous les plans et on rajoute une photo de
     référence pour la consistance ». Rien de lisible : les plans partent tels quels."""
     ids = commun["fiches"] or ([commun["fiche"]] if commun["fiche"] else [])
+    faites = []
+    for fid, par_plan in (await _tenues_des_plans(ids, plans)).items():
+        nom = video_h3.fiche_lire(fid)["nom"]
+        for tenue in dict.fromkeys(t for t in par_plan if t):
+            b64, reprise = await _photo_de_tenue(fid, tenue)
+            numeros = [k + 1 for k, t in enumerate(par_plan) if t == tenue]
+            # Au rejeu, les plans repris sont retirés de `a_tourner` : chacun garde son numéro.
+            for p in a_tourner:
+                if p["numero"] in numeros and p["payload"].get("mode") == "references":
+                    p["payload"].setdefault("tenues", {})[fid] = b64
+                    video_h3.preparer(p["payload"])   # neuf images au plus, contrôlé avant le premier sou
+            faites.append({"fiche": fid, "nom": nom, "tenue": tenue, "plans": numeros, "reprise": reprise})
+    return faites
+
+
+async def _tenues_des_plans(ids: list, plans: list) -> dict:
+    """{fiche: [tenue de chaque plan, ou None]} pour les fiches dont les plans nomment
+    la tenue ; rien de lisible, {} (les plans partent avec les photos de la fiche)."""
     fiches = [video_h3.fiche_lire(f) for f in ids]
     fiches = [f for f in fiches if f.get("images")]
     if not fiches:
-        return []
+        return {}
+    noms = [f["nom"] for f in fiches]
     try:
-        tenues = video_h3.lire_tenues(await _chat_du_studio(
-            video_h3.consigne_tenues(plans, [f["nom"] for f in fiches]),
-            "le relevé des tenues"), [f["nom"] for f in fiches])
+        releve = video_h3.lire_tenues(await _chat_du_studio(
+            video_h3.consigne_tenues(plans, noms), "le relevé des tenues"), noms, len(plans))
     except HTTPException:
-        return []
-    faites = []
-    for f in fiches:
-        if f["nom"] not in tenues:
-            continue
-        demande, _ = video_h3.demande_image(video_h3.texte_photo_tenue(f["nom"], tenues[f["nom"]]), [], [f["id"]])
-        image = await _image_du_studio(demande)
-        did = video_h3.depart_poser(image)
-        b64 = image.split(",", 1)[1]
-        for p in a_tourner:
-            if p["payload"].get("mode") == "references":
-                p["payload"].setdefault("tenues", {})[f["id"]] = b64
-                video_h3.preparer(p["payload"])   # neuf images au plus, contrôlé avant le premier sou
-        faites.append({"fiche": f["id"], "nom": f["nom"], "tenue": tenues[f["nom"]], "image": did})
-    return faites
+        return {}
+    return {f["id"]: video_h3.tenues_par_plan(releve[f["nom"]], len(plans)) for f in fiches if f["nom"] in releve}
+
+
+async def _photo_de_tenue(fid: str, tenue: str) -> tuple:
+    """(photo en base64, reprise ?) : la variante gardée sur la fiche, sinon faite
+    (image du Studio, gratuite) puis gardée pour les films suivants."""
+    b64 = video_h3.fiche_tenue_image(fid, tenue)
+    if b64:
+        return b64, True
+    nom = video_h3.fiche_lire(fid)["nom"]
+    demande, _ = video_h3.demande_image(video_h3.texte_photo_tenue(nom, tenue), [], [fid])
+    image = await _image_du_studio(demande)
+    video_h3.fiche_poser_tenue(fid, tenue, image)
+    return image.split(",", 1)[1], False
 
 
 async def _scenario_traduire(a_tourner: list, musique):
@@ -4703,9 +4734,28 @@ async def _juger_passage(film: bytes, debut: float, duree: float, noms: list, re
                                     images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
                                     modele=video_h3.MODELE_JUGE)
     try:
-        return video_h3.lire_jugement(reponse, debut, nombre)
+        verdict = video_h3.lire_jugement(reponse, debut, nombre)
     except ValueError as exc:
         raise HTTPException(502, str(exc)) from exc
+    # Second regard, serré, sur la première seconde et demie du plan lui-même (29/09).
+    depart = debut + raccord * 0.5
+    serre = min(video_h3.DEBUT_SERRE_S, max(0.0, debut + duree - depart))
+    if serre <= 0:
+        return verdict
+    try:
+        png, nombre = await asyncio.to_thread(montage.planche_serree, film, depart, serre, video_h3.DEBUT_SERRE_PAS)
+        reponse = await _chat_du_studio(video_h3.consigne_debut(noms, texte), "le jugement du début des plans",
+                                        images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
+                                        modele=video_h3.MODELE_JUGE)
+        debut_vu = video_h3.lire_jugement(reponse, depart, nombre, video_h3.DEBUT_SERRE_PAS)
+    except (montage.MontageImpossible, ValueError, HTTPException) as exc:
+        # Une aide de plus : illisible, le jugement d'ensemble reste, et on le dit.
+        verdict["debut_erreur"] = str(getattr(exc, "detail", exc))
+        return verdict
+    verdict["defauts"] = debut_vu["defauts"] + verdict["defauts"]
+    if debut_vu["defauts"]:
+        verdict["verdict"] = "defaut"
+    return verdict
 
 
 async def _ecouter(video: bytes, texte: str) -> dict:
@@ -4805,14 +4855,22 @@ async def video_h3_scenario_corriger(sid: str, request: Request,
         raise HTTPException(400, "Remarques trop longues (2 000 caractères au plus).")
     # Le juge répète un défaut image après image (dix lignes pour un plan, le 28/09) :
     # trois par plan suffisent à corriger, et la boucle « tout seul » ne bute plus.
-    par_plan = {}
+    par_plan, video_seule = {}, []
     for d in corps.get("defauts") or []:
         if isinstance(d, dict) and str(d.get("quoi") or "").strip():
+            # Un défaut dont le texte n'est pas la cause ne réécrit rien : le plan se
+            # rejoue tel quel, avec une autre graine (29/09).
+            if d.get("cause") == "video":
+                video_seule.append(d.get("plan"))
+                continue
             par_plan.setdefault(d.get("plan"), []).append(d)
     for plan, liste in par_plan.items():
         for d in liste[:DEFAUTS_PAR_PLAN]:
             retours.append("Shot %s, at %s s: %s" % (plan, d.get("t_s"), " ".join(str(d["quoi"]).split())[:200]))
     retours = "\n".join(r for r in retours if r)
+    if not retours and video_seule:
+        return {"plans": sc["plans"], "retours": "", "continuite": {"ok": None, "problemes": [], "etats": []},
+                "sans_texte": sorted(set(video_seule), key=str)}
     if not retours:
         raise HTTPException(400, "Aucun retour : faites juger les plans, ou écrivez vos remarques.")
     # L'histoire de référence est celle du scénario initial : une correction ne la change pas.
@@ -4831,7 +4889,8 @@ async def video_h3_scenario_corriger(sid: str, request: Request,
                                                 "continuity; avoid this:\n" + "\n".join(
                                                     "Shot %d: %s" % (p["plan"], p["quoi"])
                                                     for p in continuite["problemes"]), histoire)
-    return {"plans": plans, "retours": retours, "continuite": continuite}
+    return {"plans": plans, "retours": retours, "continuite": continuite,
+            "sans_texte": sorted(set(video_seule) - set(par_plan), key=str)}
 
 
 @app.post("/video-h3/scenario/{sid}/rejouer")

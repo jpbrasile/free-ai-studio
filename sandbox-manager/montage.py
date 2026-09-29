@@ -292,6 +292,21 @@ def planche(video: bytes, debut_s: float, duree_s: float) -> tuple[bytes, int]:
         return sortie.read_bytes(), nombre
 
 
+def planche_serree(video: bytes, debut_s: float, duree_s: float, pas_s: float) -> tuple[bytes, int]:
+    """Comme `planche`, une image toutes les `pas_s` secondes (0,125 : le début d'un
+    plan, 29/09/2026), en images plus grandes (4 x 3, 480 px de large chacune)."""
+    nombre = max(1, min(PLANCHE_IMAGES, int(-(-duree_s / pas_s // 1))))
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "a.mp4"), Path(dossier, "serree.png")
+        a.write_bytes(video)
+        _lancer(["-ss", "%.3f" % debut_s, "-t", "%.3f" % duree_s, "-i", str(a),
+                 "-vf", "fps=%g,scale=480:-1,tile=4x3" % (1 / pas_s), "-frames:v", "1", str(sortie)],
+                "La planche serrée du début du plan")
+        if not sortie.is_file() or not sortie.stat().st_size:
+            raise MontageImpossible("La planche serrée du plan n'a pas pu être faite.")
+        return sortie.read_bytes(), nombre
+
+
 def extraire(video: bytes, premiere: int, fin: int) -> bytes:
     """Les images [premiere, fin) d'un film, son compris : un plan déjà tourné,
     repris tel quel quand un scénario est rejoué (28/09/2026). Un seul

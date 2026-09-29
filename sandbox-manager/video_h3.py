@@ -364,9 +364,20 @@ FIGURANTS_IMAGE = ("S'il y a d'autres personnes que celles décrites (passants, 
                    "peu d'objets au premier plan.")
 
 
-def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
+def _data_url(b64: str) -> str:
+    """Une image en base64 nu (PNG, JPEG ou WebP) en data URL, son type lu dans ses octets."""
+    octets = base64.b64decode(b64[:32] + "=" * (-len(b64[:32]) % 4))
+    genre = next((g for debut, g in _EXTENSIONS.items() if octets.startswith(debut)), ".png")
+    return f"data:{_TYPES[genre]};base64,{b64}"
+
+
+def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
     l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
+
+    `tenues` : {fiche: photo de la tenue du plan (base64)} ; cette fiche ne joint
+    alors que son portrait de face et cette photo (29/09 : la même tenue sur
+    l'image de départ que dans le plan tourné).
 
     `decor` : le numéro d'une image de départ déjà gardée (celle du plan d'avant),
     jointe en dernier pour garder le même lieu. Le 28/09, le plan 2 décrit par
@@ -376,17 +387,24 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None) -> tuple:
     if not isinstance(fiches, (list, tuple)) or len(set(map(str, fiches))) != len(fiches):
         raise ValueError("Liste de fiches illisible.")
     photos, presentation = [], []
+    tenues = tenues or {}
     for fid in fiches:
         fiche = fiche_lire(fid)
-        urls = [fiche_image_data_url(fid, a) for a in ANGLES if a in fiche["images"]]
+        tenue = tenues.get(fid)
+        urls = ([_data_url(b) for b in fiche_images(fid, visage_seul=True)] if tenue
+                else [fiche_image_data_url(fid, a) for a in ANGLES if a in fiche["images"]])
         if not urls:
             raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
-        planche = fiche_planche_data_url(fid)
+        planche = None if tenue else fiche_planche_data_url(fid)   # la planche montre l'ancienne tenue
         if planche:   # la même personne sous tous les angles (28/09)
             urls.append(planche)
+        if tenue:
+            urls.append(_data_url(tenue))
         n = len(photos)
         presentation.append("%s est la personne des images jointes %d à %d" % (fiche["nom"], n + 1, n + len(urls))
                             if len(urls) > 1 else "%s est la personne de l'image jointe %d" % (fiche["nom"], n + 1))
+        if tenue:
+            presentation[-1] += ", vêtue exactement comme sur l'image jointe %d" % (n + len(urls))
         photos += urls
     # Les photos d'une fiche peuvent montrer plusieurs tenues : celle de la
     # description l'emporte (essai du 28/09 : photos en sweat et en débardeur).
@@ -483,7 +501,8 @@ def fiches_liste() -> list:
         except (OSError, ValueError):
             continue
         fiches.append({"id": d["id"], "nom": d["nom"], "description": d["description"],
-                       "angles": [a for a in ANGLES if a in d.get("images", {})], "cree_le": d["cree_le"]})
+                       "angles": [a for a in ANGLES if a in d.get("images", {})], "cree_le": d["cree_le"],
+                       "tenues": [t["tenue"] for t in (d.get("tenues") or {}).values()]})
     return sorted(fiches, key=lambda d: d["cree_le"])
 
 
@@ -675,10 +694,62 @@ def lire_ressemblance(reponse: str) -> dict:
     return {"ressemblance": niveau, "ecarts": " ".join(str(d.get("ecarts") or "").split())}
 
 
-def fiche_images(fid) -> list:
-    """Les images de la fiche, dans l'ordre des angles, en base64 nu."""
+def fiche_images(fid, visage_seul: bool = False) -> list:
+    """Les images de la fiche, dans l'ordre des angles, en base64 nu. `visage_seul` :
+    le portrait de face seulement, quand une autre tenue est jouée (les autres
+    photos montrent l'ancienne) ; sans portrait de face, toutes."""
     fiche = fiche_lire(fid)
-    return [fiche_image_data_url(fid, a).split(",", 1)[1] for a in ANGLES if a in fiche["images"]]
+    angles = [a for a in ANGLES if a in fiche["images"]]
+    if visage_seul and ANGLE_DEPART in angles:
+        angles = [ANGLE_DEPART]
+    return [fiche_image_data_url(fid, a).split(",", 1)[1] for a in angles]
+
+
+# --- Les tenues d'un personnage : des variantes gardées sur sa fiche (29/09) ------
+# Demande du propriétaire : « le profil du personnage dérive de la fiche de base,
+# avec des attributs qui changent comme les vêtements, pour que la vidéo tienne au
+# contexte ». Visage et coiffure restent ceux de la fiche ; chaque tenue a sa photo
+# en pied, faite une fois, puis reprise telle quelle par tous les films qui la jouent.
+
+def _cle_tenue(tenue: str) -> str:
+    return _norme_replique(tenue)
+
+
+def fiche_tenue_image(fid, tenue: str):
+    """La photo (base64 nu) de cette tenue sur la fiche ; None si elle n'est pas encore faite."""
+    variante = (fiche_lire(fid).get("tenues") or {}).get(_cle_tenue(tenue))
+    if not variante:
+        return None
+    chemin = _dossier_fiche(fid) / variante["image"]
+    return base64.b64encode(chemin.read_bytes()).decode() if chemin.is_file() else None
+
+
+def fiche_poser_tenue(fid, tenue: str, image: str) -> dict:
+    fiche = fiche_lire(fid)
+    cle = _cle_tenue(tenue)
+    if not cle:
+        raise ValueError("Tenue vide.")
+    octets = base64.b64decode(_image(image, "Photo de la tenue"))
+    ext = next(e for debut, e in _EXTENSIONS.items() if octets.startswith(debut))
+    nom = "tenue_" + hashlib.sha256(cle.encode()).hexdigest()[:10] + ext
+    (_dossier_fiche(fid) / nom).write_bytes(octets)
+    fiche.setdefault("tenues", {})[cle] = {"tenue": " ".join(tenue.split()), "image": nom}
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def tenues_par_plan(par_plan: dict, nombre: int) -> list:
+    """{numéro de plan (1…) ou 0 pour tous : tenue} → la tenue de chaque plan. Un
+    plan qui n'en nomme pas garde celle du plan d'avant (ou, au début, la
+    première nommée) : un personnage ne se change pas hors champ."""
+    tous = par_plan.get(0)
+    liste = [par_plan.get(k + 1) or tous for k in range(nombre)]
+    premiere = next((t for t in liste if t), None)
+    courante, sortie = premiere, []
+    for t in liste:
+        courante = t or courante
+        sortie.append(courante)
+    return sortie
 
 
 def sujets_des_fiches(nombres: list, tenues=()) -> str:
@@ -858,6 +929,17 @@ CADRAGE = ("Framing: a close-up shows one character only; when two or more chara
            "at the edge of the frame or partly hidden; when they move, they walk through and leave the frame. "
            "Keep few objects in the foreground. Never add or remove a character of the story for this. ")
 
+# La physique écrite en entier (29/09, demande du propriétaire : « rebondir AU SOL,
+# sinon il l'a fait en l'air ; H3 est faible en physique, sois générique »). H3 ne
+# déduit rien : un contact non nommé n'a pas lieu, ou a lieu n'importe où.
+PHYSIQUE = ("Physics is never implied, the video model is poor at it: for every object that moves, write what "
+            "sets it moving (hand, foot, gravity), its path, EACH contact with a named surface (\"bounces once on "
+            "the wooden floor\", never \"bounces\"; \"hits the backboard\"; \"lands on the table\"), and where it "
+            "comes to rest and that it stays still there (\"then lies still on the floor at the right\"). Things "
+            "fall DOWN to a named surface; nothing floats, rises, speeds up or changes direction on its own; a "
+            "liquid pours into a named container; a door swings on its hinges. Give each moving object a count "
+            "(\"the only ball\") so that no second one appears. ")
+
 
 def consigne_decoupage(scenario: str) -> str:
     # Une action et une réplique courte par plan : l'essai du 27/09 (clip 2) a
@@ -923,7 +1005,7 @@ def consigne_decoupage(scenario: str) -> str:
             "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
             "\"coupe\" for a new camera shot or place, \"suite\" when it continues the previous shot "
             "without a cut. The first shot is \"coupe\". Answer with the JSON array only.\n\n%s"
-            % (SCENARIO_PLANS_MAX, CADRAGE, scenario))
+            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE, scenario))
 
 
 def verifier_plans(plans) -> list:
@@ -1056,7 +1138,7 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
              "the cut and gone after it." if raccord else "")
     # Le texte du plan : la vidéo doit faire ce qu'il dit, dans le même ordre (28/09).
     voulu = (" The shot is meant to show: «%s». Also say if the video does not show these actions, or not in "
-             "this order." % " ".join(texte.split())) if texte.strip() else ""
+             "this order." % " ".join(texte.split()) + CAUSE) if texte.strip() else ""
     # Le modèle rend le NUMÉRO de l'image, le Studio en fait l'heure : le 28/09,
     # un départ mal annoncé dans la consigne a décalé sa réponse d'une seconde.
     return (refs + f" Image {len(noms) + 1} is a contact sheet of ONE video shot: frames numbered from 1, "
@@ -1076,10 +1158,42 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
             "Many shots have no problem: then answer ok with an empty list. Report only what you clearly see, "
             "each problem once, at the first frame where it appears, in one short sentence. "
             "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", "
-            "\"defauts\": [{\"image\": frame number, \"quoi\": \"what is wrong\"}]}.")
+            "\"defauts\": [{\"image\": frame number, \"quoi\": \"what is wrong\""
+            + (", \"cause\": \"texte\" or \"video\"" if texte.strip() else "") + "}]}.")
 
 
-def lire_jugement(reponse: str, debut_s: float, nombre: int) -> dict:
+# La cause d'un défaut (29/09, remarque du propriétaire : « tout défaut vient d'un
+# mauvais script ») : le plus souvent oui, mais pas toujours. Le plan 3 v3 avait un
+# texte juste, et H3 a rejoué le tir quand même. Réécrire un texte juste ne sert à
+# rien : ce défaut-là se rejoue (autre graine) sans toucher au texte.
+CAUSE = (" For each problem, give its cause: \"texte\" when the shot's text asks for it, allows it, or is vague "
+         "about it (a movement without its surface or its end, an action told again, something not placed); "
+         "\"video\" when the text is clear and right and the video does not follow it.")
+
+# Le second regard, serré, sur le début du plan (29/09) : sur la planche à 0,5 s, le
+# juge a dit « ok » au plan 3 v3 ; à 0,25 s puis zoomé à 1/8 s, l'agent a vu un
+# second ballon traverser le filet entre 0,75 et 1 s. Les redites et les objets
+# dédoublés naissent dans la première seconde, là où H3 raccorde l'image de départ.
+DEBUT_SERRE_S, DEBUT_SERRE_PAS = 1.5, 0.125
+
+
+def consigne_debut(noms: list, texte: str = "") -> str:
+    refs = " ".join(f"Image {k + 1} shows {nom}, a reference picture." for k, nom in enumerate(noms))
+    voulu = (" The shot's text is: «%s»." % " ".join(texte.split()) + CAUSE) if texte.strip() else ""
+    return (refs + f" Image {len(noms) + 1} is a contact sheet of the FIRST {DEBUT_SERRE_S:g} SECONDS of one video "
+            f"shot, one frame every {DEBUT_SERRE_PAS:g} s, numbered from 1, read left to right then top to "
+            "bottom. Look closely at every object that moves (a ball, a glass, a door) and count each one in "
+            "every frame. Report only what you clearly see: an object that appears twice or comes from nowhere, "
+            "an object that repeats a movement the text says is already over, an object that bounces or stops "
+            "in mid-air instead of on a surface, an object that moves without anything moving it, a character "
+            "that jumps to another place or pose." + voulu + " Many shots have no problem: then answer ok with "
+            "an empty list. Each problem once, at the first frame where it appears, in one short sentence. "
+            "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", \"defauts\": [{\"image\": frame "
+            "number, \"quoi\": \"what is wrong\"" + (", \"cause\": \"texte\" or \"video\"" if texte.strip() else "")
+            + "}]}.")
+
+
+def lire_jugement(reponse: str, debut_s: float, nombre: int, pas: float = 0.5) -> dict:
     t = str(reponse or "")
     debut, fin = t.find("{"), t.rfind("}")
     try:
@@ -1096,7 +1210,10 @@ def lire_jugement(reponse: str, debut_s: float, nombre: int) -> dict:
             continue
         quoi = " ".join(str(x.get("quoi") or "").split())[:300]
         if 1 <= i <= nombre and quoi:   # une image qui n'existe pas n'a rien montré
-            defauts.append({"t_s": round(debut_s + (i - 1) * 0.5, 1), "quoi": quoi})
+            defaut = {"t_s": round(debut_s + (i - 1) * pas, 2 if pas < 0.5 else 1), "quoi": quoi}
+            if x.get("cause") in ("texte", "video"):
+                defaut["cause"] = x["cause"]
+            defauts.append(defaut)
     return {"verdict": d["verdict"], "defauts": defauts}
 
 
@@ -1149,6 +1266,7 @@ def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
             "things happen, lines of dialogue included: an action caused by a line comes after that line. "
             "If a problem cannot be "
             "fixed without changing what happens, leave that shot unchanged: it will be shot again. " + CADRAGE +
+            PHYSIQUE +
             "Answer with the JSON array only.\n\n"
             "Shots: %s\n\nFeedback: %s" % (json.dumps(plans, ensure_ascii=False), retours))
 
@@ -1161,27 +1279,37 @@ def consigne_tenues(plans: list, noms: list) -> str:
     """Les noms seuls, jamais la description de la fiche : le 29/09, l'âge d'une fiche
     (15 ans) à côté d'une question de vêtements a fait filtrer la demande par Gemini
     (« content_filter: PROHIBITED_CONTENT »), réponse vide. Toute tenue que les plans
-    nomment reçoit sa photo, même si c'est celle de la fiche : sans danger."""
-    return ("Here are the shots of a short film. For each character named below, say which clothing the "
-            "shots give them; leave it empty when the shots name no clothing. Answer in French, JSON only: "
-            "{\"tenues\": [{\"nom\": \"...\", \"tenue\": \"...\"}]}, the clothing only, in a few words, as "
-            "the shots say it.\n\nCharacters: %s\n\nShots: %s"
+    nomment reçoit sa photo, même si c'est celle de la fiche : sans danger. Plan par
+    plan : un personnage peut changer de tenue au fil du film."""
+    return ("Here are the shots of a short film, numbered from 1. For each character named below and each shot "
+            "that names their clothing, say which clothing that shot gives them; skip the shots that name none. "
+            "Answer in French, JSON only: {\"tenues\": [{\"nom\": \"...\", \"plan\": shot number, \"tenue\": "
+            "\"...\"}]}, the clothing only, in a few words, as the shot says it, with the same words for the same "
+            "clothing.\n\nCharacters: %s\n\nShots: %s"
             % (json.dumps(list(noms), ensure_ascii=False),
-               json.dumps([p["image_paroles"] for p in plans], ensure_ascii=False)))
+               json.dumps({k + 1: p["image_paroles"] for k, p in enumerate(plans)}, ensure_ascii=False)))
 
 
-def lire_tenues(reponse: str, noms: list) -> dict:
-    """{nom: tenue} pour les seuls personnages connus dont la tenue change ; illisible, rien ne change."""
+def lire_tenues(reponse: str, noms: list, nombre: int = 0) -> dict:
+    """{nom: {plan: tenue}} pour les seuls personnages connus (plan 0 : tous les
+    plans, quand le relevé n'en donne pas) ; illisible, rien ne change."""
     t = str(reponse or "")
     debut, fin = t.find("{"), t.rfind("}")
     try:
         d = json.loads(t[debut:fin + 1]) if debut >= 0 else {}
     except ValueError:
         d = {}
-    tenues = {}
+    tenues: dict = {}
     for x in (d.get("tenues") if isinstance(d, dict) else None) or []:
-        if isinstance(x, dict) and x.get("nom") in noms and str(x.get("tenue") or "").strip():
-            tenues[x["nom"]] = " ".join(str(x["tenue"]).split())[:300]
+        if not (isinstance(x, dict) and x.get("nom") in noms and str(x.get("tenue") or "").strip()):
+            continue
+        try:
+            plan = int(x.get("plan") or 0)
+        except (TypeError, ValueError):
+            continue
+        if plan < 0 or (nombre and plan > nombre):
+            continue
+        tenues.setdefault(x["nom"], {})[plan] = " ".join(str(x["tenue"]).split())[:300]
     return tenues
 
 
@@ -1225,6 +1353,10 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "the previous one? is it said what moves an object and where it ends? does a character touch, "
             "take, pour into or hand something that stands elsewhere in the frame without walking to it? "
             "(6) does the camera stay on the same side and keep the framing written? "
+            # 29/09 : « rebondit » sans surface, et H3 a fait rebondir le ballon en l'air.
+            "(7) physics: for every moving object, are what moves it, each contact with a NAMED surface "
+            "(bounces on the floor, not just bounces) and where it comes to rest all written? A shot that "
+            "leaves one of them out is a problem: quote the vague words. "
             # Même essai : trois alertes sur trois demandaient d'écrire ce qui était déjà écrit.
             "Report only real problems, each once, in one short sentence that says what to change. Before "
             "reporting that something is missing, read the shot again: if its text already says it, it is "
@@ -1449,7 +1581,9 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         fiches.append(fiche)
         if not refs:
             continue
-        images_fiche = fiche_images(fiche["id"])
+        # Une autre tenue : le visage de la fiche et la photo de la tenue, sans les photos
+        # qui montrent l'ancienne (deux tenues à la fois, H3 choisissait au hasard).
+        images_fiche = fiche_images(fiche["id"], visage_seul=bool(tenues.get(fiche["id"])))
         if not images_fiche:
             raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
         if tenues.get(fiche["id"]):
@@ -2673,7 +2807,9 @@ async function chargerFiches(choisir){
     for (const sel of [choix, ref]){
       const o = document.createElement("option");
       o.value = f.id;
-      o.textContent = f.nom + " (" + n + " image" + (n > 1 ? "s" : "") + ")";
+      // Les tenues gardées sur la fiche (29/09), reprises par chaque film qui les joue.
+      o.textContent = f.nom + " (" + n + " image" + (n > 1 ? "s" : "") + ")"
+        + ((f.tenues || []).length ? " · tenues : " + f.tenues.join(", ") : "");
       sel.appendChild(o);
     }
   }
@@ -3073,7 +3209,9 @@ function blocDepart(p){
     const avant = PLANS.slice(0, PLANS.indexOf(p)).reverse().find(q => q.image_depart);
     const r = await fetch("/video-h3/depart", {method: "POST", headers: H, body: JSON.stringify({
       texte: texte.value, ameliorations: ameliorations, fiches: fichesDuScenario(),
-      decor: avant ? avant.image_depart : null})});
+      decor: avant ? avant.image_depart : null,
+      // La tenue de ce plan, relevée sur tout le film (29/09) : la même que dans le plan tourné.
+      plans: PLANS.map(q => q.image_paroles), plan: PLANS.indexOf(p) + 1})});
     const d = await r.json();
     if (!r.ok){ etat.className = "refus"; etat.textContent = typeof d.detail === "string" ? d.detail : "Refusé."; return false; }
     p.image_depart = d.id;
@@ -3236,7 +3374,7 @@ function dessinerJugement(jugement){
       continue;
     }
     for (const x of j.defauts){
-      const d = {plan: j.plan, t_s: x.t_s, quoi: x.quoi, garde: true};
+      const d = {plan: j.plan, t_s: x.t_s, quoi: x.quoi, cause: x.cause, garde: true};
       DEFAUTS.push(d);
       const label = document.createElement("label");
       label.className = "refus";
@@ -3244,7 +3382,10 @@ function dessinerJugement(jugement){
       c.type = "checkbox";
       c.checked = true;
       c.addEventListener("change", () => { d.garde = c.checked; });
-      label.append(c, " Plan " + j.plan + ", à " + fr(x.t_s, 1) + " s : " + x.quoi);
+      // La cause (29/09) : un texte fautif se réécrit ; un texte juste que la vidéo n'a pas suivi se rejoue tel quel.
+      const cause = {texte: " (cause : le texte, il sera réécrit)",
+                     video: " (cause : la vidéo, texte juste : le plan sera rejoué sans le réécrire)"}[x.cause] || "";
+      label.append(c, " Plan " + j.plan + ", à " + fr(x.t_s, x.t_s % 0.5 ? 2 : 1) + " s : " + x.quoi + cause);
       zone.appendChild(label);
       zone.appendChild(document.createElement("br"));
     }
@@ -3320,10 +3461,15 @@ async function actionCorriger(){
   const d = await appeler("/video-h3/scenario/" + SCENARIO_TOURNE + "/corriger",
     {retours: document.getElementById("retours").value, defauts: DEFAUTS.filter(x => x.garde)});
   PLANS = d.plans;
+  // Un plan dont le texte est juste se rejoue tel quel : coché d'office.
+  for (const n of d.sans_texte || []) RETOURNER.add(n);
   dessinerPlans();
+  const tels = (d.sans_texte || []).length ? " Plan(s) " + d.sans_texte.join(", ")
+    + " : texte juste, cochés pour être rejoués tels quels." : "";
   if (d.continuite && d.continuite.ok === false)
-    scenarioEtat("Texte corrigé, mais la continuité est à revoir : " + texteContinuite(d.continuite), true);
-  else scenarioEtat("Texte corrigé : les changements sont en gras. Relisez, puis choisissez « Rejouer ».");
+    scenarioEtat("Texte corrigé, mais la continuité est à revoir : " + texteContinuite(d.continuite) + tels, true);
+  else if (!d.retours) scenarioEtat("Aucun texte à réécrire." + tels + " Choisissez « Rejouer ».");
+  else scenarioEtat("Texte corrigé : les changements sont en gras." + tels + " Relisez, puis choisissez « Rejouer ».");
 }
 
 async function actionRejouer(){

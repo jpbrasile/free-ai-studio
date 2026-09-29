@@ -1524,6 +1524,8 @@ def test_planche_et_reprise_d_un_plan(h3, tmp_path):
     m = h3.montage
     png, nombre = m.planche(film.read_bytes(), 1.0, 2.5)
     assert png.startswith(b"\x89PNG") and nombre == 5
+    png, nombre = m.planche_serree(film.read_bytes(), 1.0, 1.5, 0.125)
+    assert png.startswith(b"\x89PNG") and nombre == 12
     extrait = tmp_path / "extrait.mp4"
     extrait.write_bytes(m.extraire(film.read_bytes(), 24, 72))
     assert m.images(extrait) == 48
@@ -2167,3 +2169,138 @@ def test_la_planche_de_personnage_se_cree_sert_aux_images_et_se_supprime(h3, mon
     for morceau in ('id="fiche_planche"', "function dessinerPlanche(", "Créer la planche de personnage",
                     "Télécharger la planche", '"/planche", {method: "DELETE"'):
         assert morceau in html, morceau
+
+
+# --- 12. Physique écrite, juge serré, cause d'un défaut, tenues gardées (29/09) ---
+
+def test_la_physique_s_ecrit_en_entier_au_decoupage_a_la_relecture_et_a_la_correction(h3):
+    """29/09 : « rebondir AU SOL, sinon il l'a fait en l'air » ; règle générale, pas le ballon."""
+    v = h3.video_h3
+    plans = [{"image_paroles": "Tom lance la balle.", "ambiance": "", "enchainement": "coupe"}]
+    for consigne in (v.consigne_decoupage("Tom lance la balle."), v.consigne_correction(plans, "x")):
+        assert "bounces once on the wooden floor" in consigne and "comes to rest" in consigne
+    assert "(7) physics" in v.consigne_continuite(plans, "Tom lance la balle.")
+
+
+def test_le_juge_regarde_le_debut_serre_et_dit_la_cause(h3, monkeypatch, tmp_path):
+    """29/09 : planche à 0,5 s, « ok » ; à 1/8 s, un second ballon dans le filet."""
+    sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(h3.montage, "planche", lambda film, debut, duree: (b"\x89PNG", 11))
+    serrees = []
+    monkeypatch.setattr(h3.montage, "planche_serree", lambda film, debut, duree, pas: serrees.append(
+        (round(debut, 3), duree, pas)) or (b"\x89PNG", 12))
+    monkeypatch.setattr(h3.montage, "extraire", lambda film, de, a: b"PLAN")
+    vus = []
+    ok = '{"verdict": "ok", "defauts": []}'
+    ballon = '{"verdict": "defaut", "defauts": [{"image": 5, "quoi": "un second ballon", "cause": "video"}]}'
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([ok, ok, ok, ballon, ok, ok], vus))
+    monkeypatch.setattr(h3, "_ecouter", lambda video, texte: asyncio.sleep(0, {}))
+    j = client(h3).post(f"/video-h3/scenario/{sid}/juger", headers=CLE).json()["jugement"]
+    # Le début serré part au début du PLAN, pas à la seconde de raccord qui ouvre la planche.
+    assert serrees == [(0.0, 1.5, 0.125), (pytest.approx(124 / 24, abs=1e-3), 1.5, 0.125),
+                       (pytest.approx(248 / 24, abs=1e-3), 1.5, 0.125)]
+    assert "one frame every 0.125 s" in vus[1]["messages"][0]["content"][0]["text"]
+    assert '"cause": "texte" or "video"' in vus[1]["messages"][0]["content"][0]["text"]
+    assert j[0]["verdict"] == "ok"
+    assert j[1]["verdict"] == "defaut" and j[1]["defauts"] == [
+        {"t_s": round(124 / 24 + 4 * 0.125, 2), "quoi": "un second ballon", "cause": "video"}]
+
+
+def test_un_defaut_de_la_video_ne_reecrit_pas_le_texte(h3, monkeypatch, tmp_path):
+    sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([], []))   # aucun appel au chat
+    r = client(h3).post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={
+        "defauts": [{"plan": 3, "t_s": 11.0, "quoi": "un second ballon", "cause": "video"}]})
+    assert r.status_code == 200, r.text
+    assert r.json()["plans"] == plans and r.json()["sans_texte"] == [3] and r.json()["retours"] == ""
+    vus = []
+    corriges = [dict(plans[0]), dict(plans[1], image_paroles="Léa, assise, répond « Non. »"), dict(plans[2])]
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [json.dumps(corriges, ensure_ascii=False), '{"etats": [], "problemes": []}'], vus))
+    r = client(h3).post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={"defauts": [
+        {"plan": 2, "t_s": 6.0, "quoi": "debout", "cause": "texte"},
+        {"plan": 3, "t_s": 11.0, "quoi": "un second ballon", "cause": "video"}]})
+    assert "debout" in vus[0]["messages"][0]["content"] and "second ballon" not in vus[0]["messages"][0]["content"]
+    assert r.json()["sans_texte"] == [3]
+    assert v_lire(h3)('{"verdict": "defaut", "defauts": [{"image": 2, "quoi": "x", "cause": "autre"}]}') == \
+        {"verdict": "defaut", "defauts": [{"t_s": 0.5, "quoi": "x"}]}
+
+
+def v_lire(h3):
+    return lambda rep: h3.video_h3.lire_jugement(rep, 0.0, 12)
+
+
+def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, monkeypatch):
+    """29/09 : « le profil dérive de la fiche de base, avec des attributs qui changent »."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    fid = v.fiche_creer("Léa", "femme de 35 ans, manteau rouge")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    PIED = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\2" * 64).decode()
+    v.fiche_poser_image(fid, "pied", PIED)   # en manteau rouge : ne part plus avec une autre tenue
+    releve = ('{"tenues": [{"nom": "Léa", "plan": 1, "tenue": "maillot de basket bleu"}, '
+              '{"nom": "Léa", "plan": 3, "tenue": "robe noire"}, {"nom": "Léa", "plan": 9, "tenue": "x"}]}')
+    assert v.lire_tenues(releve, ["Léa"], 3) == {"Léa": {1: "maillot de basket bleu", 3: "robe noire"}}
+    assert v.tenues_par_plan({1: "a", 3: "b"}, 4) == ["a", "a", "b", "b"]
+    assert v.tenues_par_plan({2: "a"}, 3) == ["a", "a", "a"]
+    assert v.tenues_par_plan({0: "a"}, 2) == ["a", "a"]
+    faites_images = []
+
+    async def image(demande):
+        faites_images.append(demande)
+        return "data:image/png;base64," + base64.b64encode(
+            b"\x89PNG\r\n\x1a\n" + bytes([len(faites_images) + 2]) * 64).decode()
+
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    fils = []
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    plans = [{"image_paroles": "Léa, en maillot de basket bleu, dribble.", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Léa tire.", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Léa, en robe noire, entre au café.", "ambiance": "", "enchainement": "coupe"}]
+    corps = {"plans": plans, "fiche": fid, "longueur": 124}
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([releve], []))
+    sc = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json=corps).json()
+    assert [(t["tenue"], t["plans"], t["reprise"]) for t in sc["tenues"]] == [
+        ("maillot de basket bleu", [1, 2], False), ("robe noire", [3], False)]
+    a_tourner = fils[0][1]
+    maillot, robe = (v.fiche_tenue_image(fid, t) for t in ("Maillot de basket  bleu", "robe noire"))
+    assert maillot and robe and maillot != robe
+    assert [p["payload"]["tenues"][fid] for p in a_tourner] == [maillot, maillot, robe]
+    # Le visage de la fiche et la tenue : la photo en pied (ancienne tenue) ne part pas.
+    images = v.preparer(a_tourner[0]["payload"])["demande"]["images"]
+    assert list(images.values()) == [PNG, maillot]
+    # Un second film qui joue la même tenue la reprend de la fiche : aucune image refaite.
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([releve], []))
+    sc = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json=corps).json()
+    assert len(faites_images) == 2 and all(t["reprise"] for t in sc["tenues"])
+
+
+def test_l_image_de_depart_prend_la_tenue_de_son_plan(h3, monkeypatch):
+    v = h3.video_h3
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    fid = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    v.fiche_poser_image(fid, "pied", PNG)
+    ROBE = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\7" * 64).decode()
+    v.fiche_poser_tenue(fid, "robe noire", "data:image/png;base64," + ROBE)
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + PNG
+
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        ['{"tenues": [{"nom": "Léa", "plan": 2, "tenue": "robe noire"}]}'], []))
+    r = client(h3).post("/video-h3/depart", headers=CLE, json={
+        "texte": "Léa entre", "fiches": [fid], "plans": ["Léa marche.", "Léa, en robe noire, entre."], "plan": 2})
+    assert r.status_code == 200, r.text
+    refs = demandes[0]["image_reference"]
+    assert refs == ["data:image/png;base64," + PNG, "data:image/png;base64," + ROBE]
+    assert "vêtue exactement comme sur l'image jointe 2" in demandes[0]["prompt"]
