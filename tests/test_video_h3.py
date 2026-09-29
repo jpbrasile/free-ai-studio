@@ -1136,6 +1136,28 @@ def test_les_mains_une_pose_de_reference_une_regle_et_le_juge(h3):
     assert "Look at the hands" in v.consigne_jugement(["Léa"], "x")
 
 
+def test_la_page_cree_objets_et_poses_et_montre_le_tableau(h3):
+    """29/09, « oui fais-le » : l'objet et la pose se créent depuis la page, avec
+    une seule image adaptée ; le scénario les coche ; le tableau des éléments se voit."""
+    v = h3.video_h3
+    ballon = v.fiche_creer("basketball", "ballon de basket orange uni", genre="objet")
+    prise = v.fiche_creer("shooting grip", "main droite sous le ballon", genre="pose")
+    d = v.fiche_demande_image(ballon, "face")
+    assert "sans marque, logo ni texte" in d["prompt"] and "image_reference" not in d
+    assert "une seule personne" not in d["prompt"]
+    assert "cinq doigts" in v.fiche_demande_image(prise, "face")["prompt"]
+    for fiche in (ballon, prise):
+        with pytest.raises(ValueError, match="qu'une image"):
+            v.fiche_demande_image(fiche, "profil")
+    with pytest.raises(ValueError, match="forme, couleur"):
+        v.fiche_creer("x", "", genre="objet")
+    html = client(h3).get("/video-h3").text
+    for morceau in ('id="fiche_genre"', '<option value="pose">', "genre: genreFiche()",
+                    'id="scenario_objets"', "concat(objetsDuScenario())", "tableauElements(p.elements)",
+                    'x.genre === "personne"'):
+        assert morceau in html
+
+
 def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     """29/09, demande du propriétaire : chaque élément clé avec sa place de départ,
     son mouvement et sa place d'arrivée ; la continuité d'une « suite » se vérifie

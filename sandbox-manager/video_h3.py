@@ -532,10 +532,12 @@ def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
         raise ValueError("Une fiche est une personne, un objet ou une pose.")
     nom, description = " ".join(str(nom or "").split()), " ".join(str(description or "").split())
     if not nom or len(nom) > FICHE_NOM_MAX:
-        raise ValueError(f"Donnez un nom au personnage ({FICHE_NOM_MAX} caractères au plus).")
+        raise ValueError(f"Donnez un nom à la fiche ({FICHE_NOM_MAX} caractères au plus).")
     if not description or len(description) > FICHE_DESCRIPTION_MAX:
-        raise ValueError(f"Décrivez le personnage ({FICHE_DESCRIPTION_MAX} caractères au plus) : "
-                         "âge, visage, coiffure, tenue.")
+        raise ValueError(f"Décrivez-la ({FICHE_DESCRIPTION_MAX} caractères au plus) : "
+                         + ("âge, visage, coiffure, tenue." if genre == "personne" else
+                            "forme, couleur, matière." if genre == "objet" else
+                            "ce que fait chaque main et ses doigts."))
     fiche = {"id": os.urandom(6).hex(), "nom": nom, "description": description,
              "cree_le": time.strftime("%Y-%m-%d %H:%M:%S"), "images": {}}  # date-machine
     if genre != "personne":
@@ -562,6 +564,19 @@ def fiche_demande_image(fiche: dict, angle: str) -> dict:
     """Ce qu'on demande à l'image du Studio pour un angle : le texte, la taille,
     et le portrait de face comme image de départ pour les autres angles."""
     detail = ANGLES[_angle(angle)][1]
+    # Un objet ou une pose n'a qu'une image, sa vue de face (29/09) : les autres
+    # angles sont ceux d'une personne. Texte repris des deux fiches essayées le 29/09
+    # (ballon uni, prise de tir) : une marque dessinée revenait dans le clip.
+    genre = fiche.get("genre")
+    if genre in ("objet", "pose"):
+        if angle != ANGLE_DEPART:
+            raise ValueError("Un objet ou une pose n'a qu'une image : la vue de face.")
+        cadre = ("L'objet seul, entier, centré, sans marque, logo ni texte" if genre == "objet" else
+                 "Gros plan sur les mains et les avant-bras seulement, cinq doigts bien formés à chaque "
+                 "main, geste net, aucun visage")
+        return {"prompt": f"{fiche['description']}. {cadre} ; fond gris clair uni, lumière douce, "
+                          f"photographie réaliste, aucune autre personne.",
+                "n": 1, "size": TAILLE_IMAGE_FICHE}
     fin = "fond neutre gris clair, lumière douce, photographie réaliste, une seule personne."
     if angle == ANGLE_DEPART:
         return {"prompt": f"{fiche['description']}. {detail}, {fin}", "n": 1, "size": TAILLE_IMAGE_FICHE}
@@ -2295,12 +2310,19 @@ PAGE_HTML = r"""<!doctype html>
 
 <div class="bloc section" id="casting">
   <b>Fiches de casting</b>
-  <span class="note">un personnage décrit une fois, retrouvé d'un plan à l'autre (mode « Références »).</span>
+  <span class="note">un personnage, un objet ou une pose des mains décrit une fois, retrouvé d'un plan à
+  l'autre (mode « Références ») : son nom dans le texte d'un plan le désigne.</span>
   <label for="fiche_choix">Fiche</label>
   <select id="fiche_choix"><option value="">Nouvelle fiche…</option></select>
-  <label for="fiche_nom">Nom du personnage</label>
+  <label for="fiche_genre">Ce que décrit la fiche</label>
+  <select id="fiche_genre">
+    <option value="personne">Un personnage (quatre angles)</option>
+    <option value="objet">Un objet, le même dans tout le film (une photo)</option>
+    <option value="pose">Une pose des mains, pour un geste précis (une photo)</option>
+  </select>
+  <label for="fiche_nom">Nom (celui qu'écrit le scénario : « Leila », « the basketball »)</label>
   <input type="text" id="fiche_nom" maxlength="60">
-  <label for="fiche_description">Description (âge, visage, coiffure, tenue)</label>
+  <label for="fiche_description" id="fiche_description_titre">Description (âge, visage, coiffure, tenue)</label>
   <textarea id="fiche_description" maxlength="800"></textarea>
   <button id="fiche_creer">Créer la fiche et ses images</button>
   <button id="fiche_supprimer" hidden>Supprimer la fiche</button>
@@ -2441,6 +2463,8 @@ PAGE_HTML = r"""<!doctype html>
     <label for="scenario_fiche2">Second personnage (facultatif) et sa langue</label>
     <select id="scenario_fiche2"><option value="">Aucun</option></select>
     <select id="scenario_langue2">__LANGUES__</select>
+    <span class="note">Objets et poses des mains du scénario (facultatif) :</span>
+    <div id="scenario_objets"></div>
     <span class="note">Nommez le personnage qui parle dans la phrase de sa réplique : le Studio lui attribue
     la réplique et sa langue.</span>
     <label for="scenario_chanson">Musique de fond (une chanson du Studio, posée après le tournage)</label>
@@ -2938,6 +2962,20 @@ document.getElementById("lancer").addEventListener("click", async () => {
 // Fiches de casting (PLAN 18.9) : le Studio fabrique les images angle par angle ;
 // chacune se rejoue ou se supprime.
 let FICHES = [], ANGLES = {};
+const GENRES = {objet: "objet", pose: "pose des mains"};
+const DESCRIPTIONS_GENRE = {personne: "Description (âge, visage, coiffure, tenue)",
+  objet: "Description (forme, couleur, matière ; sans marque)",
+  pose: "Description (ce que fait chaque main et ses doigts)"};
+
+function genreFiche(){ return document.getElementById("fiche_genre").value; }
+
+document.getElementById("fiche_genre").addEventListener("change", () => {
+  document.getElementById("fiche_description_titre").textContent = DESCRIPTIONS_GENRE[genreFiche()];
+});
+
+function objetsDuScenario(){
+  return [...document.querySelectorAll("#scenario_objets input:checked")].map(c => c.value);
+}
 
 function ficheEtat(t, refus){
   const e = document.getElementById("fiche_etat");
@@ -2997,7 +3035,8 @@ async function chargerFiches(choisir){
       const o = document.createElement("option");
       o.value = f.id;
       // Les tenues gardées sur la fiche (29/09), reprises par chaque film qui les joue.
-      o.textContent = f.nom + " (" + n + " image" + (n > 1 ? "s" : "") + ")"
+      o.textContent = f.nom + (GENRES[f.genre] ? " · " + GENRES[f.genre] : "")
+        + " (" + n + " image" + (n > 1 ? "s" : "") + ")"
         + ((f.tenues || []).length ? " · tenues : " + f.tenues.join(", ") : "");
       sel.appendChild(o);
     }
@@ -3027,7 +3066,7 @@ async function chargerFiches(choisir){
     v.value = "";
     v.textContent = vide;
     sf.appendChild(v);
-    for (const f of FICHES.filter(x => x.angles.length)){
+    for (const f of FICHES.filter(x => x.angles.length && x.genre === "personne")){
       const o = document.createElement("option");
       o.value = f.id;
       o.textContent = f.nom;
@@ -3035,6 +3074,21 @@ async function chargerFiches(choisir){
     }
     sf.value = FICHES.some(f => f.id === gardeSf) ? gardeSf : "";
   }
+  // Objets et poses (29/09) : jamais de réplique, donc ni langue ni place de personnage.
+  const zoneObjets = document.getElementById("scenario_objets");
+  const objetsCoches = new Set(objetsDuScenario());
+  zoneObjets.innerHTML = "";
+  const objets = FICHES.filter(x => x.angles.length && x.genre !== "personne");
+  for (const f of objets){
+    const c = document.createElement("input");
+    c.type = "checkbox";
+    c.value = f.id;
+    c.checked = objetsCoches.has(f.id);
+    const l = document.createElement("label");
+    l.append(c, " " + f.nom + " (" + GENRES[f.genre] + ") ");
+    zoneObjets.appendChild(l);
+  }
+  if (!objets.length) zoneObjets.textContent = "aucun : créez une fiche « objet » ou « pose » plus haut.";
   await montrerFiche();
 }
 
@@ -3048,10 +3102,13 @@ async function montrerFiche(){
     document.getElementById(champ).disabled = !!id;
     if (!id) document.getElementById(champ).value = "";
   }
+  document.getElementById("fiche_genre").disabled = !!id;
   if (!id) return;
   const r = await fetch("/video-h3/fiches/" + id, {headers: H});
   const f = await r.json();
   if (!r.ok){ ficheEtat(f.detail, true); return; }
+  document.getElementById("fiche_genre").value = f.genre || "personne";
+  document.getElementById("fiche_description_titre").textContent = DESCRIPTIONS_GENRE[f.genre || "personne"];
   document.getElementById("fiche_nom").value = f.nom;
   document.getElementById("fiche_description").value = f.description;
   dessinerFiche(f);
@@ -3060,7 +3117,10 @@ async function montrerFiche(){
 function dessinerFiche(f){
   const grille = document.getElementById("fiche_images");
   grille.innerHTML = "";
-  for (const [angle, titre] of Object.entries(ANGLES)){
+  // Un objet ou une pose : une seule photo, sa vue de face (29/09).
+  const personne = (f.genre || "personne") === "personne";
+  const angles = personne ? Object.entries(ANGLES) : [["face", "Photo"]];
+  for (const [angle, titre] of angles){
     const cas = document.createElement("div");
     const t = document.createElement("b");
     t.textContent = titre;
@@ -3083,6 +3143,7 @@ function dessinerFiche(f){
     recadrer.checked = angle !== "pied";
     const coche = document.createElement("label");
     coche.append(recadrer, " recadrer sur le visage");
+    if (!personne) recadrer.checked = false;
     fichier.addEventListener("change", () => {
       const f0 = fichier.files[0];
       if (!f0) return;
@@ -3090,10 +3151,11 @@ function dessinerFiche(f){
       lecteur.onload = () => poserPhoto(f.id, angle, lecteur.result, recadrer.checked);
       lecteur.readAsDataURL(f0);
     });
-    cas.append(document.createElement("br"), "Ou une photo : ", fichier, coche);
+    cas.append(document.createElement("br"), "Ou une photo : ", fichier);
+    if (personne) cas.appendChild(coche);
     grille.appendChild(cas);
   }
-  dessinerPlanche(f);
+  if (personne) dessinerPlanche(f);
 }
 
 // La planche de personnage : la même personne sous tous les angles, faite à partir
@@ -3168,14 +3230,16 @@ document.getElementById("fiche_choix").addEventListener("change", () => { ficheE
 document.getElementById("fiche_creer").addEventListener("click", async () => {
   const r = await fetch("/video-h3/fiches", {method: "POST", headers: H, body: JSON.stringify({
     nom: document.getElementById("fiche_nom").value,
-    description: document.getElementById("fiche_description").value})});
+    description: document.getElementById("fiche_description").value, genre: genreFiche()})});
   const d = await r.json();
   if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  const personne = genreFiche() === "personne";
   await chargerFiches(d.id);
-  for (const angle of Object.keys(ANGLES)){
+  for (const angle of personne ? Object.keys(ANGLES) : ["face"]){
     if (!await faireImage(d.id, angle)) return;
   }
-  ficheEtat("Fiche prête : choisissez-la en mode « Références », champ « Personnage ».");
+  ficheEtat(personne ? "Fiche prête : choisissez-la en mode « Références », champ « Personnage »."
+    : "Fiche prête : cochez-la dans « Objets et poses du scénario », et écrivez son nom dans le texte des plans.");
 });
 
 document.getElementById("fiche_supprimer").addEventListener("click", async () => {
@@ -3365,7 +3429,7 @@ const DEPART_APERCU = new WeakMap(), DEPART_AMELIORATIONS = new WeakMap();
 
 function fichesDuScenario(){
   return [document.getElementById("scenario_fiche").value, document.getElementById("scenario_fiche2").value]
-    .filter((f, i, t) => f && t.indexOf(f) === i);
+    .concat(objetsDuScenario()).filter((f, i, t) => f && t.indexOf(f) === i);
 }
 
 function blocDepart(p){
@@ -3445,6 +3509,28 @@ function blocDepart(p){
   return zone;
 }
 
+// Le tableau des éléments (29/09) : d'où part chaque élément clé, ce qu'il fait,
+// où il finit. Écrit par le découpage ; un texte retouché à la main ne le change pas.
+function tableauElements(elements){
+  const zone = document.createElement("details");
+  zone.className = "note";
+  const titre = document.createElement("summary");
+  titre.textContent = "Éléments du plan : départ, mouvement, arrivée (écrit par le découpage)";
+  const table = document.createElement("table");
+  const entete = table.insertRow();
+  for (const x of ["Élément", "Départ", "Mouvement", "Arrivée"]){
+    const th = document.createElement("th");
+    th.textContent = x;
+    entete.appendChild(th);
+  }
+  for (const e of elements){
+    const ligne = table.insertRow();
+    for (const champ of ["nom", "debut", "mouvement", "fin"]) ligne.insertCell().textContent = e[champ] || "";
+  }
+  zone.append(titre, table);
+  return zone;
+}
+
 function dessinerPlans(){
   const liste = document.getElementById("plans_liste");
   liste.innerHTML = "";
@@ -3483,6 +3569,7 @@ function dessinerPlans(){
       dessinerPlans();
     });
     bloc.append(t, vue, son, ecart, ench, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
+    if ((p.elements || []).length) bloc.appendChild(tableauElements(p.elements));
     if (SCENARIO_TOURNE){
       const coche = document.createElement("input");
       coche.type = "checkbox";
@@ -3819,8 +3906,12 @@ async function tournerScenario(){
   const f1 = document.getElementById("scenario_fiche").value, f2 = document.getElementById("scenario_fiche2").value;
   const l1 = document.getElementById("scenario_langue1").value, l2 = document.getElementById("scenario_langue2").value;
   const deux = f1 && f2 && f1 !== f2;
+  // Les objets et poses cochés suivent les personnages : les personnages gardent
+  // les premiers <Subject N>, et le premier parle par défaut.
+  const toutes = f1 ? fichesDuScenario() : [];
+  const plusieurs = toutes.length > 1;
   const r = await fetch("/video-h3/scenario/tourner", {method: "POST", headers: H, body: JSON.stringify({
-    plans: PLANS, fiche: deux ? null : (f1 || null), fiches: deux ? [f1, f2] : null,
+    plans: PLANS, fiche: plusieurs ? null : (f1 || null), fiches: plusieurs ? toutes : null,
     langues: deux ? {[f1]: l1, [f2]: l2} : null,
     musique_chanson: document.getElementById("scenario_chanson").value || null,
     musique_a_partir_du_plan: Number(document.getElementById("scenario_musique_plan").value) || 1,
