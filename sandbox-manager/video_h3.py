@@ -874,10 +874,24 @@ def consigne_decoupage(scenario: str) -> str:
             # foldingue entre les plans, la balle part toute seule, [elle] est à 180° » —
             # face caméra, le personnage a tiré vers nous, puis s'est retourné vers une
             # cible surgie derrière lui.
-            "When an action is aimed at something (a place to reach, a person, a target), say where that "
-            "thing is in the frame and which way the character faces it, and keep that layout in every shot "
-            "of the same place: same side of the frame, camera on the same side. Describe a physical action "
-            "step by step: what moves the object, where it goes, where it ends. "
+            # Puis, demande du propriétaire : « il faut demander de clairement positionner
+            # les éléments clefs du scénario ». Chaque plan part seul chez H3 : la
+            # disposition doit être écrite dans CHAQUE plan, pas seulement au premier.
+            "Before writing the shots, fix the STAGING of each place: the key elements of the story there "
+            "(each character, every object or place an action uses or aims at) and where each one stands, "
+            "seen from the camera: left, centre or right of the frame, foreground or background, and which "
+            "way each character faces. Characters stand in the foreground or middle ground, never in the "
+            "far background. Two key elements never share the same place in the frame. "
+            # Premier essai de cette règle (29/09) : personnage et cible tous deux « au centre
+            # en arrière-plan », le personnage de dos pour faire face à la cible.
+            "Choose a staging where each character's face stays visible: a character who faces a target "
+            "is seen from the side or three-quarters, the target on the side they face, never behind the "
+            "camera. The camera stays on the same side of the scene in all its shots. "
+            "Then every shot's text states the position of each key element it shows, with the same words "
+            "as the staging, even when it did not change. The staging itself is not a separate part of the "
+            "answer: it lives only in the shots' texts, as plain sentences.When an action aims at something, say where that "
+            "thing is and that the character faces it. Describe a physical action step by step: what moves "
+            "the object, where it goes, where it ends. "
             # Même essai : la caméra s'est approchée de plan en plan, jusqu'à
             # redessiner le visage du personnage.
             "Say the framing of each shot; the camera stays at that framing (no zoom, no move) unless the "
