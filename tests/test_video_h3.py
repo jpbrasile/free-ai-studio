@@ -1071,6 +1071,33 @@ def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(
     assert d["relecture"]["corrige"] is False
 
 
+def test_une_correction_n_est_jugee_que_sur_les_plans_qu_elle_change(h3, monkeypatch):
+    """29/09, 3 essais : le plan 3 réparé les trois fois, puis la seconde relecture
+    ajoutait des remarques mineures sur les plans 1 et 2, restés tels quels."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    scenario = "Leila dribble, tire, puis se retourne vers nous et lève le poing."
+    decoupe = json.dumps([
+        {"image_paroles": "Leila dribble.", "ambiance": "", "enchainement": "coupe"},
+        {"image_paroles": "Leila tire.", "ambiance": "", "enchainement": "suite"},
+        {"image_paroles": "Leila est face à la caméra et lève le poing.", "ambiance": "", "enchainement": "suite"}],
+        ensure_ascii=False)
+    probleme = ('{"etats": [], "problemes": [{"plan": 3, "citation": "Leila est face à la caméra", '
+                '"quoi": "Le retournement de l\'histoire est sauté."}]}')
+    corrige = decoupe.replace("Leila est face à la caméra et", "Leila, de profil, se retourne vers la caméra et")
+    mineures = ('{"etats": [], "problemes": [{"plan": 1, "quoi": "Rappeler le décor."}, '
+                '{"plan": 2, "quoi": "Nommer la surface."}]}')
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, mineures], []))
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
+    assert d["relecture"]["corrige"] is True and "se retourne" in d["plans"][2]["image_paroles"]
+    assert [p["plan"] for p in d["continuite"]["problemes"]] == [1, 2]   # montrées, pas comptées contre elle
+    # Un problème de plus DANS le plan changé : la correction reste écartée.
+    pire = ('{"etats": [], "problemes": [{"plan": 3, "quoi": "Le poing n\'est pas dit."}, '
+            '{"plan": 3, "quoi": "Le lieu manque."}]}')
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, pire], []))
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
+    assert d["relecture"]["corrige"] is False
+
+
 def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3, monkeypatch):
     """Premier essai réel (29/09) : alertes sur des mots que le plan n'a pas, et
     « corrigé » annoncé sur un texte resté le même."""
@@ -2210,6 +2237,16 @@ def test_la_physique_s_ecrit_en_entier_au_decoupage_a_la_relecture_et_a_la_corre
     for consigne in (v.consigne_decoupage("x"), v.consigne_correction(plans, "x")):
         assert "Describe each movement ONCE" in consigne
     assert "(8) is a movement described twice" in v.consigne_continuite(plans, "x")
+
+
+def test_le_debut_serre_part_du_debut_du_texte_et_pardonne_camera_et_cache(h3):
+    """Banc du 29/09 : le tir rejoué vu 4/4 en partant d'où le texte commence ; un
+    panoramique et un ballon caché par le corps étaient lus comme des défauts."""
+    v = h3.video_h3
+    c = v.consigne_debut(["Léa"], "Le ballon tombe sous le panier.")
+    assert "where the text says the shot STARTS" in c and "must not be performed again" in c
+    assert "the camera panning" in c and "hidden behind a body" in c
+    assert "STARTS" not in v.consigne_debut(["Léa"])   # sans texte, rien à comparer
 
 
 def test_le_juge_regarde_le_debut_serre_et_dit_la_cause(h3, monkeypatch, tmp_path):

@@ -4470,8 +4470,15 @@ async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> t
     partis = bool(cites) and all(
         f" {video_h3._norme_replique(p['citation'])} " not in f" {video_h3._norme_replique(corriges[p['plan'] - 1]['image_paroles'])} "
         for p in cites)
-    if apres.get("ok") is None or len(apres["problemes"]) > len(trouves) or (
-            len(apres["problemes"]) == len(trouves) and not partis):
+    # Mesuré le 29/09 (découpage au retournement sauté, 3 essais) : la correction
+    # réparait le plan 3 les trois fois, puis la seconde relecture ajoutait 2 ou 3
+    # remarques mineures sur les plans 1 et 2, que la correction n'avait pas touchés
+    # (« rappeler le décor »). Seuls comptent les plans que la correction a changés.
+    changes = {k + 1 for k, (n, p) in enumerate(zip(corriges, plans))
+               if n["image_paroles"] != p["image_paroles"] or n.get("ambiance") != p.get("ambiance")}
+    restent = [p for p in apres.get("problemes") or [] if p["plan"] in changes]
+    avant = [p for p in trouves if p["plan"] in changes]
+    if apres.get("ok") is None or len(restent) > len(avant) or (len(restent) == len(avant) and not partis):
         return plans, continuite, {"trouves": trouves, "corrige": False,
                                    "erreur": "La correction n'a pas fait mieux : le texte d'origine est gardé."}
     return corriges, apres, {"trouves": trouves, "corrige": True}

@@ -1230,17 +1230,30 @@ CAUSE = (" For each problem, give its cause: \"texte\" when the shot's text asks
 DEBUT_SERRE_S, DEBUT_SERRE_PAS = 1.5, 0.125
 
 
+# Banc du 29/09, trois débuts vérifiés à l'œil, 1/8 s (4 essais chacun) : l'ancienne
+# consigne voyait le tir rejoué du plan 3 v3 1 fois sur 3 et criait au défaut 4 fois
+# sur 6 sur les deux clips propres. Ses fausses alertes : un panoramique lent (tout
+# glisse ensemble, lu « Leila saute ») et un ballon caché par le corps puis levé (lu
+# « sorti de nulle part »). La nouvelle, qui part d'où le texte COMMENCE : 4 sur 4
+# à 0,38 s, et 3 fausses alertes sur 8.
 def consigne_debut(noms: list, texte: str = "") -> str:
     refs = " ".join(f"Image {k + 1} shows {nom}, a reference picture." for k, nom in enumerate(noms))
     voulu = (" The shot's text is: «%s»." % " ".join(texte.split()) + CAUSE) if texte.strip() else ""
     return (refs + f" Image {len(noms) + 1} is a contact sheet of the FIRST {DEBUT_SERRE_S:g} SECONDS of one video "
             f"shot, one frame every {DEBUT_SERRE_PAS:g} s, numbered from 1, read left to right then top to "
-            "bottom. Look closely at every object that moves (a ball, a glass, a door) and count each one in "
-            "every frame. Report only what you clearly see: an object that appears twice or comes from nowhere, "
-            "an object that repeats a movement the text says is already over, an object that bounces or stops "
-            "in mid-air instead of on a surface, an object that moves without anything moving it, a character "
-            "that jumps to another place or pose." + voulu + " Many shots have no problem: then answer ok with "
-            "an empty list. Each problem once, at the first frame where it appears, in one short sentence. "
+            "bottom. Frames this close change very little. "
+            + ("First, read where the text says the shot STARTS: an action the text puts before the shot "
+               "(something already thrown, fallen, opened, said) must not be performed again in these frames; "
+               "if it is, that is a problem, at the frame where it starts again. " if texte.strip() else "")
+            + "Count every object that moves (a ball, a glass, a door) in each frame. "
+            "Report only what you clearly see: an object seen twice at once, an object that repeats a movement "
+            "the text says is already over, an object that bounces or stops in mid-air instead of on a surface, "
+            "an object that moves without anything moving it, a character that jumps to another place or pose "
+            "between two neighbouring frames. "
+            "These are NOT problems: the camera panning, tilting or moving, so that characters, objects and "
+            "background all shift together; an object hidden behind a body, a hand or another object, then "
+            "seen again where it could have been hidden." + voulu + " Many shots have no problem: then answer ok "
+            "with an empty list. Each problem once, at the first frame where it appears, in one short sentence. "
             "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", \"defauts\": [{\"image\": frame "
             "number, \"quoi\": \"what is wrong\"" + (", \"cause\": \"texte\" or \"video\"" if texte.strip() else "")
             + "}]}.")
