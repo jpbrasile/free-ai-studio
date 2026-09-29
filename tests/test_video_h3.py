@@ -1120,6 +1120,22 @@ def test_une_fiche_objet_devient_un_sujet_unique_qui_ne_parle_pas(h3):
     assert "<Subject 2> (S1)" not in inv and "(S1)" in inv
 
 
+def test_les_mains_une_pose_de_reference_une_regle_et_le_juge(h3):
+    """29/09, « améliorer les mains » : le geste écrit, une pose en image, le juge qui regarde."""
+    v = h3.video_h3
+    lea = v.fiche_creer("Léa", "femme")["id"]
+    prise = v.fiche_creer("shooting grip", "deux mains sur un ballon", genre="pose")["id"]
+    for f in (lea, prise):
+        v.fiche_poser_image(f, "face", PNG)
+    inv = v.preparer({"mode": "references", "fiches": [lea, prise], "longueur": 124,
+                      "image_paroles": "Léa holds the ball in the shooting grip and says « Go. »"})["resume_public"]["invite"]
+    assert "<Subject 2> is the hand pose in <Picture 2>." in inv and "it adds no person" in inv
+    assert "in the <Subject 2>" in inv and "<Subject 2> (S1)" not in inv
+    assert "what each hand and its fingers do" in v.consigne_decoupage("x")
+    assert "concrete gesture" in v.consigne_continuite([{"image_paroles": "x", "enchainement": "coupe"}], "x")
+    assert "Look at the hands" in v.consigne_jugement(["Léa"], "x")
+
+
 def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     """29/09, demande du propriétaire : chaque élément clé avec sa place de départ,
     son mouvement et sa place d'arrivée ; la continuité d'une « suite » se vérifie

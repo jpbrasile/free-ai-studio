@@ -404,7 +404,7 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
         if tenue:
             urls.append(_data_url(tenue))
         n = len(photos)
-        qui = "l'objet" if fiche_est_objet(fiche) else "la personne"
+        qui = {"objet": "l'objet", "pose": "la pose des mains"}.get(fiche.get("genre"), "la personne")
         presentation.append("%s est %s des images jointes %d à %d" % (fiche["nom"], qui, n + 1, n + len(urls))
                             if len(urls) > 1 else "%s est %s de l'image jointe %d" % (fiche["nom"], qui, n + 1))
         if tenue:
@@ -516,16 +516,20 @@ def fiches_liste() -> list:
 # (ref-en.txt) donne <Subject N> aux « people, animals, or objects… props », toujours
 # rattaché à une image ; sans image, une étiquette est « non résolue ». L'objet a
 # donc sa photo, comme un personnage : son nom dans le texte devient <Subject N>.
-GENRES_FICHE = ("personne", "objet")
+# Une POSE aussi (29/09, « améliorer les mains ») : le guide de MiniMax range « a pose »
+# parmi les <Subject N> ; une image du geste des mains donne au modèle un geste réel
+# à suivre au lieu de le deviner.
+GENRES_FICHE = ("personne", "objet", "pose")
 
 
 def fiche_est_objet(fiche: dict) -> bool:
-    return fiche.get("genre") == "objet"
+    """Pas une personne (objet ou pose) : ni réplique, ni tenue."""
+    return fiche.get("genre") in ("objet", "pose")
 
 
 def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
     if genre not in GENRES_FICHE:
-        raise ValueError("Une fiche est une personne ou un objet.")
+        raise ValueError("Une fiche est une personne, un objet ou une pose.")
     nom, description = " ".join(str(nom or "").split()), " ".join(str(description or "").split())
     if not nom or len(nom) > FICHE_NOM_MAX:
         raise ValueError(f"Donnez un nom au personnage ({FICHE_NOM_MAX} caractères au plus).")
@@ -534,8 +538,8 @@ def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
                          "âge, visage, coiffure, tenue.")
     fiche = {"id": os.urandom(6).hex(), "nom": nom, "description": description,
              "cree_le": time.strftime("%Y-%m-%d %H:%M:%S"), "images": {}}  # date-machine
-    if genre == "objet":
-        fiche["genre"] = "objet"
+    if genre != "personne":
+        fiche["genre"] = genre
     _fiche_ecrire(fiche)
     return fiche
 
@@ -827,6 +831,11 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=()) -> str:
     for k, nombre in enumerate(nombres):
         images = ", ".join(f"<Picture {premiere + i}>" for i in range(nombre))
         premiere += nombre
+        if k in objets and (objets.get(k) if isinstance(objets, dict) else None) == "pose":
+            definitions.append(f"<Subject {k + 1}> is the hand pose in {images}.")
+            garde.append(f"<Subject {k + 1}> is a hand pose only: the hands and fingers take exactly this "
+                         "position when the text names it; it adds no person and no object.")
+            continue
         if k in objets:
             definitions.append(f"<Subject {k + 1}> is the object in {images}.")
             garde.append(f"<Subject {k + 1}> keeps the shape, colour and size of the reference pictures; there "
@@ -1017,7 +1026,14 @@ PHYSIQUE = ("Physics is never implied, the video model is poor at it: for every 
             # « face caméra », puis « se tourne vers la caméra » dans le même plan.
             "Describe each movement ONCE, in one way: the start of a shot gives the pose BEFORE the movement "
             "(\"seen in profile, facing right\"), never its result (\"facing the camera\" before \"turns to face "
-            "the camera\"); never write the same gesture twice with other words. ")
+            "the camera\"); never write the same gesture twice with other words. "
+            # 29/09, demande du propriétaire (« améliorer les mains ») : les guides de
+            # vidéo IA disent que le modèle devine un geste qu'on ne décrit pas, et que
+            # c'est là que les mains se déforment. Le geste concret, un à la fois.
+            "Hands: when hands act, say what each hand and its fingers do, concretely (\"both hands hold the "
+            "ball, fingers spread on its sides\", \"her right hand grips the door handle\"), never an intention "
+            "in place of the gesture; one simple, unhurried hand gesture at a time, hands not crossing each "
+            "other. ")
 
 
 # Le tableau des éléments clés (29/09, demande du propriétaire : « qualifier Leila,
@@ -1296,7 +1312,10 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
             "the frame."
             # Le 29/09, un ballon est parti tout seul, au-dessus des mains, sans geste de lancer.
             + " Objects obey physics: report an object that moves, floats or flies away without something "
-            "pushing it, or an action aimed at a target that is not where the action goes." + avant + voulu
+            "pushing it, or an action aimed at a target that is not where the action goes."
+            # 29/09 (« améliorer les mains ») : le juge ne les regardait pas.
+            + " Look at the hands: report a hand clearly deformed (extra, missing or merged fingers, a hand "
+            "melting into an object) that a viewer would notice." + avant + voulu
             + " " + PAS_UN_DEFAUT + MAJEUR +
             "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", "
             "\"defauts\": [{\"image\": frame number, \"quoi\": \"what is wrong\""
@@ -1508,7 +1527,8 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             # 29/09 : « rebondit » sans surface, et H3 a fait rebondir le ballon en l'air.
             "(7) physics: for every moving object, are what moves it, each contact with a NAMED surface "
             "(bounces on the floor, not just bounces) and where it comes to rest all written? A shot that "
-            "leaves one of them out is a problem: quote the vague words. "
+            "leaves one of them out is a problem: quote the vague words. Do the hands that act get their "
+            "concrete gesture (what each hand and its fingers do), not an intention? "
             "(8) is a movement described twice or in two ways in the same shot, or does a shot give, at its "
             "start, the pose that one of its own movements only reaches (\"facing the camera\", then \"turns "
             "to face the camera\")? Quote the words of the start pose. "
@@ -1731,14 +1751,14 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             isinstance(t, str) and len(t) <= 300 for t in ecrites.values()):
         raise ValueError("Tenues illisibles.")
     fiches, de_la_fiche, nombres, avec_tenue, ecrites_k = [], [], [], set(), {}
-    objets = set()
+    objets = {}   # rang de la fiche -> "objet" ou "pose"
     for fid in ids:
         if mode not in ("references", "premiere", "premiere_derniere"):
             raise ValueError("Une fiche de casting se joue en mode « Références » ou « Première image ».")
         fiche = fiche_lire(fid)
         fiches.append(fiche)
         if fiche_est_objet(fiche):
-            objets.add(len(fiches) - 1)
+            objets[len(fiches) - 1] = fiche["genre"]
         if not refs:
             continue
         if fiche_est_objet(fiche):   # un objet n'a ni tenue ni tenue écrite
