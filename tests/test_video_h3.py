@@ -1026,6 +1026,7 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
     for regle in ("script supervisor", "same place in the frame", "before it arrives in the story",
                   "placed and visible from the first shot", "quick gesture spread over several shots",
                   "elsewhere in the frame without walking to it", "an object appears twice",
+                  "still moving at the end of a shot",
                   "camera stay on the same side"):
         assert regle in texte, regle
     assert "BEFORE shooting" in json.dumps(vus[2], ensure_ascii=False)
@@ -1070,6 +1071,7 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     # Chaque plan part traduit, la suite aussi (28/09) : deux réponses du chat.
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([
+        '{"tenues": [{"nom": "Léa", "tenue": ""}]}',   # le relevé des tenues : celle de la fiche
         '{"image_paroles": "Lea walks into the café", "ambiance": "Chatter", "musique": ""}',
         '{"image_paroles": "She says « Bonjour. »", "ambiance": "", "musique": ""}'], []))
     fid = v.fiche_creer("Léa", "femme de 35 ans")["id"]
@@ -1109,6 +1111,43 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     assert (p2, r2) == (j1, 1) and v2["mode"] == "prolonger" and v2["plans"] == 2
     assert "(S1) <d>[French] Bonjour.</d>" in v2["invite"]
     assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
+
+
+def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch):
+    """29/09 : « si on change les vêtements on le fait pour tous les plans et on rajoute
+    une photo de référence pour la consistance »."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    fid = v.fiche_creer("Léa", "femme de 35 ans, manteau rouge")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    vus, demandes = [], []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        ['{"tenues": [{"nom": "Léa", "tenue": "robe de cocktail noire"}, {"nom": "Inconnu", "tenue": "x"}]}'], vus))
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + PNG
+
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    fils = []
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    plans = [{"image_paroles": "Léa, en robe de cocktail noire, entre.", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Léa, en robe de cocktail noire, s'assoit.", "ambiance": "", "enchainement": "coupe"}]
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 200, r.text
+    assert "manteau rouge" in json.dumps(vus[0], ensure_ascii=False)   # la fiche est lue pour comparer
+    assert "robe de cocktail noire" in demandes[0]["prompt"] and demandes[0]["image_reference"]
+    sc = r.json()
+    assert [(t["nom"], t["tenue"]) for t in sc["tenues"]] == [("Léa", "robe de cocktail noire")]
+    for p in fils[0][1]:
+        assert p["payload"]["tenues"] == {fid: PNG}
+        invite = v.preparer(p["payload"])["resume_public"]["invite"]
+        assert "wears the clothing of <Picture 2>" in invite
+    assert v.lire_tenues("rien de lisible", ["Léa"]) == {}
 
 
 def test_un_plan_en_echec_arrete_le_scenario(h3, monkeypatch):
@@ -1167,6 +1206,7 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
                   "the camera stays at that framing", "fix the STAGING of each place",
                   "every shot's text states the position of each key element", "what moves the object",
                   "walking to it first", "plain sentences. When", "never tells again an action that ended",
+                  "An object still moving when a shot starts",
                   "These positions describe the START of the shot"):
         assert regle in v.consigne_decoupage("Un film."), regle
     assert v.CADRAGE in v.consigne_correction([], "retour")

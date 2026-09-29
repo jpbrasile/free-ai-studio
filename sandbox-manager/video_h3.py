@@ -681,7 +681,7 @@ def fiche_images(fid) -> list:
     return [fiche_image_data_url(fid, a).split(",", 1)[1] for a in ANGLES if a in fiche["images"]]
 
 
-def sujets_des_fiches(nombres: list) -> str:
+def sujets_des_fiches(nombres: list, tenues=()) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -696,6 +696,10 @@ def sujets_des_fiches(nombres: list) -> str:
         # phrase « In the foreground: only <Subject 1>… » plaçait Léa une première
         # fois, la description la replaçait à sa table, et H3 en a dessiné deux
         # (règle 1 du matin, retirée le soir ; remarque du propriétaire).
+        if k in tenues:   # la dernière de ses images le montre dans la tenue du scénario (29/09)
+            garde.append(f"<Subject {k + 1}> keeps the face and hair of the reference pictures and wears the "
+                         f"clothing of <Picture {premiere - 1}>, as one single person.")
+            continue
         garde.append(f"<Subject {k + 1}> keeps the face, hair and clothing of the reference pictures, "
                      "as one single person.")
     return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
@@ -897,6 +901,10 @@ def consigne_decoupage(scenario: str) -> str:
             "A shot never tells again an action that ended before its start, not even as \"has just…\": "
             "the video model would play it a second time. It only says where things are now (the glass "
             "stands full on the table, the door is open). Each object is there once: no text lets a second one appear. "
+            # 29/09, plan 3 retourné sans redite : le ballon encore en l'air sur l'image de
+            # départ, sans suite écrite, H3 l'a relancé dans le filet.
+            "An object still moving when a shot starts (falling, rolling, flying, swinging) gets its end "
+            "written in that shot: where it goes and where it stops; then nothing repeats its path. "
             "The staging itself is not a separate part of the "
             "answer: it lives only in the shots' texts, as plain sentences. When an action aims at something, say where that "
             "thing is and that the character faces it. Describe a physical action step by step: what moves "
@@ -1127,7 +1135,10 @@ def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
     reference = ("The story the shots must tell (what happens, in order; it must stay true, even where the shots "
                  "given have drifted from it): %s\n\n" % histoire) if histoire else ""
     return (reference + "Here are the shots of a short film (JSON) and the feedback after shooting them. Rewrite the shots "
-            "so that the feedback is fixed: be explicit about who is in the frame and what they wear. Keep the "
+            # 29/09 : la correction inventait des vêtements (t-shirt blanc sur une fiche en sweat) ;
+            # une tenue ne vient que de l'histoire ou des plans, la même partout.
+            "so that the feedback is fixed: be explicit about who is in the frame. Name clothing only when "
+            "the story or the shots already give it, and then the same clothing in every shot. Keep the "
             "same number of shots in the same order, keep each \"enchainement\", and copy every line of "
             "dialogue between « » EXACTLY in its own shot; never add, move or remove dialogue. Change only what "
             "the feedback requires; write in the language of the shots. "
@@ -1140,6 +1151,41 @@ def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
             "fixed without changing what happens, leave that shot unchanged: it will be shot again. " + CADRAGE +
             "Answer with the JSON array only.\n\n"
             "Shots: %s\n\nFeedback: %s" % (json.dumps(plans, ensure_ascii=False), retours))
+
+
+# --- La tenue d'un personnage, quand le scénario change celle de sa fiche (29/09) ---
+# Décision du propriétaire : « si on change les vêtements on le fait pour tous les
+# plans et on rajoute une photo de référence pour la consistance ».
+
+def consigne_tenues(plans: list, fiches: list) -> str:
+    """`fiches` : [(nom, description)] ; la description donne la tenue de la fiche."""
+    return ("Here are the shots of a short film and the casting sheet of each character. For each character, "
+            "say which clothing the shots give them when it differs from their casting sheet; leave it empty "
+            "when the shots name no clothing or the same clothing. Answer in French, JSON only: "
+            "{\"tenues\": [{\"nom\": \"...\", \"tenue\": \"...\"}]}, the clothing only, in a few words, as "
+            "the shots say it.\n\nCasting sheets: %s\n\nShots: %s"
+            % (json.dumps([{"nom": n, "description": d} for n, d in fiches], ensure_ascii=False),
+               json.dumps([p["image_paroles"] for p in plans], ensure_ascii=False)))
+
+
+def lire_tenues(reponse: str, noms: list) -> dict:
+    """{nom: tenue} pour les seuls personnages connus dont la tenue change ; illisible, rien ne change."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else {}
+    except ValueError:
+        d = {}
+    tenues = {}
+    for x in (d.get("tenues") if isinstance(d, dict) else None) or []:
+        if isinstance(x, dict) and x.get("nom") in noms and str(x.get("tenue") or "").strip():
+            tenues[x["nom"]] = " ".join(str(x["tenue"]).split())[:300]
+    return tenues
+
+
+def texte_photo_tenue(nom: str, tenue: str) -> str:
+    return (f"Photo en pied de {nom}, debout, de face, sur un fond neutre et clair, vêtue de : {tenue}. "
+            "Même visage et même coiffure que sur ses photos ; seule la tenue change.")
 
 
 def consigne_continuite(plans: list, histoire: str) -> str:
@@ -1169,7 +1215,8 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "(3) does a shot show a character or object before it arrives in the story, or repeat a word that "
             "is no longer true (alone, empty, still in the hand)? Does a shot tell again, even as \"has "
             "just…\", an action that ended before it starts? The video model plays it again, and an object "
-            "appears twice. "
+            "appears twice. Does an object still moving at the end of a shot get, in the next shot, where "
+            "it goes and where it stops? "
             "(4) is a target of an action (where something is thrown, reached, given) placed and visible from "
             "the first shot of that place, with the character facing it when acting? "
             "(5) is a quick gesture spread over several shots, or a shot that only waits for the result of "
@@ -1389,7 +1436,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     # En « Première image », les fiches ne donnent que les voix : qui dit quelle
     # réplique, dans quelle langue (plan « coupe » parti de son image, 28/09).
     refs = mode == "references"
-    fiches, de_la_fiche, nombres = [], [], []
+    tenues = payload.get("tenues") or {}
+    if not isinstance(tenues, dict):
+        raise ValueError("Tenues illisibles.")
+    fiches, de_la_fiche, nombres, avec_tenue = [], [], [], set()
     for fid in ids:
         if mode not in ("references", "premiere", "premiere_derniere"):
             raise ValueError("Une fiche de casting se joue en mode « Références » ou « Première image ».")
@@ -1400,6 +1450,9 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         images_fiche = fiche_images(fiche["id"])
         if not images_fiche:
             raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
+        if tenues.get(fiche["id"]):
+            images_fiche = images_fiche + [tenues[fiche["id"]]]
+            avec_tenue.add(len(nombres))
         de_la_fiche += images_fiche
         nombres.append(len(images_fiche))
     image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
@@ -1421,7 +1474,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if depart:
         texte = f"<Picture {sum(nombres) + 1}> is the first frame of [Shot 1]. " + texte
     if refs and fiches:
-        texte = sujets_des_fiches(nombres) + " detailed_description: " + texte
+        texte = sujets_des_fiches(nombres, avec_tenue) + " detailed_description: " + texte
     # Ce que montrent la première et la dernière image, quand le Studio les a
     # créées : leur description (améliorations comprises) passe aussi à H3, pour
     # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).

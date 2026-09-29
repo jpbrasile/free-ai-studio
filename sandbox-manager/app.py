@@ -4529,6 +4529,39 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
     return commun, musique, a_tourner
 
 
+async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
+    """Une tenue que les plans donnent à un personnage, autre que celle de sa fiche :
+    une photo en pied dans cette tenue (image du Studio, gratuite) rejoint ses photos
+    dans tous les plans tournés avec sa fiche. Décision du propriétaire, 29/09 : « si
+    on change les vêtements on le fait pour tous les plans et on rajoute une photo de
+    référence pour la consistance ». Rien de lisible : les plans partent tels quels."""
+    ids = commun["fiches"] or ([commun["fiche"]] if commun["fiche"] else [])
+    fiches = [video_h3.fiche_lire(f) for f in ids]
+    fiches = [f for f in fiches if f.get("images")]
+    if not fiches:
+        return []
+    try:
+        tenues = video_h3.lire_tenues(await _chat_du_studio(
+            video_h3.consigne_tenues(plans, [(f["nom"], f.get("description", "")) for f in fiches]),
+            "le relevé des tenues"), [f["nom"] for f in fiches])
+    except HTTPException:
+        return []
+    faites = []
+    for f in fiches:
+        if f["nom"] not in tenues:
+            continue
+        demande, _ = video_h3.demande_image(video_h3.texte_photo_tenue(f["nom"], tenues[f["nom"]]), [], [f["id"]])
+        image = await _image_du_studio(demande)
+        did = video_h3.depart_poser(image)
+        b64 = image.split(",", 1)[1]
+        for p in a_tourner:
+            if p["payload"].get("mode") == "references":
+                p["payload"].setdefault("tenues", {})[f["id"]] = b64
+                video_h3.preparer(p["payload"])   # neuf images au plus, contrôlé avant le premier sou
+        faites.append({"fiche": f["id"], "nom": f["nom"], "tenue": tenues[f["nom"]], "image": did})
+    return faites
+
+
 async def _scenario_traduire(a_tourner: list, musique):
     for p in a_tourner:
         if "reprise" in p:
@@ -4572,8 +4605,12 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     _h3_peut_louer()
+    try:
+        tenues = await _scenario_tenues(commun, plans, a_tourner)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
-    return _scenario_lancer(plans, commun, musique, a_tourner)
+    return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues)
 
 
 def _fins_images(sc: dict) -> list:
@@ -4836,8 +4873,12 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
         if i not in repris:
             p["payload"]["graine"] = None   # une nouvelle prise, pas la même
     _h3_peut_louer()
+    try:
+        tenues = await _scenario_tenues(commun, plans, [p for p in a_tourner if "reprise" not in p])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
-    return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, repris=[i + 1 for i in repris],
+    return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, tenues=tenues, repris=[i + 1 for i in repris],
                             plans_initiaux=parent.get("plans_initiaux") or parent["plans"])
 
 
