@@ -1116,10 +1116,19 @@ PHYSIQUE = ("Physics is never implied, the video model is poor at it: for every 
 # vérifie alors par le code, sans avis d'un modèle.
 TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element the shot shows (each character, "
            "every object that moves or that an action uses or aims at): {\"nom\": its name, \"debut\": where it is "
-           "when the shot starts (place in the frame, which way it faces, standing or sitting, what it holds), "
+           "when the shot starts (place in the frame, which way it faces, standing or sitting, what it holds "
+           "and how: which hand, which end of the object is up), "
            "\"mouvement\": what it does during the shot, step by step, each contact with a named surface, or "
            "\"none\", \"fin\": where it is when the shot ends}. Use the same name for an element in every shot. "
            "In a \"suite\" shot, each element's \"debut\" copies WORD FOR WORD its \"fin\" in the previous shot. "
+           # 29/09, quai de gare rejoué : « tenant un parapluie fermé dans la main droite »
+           # à la fin du plan 1, sans dire quel bout en haut ; le modèle l'a tenu crosse
+           # en haut, et le plan suivant, qui part de cette image, l'a hérité. Le sens et
+           # l'état d'un objet tenu s'écrivent donc au tableau, d'où la suite les copie.
+           "An object held or carried: its \"debut\" and \"fin\", and the \"debut\" and \"fin\" of the "
+           "character holding it, say which hand holds it, where, which end is up or in the hand, and its "
+           "state (\"in her left hand, lens forward, switched off\", \"held upright by its neck, cap on, "
+           "full\"). "
            # Mesuré le 29/09 (7 découpages) : un verre ou une carafe notés « none » au
            # départ surgissaient sur la table ou dans une main au plan 3 ou 4.
            "\"debut\" is never \"none\" or empty: an element not yet in the frame when the shot starts has "
@@ -1688,9 +1697,21 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "reporting that something is missing, read the shot again: if its text already says it, it is "
             "not a problem. For a wrong or contradictory text, \"citation\" copies EXACTLY the wrong words "
             "from the shot; for something missing, \"citation\" is empty. "
+            # 29/09, remarque du propriétaire : « le seuil de déclenchement est trop bas,
+            # pour la gare le seul défaut est le parapluie ». Relu sur 18 découpages : le
+            # geste du parapluie sort « bloquant » 5 fois sur 5, les regards et les mains
+            # « detail » ; seuls les bloquants font corriger le texte.
+            "For each problem, give \"gravite\": \"bloquant\" or \"detail\". \"bloquant\" = the video model, "
+            "reading this shot alone, will visibly get it wrong on screen: an object that is handled, opened "
+            "or moved without the concrete gesture or its path written; a character or object that appears, "
+            "vanishes, jumps to another place or changes between shots; an event of the story that no shot "
+            "shows; a shot whose text contradicts itself; two characters each doing their own main action in "
+            "one shot. \"detail\" = a precision the video model usually gets right on its own or that barely "
+            "shows: which way someone faces, looks or turns the head (always a detail), which hand, the exact "
+            "side or depth in the frame, naming a target earlier, wording. When unsure, \"detail\". "
             "Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
             "\"debut\": \"...\", \"fin\": \"...\"}], \"problemes\": [{\"plan\": number, \"citation\": \"...\", "
-            "\"quoi\": \"...\"}]}; "
+            "\"quoi\": \"...\", \"gravite\": \"bloquant|detail\"}]}; "
             "an empty \"problemes\" list if the shots hold together.\n\nStory: %s\n\nShots: %s"
             % (histoire, json.dumps([{k: p[k] for k in ("image_paroles", "enchainement")} for p in plans],
                                     ensure_ascii=False)))
@@ -1698,7 +1719,10 @@ def consigne_continuite(plans: list, histoire: str) -> str:
 
 def lire_continuite(reponse: str, nombre: int, textes: list | None = None) -> dict:
     """Avec les textes des plans, un problème qui cite des mots absents de son plan
-    est écarté : premier essai réel (29/09), le relecteur réclamait ce qui était déjà écrit."""
+    est écarté : premier essai réel (29/09), le relecteur réclamait ce qui était déjà écrit.
+    Seuls les problèmes bloquants restent dans `problemes` (et font corriger) ; les
+    détails vont dans `details`, affichés sans rien réécrire. Sans gravité lisible,
+    un problème est bloquant, comme avant."""
     t = str(reponse or "")
     debut, fin = t.find("{"), t.rfind("}")
     try:
@@ -1707,7 +1731,7 @@ def lire_continuite(reponse: str, nombre: int, textes: list | None = None) -> di
         d = None
     if not isinstance(d, dict) or not isinstance(d.get("problemes"), list):
         raise ValueError("Le contrôle de continuité n'a pas pu être lu : réessayez.")
-    problemes = []
+    problemes, details = [], []
     for x in d["problemes"]:
         try:
             plan = int(x["plan"])
@@ -1722,9 +1746,9 @@ def lire_continuite(reponse: str, nombre: int, textes: list | None = None) -> di
         probleme = {"plan": plan, "quoi": " ".join(str(x["quoi"]).split())[:300]}
         if citation:
             probleme["citation"] = " ".join(str(x["citation"]).split())[:300]
-        problemes.append(probleme)
+        (details if str(x.get("gravite") or "").strip().lower() in ("detail", "détail") else problemes).append(probleme)
     etats = [e for e in d.get("etats") or [] if isinstance(e, dict)][:nombre]
-    return {"ok": not problemes, "problemes": problemes, "etats": etats}
+    return {"ok": not problemes, "problemes": problemes, "details": details, "etats": etats}
 
 
 def lire_correction(reponse: str, plans: list) -> list:
@@ -3827,9 +3851,12 @@ document.getElementById("scenario_decouper").addEventListener("click", async () 
     ? "Seconde relecture : " + (st.corrige ? "corrigé aussi — " : "")
       + texteContinuite({problemes: st.trouves}) + (st.erreur ? " (" + st.erreur + ")" : "") + ". "
     : "";
+  // Les détails (regard, main, place exacte) : montrés, jamais réécrits (29/09).
+  const det = d.continuite && (d.continuite.details || []).length
+    ? " Détails, sans correction : " + texteContinuite({problemes: d.continuite.details}) + "." : "";
   if (d.continuite && d.continuite.ok === false)
-    scenarioEtat(vu + vu2 + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite), true);
-  else scenarioEtat(vu + vu2 + "Relisez les plans, puis tournez.");
+    scenarioEtat(vu + vu2 + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite) + "." + det, true);
+  else scenarioEtat(vu + vu2 + "Relisez les plans, puis tournez." + det);
 });
 
 function texteContinuite(c){

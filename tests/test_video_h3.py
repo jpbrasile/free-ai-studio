@@ -1049,6 +1049,22 @@ def test_le_relecteur_garde_le_texte_si_la_correction_ne_fait_pas_mieux(h3, monk
     assert d["continuite"]["problemes"] == [{"plan": 1, "quoi": "Le panier n'est pas placé."}]
 
 
+def test_la_correction_demande_le_modele_haut_de_gamme_gratuit(h3, monkeypatch):
+    """29/09 : free-ai-auto rendait 5 plans au lieu de 4 (4 corrections lues sur 15),
+    free-ai-max 15 sur 15."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    decoupe = '[{"image_paroles": "Léa lance le ballon.", "ambiance": "", "enchainement": "coupe"}]'
+    probleme = '{"etats": [], "problemes": [{"plan": 1, "quoi": "Le panier n\'est pas placé."}]}'
+    corrige = '[{"image_paroles": "Léa lance le ballon vers le panier.", "ambiance": "", "enchainement": "coupe"}]'
+    vus = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [decoupe, probleme, corrige, '{"etats": [], "problemes": []}'], vus))
+    client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": "Léa lance le ballon."})
+    assert h3.MODELE_CORRECTION == "free-ai-max"
+    # Le découpage reste sur free-ai-auto ; la relecture était déjà sur free-ai-max.
+    assert [v["model"] for v in vus] == ["free-ai-auto", "free-ai-max", "free-ai-max", "free-ai-max"]
+
+
 def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(h3, monkeypatch):
     """29/09 : « face caméra » puis « se tourne vers la caméra » ; corrigé, la seconde
     relecture relevait un autre petit point et le compte égal rejetait la correction."""
@@ -1195,6 +1211,9 @@ def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     assert "sans avoir été vu avant" in ruptures[0]["quoi"] and "off-frame" in ruptures[1]["quoi"]
     c = v.consigne_decoupage("x")
     assert '"off-frame"' in c and "at most three simple steps" in c and "a cut (\"coupe\") skip the minor steps" in c
+    # 29/09 : le sens d'un objet tenu, non écrit au plan 1, a été hérité à l'envers par la suite.
+    assert "which end is up or in the hand, and its state" in c
+    assert "which end is up or in the hand" in v.consigne_correction([{"image_paroles": "x"}], "y")
     relu = v.consigne_continuite([{"image_paroles": "x", "enchainement": "coupe"}], "x")
     # 29/09 : « divisez le plan en deux » menait la correction à un 5e plan, refusé (2 fois sur 3).
     assert "(8) does the number of shots fit the actions" in relu and "never ask to split a shot" in relu
@@ -1926,6 +1945,25 @@ def test_corriger_part_des_retours_et_du_jugement(h3, monkeypatch, tmp_path):
                   json={"retours": "x" * 2001}).status_code == 400
 
 
+def test_seuls_les_problemes_bloquants_font_corriger(h3):
+    """29/09 : « le seuil de déclenchement est trop bas, pour la gare le seul défaut est
+    le parapluie ». Un regard ou une main est un détail : montré, jamais réécrit."""
+    v = h3.video_h3
+    c = v.lire_continuite(json.dumps({"problemes": [
+        {"plan": 3, "quoi": "Écrire le geste qui ouvre le parapluie.", "gravite": "bloquant"},
+        {"plan": 2, "quoi": "Léa doit regarder Marc.", "gravite": "detail"},
+        {"plan": 4, "quoi": "Quelle main prend la valise ?", "gravite": "détail"}]}), 4)
+    assert c["ok"] is False and [p["plan"] for p in c["problemes"]] == [3]
+    assert [p["plan"] for p in c["details"]] == [2, 4]
+    # Que des détails : rien à corriger, le découpage est bon à tourner.
+    seuls = v.lire_continuite(json.dumps({"problemes": [
+        {"plan": 2, "quoi": "Léa doit regarder Marc.", "gravite": "detail"}]}), 4)
+    assert seuls["ok"] is True and seuls["problemes"] == [] and len(seuls["details"]) == 1
+    consigne = v.consigne_continuite([{"image_paroles": "x", "ambiance": "", "enchainement": "coupe"}], "y")
+    assert '"gravite": "bloquant|detail"' in consigne and "always a detail" in consigne
+    assert "Détails, sans correction" in v.PAGE_HTML
+
+
 def test_une_correction_qui_casse_la_continuite_est_refaite_une_fois(h3, monkeypatch, tmp_path):
     # Le 28/09 : pour effacer un défaut d'image, la correction a fait asseoir James
     # avant que Léa l'y invite. Le contrôle le voit ; un second essai lui est demandé.
@@ -1959,7 +1997,7 @@ def test_une_correction_qui_casse_la_continuite_est_refaite_une_fois(h3, monkeyp
     r = client(h3).post(f"/video-h3/scenario/{sid}/corriger", headers=CLE, json={"retours": "Léa disparaît."})
     assert r.status_code == 200 and len(vus) == 4
     assert r.json()["continuite"] == {"ok": False, "etats": [], "problemes": [
-        {"plan": 2, "quoi": "James est assis avant d'être invité"}]}
+        {"plan": 2, "quoi": "James est assis avant d'être invité"}], "details": []}
 
 
 def test_la_continuite_se_lit_et_ne_garde_que_les_plans_du_film(h3):
@@ -1967,7 +2005,7 @@ def test_la_continuite_se_lit_et_ne_garde_que_les_plans_du_film(h3):
     c = v.lire_continuite('Voici : {"etats": [{"plan": 1, "debut": "a", "fin": "b"}], "problemes": '
                           '[{"plan": 2, "quoi": "  assis   trop tôt "}, {"plan": 9, "quoi": "hors film"}, {"plan": 1}]}', 3)
     assert c == {"ok": False, "etats": [{"plan": 1, "debut": "a", "fin": "b"}],
-                 "problemes": [{"plan": 2, "quoi": "assis trop tôt"}]}
+                 "problemes": [{"plan": 2, "quoi": "assis trop tôt"}], "details": []}
     assert v.lire_continuite('{"problemes": []}', 3)["ok"] is True
     with pytest.raises(ValueError, match="pas pu être lu"):
         v.lire_continuite("tout va bien", 3)

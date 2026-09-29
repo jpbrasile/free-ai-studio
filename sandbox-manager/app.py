@@ -4031,6 +4031,15 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
     return _lancer_h3(plan)
 
 
+# La correction des plans demande le haut de gamme gratuit. Mesuré le 29/09 sur les
+# 5 découpages du banc dont la correction était illisible (3 essais chacun, mêmes
+# remarques) : free-ai-auto (gemini-3.5-flash-lite) 4 lues sur 15, il rendait 5 plans
+# au lieu de 4 quand une remarque bloquante dit « deux actions dans un plan » ; la
+# même consigne avec une règle « garde le nombre de plans » 7 sur 15 ; free-ai-max
+# (gemini-3.8-flash) 15 sur 15. Même routage gratuit, son propre quota.
+MODELE_CORRECTION = "free-ai-max"
+
+
 async def _chat_du_studio(consigne: str, quoi: str = "la traduction en anglais", images=None,
                           modele: str = "free-ai-auto") -> str:
     """Une réponse du chat gratuit du Studio (routeur) ; HTTPException sinon.
@@ -4458,12 +4467,22 @@ async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> t
     trouves = continuite["problemes"]
     retours = ("Review of the text BEFORE shooting (nothing is filmed yet): "
                + " ; ".join("shot %d: %s" % (p["plan"], p["quoi"]) for p in trouves))
-    try:
-        corriges = video_h3.lire_correction(await _chat_du_studio(
-            video_h3.consigne_correction(plans, retours, histoire), "la correction du scénario"), plans)
-    except (ValueError, HTTPException) as exc:
-        return plans, continuite, {"trouves": trouves, "corrige": False,
-                                   "erreur": str(getattr(exc, "detail", exc))}
+    consigne = video_h3.consigne_correction(plans, retours, histoire)
+    # Banc du 29/09 (10 découpages, gravité) : 5 corrections sur 10 illisibles, le
+    # chat rendait plus de plans qu'il n'en recevait. La cause est le modèle
+    # (MODELE_CORRECTION) ; la seconde demande, qui le lui dit, reste en filet.
+    for essai in (1, 2):
+        try:
+            corriges = video_h3.lire_correction(await _chat_du_studio(
+                consigne, "la correction du scénario", modele=MODELE_CORRECTION), plans)
+            break
+        except ValueError as exc:
+            if essai == 2:
+                return plans, continuite, {"trouves": trouves, "corrige": False, "erreur": str(exc)}
+            consigne += ("\n\nYour previous answer could not be used: it must be a JSON array of exactly %d "
+                         "shots, the same shots in the same order, rewritten; never split or add a shot." % len(plans))
+        except HTTPException as exc:
+            return plans, continuite, {"trouves": trouves, "corrige": False, "erreur": str(exc.detail)}
     if all(n["image_paroles"] == p["image_paroles"] and n.get("ambiance") == p.get("ambiance")
            for n, p in zip(corriges, plans)):
         return plans, continuite, {"trouves": trouves, "corrige": False,
@@ -4500,9 +4519,9 @@ async def _continuite(plans: list, histoire: str) -> dict:
             modele=video_h3.MODELE_JUGE), len(plans),
             [p["image_paroles"] + " " + p.get("ambiance", "") for p in plans])
     except (ValueError, HTTPException) as exc:
-        return {"ok": None, "problemes": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
+        return {"ok": None, "problemes": [], "details": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
     # Le tableau des éléments (29/09) : un élément qui surgit sans origine se voit
-    # sans avis de modèle.
+    # sans avis de modèle ; il est toujours bloquant.
     ruptures = video_h3.apparitions_du_tableau(plans)
     if ruptures:
         c = dict(c, ok=False, problemes=c["problemes"] + ruptures)
@@ -4955,7 +4974,8 @@ async def video_h3_scenario_corriger(sid: str, request: Request,
     consigne = video_h3.consigne_correction(sc["plans"], retours, histoire)
     for essai in (1, 2):
         try:
-            plans = video_h3.lire_correction(await _chat_du_studio(consigne, "la correction des plans"), sc["plans"])
+            plans = video_h3.lire_correction(await _chat_du_studio(
+                consigne, "la correction des plans", modele=MODELE_CORRECTION), sc["plans"])
         except ValueError as exc:
             raise HTTPException(502, str(exc)) from exc
         continuite = await _continuite(plans, histoire)
