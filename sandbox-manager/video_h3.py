@@ -1449,19 +1449,48 @@ def _mots(texte: str) -> list:
 
 
 PAROLES_SEUIL = 0.7   # part des mots attendus qu'il faut entendre
+# En dessous de PAROLES_SEUIL mais au-dessus de celui-ci : un mot déformé, pas une
+# réplique perdue ; « à vérifier à l'oreille », pas un défaut (29/09, gare : « Tu es
+# trempé » dit « trampé », entendu « trompé », 2 mots sur 3 ; le propriétaire l'a
+# entendu dit). Choisi, pas mesuré : le corpus n'a aucune réplique vraiment perdue.
+PAROLES_SEUIL_DEFAUT = 0.5
+# Un segment que Whisper juge sans parole au-delà de ce seuil est écarté. Mesure du
+# 29/09 sur 73 passages de 24 scénarios tournés (Groq whisper-large-v3) : les
+# répliques vraies vont de 0,00 à 0,11, les mots inventés sur des pas, de la pluie
+# ou un souffle (« Bye. », « Thank you. », « you ») de 0,43 à 0,88.
+SANS_PAROLE_SEUIL = 0.3
+
+
+def segments_parles(segments: list) -> tuple:
+    """(texte gardé, textes écartés) : les segments que Whisper croit sans parole
+    sont écartés — le « Bye. » de la gare (29/09) était un de ces mots inventés."""
+    gardes, ecartes = [], []
+    for s in segments or []:
+        t = " ".join(str(s.get("text") or "").split())
+        if not t:
+            continue
+        sans = s.get("no_speech_prob")
+        (ecartes if isinstance(sans, (int, float)) and sans >= SANS_PAROLE_SEUIL else gardes).append(t)
+    return " ".join(gardes), ecartes
 
 
 def comparer_paroles(texte: str, entendu: str) -> dict:
     """Les répliques du texte (entre guillemets) comparées à ce que le Whisper du
     Studio a entendu. Le 28/09, un clip dont l'invite était juste (réplique
     balisée [English]) disait du français inventé : le juge, qui ne voit que les
-    images, ne pouvait pas l'entendre. `ok` vaut None quand rien n'est attendu."""
+    images, ne pouvait pas l'entendre. `ok` vaut None quand rien n'est attendu,
+    et aussi quand la réplique est entendue à moitié (`doute` : à l'oreille)."""
     attendues = repliques(texte)
     mots, entendus = _mots(" ".join(attendues)), set(_mots(entendu))
     part = (sum(m in entendus for m in mots) / len(mots)) if mots else None
+    # Réplique par réplique : une réplique perdue en entier sur deux (4 mots sur 7)
+    # reste un défaut, même quand la part globale tombe dans la zone de doute.
+    parts = [sum(m in entendus for m in w) / len(w) for w in map(_mots, attendues) if w]
+    manque = any(p < PAROLES_SEUIL_DEFAUT for p in parts)
+    doute = not manque and any(p < PAROLES_SEUIL for p in parts)
     return {"attendu": attendues, "entendu": " ".join(str(entendu or "").split()),
             "part": None if part is None else round(part, 2),
-            "ok": None if part is None else part >= PAROLES_SEUIL}
+            "ok": None if part is None or doute else not manque, "doute": doute}
 
 
 def defaut_de_paroles(paroles: dict, t_s: float):
@@ -3039,6 +3068,7 @@ let CLIP_COURANT = null;
 function texteParoles(p){
   if (!p) return "";
   if (p.erreur) return "Écoute : " + p.erreur;
+  if (p.doute) return "Écoute : « " + (p.entendu || "rien") + " », réplique entendue en partie : à vérifier à l'oreille.";
   if (p.ok === null) return "Écoute : aucune réplique attendue.";
   return "Écoute : « " + (p.entendu || "rien") + " »" + (p.ok ? ", réplique bien dite." : ", réplique manquante.");
 }

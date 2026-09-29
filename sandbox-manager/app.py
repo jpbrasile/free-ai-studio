@@ -4824,15 +4824,26 @@ async def _ecouter(video: bytes, texte: str) -> dict:
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
         return {"erreur": "L'écoute n'est pas joignable d'ici (clé interne du routeur absente)."}
+    ecartes = []
+
     async def transcrire(client, nom, octets, type_mime):
+        # Les segments et leur probabilité de silence : un passage sans voix devenait
+        # un mot inventé (« Bye. », gare, 29/09). Le repli local n'en rend pas : texte brut.
         try:
             r = await client.post(ROUTEUR_INTERNE + "/v1/audio/transcriptions",
                                   headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
-                                  files={"file": (nom, octets, type_mime)}, data={"model": "whisper-1"})
-            t = r.json().get("text") if r.status_code < 400 else None
+                                  files={"file": (nom, octets, type_mime)},
+                                  data={"model": "whisper-1", "details": "segments"})
+            d = r.json() if r.status_code < 400 else {}
         except (httpx.HTTPError, ValueError):
-            t = None
-        return t if isinstance(t, str) else None
+            d = {}
+        t = d.get("text") if isinstance(d, dict) else None
+        if not isinstance(t, str):
+            return None
+        if isinstance(d.get("segments"), list) and d["segments"]:
+            t, sans = video_h3.segments_parles(d["segments"])
+            ecartes.extend(sans)
+        return t
 
     # Le clip entier, puis chaque passage parlé à part : sur le clip entier,
     # Whisper garde une seule langue (essai du 28/09 : une réplique perdue).
@@ -4857,6 +4868,8 @@ async def _ecouter(video: bytes, texte: str) -> dict:
         texte, entendu + (" " + " ".join(m["entendu"] for m in morceaux) if morceaux else ""))
     resultat["entendu"] = " ".join(entendu.split())
     resultat["passages"] = morceaux
+    if ecartes:
+        resultat["ecartes"] = ecartes
     return resultat
 
 

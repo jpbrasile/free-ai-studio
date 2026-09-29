@@ -443,7 +443,8 @@ class _FauxRouteurOreille(_FauxRouteur):
     async def post(self, url, headers=None, json=None, files=None, data=None):
         if url.endswith("/v1/audio/transcriptions"):
             self.ecoutes.append((files["file"][1], data))
-            self.corps = {"text": self.entendus.pop(0)}
+            e = self.entendus.pop(0)
+            self.corps = e if isinstance(e, dict) else {"text": e}
         else:
             self.vu.setdefault("chats", []).append(json)
             self.corps = {"choices": [{"message": {"content": self.chat}}]}
@@ -1540,6 +1541,43 @@ def test_l_ecoute_entend_aussi_chaque_passage(h3, monkeypatch):
     assert sans["ok"] is False and abs(sans["part"] - 4 / 7) < 0.01
 
 
+def test_l_ecoute_ecarte_les_mots_inventes_sur_un_passage_sans_voix(h3, monkeypatch):
+    """Gare, 29/09 : un bruit à 0,65 s devenait « Bye. » (Groq, sans parole à 0,74) ;
+    le propriétaire n'a entendu aucun « Bye ». Les segments sans parole sont écartés."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [(0.65, 1.61), (2.94, 5.17)])
+    monkeypatch.setattr(h3.montage, "son_du_passage", lambda video, a, b: ("P%.2f" % a).encode())
+    ligne = {"text": "Désolé, le bus était en retard.", "no_speech_prob": 0.03, "avg_logprob": -0.21}
+    bye = {"text": "Bye.", "no_speech_prob": 0.74, "avg_logprob": -0.80}
+    ecoutes = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille("", [
+        {"text": "Bye. Désolé, le bus était en retard.", "segments": [bye, ligne]},
+        {"text": "Bye.", "segments": [bye]},
+        {"text": ligne["text"], "segments": [ligne]}], ecoutes, {}))
+    import asyncio
+    r = asyncio.run(h3._ecouter(b"CLIP", "Marc dit « Désolé, le bus était en retard. »"))
+    assert all(e[1]["details"] == "segments" for e in ecoutes)
+    assert r["entendu"] == "Désolé, le bus était en retard." and r["ok"] is True
+    assert [p["entendu"] for p in r["passages"]] == ["Désolé, le bus était en retard."]
+    assert r["ecartes"] == ["Bye.", "Bye."]
+    # Le repli local du routeur ne rend que le texte : il est gardé tel quel.
+    monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [])
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille("", ["Bye. Désolé."], [], {}))
+    assert asyncio.run(h3._ecouter(b"CLIP", "« Désolé. »"))["entendu"] == "Bye. Désolé."
+
+
+def test_une_replique_entendue_a_moitie_est_a_verifier_pas_un_defaut():
+    import importlib
+    v = importlib.import_module("video_h3")
+    # Gare, 29/09 : « trempé » dit « trampé », entendu « trompé » ; le propriétaire l'a entendu dit.
+    p = v.comparer_paroles("Léa dit « Tu es trempé ! »", "Tu es trompé !")
+    assert p["part"] == 0.67 and p["doute"] is True and p["ok"] is None
+    assert v.defaut_de_paroles(p, 5.2) is None
+    assert v.comparer_paroles("« Tu es trempé ! »", "Tu")["ok"] is False
+    assert v.segments_parles([{"text": " Oui ", "no_speech_prob": 0.29}, {"text": "Bye.", "no_speech_prob": 0.3},
+                              {"text": "sans indice"}]) == ("Oui sans indice", ["Bye."])
+
+
 def test_une_replique_dit_sa_langue_et_le_personnage_garde_sa_voix(h3):
     v = h3.video_h3
     texte = "Elle dit « Bonjour ! » puis, en riant, « [anglais] Nice to meet you! »"
@@ -1757,11 +1795,11 @@ def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_pat
     assert "END OF THE PREVIOUS SHOT" not in vu["chats"][0]["messages"][0]["content"][0]["text"]
     assert [c["type"] for c in contenu[1:]] == ["image_url"] * 3   # deux fiches, puis la planche
     assert [e[0] for e in ecoutes] == [b"PLAN 0-124", b"PLAN 124-248", b"PLAN 248-372"]
-    assert ecoutes[0][1] == {"model": "whisper-1"}
+    assert ecoutes[0][1] == {"model": "whisper-1", "details": "segments"}
     j = r.json()["jugement"]
     assert j[0]["paroles"]["ok"] is True and j[0]["defauts"] == [{"t_s": 4.0, "quoi": "veste grise"}]
     # « Non. » n'a pas été dit : un défaut de plus, au début du plan.
-    assert j[1]["paroles"] == {"attendu": ["Non."], "entendu": "Oui, bien sûr.", "part": 0.0, "ok": False,
+    assert j[1]["paroles"] == {"attendu": ["Non."], "entendu": "Oui, bien sûr.", "part": 0.0, "ok": False, "doute": False,
                                 "passages": []}   # un faux plan : aucun passage à découper
     assert j[1]["defauts"] == [{"t_s": 8.2, "quoi": "veste grise"},
                                {"t_s": 5.2, "quoi": "Réplique attendue « Non. » ; le clip dit : « Oui, bien sûr. »."}]
@@ -2051,11 +2089,13 @@ def test_3_l_ecoute_compare_les_repliques_attendues():
     v = importlib.import_module("video_h3")
     p = v.comparer_paroles("James demande « Is this seat taken? »", "Excuse me, is this seat seat taken?")
     assert p == {"attendu": ["Is this seat taken?"], "entendu": "Excuse me, is this seat seat taken?",
-                 "part": 1.0, "ok": True}
+                 "part": 1.0, "ok": True, "doute": False}
     assert v.defaut_de_paroles(p, 3.0) is None
-    # Accents et ponctuation ne comptent pas ; un mot sur deux ne suffit pas.
+    # Accents et ponctuation ne comptent pas ; un mot sur deux ne suffit pas, sans faire un défaut.
     assert v.comparer_paroles("Léa dit « Déjà ? »", "deja")["ok"] is True
-    assert v.comparer_paroles("« Is this seat taken? »", "Is this")["ok"] is False
+    moitie = v.comparer_paroles("« Is this seat taken? »", "Is this")
+    assert moitie["ok"] is None and moitie["doute"] is True and v.defaut_de_paroles(moitie, 0) is None
+    assert v.comparer_paroles("« Is this seat taken? »", "Is")["ok"] is False
     rien = v.comparer_paroles("Ils marchent", "de la musique")
     assert rien["ok"] is None and v.defaut_de_paroles(rien, 0) is None
     manque = v.comparer_paroles("« Non. »", "")

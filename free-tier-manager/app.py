@@ -3443,10 +3443,19 @@ def erreur_dictee(statut: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=statut, content={"error": {"message": message}})
 
 
+# Ce que l'ecoute des clips du Studio garde de chaque segment (29/09/2026) : un
+# passage sans voix (pas, pluie) y devenait un mot invente (<< Bye. >>).
+SEGMENT_CHAMPS = ("start", "end", "text", "no_speech_prob", "avg_logprob")
+
+
 async def dicter_groq(audio: bytes, nom: Optional[str], type_mime: Optional[str],
-                      langue: Optional[str]) -> "tuple[Optional[str], Optional[str]]":
-    """Rend (texte, None) si Groq a transcrit, sinon (None, motif du refus)."""
-    champs = {"model": GROQ_DICTEE_MODELE, "response_format": "json"}
+                      langue: Optional[str],
+                      segments: Optional[list] = None) -> "tuple[Optional[str], Optional[str]]":
+    """Rend (texte, None) si Groq a transcrit, sinon (None, motif du refus).
+    Une liste `segments` fournie se remplit des segments de Groq, avec leur
+    confiance (avg_logprob) et leur probabilite de silence (no_speech_prob)."""
+    champs = {"model": GROQ_DICTEE_MODELE,
+              "response_format": "json" if segments is None else "verbose_json"}
     if langue:
         champs["language"] = langue
     url = PROVIDERS["groq"]["base_url"].rstrip("/") + "/audio/transcriptions"
@@ -3461,7 +3470,12 @@ async def dicter_groq(audio: bytes, nom: Optional[str], type_mime: Optional[str]
     if r.status_code >= 400:
         return None, "Groq HTTP %s : %s" % (r.status_code, " ".join(r.text[:300].split()))
     try:
-        return str(r.json().get("text") or "").strip(), None
+        corps = r.json()
+        texte = str(corps.get("text") or "").strip()
+        if segments is not None:
+            segments.extend({k: s.get(k) for k in SEGMENT_CHAMPS} for s in corps.get("segments") or []
+                            if isinstance(s, dict))
+        return texte, None
     except (ValueError, AttributeError):
         return None, "reponse de Groq illisible"
 
@@ -3516,10 +3530,13 @@ async def audio_transcriptions(request: Request, authorization: Optional[str] = 
     elif not exige_groq and len(audio) > DICTEE_MAX_OCTETS:
         motif = "plus de 25 Mo, la limite gratuite de Groq"
     else:
-        texte, motif = await dicter_groq(audio, fichier.filename, fichier.content_type, langue)
+        # << details=segments >> (l'ecoute des clips du Studio) : les segments
+        # et leur confiance en plus du texte. Le repli local n'en rend pas.
+        segments = [] if str(formulaire.get("details") or "").strip() == "segments" else None
+        texte, motif = await dicter_groq(audio, fichier.filename, fichier.content_type, langue, segments)
         if texte is not None:
             log.info("Dictee : Groq (%s)", GROQ_DICTEE_MODELE)
-            return JSONResponse({"text": texte})
+            return JSONResponse({"text": texte} if segments is None else {"text": texte, "segments": segments})
         if exige_groq:
             return erreur_dictee(502, "La dictee chez Groq n'a pas abouti : %s" % motif)
         log.warning("Dictee : repli sur le Whisper local (%s)", motif)

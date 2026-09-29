@@ -184,6 +184,27 @@ def test_groq_transcrit(routeur, monkeypatch):
     assert b"ID3 faux mp3" in envoi.content
 
 
+def test_l_ecoute_des_clips_recoit_la_confiance_de_chaque_segment(routeur, monkeypatch):
+    """29/09/2026 : un passage sans voix d'un clip est devenu « Bye. » ; l'écoute
+    du Studio demande les segments pour écarter ceux que Whisper juge sans parole."""
+    brancher_groq(monkeypatch)
+    groq = GroqSimule(corps={"text": " Bye. Désolé. ", "segments": [
+        {"start": 0.0, "end": 0.9, "text": " Bye.", "no_speech_prob": 0.8, "avg_logprob": -1.2, "seek": 0},
+        {"start": 1.0, "end": 2.0, "text": " Désolé.", "no_speech_prob": 0.01, "avg_logprob": -0.2}]})
+    r = dicter(routeur, monkeypatch, groq, champs={"details": "segments"})
+    assert r.json() == {"text": "Bye. Désolé.", "segments": [
+        {"start": 0.0, "end": 0.9, "text": " Bye.", "no_speech_prob": 0.8, "avg_logprob": -1.2},
+        {"start": 1.0, "end": 2.0, "text": " Désolé.", "no_speech_prob": 0.01, "avg_logprob": -0.2}]}
+    assert b"verbose_json" in groq.requetes[0].content
+
+
+def test_sans_la_demande_la_dictee_ne_change_pas(routeur, monkeypatch):
+    brancher_groq(monkeypatch)
+    groq = GroqSimule(corps={"text": " Oui. ", "segments": [{"text": " Oui."}]})
+    assert dicter(routeur, monkeypatch, groq).json() == {"text": "Oui."}
+    assert b"verbose_json" not in groq.requetes[0].content
+
+
 def test_le_moteur_local_demande_nommement_ne_part_JAMAIS_chez_groq(routeur, monkeypatch):
     """La promesse du registre : << la voix ne quitte pas la machine >>.
 
