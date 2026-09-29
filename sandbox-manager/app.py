@@ -4420,7 +4420,36 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
         plans = video_h3.lire_decoupage(reponse, scenario)
     except ValueError as exc:
         raise HTTPException(502, str(exc)) from exc
-    return {"plans": plans, "continuite": await _continuite(plans, scenario)}
+    continuite = await _continuite(plans, scenario)
+    plans, continuite, relecture = await _relire_et_corriger(plans, continuite, scenario)
+    return {"plans": plans, "continuite": continuite, "relecture": relecture}
+
+
+async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> tuple:
+    """Le relecteur a trouvé des problèmes : le texte est corrigé une fois (gratuit ;
+    répliques et nombre de plans intouchables), puis relu. La correction n'est gardée
+    que si la seconde relecture trouve moins de problèmes. Demande du propriétaire,
+    29/09 : « rajoute un reviewer pour le scénario complet qui fera comme toi »."""
+    if continuite.get("ok") is not False:
+        return plans, continuite, {"trouves": [], "corrige": False}
+    trouves = continuite["problemes"]
+    retours = ("Review of the text BEFORE shooting (nothing is filmed yet): "
+               + " ; ".join("shot %d: %s" % (p["plan"], p["quoi"]) for p in trouves))
+    try:
+        corriges = video_h3.lire_correction(await _chat_du_studio(
+            video_h3.consigne_correction(plans, retours, histoire), "la correction du scénario"), plans)
+    except (ValueError, HTTPException) as exc:
+        return plans, continuite, {"trouves": trouves, "corrige": False,
+                                   "erreur": str(getattr(exc, "detail", exc))}
+    if all(n["image_paroles"] == p["image_paroles"] and n.get("ambiance") == p.get("ambiance")
+           for n, p in zip(corriges, plans)):
+        return plans, continuite, {"trouves": trouves, "corrige": False,
+                                   "erreur": "La correction n'a rien changé au texte."}
+    apres = await _continuite(corriges, histoire)
+    if apres.get("ok") is None or len(apres["problemes"]) >= len(trouves):
+        return plans, continuite, {"trouves": trouves, "corrige": False,
+                                   "erreur": "La correction n'a pas fait mieux : le texte d'origine est gardé."}
+    return corriges, apres, {"trouves": trouves, "corrige": True}
 
 
 async def _continuite(plans: list, histoire: str) -> dict:
@@ -4429,7 +4458,8 @@ async def _continuite(plans: list, histoire: str) -> dict:
     try:
         return video_h3.lire_continuite(await _chat_du_studio(
             video_h3.consigne_continuite(plans, histoire), "le contrôle de continuité",
-            modele=video_h3.MODELE_JUGE), len(plans))
+            modele=video_h3.MODELE_JUGE), len(plans),
+            [p["image_paroles"] + " " + p.get("ambiance", "") for p in plans])
     except (ValueError, HTTPException) as exc:
         return {"ok": None, "problemes": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
 

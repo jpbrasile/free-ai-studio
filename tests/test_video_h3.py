@@ -983,6 +983,9 @@ def test_le_decoupage_est_controle(h3):
     tronquee = '[{"image_paroles": "Tom dit « Bonjour Léa, »", "ambiance": "", "enchainement": "coupe"}]'
     with pytest.raises(ValueError, match="sans la garder entière"):
         v.lire_decoupage(tronquee, long)
+    etiquete = '[{"image_paroles": "image_paroles: Plan moyen.", "ambiance": "ambiance : vent", "enchainement": "coupe"}]'
+    lu = v.lire_decoupage(etiquete, "Plan moyen.")[0]
+    assert (lu["image_paroles"], lu["ambiance"]) == ("Plan moyen.", "vent")
     with pytest.raises(ValueError, match="pas pu être lu"):
         v.lire_decoupage("[]", scenario)
     trop = [{"image_paroles": "x", "ambiance": "", "enchainement": "coupe"}] * (v.SCENARIO_PLANS_MAX + 1)
@@ -990,6 +993,70 @@ def test_le_decoupage_est_controle(h3):
                              ([{"image_paroles": "x", "enchainement": "fondu"}], "inconnu")):
         with pytest.raises(ValueError, match=message):
             v.verifier_plans(mauvais)
+
+
+def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3, monkeypatch):
+    """29/09 : « rajoute un reviewer pour le scénario complet qui fera comme toi »."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    scenario = "Léa est seule à une table. Tom arrive, pose un livre et dit « Tiens. »"
+    decoupe = json.dumps([
+        {"image_paroles": "À gauche, Léa seule à une table ; le livre est sur la table.", "ambiance": "",
+         "enchainement": "coupe"},
+        {"image_paroles": "À droite, Tom pose le livre et dit « Tiens. »", "ambiance": "", "enchainement": "suite"}],
+        ensure_ascii=False)
+    probleme = '{"etats": [], "problemes": [{"plan": 1, "quoi": "Le livre est là avant que Tom le pose."}]}'
+    corrige = json.dumps([
+        {"image_paroles": "À gauche, Léa seule à une table vide.", "ambiance": "", "enchainement": "coupe"},
+        {"image_paroles": "À droite, Tom arrive, pose le livre et dit « Tiens. »", "ambiance": "",
+         "enchainement": "suite"}], ensure_ascii=False)
+    vus = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [decoupe, probleme, corrige, '{"etats": [], "problemes": []}'], vus))
+    r = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["plans"][0]["image_paroles"] == "À gauche, Léa seule à une table vide."
+    assert d["relecture"] == {"trouves": [{"plan": 1, "quoi": "Le livre est là avant que Tom le pose."}],
+                              "corrige": True}
+    assert d["continuite"]["ok"] is True
+    relecture = vus[1]["messages"][0]["content"]
+    texte = relecture if isinstance(relecture, str) else relecture[0]["text"]
+    for regle in ("script supervisor", "same place in the frame", "before it arrives in the story",
+                  "placed and visible from the first shot", "quick gesture spread over several shots",
+                  "camera stay on the same side"):
+        assert regle in texte, regle
+    assert "BEFORE shooting" in json.dumps(vus[2], ensure_ascii=False)
+
+
+def test_le_relecteur_garde_le_texte_si_la_correction_ne_fait_pas_mieux(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    scenario = "Léa lance le ballon vers le panier."
+    decoupe = '[{"image_paroles": "Léa lance le ballon.", "ambiance": "", "enchainement": "coupe"}]'
+    probleme = '{"etats": [], "problemes": [{"plan": 1, "quoi": "Le panier n\'est pas placé."}]}'
+    pire = ('{"etats": [], "problemes": [{"plan": 1, "quoi": "Le panier n\'est pas placé."}, '
+            '{"plan": 1, "quoi": "Le ballon n\'arrive nulle part."}]}')
+    corrige = '[{"image_paroles": "Léa lance le ballon en l\'air.", "ambiance": "", "enchainement": "coupe"}]'
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, pire], []))
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
+    assert d["plans"][0]["image_paroles"] == "Léa lance le ballon."
+    assert d["relecture"]["corrige"] is False and "texte d'origine est gardé" in d["relecture"]["erreur"]
+    assert d["continuite"]["problemes"] == [{"plan": 1, "quoi": "Le panier n'est pas placé."}]
+
+
+def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3, monkeypatch):
+    """Premier essai réel (29/09) : alertes sur des mots que le plan n'a pas, et
+    « corrigé » annoncé sur un texte resté le même."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    scenario = "Tom pose un livre sur la table."
+    decoupe = '[{"image_paroles": "À droite, Tom pose le livre sur la table.", "ambiance": "", "enchainement": "coupe"}]'
+    problemes = ('{"etats": [], "problemes": ['
+                 '{"plan": 1, "citation": "Tom  pose le livre", "quoi": "Tom devrait arriver avant."}, '
+                 '{"plan": 1, "citation": "table rouge", "quoi": "La table change de couleur."}]}')
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, problemes, decoupe], []))
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
+    assert d["relecture"]["trouves"] == [{"plan": 1, "quoi": "Tom devrait arriver avant.",
+                                          "citation": "Tom pose le livre"}]
+    assert d["relecture"]["corrige"] is False and "rien changé" in d["relecture"]["erreur"]
 
 
 def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path):

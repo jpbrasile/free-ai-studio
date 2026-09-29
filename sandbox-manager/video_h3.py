@@ -950,6 +950,10 @@ def lire_decoupage(reponse: str, scenario: str) -> list:
         plans = verifier_plans(plans)
     except ValueError as exc:
         raise ValueError("Le découpage du chat n'a pas pu être lu (" + str(exc) + ") : réessayez.") from exc
+    # 29/09 : un plan commençait par « image_paroles: », le nom du champ recopié dans son texte.
+    for p in plans:
+        for k in ("image_paroles", "ambiance"):
+            p[k] = re.sub(r"^\s*" + k + r"\s*:\s*", "", p[k])
     # Le 29/09, un découpage refusé sans dire quelle réplique : le chat avait pu
     # changer une virgule, une majuscule, ou couper une longue réplique en deux
     # plans (la consigne en veut une courte par plan). Ces deux cas passent ;
@@ -1129,19 +1133,49 @@ def consigne_continuite(plans: list, histoire: str) -> str:
     """Le texte des plans se tient-il ? Un état au début et à la fin de chaque
     plan (28/09/2026) : un plan part de l'état où le précédent s'arrête, et
     aucune action ne vient avant ce qui la cause. Rien n'est loué."""
-    return ("Here are the shots of a short film (JSON), in order, and the story they tell. For each shot, write "
-            "the state at its start and at its end: who is there, where, standing or sitting, what they wear. "
-            "Then check the continuity: does each shot start in the state where the previous one ends (a cut may "
-            "move on in time or place, but nothing may be undone without being shown), does every action come "
-            "after what causes it, as in the story, and is every action of the story still shown in some shot, "
-            "none missing? Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
-            "\"debut\": \"...\", \"fin\": \"...\"}], \"problemes\": [{\"plan\": number, \"quoi\": \"...\"}]}; "
+    # Le 29/09, le relecteur du scénario complet (demande du propriétaire : « rajoute
+    # un reviewer pour le scénario complet qui fera comme toi ») : les défauts que
+    # l'agent a trouvés à la main en relisant les découpages s'y vérifient tous.
+    return ("Here are the shots of a short film (JSON), in order, and the story they tell. Each shot is filmed "
+            "ALONE by a video model that sees only that shot's text, so each text must be complete and true on "
+            "its own. For each shot, write the state at its start and at its end: who and what is there, where "
+            "in the frame (left, centre, right; foreground or background), which way each character faces, "
+            "standing or sitting, what they wear, what they hold. "
+            "Then review the whole film like a careful script supervisor: "
+            "(1) does each shot start in the state where the previous one ends (a cut may move on in time or "
+            "place, but nothing may be undone without being shown), does every action come after what causes "
+            "it, as in the story, and is every event of the story still shown in some shot (an arrival, a "
+            "departure, a gesture), none missing and none invented? "
+            "(2) does every key element (character, object, place or target an action uses) keep the same "
+            "place in the frame and the same words from shot to shot, unless a shot shows it moving; are two "
+            "elements ever given the same place; does a shot contradict itself about where something is? "
+            # Premier essai réel du relecteur (29/09) : un personnage à droite « tourné vers
+            # la gauche » pendant qu'on lui parle depuis la droite n'a pas été vu.
+            "Check every \"facing\": a character who talks to, looks at or acts toward someone or something "
+            "must face the side of the frame where that one is (on their left: facing left). "
+            "(3) does a shot show a character or object before it arrives in the story, or repeat a word that "
+            "is no longer true (alone, empty, still in the hand)? "
+            "(4) is a target of an action (where something is thrown, reached, given) placed and visible from "
+            "the first shot of that place, with the character facing it when acting? "
+            "(5) is a quick gesture spread over several shots, or a shot that only waits for the result of "
+            "the previous one? is it said what moves an object and where it ends? "
+            "(6) does the camera stay on the same side and keep the framing written? "
+            # Même essai : trois alertes sur trois demandaient d'écrire ce qui était déjà écrit.
+            "Report only real problems, each once, in one short sentence that says what to change. Before "
+            "reporting that something is missing, read the shot again: if its text already says it, it is "
+            "not a problem. For a wrong or contradictory text, \"citation\" copies EXACTLY the wrong words "
+            "from the shot; for something missing, \"citation\" is empty. "
+            "Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
+            "\"debut\": \"...\", \"fin\": \"...\"}], \"problemes\": [{\"plan\": number, \"citation\": \"...\", "
+            "\"quoi\": \"...\"}]}; "
             "an empty \"problemes\" list if the shots hold together.\n\nStory: %s\n\nShots: %s"
             % (histoire, json.dumps([{k: p[k] for k in ("image_paroles", "enchainement")} for p in plans],
                                     ensure_ascii=False)))
 
 
-def lire_continuite(reponse: str, nombre: int) -> dict:
+def lire_continuite(reponse: str, nombre: int, textes: list | None = None) -> dict:
+    """Avec les textes des plans, un problème qui cite des mots absents de son plan
+    est écarté : premier essai réel (29/09), le relecteur réclamait ce qui était déjà écrit."""
     t = str(reponse or "")
     debut, fin = t.find("{"), t.rfind("}")
     try:
@@ -1156,8 +1190,16 @@ def lire_continuite(reponse: str, nombre: int) -> dict:
             plan = int(x["plan"])
         except (KeyError, TypeError, ValueError):
             continue
-        if 1 <= plan <= nombre and str(x.get("quoi") or "").strip():
-            problemes.append({"plan": plan, "quoi": " ".join(str(x["quoi"]).split())[:300]})
+        if not (1 <= plan <= nombre and str(x.get("quoi") or "").strip()):
+            continue
+        citation = _norme_replique(str(x.get("citation") or ""))
+        if citation and textes is not None and plan <= len(textes) \
+                and f" {citation} " not in f" {_norme_replique(textes[plan - 1])} ":
+            continue
+        probleme = {"plan": plan, "quoi": " ".join(str(x["quoi"]).split())[:300]}
+        if citation:
+            probleme["citation"] = " ".join(str(x["citation"]).split())[:300]
+        problemes.append(probleme)
     etats = [e for e in d.get("etats") or [] if isinstance(e, dict)][:nombre]
     return {"ok": not problemes, "problemes": problemes, "etats": etats}
 
@@ -3070,9 +3112,15 @@ document.getElementById("scenario_decouper").addEventListener("click", async () 
   SCENARIO_TOURNE = null;
   document.getElementById("scenario_suite").hidden = true;
   dessinerPlans();
+  // Le relecteur du scénario complet (29/09) : ce qu'il a trouvé, et s'il l'a corrigé.
+  const rl = d.relecture || {trouves: []};
+  const vu = rl.trouves.length
+    ? "Relecteur : " + (rl.corrige ? "corrigé avant de vous montrer les plans — " : "")
+      + texteContinuite({problemes: rl.trouves}) + (rl.erreur ? " (" + rl.erreur + ")" : "") + ". "
+    : "";
   if (d.continuite && d.continuite.ok === false)
-    scenarioEtat("Continuité à revoir avant de tourner : " + texteContinuite(d.continuite), true);
-  else scenarioEtat("Relisez et corrigez les plans, puis tournez.");
+    scenarioEtat(vu + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite), true);
+  else scenarioEtat(vu + "Relisez les plans, puis tournez.");
 });
 
 function texteContinuite(c){
