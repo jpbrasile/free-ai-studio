@@ -892,9 +892,14 @@ def consigne_decoupage(scenario: str) -> str:
             "These positions describe the START of the shot: a character or object appears in them only "
             "once it has arrived in the story, and a word that is no longer true (alone, empty, still in "
             "the hand…) is not repeated. The staging itself is not a separate part of the "
-            "answer: it lives only in the shots' texts, as plain sentences.When an action aims at something, say where that "
+            "answer: it lives only in the shots' texts, as plain sentences. When an action aims at something, say where that "
             "thing is and that the character faces it. Describe a physical action step by step: what moves "
             "the object, where it goes, where it ends. "
+            # 29/09, relecture des découpages : un personnage à gauche versait dans un
+            # verre posé sur la table à droite, sans jamais s'en approcher.
+            "A character who touches, takes, pours into or hands something is next to it: if it stands "
+            "elsewhere in the frame, the text shows the character walking to it first, and gives the "
+            "character's new place. "
             # Même essai : la caméra s'est approchée de plan en plan, jusqu'à
             # redessiner le visage du personnage.
             "Say the framing of each shot; the camera stays at that framing (no zoom, no move) unless the "
@@ -1158,7 +1163,8 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "(4) is a target of an action (where something is thrown, reached, given) placed and visible from "
             "the first shot of that place, with the character facing it when acting? "
             "(5) is a quick gesture spread over several shots, or a shot that only waits for the result of "
-            "the previous one? is it said what moves an object and where it ends? "
+            "the previous one? is it said what moves an object and where it ends? does a character touch, "
+            "take, pour into or hand something that stands elsewhere in the frame without walking to it? "
             "(6) does the camera stay on the same side and keep the framing written? "
             # Même essai : trois alertes sur trois demandaient d'écrire ce qui était déjà écrit.
             "Report only real problems, each once, in one short sentence that says what to change. Before "

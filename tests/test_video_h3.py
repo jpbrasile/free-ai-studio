@@ -1023,6 +1023,7 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
     texte = relecture if isinstance(relecture, str) else relecture[0]["text"]
     for regle in ("script supervisor", "same place in the frame", "before it arrives in the story",
                   "placed and visible from the first shot", "quick gesture spread over several shots",
+                  "elsewhere in the frame without walking to it",
                   "camera stay on the same side"):
         assert regle in texte, regle
     assert "BEFORE shooting" in json.dumps(vus[2], ensure_ascii=False)
@@ -1163,6 +1164,7 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     for regle in ("never spread one gesture over several shots", "already visible from the start",
                   "the camera stays at that framing", "fix the STAGING of each place",
                   "every shot's text states the position of each key element", "what moves the object",
+                  "walking to it first", "plain sentences. When",
                   "These positions describe the START of the shot"):
         assert regle in v.consigne_decoupage("Un film."), regle
     assert v.CADRAGE in v.consigne_correction([], "retour")
