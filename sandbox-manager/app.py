@@ -4562,7 +4562,19 @@ async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
     référence pour la consistance ». Rien de lisible : les plans partent tels quels."""
     ids = commun["fiches"] or ([commun["fiche"]] if commun["fiche"] else [])
     faites = []
-    for fid, par_plan in (await _tenues_des_plans(ids, plans)).items():
+    releve = await _tenues_des_plans(ids, plans)
+    # Chaque plan ÉCRIT aussi la tenue de chaque personnage : celle que le scénario
+    # donne à ce plan, sinon celle de la fiche, lue sur sa photo (29/09 : de dos,
+    # H3 a inventé un sweat gris). Rien de lisible : les photos seules, comme avant.
+    for fid in ids:
+        par_plan = releve.get(fid) or [None] * len(plans)
+        base = None if all(par_plan) else await _tenue_de_base(fid)
+        for p in a_tourner:
+            ecrite = par_plan[p["numero"] - 1] or base
+            if ecrite and p["payload"].get("mode") == "references":
+                p["payload"].setdefault("tenues_ecrites", {})[fid] = ecrite
+                video_h3.preparer(p["payload"])   # invite toujours sous 4 000 caractères, avant le premier sou
+    for fid, par_plan in releve.items():
         nom = video_h3.fiche_lire(fid)["nom"]
         for tenue in dict.fromkeys(t for t in par_plan if t):
             b64, reprise = await _photo_de_tenue(fid, tenue)
@@ -4590,6 +4602,27 @@ async def _tenues_des_plans(ids: list, plans: list) -> dict:
     except HTTPException:
         return {}
     return {f["id"]: video_h3.tenues_par_plan(releve[f["nom"]], len(plans)) for f in fiches if f["nom"] in releve}
+
+
+async def _tenue_de_base(fid: str):
+    """La tenue de la fiche, lue une fois sur sa photo en pied par le modèle qui voit,
+    puis gardée sur la fiche (relue si la photo change) ; None si rien de lisible."""
+    try:
+        deja = video_h3.fiche_tenue_de_base(fid)
+        photo = video_h3.fiche_photo_de_tenue(fid)
+    except ValueError:
+        return None
+    if deja or not photo:
+        return deja
+    try:
+        tenue = video_h3.lire_tenue_photo(await _chat_du_studio(
+            video_h3.consigne_tenue_photo(), "la lecture de la tenue", images=[photo[1]],
+            modele=video_h3.MODELE_JUGE))
+    except HTTPException:
+        return None
+    if tenue:
+        video_h3.fiche_noter_tenue_de_base(fid, photo[0], tenue)
+    return tenue or None
 
 
 async def _photo_de_tenue(fid: str, tenue: str) -> tuple:

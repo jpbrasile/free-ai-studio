@@ -738,6 +738,50 @@ def fiche_poser_tenue(fid, tenue: str, image: str) -> dict:
     return fiche
 
 
+# La tenue ÉCRITE, en plus de sa photo (29/09) : au plan du tir, Leila filmée de dos
+# portait un sweat gris ; sa fiche dit « sweat jaune et veste violette », tenue que
+# le plan suivant, de face, a respectée. De dos, H3 ne relie plus les photos au
+# personnage. La tenue est lue sur la photo en pied (en anglais : c'est la langue de
+# l'invite de H3, et l'image seule, sans la description, n'a pas de souci de filtre).
+ANGLE_TENUE = "pied"
+
+
+def consigne_tenue_photo() -> str:
+    return ("Describe only the clothing the person in this photo wears: garments and colours, top to shoes, "
+            "in English, in a few words (e.g. \"a yellow hoodie under an open purple jacket, black leggings\"). "
+            "Answer with JSON only: {\"tenue\": \"...\"}.")
+
+
+def lire_tenue_photo(reponse: str) -> str:
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else {}
+    except ValueError:
+        d = {}
+    return " ".join(str(d.get("tenue") or "").split())[:200] if isinstance(d, dict) else ""
+
+
+def fiche_photo_de_tenue(fid):
+    """(nom du fichier, data URL) de la photo où lire la tenue de base ; None sans photo."""
+    fiche = fiche_lire(fid)
+    angle = ANGLE_TENUE if ANGLE_TENUE in fiche["images"] else next((a for a in ANGLES if a in fiche["images"]), None)
+    return (fiche["images"][angle], fiche_image_data_url(fid, angle)) if angle else None
+
+
+def fiche_tenue_de_base(fid):
+    """La tenue de base lue sur la photo, si elle l'a été sur CETTE photo ; None sinon."""
+    fiche, photo = fiche_lire(fid), fiche_photo_de_tenue(fid)
+    lue = fiche.get("tenue_de_base") or {}
+    return lue.get("tenue") if photo and lue.get("image") == photo[0] and lue.get("tenue") else None
+
+
+def fiche_noter_tenue_de_base(fid, image: str, tenue: str) -> None:
+    fiche = fiche_lire(fid)
+    fiche["tenue_de_base"] = {"image": image, "tenue": tenue}
+    _fiche_ecrire(fiche)
+
+
 def tenues_par_plan(par_plan: dict, nombre: int) -> list:
     """{numéro de plan (1…) ou 0 pour tous : tenue} → la tenue de chaque plan. Un
     plan qui n'en nomme pas garde celle du plan d'avant (ou, au début, la
@@ -752,7 +796,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
     return sortie
 
 
-def sujets_des_fiches(nombres: list, tenues=()) -> str:
+def sujets_des_fiches(nombres: list, tenues=(), ecrites=None) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -767,12 +811,16 @@ def sujets_des_fiches(nombres: list, tenues=()) -> str:
         # phrase « In the foreground: only <Subject 1>… » plaçait Léa une première
         # fois, la description la replaçait à sa table, et H3 en a dessiné deux
         # (règle 1 du matin, retirée le soir ; remarque du propriétaire).
+        ecrite = (ecrites or {}).get(k)
+        # La tenue écrite, pour les plans où le visage ne se voit pas (de dos, 29/09).
+        porte = (f" <Subject {k + 1}> wears {ecrite} in every frame, also when seen from behind, in profile "
+                 "or from afar." if ecrite else "")
         if k in tenues:   # la dernière de ses images le montre dans la tenue du scénario (29/09)
             garde.append(f"<Subject {k + 1}> keeps the face and hair of the reference pictures and wears the "
-                         f"clothing of <Picture {premiere - 1}>, as one single person.")
+                         f"clothing of <Picture {premiere - 1}>, as one single person." + porte)
             continue
         garde.append(f"<Subject {k + 1}> keeps the face, hair and clothing of the reference pictures, "
-                     "as one single person.")
+                     "as one single person." + porte)
     return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
 
 
@@ -1288,8 +1336,10 @@ def consigne_tenues(plans: list, noms: list) -> str:
     plan : un personnage peut changer de tenue au fil du film."""
     return ("Here are the shots of a short film, numbered from 1. For each character named below and each shot "
             "that names their clothing, say which clothing that shot gives them; skip the shots that name none. "
-            "Answer in French, JSON only: {\"tenues\": [{\"nom\": \"...\", \"plan\": shot number, \"tenue\": "
-            "\"...\"}]}, the clothing only, in a few words, as the shot says it, with the same words for the same "
+            # En anglais (29/09) : la tenue est aussi ÉCRITE dans l'invite de H3, où tout
+            # ce qui n'est pas réplique doit être anglais (sinon le personnage le dit).
+            "Answer with JSON only: {\"tenues\": [{\"nom\": \"...\", \"plan\": shot number, \"tenue\": "
+            "\"...\"}]}, the clothing only, IN ENGLISH, in a few words, with the same words for the same "
             "clothing.\n\nCharacters: %s\n\nShots: %s"
             % (json.dumps(list(noms), ensure_ascii=False),
                json.dumps({k + 1: p["image_paroles"] for k, p in enumerate(plans)}, ensure_ascii=False)))
@@ -1579,9 +1629,11 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     # réplique, dans quelle langue (plan « coupe » parti de son image, 28/09).
     refs = mode == "references"
     tenues = payload.get("tenues") or {}
-    if not isinstance(tenues, dict):
+    ecrites = payload.get("tenues_ecrites") or {}
+    if not isinstance(tenues, dict) or not isinstance(ecrites, dict) or not all(
+            isinstance(t, str) and len(t) <= 300 for t in ecrites.values()):
         raise ValueError("Tenues illisibles.")
-    fiches, de_la_fiche, nombres, avec_tenue = [], [], [], set()
+    fiches, de_la_fiche, nombres, avec_tenue, ecrites_k = [], [], [], set(), {}
     for fid in ids:
         if mode not in ("references", "premiere", "premiere_derniere"):
             raise ValueError("Une fiche de casting se joue en mode « Références » ou « Première image ».")
@@ -1597,6 +1649,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         if tenues.get(fiche["id"]):
             images_fiche = images_fiche + [tenues[fiche["id"]]]
             avec_tenue.add(len(nombres))
+        if " ".join(str(ecrites.get(fiche["id"]) or "").split()):
+            ecrites_k[len(nombres)] = " ".join(ecrites[fiche["id"]].split())
         de_la_fiche += images_fiche
         nombres.append(len(images_fiche))
     image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
@@ -1618,7 +1672,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if depart:
         texte = f"<Picture {sum(nombres) + 1}> is the first frame of [Shot 1]. " + texte
     if refs and fiches:
-        texte = sujets_des_fiches(nombres, avec_tenue) + " detailed_description: " + texte
+        texte = sujets_des_fiches(nombres, avec_tenue, ecrites_k) + " detailed_description: " + texte
     # Ce que montrent la première et la dernière image, quand le Studio les a
     # créées : leur description (améliorations comprises) passe aussi à H3, pour
     # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).

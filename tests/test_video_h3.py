@@ -1096,6 +1096,7 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     # Chaque plan part traduit, la suite aussi (28/09) : deux réponses du chat.
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([
         '{"tenues": [{"nom": "Léa", "tenue": ""}]}',   # le relevé des tenues : celle de la fiche
+        '{"tenue": "a red coat"}',                      # lue sur sa photo, écrite dans le plan
         '{"image_paroles": "Lea walks into the café", "ambiance": "Chatter", "musique": ""}',
         '{"image_paroles": "She says « Bonjour. »", "ambiance": "", "musique": ""}'], []))
     fid = v.fiche_creer("Léa", "femme de 35 ans")["id"]
@@ -1132,6 +1133,8 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     assert p1 is None and v1["mode"] == "references" and v1["traduit_en_anglais"] is True
     # Le nom, même traduit sans accent, devient <Subject 1> : dit tel quel, il a été récité.
     assert v1["invite"].startswith("subject_definitions:") and "<Subject 1> walks" in v1["invite"]
+    assert "<Subject 1> wears a red coat in every frame, also when seen from behind" in v1["invite"]
+    assert v.fiche_tenue_de_base(fid) == "a red coat"
     assert (p2, r2) == (j1, 1) and v2["mode"] == "prolonger" and v2["plans"] == 2
     assert "(S1) <d>[French] Bonjour.</d>" in v2["invite"]
     assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
@@ -2306,6 +2309,26 @@ def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, mon
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([releve], []))
     sc = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json=corps).json()
     assert len(faites_images) == 2 and all(t["reprise"] for t in sc["tenues"])
+
+
+def test_la_tenue_de_base_est_lue_sur_la_photo_en_pied_une_seule_fois(h3, monkeypatch):
+    """29/09 : de dos, H3 a inventé un sweat gris ; la tenue de la fiche est écrite."""
+    v = h3.video_h3
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    fid = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    vus = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(['{"tenue": "a red  coat"}'], vus))
+    assert asyncio.run(h3._tenue_de_base(fid)) == "a red coat"
+    # Gardée sur la fiche : aucun second appel au chat.
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([], []))
+    assert asyncio.run(h3._tenue_de_base(fid)) == "a red coat"
+    # Une photo en pied posée ensuite : c'est elle qu'on lit, la lecture sur la face ne vaut plus.
+    AUTRE = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\5" * 64).decode()
+    v.fiche_poser_image(fid, "pied", AUTRE)
+    assert v.fiche_tenue_de_base(fid) is None
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(['{"tenue": "a blue dress"}'], []))
+    assert asyncio.run(h3._tenue_de_base(fid)) == "a blue dress"
 
 
 def test_l_image_de_depart_prend_la_tenue_de_son_plan(h3, monkeypatch):
