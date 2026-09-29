@@ -859,7 +859,21 @@ def consigne_decoupage(scenario: str) -> str:
     # Une action et une réplique courte par plan : l'essai du 27/09 (clip 2) a
     # montré qu'un plan chargé rend un son incompréhensible.
     return ("Split this short film script into at most %d shots of about 5 seconds each. "
-            "Each shot shows ONE simple action and has at most ONE short line of dialogue. %s"
+            "Each shot shows ONE simple action and has at most ONE short line of dialogue. "
+            # Le 29/09, un geste de deux secondes étalé sur trois plans : au plan
+            # suivant, l'objet lancé avait disparu et le plan « regarde » a meublé
+            # cinq secondes en inventant une marche vers la caméra.
+            "A quick gesture and its immediate result (throwing and where the thrown thing lands, "
+            "catching, sitting down…) stay together in ONE shot: never spread one gesture over several "
+            "shots, and never write a shot that only waits for the result of the previous one. "
+            # Même essai : un élément du lieu dont un plan tardif a besoin n'était pas
+            # dans l'image de départ, et il est apparu d'un coup au dernier plan.
+            "The first shot's text names every lasting element of the place that a later shot uses, "
+            "so that it is already visible from the start. "
+            # Même essai : la caméra s'est approchée de plan en plan, jusqu'à
+            # redessiner le visage du personnage.
+            "Say the framing of each shot; the camera stays at that framing (no zoom, no move) unless the "
+            "script asks for a camera movement. %s"
             "Write in the language of the script. Dialogue must be copied EXACTLY from the script, "
             "between « »; never invent dialogue. For each shot give \"image_paroles\" (what we see, "
             "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
@@ -1934,6 +1948,12 @@ PAGE_HTML = r"""<!doctype html>
 <div class="bloc section" id="montage_bloc">
   <label for="scenario">Scénario (le récit : découpé en plans pour un tournage neuf, ou pour ranger des clips déjà faits)</label>
   <textarea id="scenario" maxlength="2000"></textarea>
+  <!-- Hors des parties repliables : le 29/09, replié avec le montage, le film tourné ne se voyait plus. -->
+  <div id="montage_resultat" hidden>
+    <b>🎬 Le film</b>
+    <video id="montage_lecteur" controls playsinline></video>
+    <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
+  </div>
   <details class="plie" open><summary>Tourner un scénario neuf</summary>
     <span class="note">le scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
     (chaque plan se paie comme un clip : durée, graine, langue et musique sont celles de « Fabriquer un clip »).</span>
@@ -2002,10 +2022,6 @@ PAGE_HTML = r"""<!doctype html>
     <button id="scenario_ordonner">Ranger selon le scénario</button>
     <button id="montage_lancer">Assembler le film</button>
     <p class="note" id="montage_etat"></p>
-    <div id="montage_resultat" hidden>
-      <video id="montage_lecteur" controls playsinline></video>
-      <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
-    </div>
   </details>
 </div>
 
@@ -2031,6 +2047,10 @@ PAGE_HTML = r"""<!doctype html>
     </details>
     <button id="musique_poser">Poser la musique</button>
     <p class="note" id="musique_etat"></p>
+    <div id="musique_resultat" hidden>
+      <video id="musique_lecteur" controls playsinline></video>
+      <p><a id="musique_telecharger" href="#">Enregistrer le film en musique</a></p>
+    </div>
 </div>
 
 <script>
@@ -2752,11 +2772,11 @@ document.getElementById("musique_poser").addEventListener("click", async () => {
     sous_paroles: document.getElementById("musique_sous_paroles").checked})});
   const j = await r.json();
   if (!r.ok){ e.className = "refus"; e.textContent = typeof j.detail === "string" ? j.detail : "Refusé."; return; }
-  e.textContent = "Musique posée : le film est ci-dessus.";
+  e.textContent = "Musique posée : le film est ci-dessous.";
   const lien = await fetch("/video/jobs/" + j.id, {headers: H}).then(x => x.json());
-  document.getElementById("montage_resultat").hidden = false;
-  document.getElementById("montage_lecteur").src = lien.video_url;
-  document.getElementById("montage_telecharger").href = lien.video_url + "&telecharger=1&nom=film-h3";
+  document.getElementById("musique_resultat").hidden = false;
+  document.getElementById("musique_lecteur").src = lien.video_url;
+  document.getElementById("musique_telecharger").href = lien.video_url + "&telecharger=1&nom=film-h3";
   chargerClips();
 });
 
@@ -3316,6 +3336,9 @@ async function tournerScenario(){
   const d = await r.json();
   if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Refusé.");
   await suivreScenario(d.id);
+  // Le juge gratuit passe de lui-même : le 29/09, un film fini sans jugement
+  // cachait un visage qui ne ressemblait plus à sa fiche dès le deuxième plan.
+  if (SCENARIO_TOURNE === d.id) await actionJuger();
 }
 
 document.getElementById("scenario_arreter").addEventListener("click", async () => {

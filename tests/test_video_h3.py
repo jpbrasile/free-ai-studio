@@ -91,6 +91,11 @@ def test_la_page_se_parcourt_par_un_menu(h3):
     assert 'href="http://localhost:8000/studio"' in page
     # Le verrou d'un tournage couvre aussi la musique, sortie du bloc du scénario.
     assert "#musique_bloc button" in page
+    # Un scénario tourné est jugé de lui-même (gratuit).
+    assert "if (SCENARIO_TOURNE === d.id) await actionJuger();" in page
+    # Aucun lecteur dans une partie repliée : le 29/09, le film tourné y était caché.
+    replies = "".join(re.findall(r"<details.*?</details>", page, re.S))
+    assert page.count("<video") == 3 and "<video" not in replies
     # Les réglages rares sont repliés, pas retirés.
     for i in ("definition", "coupe", "graine", "ambiance", "musique_fondu", "clips_liste"):
         assert 'id="%s"' % i in page, i
@@ -1087,6 +1092,10 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     # Règle 2, dans le découpage comme dans la correction ; aucun nom de personnage dans la règle.
     assert v.CADRAGE in v.consigne_decoupage("Un film.") and "at most %d shots" % v.SCENARIO_PLANS_MAX in \
         v.consigne_decoupage("Un film.")
+    # Essai du 29/09 : geste étalé sur trois plans, élément du lieu absent au départ, caméra qui avance.
+    for regle in ("never spread one gesture over several shots", "already visible from the start",
+                  "the camera stays at that framing"):
+        assert regle in v.consigne_decoupage("Un film."), regle
     assert v.CADRAGE in v.consigne_correction([], "retour")
     assert "close-up shows one character only" in v.CADRAGE
     assert "Place each character once" in v.CADRAGE
