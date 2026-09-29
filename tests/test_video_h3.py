@@ -7,6 +7,7 @@ que rien de ComfyUI (GPL-3.0) n'est importé par le code du Studio.
 import ast
 import base64
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -68,6 +69,31 @@ def test_la_carte_d_accueil_suit_le_reglage(routeur, monkeypatch):
     avec = c.get("/studio").text
     assert "/video-h3" not in sans and "Vidéo H3" not in sans
     assert "/video-h3" in avec and "🎬 Vidéo" in sans
+
+
+def test_l_accueil_du_sandbox_mene_a_h3_selon_le_reglage(h3, monkeypatch):
+    c = client(h3)
+    avec = c.get("/").text
+    monkeypatch.delenv("VIDEO_H3_ACTIF")
+    sans = c.get("/").text
+    assert "href='/video-h3'" in avec and "/video-h3" not in sans
+    assert "__H3__" not in avec + sans and "href='/video'" in sans
+
+
+def test_la_page_se_parcourt_par_un_menu(h3):
+    page = client(h3).get("/video-h3", headers=CLE).text
+    menu = re.search(r'<select id="section_choix"[^>]*>(.*?)</select>', page, re.S).group(1)
+    parties = re.findall(r'<option value="(\w+)"', menu)
+    assert parties == ["clip", "casting", "montage_bloc", "musique_bloc", "reglages"]
+    for p in parties:
+        assert re.search(r'class="[^"]*\bsection\b[^"]*" id="%s"' % p, page), p
+    assert page.count('class="bloc section"') + page.count('class="section"') == len(parties)
+    assert 'href="http://localhost:8000/studio"' in page
+    # Le verrou d'un tournage couvre aussi la musique, sortie du bloc du scénario.
+    assert "#musique_bloc button" in page
+    # Les réglages rares sont repliés, pas retirés.
+    for i in ("definition", "coupe", "graine", "ambiance", "musique_fondu", "clips_liste"):
+        assert 'id="%s"' % i in page, i
 
 
 def demande(**autres):

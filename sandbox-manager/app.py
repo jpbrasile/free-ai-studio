@@ -6143,7 +6143,7 @@ def home():
 <div class=card><h2>⚡ Modal <span id=b-modal></span></h2><p>Machine distante, pour ce qui demande une carte graphique ou Internet ; secours si votre ordinateur ne répond pas. Résultats récupérés comme ressources de l’agent.</p><a class=button href='https://modal.com/' target=_blank rel='noopener'>Ouvrir Modal ↗</a></div>
 <div class=card><h2>Kaggle <span id=b-kaggle></span></h2><p>Fallback automatisable si configuré — sur votre machine seulement, avec vos identifiants. L’accès direct reste toujours disponible.</p><a class=button href='https://www.kaggle.com/code' target=_blank rel='noopener'>Ouvrir Kaggle ↗</a></div>
 <div class=card><h2>Colab</h2><p>Accès direct permanent. En dernier recours, le Studio génère un notebook prêt à ouvrir puis réimporte les résultats.</p><a class=button href='https://colab.research.google.com/' target=_blank rel='noopener'>Ouvrir Colab ↗</a></div>
-</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; <a class=button href='/chanson'>🎵 Faire chanter des paroles</a> &nbsp; <a class=button href='/dialogue'>🎙️ Faire parler deux voix</a> &nbsp;<a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
+</div><p><a class=button href='/essai'>▶️ Lancer un essai</a> &nbsp; <a class=button href='/video'>🎬 Fabriquer une vidéo</a> &nbsp; __H3__<a class=button href='/chanson'>🎵 Faire chanter des paroles</a> &nbsp; <a class=button href='/dialogue'>🎙️ Faire parler deux voix</a> &nbsp;<a class=button href='/cles'>🔑 Brancher Modal ou Kaggle</a> &nbsp; <a href='/docs'>API Sandbox / Agent →</a></p>
 <script>
 (function(){
  var pastille = function(ok, oui, non){
@@ -6168,5 +6168,6 @@ def home():
  });
 })();
 </script>
-</html>"""
+</html>""".replace("__H3__", "<a class=button href='/video-h3'>🎞️ Vidéo H3 (image et son)</a> &nbsp; "
+                   if video_h3.actif() else "")
     )

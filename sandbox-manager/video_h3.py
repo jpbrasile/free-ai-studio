@@ -1725,15 +1725,37 @@ PAGE_HTML = r"""<!doctype html>
   .clip button { margin: 0 4px 0 0; padding: 2px 10px; }
   .clip .note { flex: 1; overflow-wrap: anywhere; }
   pre { white-space: pre-wrap; font-size: .8rem; max-height: 240px; overflow: auto; background: #f3f3f3; padding: 8px; }
+  [hidden] { display: none !important; }
+  .barre { position: sticky; top: 0; z-index: 5; background: #fafafa; display: flex; flex-wrap: wrap; gap: 8px 14px;
+           align-items: center; padding: 8px 0; border-bottom: 1px solid #ddd; }
+  .barre h1 { margin: 0; font-size: 1.2rem; }
+  .barre select { width: auto; flex: 1; min-width: 200px; font-weight: 600; }
+  .barre a { text-decoration: none; }
+  #banniere { font-size: .9rem; padding: 6px 10px; }
+  details { margin-top: 10px; }
+  details > summary { cursor: pointer; font-weight: 600; }
+  details.plie { border-top: 1px solid #eee; padding-top: 8px; }
 </style>
 </head>
 <body>
-<h1>🎞️ Vidéo H3 <span class="note">expérimental</span></h1>
-<p class="note">MiniMax H3 fabrique l'image <b>et</b> le son d'un clip, sur une machine louée chez Modal
-(A100). Moteur : ComfyUI, lancé à part sur la machine louée.</p>
+<nav class="barre">
+  <a href="http://localhost:8000/studio">← Studio</a>
+  <h1>🎞️ Vidéo H3</h1>
+  <select id="section_choix" aria-label="Partie de la page">
+    <option value="clip">🎬 Fabriquer un clip</option>
+    <option value="casting">👤 Personnages (fiches de casting)</option>
+    <option value="montage_bloc">🎥 Scénario et film</option>
+    <option value="musique_bloc">🎵 Musique sous un film</option>
+    <option value="reglages">⚙️ Licence et poids</option>
+  </select>
+  <span id="barre_alerte" class="refus" hidden></span>
+</nav>
 
 <div class="bloc" id="banniere">Lecture du budget…</div>
 
+<div class="section" id="reglages">
+<p class="note">MiniMax H3 fabrique l'image <b>et</b> le son d'un clip, sur une machine louée chez Modal
+(A100). Moteur : ComfyUI, lancé à part sur la machine louée.</p>
 <div class="bloc" id="licence">
   <b>Licence de MiniMax H3.</b> Elle exclut par défaut l'Union européenne, le Royaume-Uni et la Corée :
   il faut l'autorisation écrite de MiniMax.
@@ -1752,8 +1774,9 @@ PAGE_HTML = r"""<!doctype html>
   <b>Poids du modèle.</b> <span id="poids_etat">Lecture…</span>
   <button id="poids_preparer" hidden>Préparer les poids</button>
 </div>
+</div>
 
-<div class="bloc" id="casting">
+<div class="bloc section" id="casting">
   <b>Fiches de casting</b>
   <span class="note">un personnage décrit une fois, retrouvé d'un plan à l'autre (mode « Références »).</span>
   <label for="fiche_choix">Fiche</label>
@@ -1772,7 +1795,7 @@ PAGE_HTML = r"""<!doctype html>
   visage. Rejouez ou supprimez celles qui ne vont pas.</p>
 </div>
 
-<div class="bloc">
+<div class="bloc section" id="clip">
   <label for="mode">Mode</label>
   <select id="mode"></select>
   <p class="note" id="mode_note"></p>
@@ -1780,16 +1803,20 @@ PAGE_HTML = r"""<!doctype html>
   <textarea id="image_paroles">Une femme en manteau rouge marche sous la pluie à Paris, la nuit ; elle se retourne et dit : « On y est presque. »</textarea>
   <label for="langue">Langue des paroles</label>
   <select id="langue">__LANGUES__</select>
-  <span class="note">Une réplique dans une autre langue la dit en tête : « Bonjour ! » puis
-  « [anglais] Nice to meet you! » — même personnage, même voix.</span>
+  <details class="note"><summary>Conseils pour les paroles</summary>
+  Une réplique dans une autre langue la dit en tête : « Bonjour ! » puis
+  « [anglais] Nice to meet you! » — même personnage, même voix.
+  Pour des paroles nettes : une seule personne parle, visage vers la caméra, une seule action par plan,
+  et pas plus de 2 mots par seconde (une dizaine pour 5 s). Les textes sont des exemples : modifiez-les librement.
+  </details>
+  <details class="plie"><summary>2. Ambiance sonore et 3. musique</summary>
   <label for="ambiance">2. Ambiance sonore</label>
   <textarea id="ambiance">Pluie, circulation au loin.</textarea>
   <label for="musique">3. Musique (vide : aucune musique)</label>
   <textarea id="musique"></textarea>
-  <p class="note">Les trois textes sont des exemples : modifiez-les librement.
-  Pour des paroles nettes : une seule personne parle, visage vers la caméra, une seule action par plan,
-  et pas plus de 2 mots par seconde (une dizaine pour 5 s). Case musique vide, le Studio demande au modèle
+  <p class="note">Case musique vide, le Studio demande au modèle
   de n'en mettre aucune : sinon il en ajoute une de lui-même.</p>
+  </details>
 
   <div class="image_bord" id="bord_premiere" hidden>
     <b>Première image</b>
@@ -1846,6 +1873,7 @@ PAGE_HTML = r"""<!doctype html>
   <select id="longueur"></select>
   <p class="note" id="prix"></p>
 
+  <details class="plie"><summary>Réglages avancés : définition, coupe du début, graine</summary>
   <label for="definition">Définition de l'image</label>
   <select id="definition">
     <option value="480p">480p (832 × 480), celle des prix mesurés</option>
@@ -1860,6 +1888,7 @@ PAGE_HTML = r"""<!doctype html>
   </select>
   <label for="graine">Graine (vide = au hasard ; la même graine refait le même tirage)</label>
   <input type="number" id="graine" min="0" step="1">
+  </details>
 
   <button id="lancer">Fabriquer le clip</button>
   <p id="statut" class="note"></p>
@@ -1877,25 +1906,12 @@ PAGE_HTML = r"""<!doctype html>
   <pre id="journal" hidden></pre>
 </div>
 
-<div class="bloc" id="montage_bloc">
-  <b>Monter un scénario</b>
-  <span class="note">avec les clips déjà faits : rien n'est tourné de nouveau, rien n'est loué.</span>
-  <label for="scenario">Scénario (sert à ranger les clips dans l'ordre du récit)</label>
+<div class="bloc section" id="montage_bloc">
+  <label for="scenario">Scénario (le récit : découpé en plans pour un tournage neuf, ou pour ranger des clips déjà faits)</label>
   <textarea id="scenario" maxlength="2000"></textarea>
-  <p class="note">Cochez les clips du film. Rangez-les avec ↑ ↓, ou demandez l'ordre au chat du Studio
-  d'après le scénario ; puis assemblez. Les clips sont recollés bout à bout, son compris, sans rien couper.</p>
-  <div id="clips_liste"></div>
-  <button id="scenario_ordonner">Ranger selon le scénario</button>
-  <button id="montage_lancer">Assembler le film</button>
-  <p class="note" id="montage_etat"></p>
-  <div id="montage_resultat" hidden>
-    <video id="montage_lecteur" controls playsinline></video>
-    <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
-  </div>
-  <div class="image_bord">
-    <b>Ou tourner un scénario neuf</b>
-    <span class="note">le même scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
-    (chaque plan se paie comme un clip : durée, graine, langue et musique sont celles du formulaire du clip).</span>
+  <details class="plie" open><summary>Tourner un scénario neuf</summary>
+    <span class="note">le scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
+    (chaque plan se paie comme un clip : durée, graine, langue et musique sont celles de « Fabriquer un clip »).</span>
     <label for="scenario_fiche">Personnage (fiche de casting) et sa langue</label>
     <select id="scenario_fiche"><option value="">Choisissez une fiche…</option></select>
     <select id="scenario_langue1">__LANGUES__</select>
@@ -1917,7 +1933,9 @@ PAGE_HTML = r"""<!doctype html>
     <p id="scenario_occupe" class="occupe" hidden><span class="rond"></span> <span id="scenario_occupe_texte"></span>
       <span id="scenario_chrono"></span></p>
     <p class="note" id="scenario_etat"></p>
-    <label for="scenario_choix">Reprendre un scénario déjà tourné</label>
+  </details>
+  <details class="plie" open><summary>Reprendre un scénario déjà tourné</summary>
+    <label for="scenario_choix">Scénario</label>
     <select id="scenario_choix"><option value="">Choisissez un scénario…</option></select>
     <div id="scenario_suite" hidden>
       <label for="suite_action">Que faire ?</label>
@@ -1950,8 +1968,23 @@ PAGE_HTML = r"""<!doctype html>
         seuls les plans changés ou cochés sont tournés et payés, les autres sont repris, la musique est reposée.
       </details>
     </div>
-  </div>
-  <div class="image_bord">
+  </details>
+  <details class="plie"><summary>Monter des clips déjà faits</summary>
+    <span class="note">rien n'est tourné de nouveau, rien n'est loué.</span>
+    <p class="note">Cochez les clips du film. Rangez-les avec ↑ ↓, ou demandez l'ordre au chat du Studio
+    d'après le scénario ; puis assemblez. Les clips sont recollés bout à bout, son compris, sans rien couper.</p>
+    <div id="clips_liste"></div>
+    <button id="scenario_ordonner">Ranger selon le scénario</button>
+    <button id="montage_lancer">Assembler le film</button>
+    <p class="note" id="montage_etat"></p>
+    <div id="montage_resultat" hidden>
+      <video id="montage_lecteur" controls playsinline></video>
+      <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
+    </div>
+  </details>
+</div>
+
+<div class="bloc section" id="musique_bloc">
     <b>Poser une musique sous un film</b>
     <span class="note">une chanson du Studio (page Chanson) sous le son du film, du début choisi à la fin, avec
     un decrescendo final ; rien n'est loué.</span>
@@ -1959,6 +1992,8 @@ PAGE_HTML = r"""<!doctype html>
     <select id="musique_film"></select>
     <label for="musique_chanson">Musique</label>
     <select id="musique_chanson"></select>
+    <label><input id="musique_sous_paroles" type="checkbox" checked> Baisser la musique quand on parle</label>
+    <details class="plie"><summary>Réglages : début, volume, point de départ dans la chanson, fondu</summary>
     <label for="musique_debut">Début de la musique (secondes)</label>
     <input id="musique_debut" type="number" min="0" step="0.01" value="0">
     <label for="musique_volume">Volume (de 0,05 à 1)</label>
@@ -1968,10 +2003,9 @@ PAGE_HTML = r"""<!doctype html>
     <span class="note">par exemple là où le chant commence, pour sauter une longue introduction.</span>
     <label for="musique_fondu">Fondu d'entrée (secondes)</label>
     <input id="musique_fondu" type="number" min="0" max="5" step="0.1" value="0.3">
-    <label><input id="musique_sous_paroles" type="checkbox" checked> Baisser la musique quand on parle</label>
+    </details>
     <button id="musique_poser">Poser la musique</button>
     <p class="note" id="musique_etat"></p>
-  </div>
 </div>
 
 <script>
@@ -2175,6 +2209,20 @@ function afficherLicence(a){
     ? "Copie de l'autorisation déposée le " + dateFr(a.deposee_le) + " (autorisation du "
       + dateFr(a.date_autorisation) + "). Les clips sont permis."
     : "Aucune copie d'autorisation sur ce Studio : les clips sont refusés tant qu'elle n'est pas déposée.";
+  MANQUE.licence = !a.presente;
+  alerteBarre();
+}
+
+// Ce qui empêche de tourner, rappelé dans la barre du haut quelle que soit la partie ouverte.
+const MANQUE = {licence: false, poids: false};
+function alerteBarre(){
+  const manque = [];
+  if (MANQUE.licence) manque.push("licence à déposer");
+  if (MANQUE.poids) manque.push("poids à préparer");
+  const b = document.getElementById("barre_alerte");
+  b.hidden = !manque.length;
+  b.textContent = "⚠ " + manque.join(", ") + " (voir « Licence et poids »)";
+  b.style.cursor = "pointer";
 }
 
 function afficherPoids(p){
@@ -2183,6 +2231,8 @@ function afficherPoids(p){
     : "Pas encore sur le disque Modal « " + p.volume + " ». Une fois pour toutes : environ "
       + ETAT.poids_go + " Go, téléchargés sur processeur (sans carte). Au pire " + fr(ETAT.pire_cas_poids_usd, 2) + " $.";
   document.getElementById("poids_preparer").hidden = p.prets;
+  MANQUE.poids = !p.prets;
+  alerteBarre();
 }
 
 function rafraichir(){
@@ -3024,7 +3074,7 @@ let CHRONO = null;
 const LIBRES_PENDANT = new Set(["scenario_arreter", "scenario_auto_payer", "scenario_auto_arreter"]);
 
 function verrouiller(oui){
-  for (const e of document.querySelectorAll("#montage_bloc button, #montage_bloc select"))
+  for (const e of document.querySelectorAll("#montage_bloc button, #montage_bloc select, #musique_bloc button, #musique_bloc select"))
     if (!LIBRES_PENDANT.has(e.id)) e.disabled = oui;
 }
 
@@ -3252,6 +3302,20 @@ document.getElementById("scenario_arreter").addEventListener("click", async () =
 brancherBord("premiere");
 brancherBord("derniere");
 document.getElementById("image_paroles").addEventListener("input", majInvitesImages);
+// Une seule partie de la page à la fois, choisie dans le menu du haut ; le choix
+// est retenu pour ce navigateur seulement (sans lui, la page ouvre sur le clip).
+function montrerSection(id){
+  if (!document.getElementById(id)) id = "clip";
+  for (const s of document.querySelectorAll(".section")) s.hidden = s.id !== id;
+  document.getElementById("section_choix").value = id;
+  try { localStorage.setItem("h3_section", id); } catch (e) {}
+}
+document.getElementById("section_choix").addEventListener("change", e => montrerSection(e.target.value));
+let SECTION_DEPART = "clip";
+try { SECTION_DEPART = localStorage.getItem("h3_section") || "clip"; } catch (e) {}
+montrerSection(SECTION_DEPART);
+document.getElementById("barre_alerte").addEventListener("click", () => montrerSection("reglages"));
+
 rafraichir().then(majInvitesImages).then(() => chargerFiches("")).then(chargerClips).then(chargerScenarios);
 </script>
 </body>
