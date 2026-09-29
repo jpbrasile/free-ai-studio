@@ -986,6 +986,8 @@ def test_le_decoupage_est_controle(h3):
     etiquete = '[{"image_paroles": "image_paroles: Plan moyen.", "ambiance": "ambiance : vent", "enchainement": "coupe"}]'
     lu = v.lire_decoupage(etiquete, "Plan moyen.")[0]
     assert (lu["image_paroles"], lu["ambiance"]) == ("Plan moyen.", "vent")
+    vide = '[{"image_paroles": "Elle sourit « ».", "ambiance": "", "enchainement": "coupe"}]'
+    assert v.lire_decoupage(vide, "Elle sourit.")[0]["image_paroles"] == "Elle sourit ."
     with pytest.raises(ValueError, match="pas pu être lu"):
         v.lire_decoupage("[]", scenario)
     trop = [{"image_paroles": "x", "ambiance": "", "enchainement": "coupe"}] * (v.SCENARIO_PLANS_MAX + 1)
@@ -1023,7 +1025,7 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
     texte = relecture if isinstance(relecture, str) else relecture[0]["text"]
     for regle in ("script supervisor", "same place in the frame", "before it arrives in the story",
                   "placed and visible from the first shot", "quick gesture spread over several shots",
-                  "elsewhere in the frame without walking to it",
+                  "elsewhere in the frame without walking to it", "an object appears twice",
                   "camera stay on the same side"):
         assert regle in texte, regle
     assert "BEFORE shooting" in json.dumps(vus[2], ensure_ascii=False)
@@ -1164,7 +1166,7 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     for regle in ("never spread one gesture over several shots", "already visible from the start",
                   "the camera stays at that framing", "fix the STAGING of each place",
                   "every shot's text states the position of each key element", "what moves the object",
-                  "walking to it first", "plain sentences. When",
+                  "walking to it first", "plain sentences. When", "never tells again an action that ended",
                   "These positions describe the START of the shot"):
         assert regle in v.consigne_decoupage("Un film."), regle
     assert v.CADRAGE in v.consigne_correction([], "retour")
@@ -1910,10 +1912,18 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     corps = {"fiches": [lea, james], "langues": {james: "English"}, "langue": "French", "longueur": 124}
     commun, musique, a_tourner = h3._scenario_prepare(corps, plans)
     assert recadres == [(base64.b64decode(PNG), *v.DEFINITIONS[v.DEFINITION_PAR_DEFAUT])]
-    p0, p1 = a_tourner[0]["payload"], a_tourner[1]["payload"]
+    # 29/09 : les photos des fiches accompagnent l'image de départ (visage réinventé sinon).
+    p0 = a_tourner[0]["payload"]
+    assert p0["mode"] == "references" and p0["depart_reference"] == base64.b64encode(CADRE).decode()
+    plan = v.preparer(dict(p0, depart_reference=PNG))
+    assert "detailed_description: <Picture 4> is the first frame of [Shot 1]. " in plan["resume_public"]["invite"]
+    assert list(plan["demande"]["images"]) == [f"ref_{i}.png" for i in range(4)]
+    # Des fiches sans photo : l'image seule, et les fiches donnent les voix.
+    lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
+    corps = {"fiches": [lea, james], "langues": {james: "English"}, "langue": "French", "longueur": 124}
+    p0 = h3._scenario_prepare(corps, plans[:1])[2][0]["payload"]
     assert p0["mode"] == "premiere" and p0["images"] == [base64.b64encode(CADRE).decode()]
     assert p0["description_premiere"] == "Un café bondé, une chaise vide"
-    assert p1["mode"] == "references"
     invite = v.preparer(dict(p0, images=[PNG]))["resume_public"]["invite"]
     # Sans photos de fiche, les noms restent des noms ; James parle anglais.
     assert invite.startswith("First frame: Un café bondé, une chaise vide. ")

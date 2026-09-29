@@ -891,7 +891,13 @@ def consigne_decoupage(scenario: str) -> str:
             # personnage « seul » alors que l'autre est arrivé.
             "These positions describe the START of the shot: a character or object appears in them only "
             "once it has arrived in the story, and a word that is no longer true (alone, empty, still in "
-            "the hand…) is not repeated. The staging itself is not a separate part of the "
+            "the hand…) is not repeated. "
+            # 29/09 : « the basketball has just dropped through the net » en tête d'un
+            # plan : H3 a rejoué le tir, avec un second ballon dans le filet.
+            "A shot never tells again an action that ended before its start, not even as \"has just…\": "
+            "the video model would play it a second time. It only says where things are now (the glass "
+            "stands full on the table, the door is open). Each object is there once: no text lets a second one appear. "
+            "The staging itself is not a separate part of the "
             "answer: it lives only in the shots' texts, as plain sentences. When an action aims at something, say where that "
             "thing is and that the character faces it. Describe a physical action step by step: what moves "
             "the object, where it goes, where it ends. "
@@ -959,6 +965,8 @@ def lire_decoupage(reponse: str, scenario: str) -> list:
     for p in plans:
         for k in ("image_paroles", "ambiance"):
             p[k] = re.sub(r"^\s*" + k + r"\s*:\s*", "", p[k])
+            # 29/09 : des guillemets vides « » dans un scénario sans réplique, refusés comme inventés.
+            p[k] = " ".join(re.sub(r"«\s*»|“\s*”", " ", p[k]).split())
     # Le 29/09, un découpage refusé sans dire quelle réplique : le chat avait pu
     # changer une virgule, une majuscule, ou couper une longue réplique en deux
     # plans (la consigne en veut une courte par plan). Ces deux cas passent ;
@@ -1159,7 +1167,9 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "Check every \"facing\": a character who talks to, looks at or acts toward someone or something "
             "must face the side of the frame where that one is (on their left: facing left). "
             "(3) does a shot show a character or object before it arrives in the story, or repeat a word that "
-            "is no longer true (alone, empty, still in the hand)? "
+            "is no longer true (alone, empty, still in the hand)? Does a shot tell again, even as \"has "
+            "just…\", an action that ended before it starts? The video model plays it again, and an object "
+            "appears twice. "
             "(4) is a target of an action (where something is thrown, reached, given) placed and visible from "
             "the first shot of that place, with the character facing it when acting? "
             "(5) is a quick gesture spread over several shots, or a shot that only waits for the result of "
@@ -1403,6 +1413,13 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                    "overall_soundscape: " if refs and fiches else "Sound: ")
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
+    # Image de départ ET photos des fiches (29/09, visage réinventé dans un plan parti
+    # d'une image seule ; demande du propriétaire : « fais le ») : le nœud Références
+    # n'a pas d'entrée first_frame, l'image part donc en dernière <Picture N>, désignée
+    # comme le guide de MiniMax l'écrit (ref-en.txt, 2.2).
+    depart = payload.get("depart_reference") if refs and fiches else None
+    if depart:
+        texte = f"<Picture {sum(nombres) + 1}> is the first frame of [Shot 1]. " + texte
     if refs and fiches:
         texte = sujets_des_fiches(nombres) + " detailed_description: " + texte
     # Ce que montrent la première et la dernière image, quand le Studio les a
@@ -1443,7 +1460,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     brutes = payload.get("images") or []
     if not isinstance(brutes, list):
         raise ValueError("Images illisibles.")
-    brutes = de_la_fiche + brutes
+    brutes = de_la_fiche + brutes + ([depart] if depart else [])
     m = MODES[mode]
     if not m["images_min"] <= len(brutes) <= m["images_max"]:
         if m["images_max"] == 0:

@@ -4506,8 +4506,16 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
                                                *video_h3.DEFINITIONS[definition])
             except montage.MontageImpossible as exc:
                 raise ValueError(str(exc)) from exc
-            payload.update(mode="premiere", images=[base64.b64encode(image).decode()],
-                           description_premiere=p.get("description_depart", ""))
+            image_b64 = base64.b64encode(image).decode()
+            # Avec les photos des fiches quand elles tiennent (9 images au plus) : un
+            # départ d'image seule réinventait le visage (29/09). Sinon, l'image seule.
+            nb_photos = sum(len(video_h3.fiche_lire(f).get("images") or {})
+                            for f in (commun["fiches"] or [commun["fiche"]]))
+            if 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
+                payload.update(mode="references", depart_reference=image_b64)
+            else:
+                payload.update(mode="premiere", images=[image_b64],
+                               description_premiere=p.get("description_depart", ""))
             video_h3.preparer(payload)
         elif p["enchainement"] == "coupe":
             payload["mode"] = "references"
