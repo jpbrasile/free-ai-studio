@@ -1198,6 +1198,10 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
           - le ballon traverse bien le filet, entre 4,45 et 4,9 s : c'est une fausse alerte du juge, qui ne voyait qu'une image toutes les 0,5 s ;
           - la mise en place est tenue : le panier au fond à gauche, elle à droite, tournée vers lui, sans demi-tour ; c'est elle qui lance, et la trajectoire est continue ;
           - restent : on la voit de dos, sans visage, conséquence de la règle retirée ; un gymnase au lieu du terrain du campus, que ce texte-là ne nommait pas et que le relecteur n'a pas relevé ; un recadrage vers le panier à partir de 4,5 s.
+        - **Film en trois plans autour de ce clip** (propriétaire : « insère ce clip dans un scénario global, attention à la cohérence du lieu »). Le plan 1 part de la première image du clip, le plan 3 de sa dernière ; les deux sont tournés à part, puis les trois clips sont montés. Film `739c831b`, 15,5 s, environ 0,10 $ de plus. Avant de tourner, le relecteur n'a signalé aucun problème.
+          - **Verdict du juge du Studio** : défaut à 0,5 s, « Le personnage se téléporte brusquement » et « Le ballon de basket disparaît ».
+          - **Mon avis, sur planche à 0,5 s puis à 1/8 s** : fausse alerte. Le ballon rebondit sous le bas du cadre et elle ne saute pas de place. Le lieu reste le même dans les trois plans : même gymnase, panier à gauche, mur violet. Aux coupes, elle garde la même pose. Dans le plan 3, elle se retourne, sourit et lève les deux poings, alors que le texte en demande un seul.
+          - **Non vérifié** : la ressemblance du visage du plan 3 avec la fiche. Un plan parti d'une image n'utilise la fiche que pour la voix.
         - **À faire** :
           - le juge regarde le dernier geste de plus près, par exemple à 4 images par seconde sur la fin du plan ;
           - le découpage ne crée plus de plan d'attente.
