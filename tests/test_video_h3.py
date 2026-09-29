@@ -1184,10 +1184,13 @@ def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     assert [r["plan"] for r in ruptures] == [3, 3]
     assert "sans avoir été vu avant" in ruptures[0]["quoi"] and "off-frame" in ruptures[1]["quoi"]
     c = v.consigne_decoupage("x")
-    assert '"off-frame"' in c and "at most three simple steps" in c and "a cut (\"coupe\") skips" in c
+    assert '"off-frame"' in c and "at most three simple steps" in c and "a cut (\"coupe\") skip the minor steps" in c
     relu = v.consigne_continuite([{"image_paroles": "x", "enchainement": "coupe"}], "x")
     # 29/09 : « divisez le plan en deux » menait la correction à un 5e plan, refusé (2 fois sur 3).
-    assert "(8) does a shot hold more than" in relu and "never ask to split a shot" in relu
+    assert "(8) does the number of shots fit the actions" in relu and "never ask to split a shot" in relu
+    assert "is not a missing event" in relu
+    # 29/09 : « une règle de cohérence entre le nombre de plans et d'actions, exemple en 3 plans ».
+    assert "The NUMBER of shots follows the actions" in c and "Example, in 3 shots" in c
 
     # Au découpage : le tableau est gardé, et la rupture rejoint la relecture.
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")

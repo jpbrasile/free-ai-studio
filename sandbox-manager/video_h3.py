@@ -1073,9 +1073,20 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            # prendre, verser, reposer).
            "A shot lasts about 5 seconds: it holds ONE main action (one character, or two together in one "
            "shared gesture: a handshake, a hug), with at most three simple steps (lifts the glass, drinks, "
-           "puts it down); a line of dialogue counts as a step. When the script holds more actions than the shots can "
-           "show, a cut (\"coupe\") skips the minor steps (walking to a chair, filling a glass): the next shot "
-           "starts after them, with the places they lead to. "
+           "puts it down); a line of dialogue counts as a step. "
+           # 29/09, demande du propriétaire : « une règle de cohérence entre le nombre
+           # de plans et d'actions, exemple en 3 plans ». L'exemple n'est aucune des
+           # histoires du banc (basket, cuisine, quai de gare), pour ne pas l'apprendre.
+           "The NUMBER of shots follows the actions: first list the story's actions in order, then group them, "
+           "one main action and its steps per shot; as many shots as groups, never more (no shot that only "
+           "waits or repeats), never fewer than the maximum allows if actions are left over. When the actions "
+           "still do not fit, keep those that carry the story (an arrival, a line, a result) and let a cut "
+           "(\"coupe\") skip the minor steps (walking to a chair, filling a glass): the next shot starts after "
+           "them, with the places they lead to. Example, in 3 shots: \"Marc waters the tomato plants, picks a "
+           "ripe tomato, washes it at the tap, bites into it and calls to his daughter: « Viens goûter ! »\" "
+           "gives shot 1: Marc waters the row of plants with a watering can; shot 2 (coupe, the washing is "
+           "skipped): Marc picks a tomato and bites into it; shot 3 (suite): Marc turns to the house and calls "
+           "« Viens goûter ! ». "
            "Then write \"image_paroles\" from this table: the start places, then each movement once, in order; "
            "never a start place that a movement of the shot only reaches. ")
 HORS_CHAMP = ("off-frame", "off frame", "offframe", "off-screen", "off screen", "offscreen", "hors champ")
@@ -1544,7 +1555,8 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "(1) does each shot start in the state where the previous one ends (a cut may move on in time or "
             "place, but nothing may be undone without being shown), does every action come after what causes "
             "it, as in the story, and is every event of the story still shown in some shot (an arrival, a "
-            "departure, a gesture), none missing and none invented? "
+            "departure, a gesture), none missing and none invented? A minor step that a cut skips (walking to a "
+            "chair, filling a glass) is not a missing event. "
             "(2) does every key element (character, object, place or target an action uses) keep the same "
             "place in the frame and the same words from shot to shot, unless a shot shows it moving; are two "
             "elements ever given the same place; does a shot contradict itself about where something is? "
@@ -1568,7 +1580,8 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "(bounces on the floor, not just bounces) and where it comes to rest all written? A shot that "
             "leaves one of them out is a problem: quote the vague words. Do the hands that act get their "
             "concrete gesture (what each hand and its fingers do), not an intention? "
-            "(8) does a shot hold more than about 5 seconds can show: more than one main action, or more than "
+            "(8) does the number of shots fit the actions: a shot with no action of its own (it only waits "
+            "or repeats), or a shot holding more than about 5 seconds can show: more than one main action, or more than "
             "three steps? Name the minor steps to leave out, skipped by the cut before the next shot: the "
             "number of shots never changes, never ask to split a shot. "
             "(9) is a movement described twice or in two ways in the same shot, or does a shot give, at its "
