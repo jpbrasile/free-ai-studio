@@ -938,7 +938,12 @@ PHYSIQUE = ("Physics is never implied, the video model is poor at it: for every 
             "comes to rest and that it stays still there (\"then lies still on the floor at the right\"). Things "
             "fall DOWN to a named surface; nothing floats, rises, speeds up or changes direction on its own; a "
             "liquid pours into a named container; a door swings on its hinges. Give each moving object a count "
-            "(\"the only ball\") so that no second one appears. ")
+            "(\"the only ball\") so that no second one appears. "
+            # 29/09, demande du propriétaire : « ne pas décrire un mouvement de deux façons » —
+            # « face caméra », puis « se tourne vers la caméra » dans le même plan.
+            "Describe each movement ONCE, in one way: the start of a shot gives the pose BEFORE the movement "
+            "(\"seen in profile, facing right\"), never its result (\"facing the camera\" before \"turns to face "
+            "the camera\"); never write the same gesture twice with other words. ")
 
 
 def consigne_decoupage(scenario: str) -> str:
@@ -1357,6 +1362,9 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "(7) physics: for every moving object, are what moves it, each contact with a NAMED surface "
             "(bounces on the floor, not just bounces) and where it comes to rest all written? A shot that "
             "leaves one of them out is a problem: quote the vague words. "
+            "(8) is a movement described twice or in two ways in the same shot, or does a shot give, at its "
+            "start, the pose that one of its own movements only reaches (\"facing the camera\", then \"turns "
+            "to face the camera\")? Quote the words of the start pose. "
             # Même essai : trois alertes sur trois demandaient d'écrire ce qui était déjà écrit.
             "Report only real problems, each once, in one short sentence that says what to change. Before "
             "reporting that something is missing, read the shot again: if its text already says it, it is "

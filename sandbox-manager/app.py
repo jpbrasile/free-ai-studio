@@ -4462,7 +4462,16 @@ async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> t
         return plans, continuite, {"trouves": trouves, "corrige": False,
                                    "erreur": "La correction n'a rien changé au texte."}
     apres = await _continuite(corriges, histoire)
-    if apres.get("ok") is None or len(apres["problemes"]) >= len(trouves):
+    # Mesuré le 29/09 : la correction retirait bien « facing the camera » (2 fois sur 2),
+    # mais la seconde relecture, qui varie d'un appel à l'autre, relevait un AUTRE petit
+    # point, et le compte égal rejetait la correction. Gardée aussi quand les mots cités
+    # ont quitté leur plan et que le compte ne monte pas.
+    cites = [p for p in trouves if p.get("citation")]
+    partis = bool(cites) and all(
+        f" {video_h3._norme_replique(p['citation'])} " not in f" {video_h3._norme_replique(corriges[p['plan'] - 1]['image_paroles'])} "
+        for p in cites)
+    if apres.get("ok") is None or len(apres["problemes"]) > len(trouves) or (
+            len(apres["problemes"]) == len(trouves) and not partis):
         return plans, continuite, {"trouves": trouves, "corrige": False,
                                    "erreur": "La correction n'a pas fait mieux : le texte d'origine est gardé."}
     return corriges, apres, {"trouves": trouves, "corrige": True}

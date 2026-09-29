@@ -1048,6 +1048,29 @@ def test_le_relecteur_garde_le_texte_si_la_correction_ne_fait_pas_mieux(h3, monk
     assert d["continuite"]["problemes"] == [{"plan": 1, "quoi": "Le panier n'est pas placé."}]
 
 
+def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(h3, monkeypatch):
+    """29/09 : « face caméra » puis « se tourne vers la caméra » ; corrigé, la seconde
+    relecture relevait un autre petit point et le compte égal rejetait la correction."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    scenario = "Leila se retourne vers nous et sourit."
+    decoupe = ('[{"image_paroles": "Leila est face à la caméra. Leila se retourne vers la caméra et sourit.", '
+               '"ambiance": "", "enchainement": "coupe"}]')
+    probleme = ('{"etats": [], "problemes": [{"plan": 1, "citation": "Leila est face à la caméra", '
+                '"quoi": "La pose de départ est le résultat du mouvement."}]}')
+    corrige = ('[{"image_paroles": "Leila est de dos. Leila se retourne vers la caméra et sourit.", '
+               '"ambiance": "", "enchainement": "coupe"}]')
+    autre = '{"etats": [], "problemes": [{"plan": 1, "citation": "", "quoi": "Le lieu n\'est pas nommé."}]}'
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, autre], []))
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
+    assert d["relecture"]["corrige"] is True and d["plans"][0]["image_paroles"].startswith("Leila est de dos.")
+    # Les mots cités encore là : à compte égal, le texte d'origine reste.
+    reste = ('{"etats": [], "problemes": [{"plan": 1, "citation": "", "quoi": "Autre chose."}]}')
+    corrige_mal = decoupe.replace("et sourit", "et sourit largement")
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige_mal, reste], []))
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
+    assert d["relecture"]["corrige"] is False
+
+
 def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3, monkeypatch):
     """Premier essai réel (29/09) : alertes sur des mots que le plan n'a pas, et
     « corrigé » annoncé sur un texte resté le même."""
@@ -2180,6 +2203,10 @@ def test_la_physique_s_ecrit_en_entier_au_decoupage_a_la_relecture_et_a_la_corre
     for consigne in (v.consigne_decoupage("Tom lance la balle."), v.consigne_correction(plans, "x")):
         assert "bounces once on the wooden floor" in consigne and "comes to rest" in consigne
     assert "(7) physics" in v.consigne_continuite(plans, "Tom lance la balle.")
+    # « ne pas décrire un mouvement de deux façons » (29/09) : même règle, même relecture.
+    for consigne in (v.consigne_decoupage("x"), v.consigne_correction(plans, "x")):
+        assert "Describe each movement ONCE" in consigne
+    assert "(8) is a movement described twice" in v.consigne_continuite(plans, "x")
 
 
 def test_le_juge_regarde_le_debut_serre_et_dit_la_cause(h3, monkeypatch, tmp_path):
