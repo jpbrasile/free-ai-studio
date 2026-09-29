@@ -1189,6 +1189,9 @@ def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     # 29/09 : « divisez le plan en deux » menait la correction à un 5e plan, refusé (2 fois sur 3).
     assert "(8) does the number of shots fit the actions" in relu and "never ask to split a shot" in relu
     assert "is not a missing event" in relu
+    # 29/09, quai de gare : deux personnages actifs dans un plan ; le train, but de la marche, absent.
+    assert "Count the characters who act in each shot" in relu and "where a character walks" in relu
+    assert "are TWO main actions" in c and "walks, runs, drives or looks toward" in c
     # 29/09 : « une règle de cohérence entre le nombre de plans et d'actions, exemple en 3 plans ».
     assert "The NUMBER of shots follows the actions" in c and "Example, in 3 shots" in c
 

@@ -1068,12 +1068,19 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            "\"debut\" is never \"none\" or empty: an element not yet in the frame when the shot starts has "
            "\"debut\": \"off-frame\" (these exact English words, whatever the language) and its \"mouvement\" "
            "shows how it comes in (walks in through the door, is handed over); an object a character will take, "
-           "fill or use is already in the table, at its place, in the first shot of that place. "
+           "fill or use is already in the table, at its place, in the first shot of that place; so is every place "
+           # 29/09, quai de gare : le train, but de la marche finale, placé 1 fois sur 3.
+           "or thing a character walks, runs, drives or looks toward (a train, a car, a door), even if it is "
+           "reached only in the last shot. "
            # Même mesure : jusqu'à cinq actions dans un plan de 5 s (entrer, s'asseoir,
            # prendre, verser, reposer).
            "A shot lasts about 5 seconds: it holds ONE main action (one character, or two together in one "
            "shared gesture: a handshake, a hug), with at most three simple steps (lifts the glass, drinks, "
            "puts it down); a line of dialogue counts as a step. "
+           # 29/09, quai de gare : « elle rit et répond, il ouvre le parapluie, elle prend
+           # la valise » dans un seul plan, 2 fois sur 3.
+           "Two characters each doing their own thing (she answers while he opens an umbrella) are TWO main "
+           "actions, so two shots; in a shot, the other characters only listen, look or react with their face. "
            # 29/09, demande du propriétaire : « une règle de cohérence entre le nombre
            # de plans et d'actions, exemple en 3 plans ». L'exemple n'est aucune des
            # histoires du banc (basket, cuisine, quai de gare), pour ne pas l'apprendre.
@@ -1569,7 +1576,8 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "just…\", an action that ended before it starts? The video model plays it again, and an object "
             "appears twice. Does an object still moving at the end of a shot get, in the next shot, where "
             "it goes and where it stops? "
-            "(4) is a target of an action (where something is thrown, reached, given) placed and visible from "
+            "(4) is a target of an action (where something is thrown, reached, given, or where a character walks, "
+            "runs or looks: a train, a door, a car) placed and visible from "
             "the first shot of that place, with the character facing it when acting? "
             "(5) is a quick gesture spread over several shots, or a shot that only waits for the result of "
             "the previous one? is it said what moves an object and where it ends? does a character touch, "
@@ -1582,7 +1590,9 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "concrete gesture (what each hand and its fingers do), not an intention? "
             "(8) does the number of shots fit the actions: a shot with no action of its own (it only waits "
             "or repeats), or a shot holding more than about 5 seconds can show: more than one main action, or more than "
-            "three steps? Name the minor steps to leave out, skipped by the cut before the next shot: the "
+            "three steps? Count the characters who act in each shot: two characters each doing their own "
+            "thing (one answers while the other opens an umbrella) are two main actions, a problem; a character "
+            "who only listens, looks or reacts with the face does not count. Name the minor steps to leave out, skipped by the cut before the next shot: the "
             "number of shots never changes, never ask to split a shot. "
             "(9) is a movement described twice or in two ways in the same shot, or does a shot give, at its "
             "start, the pose that one of its own movements only reaches (\"facing the camera\", then \"turns "
