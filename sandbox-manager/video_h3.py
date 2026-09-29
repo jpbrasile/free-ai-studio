@@ -238,7 +238,7 @@ def _motif_nom(nom: str) -> str:
     return r"(?<!\w)" + "".join(morceaux) + r"(?!\w)"
 
 
-def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False) -> str:
+def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, objets=()) -> str:
     """Plusieurs personnages (guide de MiniMax, ref-en.txt, 5.4) : `sujets` est la
     liste des (nom, langue) dans l'ordre des <Subject N>.
 
@@ -268,9 +268,12 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False) -> 
         avant = texte[fin_precedente:m.start()]
         coupure = max(avant.rfind(c) for c in ".!?;\n")
         debut_phrase = fin_precedente + coupure + 1
-        dans_la_phrase = [n for n in noms if debut_phrase <= n[0] < m.start()]
-        plus_tot = [n for n in noms if n[0] < debut_phrase]
-        k = dans_la_phrase[0][2] if dans_la_phrase else plus_tot[-1][2] if plus_tot else 0
+        # Un objet ne parle pas : seuls les personnages portent une réplique.
+        parlants = [n for n in noms if n[2] not in objets]
+        dans_la_phrase = [n for n in parlants if debut_phrase <= n[0] < m.start()]
+        plus_tot = [n for n in parlants if n[0] < debut_phrase]
+        premier = next((k for k in range(len(sujets)) if k not in objets), 0)
+        k = dans_la_phrase[0][2] if dans_la_phrase else plus_tot[-1][2] if plus_tot else premier
         parleur[m.start()] = k
         if dans_la_phrase:
             nom_du_locuteur[dans_la_phrase[0][0]] = k
@@ -401,8 +404,9 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
         if tenue:
             urls.append(_data_url(tenue))
         n = len(photos)
-        presentation.append("%s est la personne des images jointes %d à %d" % (fiche["nom"], n + 1, n + len(urls))
-                            if len(urls) > 1 else "%s est la personne de l'image jointe %d" % (fiche["nom"], n + 1))
+        qui = "l'objet" if fiche_est_objet(fiche) else "la personne"
+        presentation.append("%s est %s des images jointes %d à %d" % (fiche["nom"], qui, n + 1, n + len(urls))
+                            if len(urls) > 1 else "%s est %s de l'image jointe %d" % (fiche["nom"], qui, n + 1))
         if tenue:
             presentation[-1] += ", vêtue exactement comme sur l'image jointe %d" % (n + len(urls))
         photos += urls
@@ -502,11 +506,26 @@ def fiches_liste() -> list:
             continue
         fiches.append({"id": d["id"], "nom": d["nom"], "description": d["description"],
                        "angles": [a for a in ANGLES if a in d.get("images", {})], "cree_le": d["cree_le"],
-                       "tenues": [t["tenue"] for t in (d.get("tenues") or {}).values()]})
+                       "tenues": [t["tenue"] for t in (d.get("tenues") or {}).values()],
+                       "genre": d.get("genre") or "personne"})
     return sorted(fiches, key=lambda d: d["cree_le"])
 
 
-def fiche_creer(nom: str, description: str) -> dict:
+# Une fiche peut être un OBJET (29/09, demande du propriétaire : « un nom comme
+# <le ballon> pour le même objet tout le long du script »). Le guide de MiniMax
+# (ref-en.txt) donne <Subject N> aux « people, animals, or objects… props », toujours
+# rattaché à une image ; sans image, une étiquette est « non résolue ». L'objet a
+# donc sa photo, comme un personnage : son nom dans le texte devient <Subject N>.
+GENRES_FICHE = ("personne", "objet")
+
+
+def fiche_est_objet(fiche: dict) -> bool:
+    return fiche.get("genre") == "objet"
+
+
+def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
+    if genre not in GENRES_FICHE:
+        raise ValueError("Une fiche est une personne ou un objet.")
     nom, description = " ".join(str(nom or "").split()), " ".join(str(description or "").split())
     if not nom or len(nom) > FICHE_NOM_MAX:
         raise ValueError(f"Donnez un nom au personnage ({FICHE_NOM_MAX} caractères au plus).")
@@ -515,6 +534,8 @@ def fiche_creer(nom: str, description: str) -> dict:
                          "âge, visage, coiffure, tenue.")
     fiche = {"id": os.urandom(6).hex(), "nom": nom, "description": description,
              "cree_le": time.strftime("%Y-%m-%d %H:%M:%S"), "images": {}}  # date-machine
+    if genre == "objet":
+        fiche["genre"] = "objet"
     _fiche_ecrire(fiche)
     return fiche
 
@@ -796,7 +817,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
     return sortie
 
 
-def sujets_des_fiches(nombres: list, tenues=(), ecrites=None) -> str:
+def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=()) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -806,6 +827,11 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None) -> str:
     for k, nombre in enumerate(nombres):
         images = ", ".join(f"<Picture {premiere + i}>" for i in range(nombre))
         premiere += nombre
+        if k in objets:
+            definitions.append(f"<Subject {k + 1}> is the object in {images}.")
+            garde.append(f"<Subject {k + 1}> keeps the shape, colour and size of the reference pictures; there "
+                         "is exactly one of it in every frame where it appears.")
+            continue
         definitions.append(f"<Subject {k + 1}> is the person in {images}.")
         # Une seule personne, dit ici et pas dans la description : le 28/09, une
         # phrase « In the foreground: only <Subject 1>… » plaçait Léa une première
@@ -994,6 +1020,50 @@ PHYSIQUE = ("Physics is never implied, the video model is poor at it: for every 
             "the camera\"); never write the same gesture twice with other words. ")
 
 
+# Le tableau des éléments clés (29/09, demande du propriétaire : « qualifier Leila,
+# le ballon, le tir, avec place de départ, mouvement, place d'arrivée »). Le guide
+# de MiniMax veut, par plan, « subject positions, actions, state changes ». Le tir
+# rejoué de v3 venait d'un début non dit (« le ballon tombe sous le panier » : où,
+# au début ?). Le tableau force le début, et la continuité d'un plan à l'autre se
+# vérifie alors par le code, sans avis d'un modèle.
+TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element the shot shows (each character, "
+           "every object that moves or that an action uses or aims at): {\"nom\": its name, \"debut\": where it is "
+           "when the shot starts (place in the frame, which way it faces, standing or sitting, what it holds), "
+           "\"mouvement\": what it does during the shot, step by step, each contact with a named surface, or "
+           "\"none\", \"fin\": where it is when the shot ends}. Use the same name for an element in every shot. "
+           "In a \"suite\" shot, each element's \"debut\" copies WORD FOR WORD its \"fin\" in the previous shot. "
+           "Then write \"image_paroles\" from this table: the start places, then each movement once, in order; "
+           "never a start place that a movement of the shot only reaches. ")
+TABLEAU_MAX, TABLEAU_CHAMPS = 8, ("nom", "debut", "mouvement", "fin")
+
+
+def lire_tableau(elements) -> list:
+    """Le tableau d'un plan, nettoyé ; illisible ou absent : [] (il n'est qu'une aide)."""
+    propres = []
+    for e in elements if isinstance(elements, list) else []:
+        if isinstance(e, dict) and all(isinstance(e.get(k, ""), str) for k in TABLEAU_CHAMPS) \
+                and " ".join(str(e.get("nom") or "").split()):
+            propres.append({k: " ".join(str(e.get(k) or "").split())[:300] for k in TABLEAU_CHAMPS})
+    return propres[:TABLEAU_MAX]
+
+
+def ruptures_du_tableau(plans: list) -> list:
+    """Les éléments d'une « suite » qui ne commencent pas où le plan d'avant les a
+    laissés : des problèmes de relecture, trouvés par le code."""
+    problemes = []
+    for k in range(1, len(plans)):
+        if plans[k].get("enchainement") != "suite":
+            continue
+        fins = {_norme_replique(e["nom"]): e for e in plans[k - 1].get("elements") or []}
+        for e in plans[k].get("elements") or []:
+            avant = fins.get(_norme_replique(e["nom"]))
+            if avant and avant["fin"] and e["debut"] and _norme_replique(avant["fin"]) != _norme_replique(e["debut"]):
+                problemes.append({"plan": k + 1, "quoi": (
+                    f"« {e['nom']} » commence « {e['debut']} », mais le plan {k} le laisse « {avant['fin']} » : "
+                    "le début de ce plan reprend mot pour mot la fin du précédent.")[:300]})
+    return problemes
+
+
 def consigne_decoupage(scenario: str) -> str:
     # Une action et une réplique courte par plan : l'essai du 27/09 (clip 2) a
     # montré qu'un plan chargé rend un son incompréhensible.
@@ -1054,11 +1124,12 @@ def consigne_decoupage(scenario: str) -> str:
             "Say the framing of each shot; the camera stays at that framing (no zoom, no move) unless the "
             "script asks for a camera movement. %s"
             "Write in the language of the script. Dialogue must be copied EXACTLY from the script, "
-            "between « »; never invent dialogue. For each shot give \"image_paroles\" (what we see, "
+            "between « »; never invent dialogue. For each shot give \"elements\" (the table), "
+            "\"image_paroles\" (what we see, "
             "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
             "\"coupe\" for a new camera shot or place, \"suite\" when it continues the previous shot "
             "without a cut. The first shot is \"coupe\". Answer with the JSON array only.\n\n%s"
-            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE, scenario))
+            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, scenario))
 
 
 def verifier_plans(plans) -> list:
@@ -1080,6 +1151,8 @@ def verifier_plans(plans) -> list:
             raise ValueError(f"Plan {i + 1} : enchaînement inconnu.")
         propre = {"image_paroles": p["image_paroles"].strip(), "ambiance": p.get("ambiance", "").strip(),
                   "enchainement": "coupe" if i == 0 else enchainement}
+        if lire_tableau(p.get("elements")):
+            propre["elements"] = lire_tableau(p["elements"])
         # Un plan « coupe » peut partir d'une image de départ validée (28/09).
         if p.get("image_depart") and propre["enchainement"] == "coupe":
             if not _ID_DEPART.fullmatch(str(p["image_depart"])):
@@ -1179,6 +1252,23 @@ def scenario_noter(sid: str, **champs) -> dict:
 
 MODELE_JUGE = "free-ai-max"   # le modèle plus fort du routeur, gratuit, son propre quota
 
+# Le juge est trop zélé (29/09, remarque du propriétaire : « le LLM red team est trop
+# pressé de trouver un problème ; s'il y a un problème majeur, le qualifier en détail,
+# sinon dire que le clip est propre »). Banc de trois clips vérifiés à l'œil, 4 essais :
+# juge principal, fausses alertes sur les deux propres 7/8 → 5/8 ; juge serré 3/8 → 3/8,
+# le tir rejoué toujours vu 4/4, mieux décrit.
+MAJEUR = ("Most clips are clean. Report a problem ONLY if it is a MAJOR one, that a viewer would notice at "
+          "normal speed and that breaks the story or physics; then describe it in detail (what, where in the "
+          "frame, which frames), once, at the first frame where it appears. A small doubt, a blur, a slight "
+          "shift or something you are not sure of is not a problem: then say the clip is clean, verdict ok "
+          "with an empty list. ")
+# Les fausses alertes du même banc : un panoramique (tout glisse ensemble, lu « elle
+# saute ») et un ballon caché par le corps, filmé de dos (lu « elle ne le tient pas »).
+PAS_UN_DEFAUT = ("These are NOT problems: the camera panning, tilting or moving, so that characters, objects and "
+                 "background all shift together; an object hidden behind a body, a hand or another object (a "
+                 "character seen from behind hides what they hold), then seen again where it could have been "
+                 "hidden. ")
+
 
 def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
     """`raccord` : le nombre de premières images de la planche qui sont la fin du
@@ -1207,9 +1297,7 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
             # Le 29/09, un ballon est parti tout seul, au-dessus des mains, sans geste de lancer.
             + " Objects obey physics: report an object that moves, floats or flies away without something "
             "pushing it, or an action aimed at a target that is not where the action goes." + avant + voulu
-            + " "
-            "Many shots have no problem: then answer ok with an empty list. Report only what you clearly see, "
-            "each problem once, at the first frame where it appears, in one short sentence. "
+            + " " + PAS_UN_DEFAUT + MAJEUR +
             "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", "
             "\"defauts\": [{\"image\": frame number, \"quoi\": \"what is wrong\""
             + (", \"cause\": \"texte\" or \"video\"" if texte.strip() else "") + "}]}.")
@@ -1249,11 +1337,7 @@ def consigne_debut(noms: list, texte: str = "") -> str:
             "Report only what you clearly see: an object seen twice at once, an object that repeats a movement "
             "the text says is already over, an object that bounces or stops in mid-air instead of on a surface, "
             "an object that moves without anything moving it, a character that jumps to another place or pose "
-            "between two neighbouring frames. "
-            "These are NOT problems: the camera panning, tilting or moving, so that characters, objects and "
-            "background all shift together; an object hidden behind a body, a hand or another object, then "
-            "seen again where it could have been hidden." + voulu + " Many shots have no problem: then answer ok "
-            "with an empty list. Each problem once, at the first frame where it appears, in one short sentence. "
+            "between two neighbouring frames. " + PAS_UN_DEFAUT.rstrip() + voulu + " " + MAJEUR +
             "Answer in French, JSON only: {\"verdict\": \"ok\" or \"defaut\", \"defauts\": [{\"image\": frame "
             "number, \"quoi\": \"what is wrong\"" + (", \"cause\": \"texte\" or \"video\"" if texte.strip() else "")
             + "}]}.")
@@ -1332,7 +1416,7 @@ def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
             "things happen, lines of dialogue included: an action caused by a line comes after that line. "
             "If a problem cannot be "
             "fixed without changing what happens, leave that shot unchanged: it will be shot again. " + CADRAGE +
-            PHYSIQUE +
+            PHYSIQUE + TABLEAU + "Keep \"elements\" true to the rewritten text. " +
             "Answer with the JSON array only.\n\n"
             "Shots: %s\n\nFeedback: %s" % (json.dumps(plans, ensure_ascii=False), retours))
 
@@ -1647,12 +1731,22 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             isinstance(t, str) and len(t) <= 300 for t in ecrites.values()):
         raise ValueError("Tenues illisibles.")
     fiches, de_la_fiche, nombres, avec_tenue, ecrites_k = [], [], [], set(), {}
+    objets = set()
     for fid in ids:
         if mode not in ("references", "premiere", "premiere_derniere"):
             raise ValueError("Une fiche de casting se joue en mode « Références » ou « Première image ».")
         fiche = fiche_lire(fid)
         fiches.append(fiche)
+        if fiche_est_objet(fiche):
+            objets.add(len(fiches) - 1)
         if not refs:
+            continue
+        if fiche_est_objet(fiche):   # un objet n'a ni tenue ni tenue écrite
+            images_fiche = fiche_images(fiche["id"])
+            if not images_fiche:
+                raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
+            de_la_fiche += images_fiche
+            nombres.append(len(images_fiche))
             continue
         # Une autre tenue : le visage de la fiche et la photo de la tenue, sans les photos
         # qui montrent l'ancienne (deux tenues à la fois, H3 choisissait au hasard).
@@ -1669,8 +1763,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
     if fiches:
         sujets = [(f["nom"], langues.get(f["id"], langue)) for f in fiches]
-        image_paroles = attribuer_repliques(image_paroles, sujets, garder_noms=not refs)
-        ambiance = attribuer_repliques(ambiance, sujets, garder_noms=not refs)
+        image_paroles = attribuer_repliques(image_paroles, sujets, garder_noms=not refs, objets=objets)
+        ambiance = attribuer_repliques(ambiance, sujets, garder_noms=not refs, objets=objets)
     texte = invite(image_paroles, ambiance, payload.get("musique", ""), langue, "(S1)",
                    # Rubriques du mode références, dans l'ordre de la consigne de MiniMax
                    # (skills/h3-prompt-writing/SKILL.md) ; `summary` n'est pas écrit.
@@ -1685,7 +1779,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if depart:
         texte = f"<Picture {sum(nombres) + 1}> is the first frame of [Shot 1]. " + texte
     if refs and fiches:
-        texte = sujets_des_fiches(nombres, avec_tenue, ecrites_k) + " detailed_description: " + texte
+        texte = sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets) + " detailed_description: " + texte
     # Ce que montrent la première et la dernière image, quand le Studio les a
     # créées : leur description (améliorations comprises) passe aussi à H3, pour
     # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).

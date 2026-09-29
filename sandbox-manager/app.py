@@ -4488,12 +4488,18 @@ async def _continuite(plans: list, histoire: str) -> dict:
     """Le contrôle de continuité du texte (gratuit) ; illisible, il le dit sans
     rien bloquer : c'est une aide, le propriétaire relit."""
     try:
-        return video_h3.lire_continuite(await _chat_du_studio(
+        c = video_h3.lire_continuite(await _chat_du_studio(
             video_h3.consigne_continuite(plans, histoire), "le contrôle de continuité",
             modele=video_h3.MODELE_JUGE), len(plans),
             [p["image_paroles"] + " " + p.get("ambiance", "") for p in plans])
     except (ValueError, HTTPException) as exc:
         return {"ok": None, "problemes": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
+    # Le tableau des éléments (29/09) : une « suite » qui ne part pas d'où le plan
+    # d'avant laisse un élément se voit sans avis de modèle.
+    ruptures = video_h3.ruptures_du_tableau(plans)
+    if ruptures:
+        c = dict(c, ok=False, problemes=c["problemes"] + ruptures)
+    return c
 
 
 def _histoire(plans: list) -> str:
@@ -4568,6 +4574,8 @@ async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
     on change les vêtements on le fait pour tous les plans et on rajoute une photo de
     référence pour la consistance ». Rien de lisible : les plans partent tels quels."""
     ids = commun["fiches"] or ([commun["fiche"]] if commun["fiche"] else [])
+    # Un objet (29/09) n'a pas de tenue.
+    ids = [f for f in ids if not video_h3.fiche_est_objet(video_h3.fiche_lire(f))]
     faites = []
     releve = await _tenues_des_plans(ids, plans)
     # Chaque plan ÉCRIT aussi la tenue de chaque personnage : celle que le scénario
@@ -5131,6 +5139,7 @@ def video_h3_scenario_arreter(sid: str, authorization: Optional[str] = Header(de
 
 def _fiche_publique(fiche: dict, avec_images: bool = True) -> dict:
     d = {k: fiche[k] for k in ("id", "nom", "description", "cree_le")}
+    d["genre"] = fiche.get("genre") or "personne"
     d["images"] = {a: video_h3.fiche_image_data_url(fiche["id"], a) if avec_images else True
                    for a in video_h3.ANGLES if a in fiche.get("images", {})}
     d["planche"] = (video_h3.fiche_planche_data_url(fiche["id"]) if avec_images else True) \
@@ -5159,7 +5168,8 @@ async def video_h3_fiche_creer(request: Request, authorization: Optional[str] = 
     _h3_ou_404()
     auth(authorization)
     corps = await request.json()
-    fiche = _fiche_ou_400(lambda: video_h3.fiche_creer(corps.get("nom", ""), corps.get("description", "")))
+    fiche = _fiche_ou_400(lambda: video_h3.fiche_creer(corps.get("nom", ""), corps.get("description", ""),
+                                                       corps.get("genre") or "personne"))
     return _fiche_publique(fiche)
 
 

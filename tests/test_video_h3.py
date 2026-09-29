@@ -1098,6 +1098,63 @@ def test_une_correction_n_est_jugee_que_sur_les_plans_qu_elle_change(h3, monkeyp
     assert d["relecture"]["corrige"] is False
 
 
+def test_une_fiche_objet_devient_un_sujet_unique_qui_ne_parle_pas(h3):
+    """29/09 : « un nom comme <le ballon> pour le même objet tout le long du script »."""
+    v = h3.video_h3
+    lea = v.fiche_creer("Léa", "femme")["id"]
+    ballon = v.fiche_creer("basketball", "ballon de basket orange", genre="objet")["id"]
+    for f in (lea, ballon):
+        v.fiche_poser_image(f, "face", PNG)
+    with pytest.raises(ValueError, match="objet"):
+        v.fiche_creer("x", "y", genre="animal")
+    assert {f["id"]: f["genre"] for f in v.fiches_liste()} == {lea: "personne", ballon: "objet"}
+    d = v.preparer({"mode": "references", "fiches": [lea, ballon], "longueur": 124,
+                    "image_paroles": "The basketball lies on the floor. Léa picks up the basketball and says « Go. »",
+                    "tenues_ecrites": {lea: "a red coat"}})
+    inv = d["resume_public"]["invite"]
+    assert "<Subject 2> is the object in <Picture 2>." in inv
+    assert "there is exactly one of it in every frame" in inv
+    assert "<Subject 2> lies on the floor" in inv and "picks up the <Subject 2>" in inv
+    assert "<Subject 2> wears" not in inv and "<Subject 1> wears a red coat" in inv
+    # La réplique va à Léa, jamais à l'objet nommé dans la même phrase.
+    assert "<Subject 2> (S1)" not in inv and "(S1)" in inv
+
+
+def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
+    """29/09, demande du propriétaire : chaque élément clé avec sa place de départ,
+    son mouvement et sa place d'arrivée ; la continuité d'une « suite » se vérifie
+    par le code."""
+    v = h3.video_h3
+    c = v.consigne_decoupage("Leila tire.")
+    assert '"elements"' in c and "copies WORD FOR WORD" in c and '"mouvement"' in c
+    assert "Keep \"elements\" true" in v.consigne_correction([{"image_paroles": "x"}], "y")
+    sale = [{"nom": " Ballon ", "debut": "dans  ses mains", "mouvement": "none", "fin": "au sol"},
+            {"nom": "", "debut": "x"}, "pas un dict", {"nom": "Leila", "debut": 3}]
+    assert v.lire_tableau(sale) == [{"nom": "Ballon", "debut": "dans ses mains", "mouvement": "none", "fin": "au sol"}]
+    assert v.lire_tableau(None) == [] and len(v.lire_tableau([sale[0]] * 20)) == v.TABLEAU_MAX
+    ballon = lambda debut, fin: {"nom": "le ballon", "debut": debut, "mouvement": "", "fin": fin}  # noqa: E731
+    plans = [{"enchainement": "coupe", "elements": [ballon("dans ses mains", "immobile au sol à droite")]},
+             {"enchainement": "suite", "elements": [ballon("Immobile au sol, à droite.", "idem")]},
+             {"enchainement": "suite", "elements": [ballon("dans ses mains", "idem")]},
+             {"enchainement": "coupe", "elements": [ballon("ailleurs", "")]}]
+    ruptures = v.ruptures_du_tableau(plans)
+    # Casse et ponctuation ne comptent pas ; une coupe peut changer de lieu.
+    assert [r["plan"] for r in ruptures] == [3] and "dans ses mains" in ruptures[0]["quoi"]
+
+    # Au découpage : le tableau est gardé, et la rupture rejoint la relecture.
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    decoupe = json.dumps([
+        {"elements": [ballon("dans ses mains", "au sol à droite")], "image_paroles": "Leila tire.",
+         "ambiance": "", "enchainement": "coupe"},
+        {"elements": [ballon("dans le filet", "au sol")], "image_paroles": "Le ballon est au sol.",
+         "ambiance": "", "enchainement": "suite"}], ensure_ascii=False)
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [decoupe, '{"etats": [], "problemes": []}', decoupe], []))
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": "Leila tire."}).json()
+    assert d["plans"][0]["elements"][0]["debut"] == "dans ses mains"
+    assert [p["plan"] for p in d["relecture"]["trouves"]] == [2]
+
+
 def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3, monkeypatch):
     """Premier essai réel (29/09) : alertes sur des mots que le plan n'a pas, et
     « corrigé » annoncé sur un texte resté le même."""
