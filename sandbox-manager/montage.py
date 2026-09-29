@@ -42,6 +42,24 @@ def _lancer(arguments: list[str], quoi: str) -> None:
         raise MontageImpossible("%s a échoué : %s" % (quoi, (fini.stderr or "").strip()[-300:]))
 
 
+VOIX_TAUX = 32000   # celui du VAE audio de H3 : le nœud ne rééchantillonne rien
+
+
+def voix_de_reference(son: bytes, max_s: float) -> tuple[bytes, float]:
+    """Un exemple de voix mis au propre pour H3 : WAV mono, silence de tête retiré,
+    `max_s` secondes au plus. Rend (wav, durée en secondes). Un son, une vidéo ou
+    un enregistrement du navigateur passent de même."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "entree"), Path(dossier, "voix.wav")
+        a.write_bytes(son)
+        _lancer(["-i", str(a), "-vn", "-ac", "1", "-ar", str(VOIX_TAUX),
+                 "-af", "silenceremove=start_periods=1:start_threshold=-45dB", "-t", "%.2f" % max_s,
+                 "-c:a", "pcm_s16le", str(sortie)], "La mise au propre de la voix")
+        wav = sortie.read_bytes() if sortie.is_file() else b""
+    # 44 octets d'en-tête, 2 octets par échantillon mono.
+    return wav, round(max(0, len(wav) - 44) / (2 * VOIX_TAUX), 2)
+
+
 def derniere_image(video: bytes) -> bytes:
     """La derniere image d'une video, en PNG. Lue a la fin du flux, pas estimee."""
     with tempfile.TemporaryDirectory() as dossier:

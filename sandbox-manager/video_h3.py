@@ -507,7 +507,7 @@ def fiches_liste() -> list:
         fiches.append({"id": d["id"], "nom": d["nom"], "description": d["description"],
                        "angles": [a for a in ANGLES if a in d.get("images", {})], "cree_le": d["cree_le"],
                        "tenues": [t["tenue"] for t in (d.get("tenues") or {}).values()],
-                       "genre": d.get("genre") or "personne"})
+                       "genre": d.get("genre") or "personne", "voix": bool(d.get("voix"))})
     return sorted(fiches, key=lambda d: d["cree_le"])
 
 
@@ -617,6 +617,58 @@ def fiche_image_data_url(fid, angle: str) -> str:
         raise ValueError("Cette image n'existe pas.")
     octets = (_dossier_fiche(fid) / nom).read_bytes()
     return f"data:{_TYPES[Path(nom).suffix]};base64," + base64.b64encode(octets).decode()
+
+
+# --- Le profil voix d'un personnage (29/09) ----------------------------------------
+# Demande du propriétaire : « soit on donne un exemple de voix à cloner, soit on génère
+# un clonage dans la langue du locuteur et on l'applique à tous les plans, c'est le
+# profil voix du personnage ». Sans lui, H3 invente un timbre à chaque plan. Le son
+# part en <Audio j> du mode « Références » (nœud de ComfyUI v0.37.0, `ref_audios`,
+# 3 au plus), comme référence de timbre : le guide de MiniMax
+# (docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md) dit « <Audio N> is the voice-timbre
+# reference for <Subject N> » et interdit d'en reprendre les mots.
+VOIX_MIN_S, VOIX_MAX_S = 3.0, 15.0
+VOIX_FICHIER = "voix.wav"
+VOIX_MAX_OCTETS = 20_000_000
+VOIX_PAR_PLAN = 3   # le nœud en prend trois
+# Une phrase neutre par langue, lue par la voix du Studio quand on génère le profil.
+PHRASE_VOIX = {
+    "French": "Bonjour, je m'appelle comme sur ma fiche. Aujourd'hui il fait beau, et je vous raconte "
+              "tranquillement ma journée, sans me presser.",
+    "English": "Hello, my name is on my card. The weather is nice today, and I am calmly telling you "
+               "about my day, without rushing.",
+}
+
+
+def fiche_poser_voix(fid, wav: bytes, duree_s: float, source: str) -> dict:
+    """Le profil voix, déjà mis au propre (montage.voix_de_reference)."""
+    fiche = fiche_lire(fid)
+    if fiche_est_objet(fiche):
+        raise ValueError("Un objet ou une pose ne parle pas : la voix va sur la fiche d'une personne.")
+    if source not in ("exemple", "generee"):
+        raise ValueError("Source de voix inconnue.")
+    if duree_s < VOIX_MIN_S:
+        raise ValueError(f"Voix trop courte : {VOIX_MIN_S:g} s de parole au moins "
+                         f"({duree_s:g} s entendues après le silence du début).")
+    (_dossier_fiche(fid) / VOIX_FICHIER).write_bytes(wav)
+    fiche["voix"] = {"source": source, "duree_s": duree_s,
+                     "pose_le": time.strftime("%Y-%m-%d %H:%M:%S")}  # date-machine
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_retirer_voix(fid) -> dict:
+    fiche = fiche_lire(fid)
+    fiche.pop("voix", None)
+    (_dossier_fiche(fid) / VOIX_FICHIER).unlink(missing_ok=True)
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_voix(fid) -> bytes | None:
+    fiche = fiche_lire(fid)
+    chemin = _dossier_fiche(fid) / VOIX_FICHIER
+    return chemin.read_bytes() if fiche.get("voix") and chemin.is_file() else None
 
 
 # --- La planche de personnage : la même personne sous tous les angles (28/09) -----
@@ -836,12 +888,12 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
     return sortie
 
 
-def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=()) -> str:
+def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
     l'invite, elle a été DITE par le personnage (essai du 28/09, « Femme de 35
-    ans, cheveux bruns… »)."""
+    ans, cheveux bruns… »). `voix` : {rang de la fiche : numéro de son <Audio j>}."""
     definitions, garde, premiere = [], [], 1
     for k, nombre in enumerate(nombres):
         images = ", ".join(f"<Picture {premiere + i}>" for i in range(nombre))
@@ -857,6 +909,11 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=()) -> str:
                          "is exactly one of it in every frame where it appears.")
             continue
         definitions.append(f"<Subject {k + 1}> is the person in {images}.")
+        j = (voix or {}).get(k)
+        if j:   # le profil voix (29/09), dans la forme du guide de MiniMax
+            definitions.append(f"<Audio {j}> is the voice-timbre reference for <Subject {k + 1}>.")
+            garde.append(f"<Audio {j}>: reference - its vocal timbre guides the spoken voice of <Subject {k + 1}> "
+                         f"in every line; the words of <Audio {j}> are never said.")
         # Une seule personne, dit ici et pas dans la description : le 28/09, une
         # phrase « In the foreground: only <Subject 1>… » plaçait Léa une première
         # fois, la description la replaçait à sa table, et H3 en a dessiné deux
@@ -1713,7 +1770,7 @@ def noms_images(mode: str, nombre: int) -> list:
 
 
 def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0,
-           definition: str = DEFINITION_PAR_DEFAUT) -> dict:
+           definition: str = DEFINITION_PAR_DEFAUT, nb_sons: int = 0) -> dict:
     """Le graphe des essais du 27/09, pour un clip.
 
     Chargeurs, LoRA Turbo 4 étapes, échantillonneur `res_multistep`, ordonnanceur
@@ -1740,6 +1797,9 @@ def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0
                    "ref_image_size": "match", **taille}
         for i in range(len(images)):
             entrees[f"ref_images.ref_image_{i}"] = [f"6{i}", 0]
+        for j in range(nb_sons):   # les profils voix, <Audio 1…3> (29/09)
+            g[f"7{j}"] = _n("LoadAudio", {"audio": f"voix_{j}.wav"})
+            entrees[f"ref_audios.ref_audio_{j}"] = [f"7{j}", 0]
         g["10"] = _n("MiniMaxH3ReferenceToVideo", entrees)
     else:
         entrees = {"clip": ["3", 0], "vae": ["4", 0], "prompt": texte, **taille}
@@ -1845,6 +1905,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             isinstance(t, str) and len(t) <= 300 for t in ecrites.values()):
         raise ValueError("Tenues illisibles.")
     fiches, de_la_fiche, nombres, avec_tenue, ecrites_k = [], [], [], set(), {}
+    voix_k, sons = {}, []   # le profil voix de chaque personnage qui en a un (29/09)
     objets = {}   # rang de la fiche -> "objet" ou "pose"
     for fid in ids:
         if mode not in ("references", "premiere", "premiere_derniere"):
@@ -1872,6 +1933,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             avec_tenue.add(len(nombres))
         if " ".join(str(ecrites.get(fiche["id"]) or "").split()):
             ecrites_k[len(nombres)] = " ".join(ecrites[fiche["id"]].split())
+        son = fiche_voix(fiche["id"])
+        if son and len(sons) < VOIX_PAR_PLAN:
+            sons.append(base64.b64encode(son).decode())
+            voix_k[len(nombres)] = len(sons)
         de_la_fiche += images_fiche
         nombres.append(len(images_fiche))
     image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
@@ -1893,7 +1958,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if depart:
         texte = f"<Picture {sum(nombres) + 1}> is the first frame of [Shot 1]. " + texte
     if refs and fiches:
-        texte = sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets) + " detailed_description: " + texte
+        texte = sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k) + " detailed_description: " + texte
     # Ce que montrent la première et la dernière image, quand le Studio les a
     # créées : leur description (améliorations comprises) passe aussi à H3, pour
     # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).
@@ -1948,9 +2013,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
 
     demande = {
         "mode": mode,
-        "graphe": graphe(mode, texte, longueur, graine, len(brutes), definition),
+        "graphe": graphe(mode, texte, longueur, graine, len(brutes), definition, len(sons)),
         "classes": [m["noeud"]],
         "images": images,
+        "sons": {f"voix_{j}.wav": s for j, s in enumerate(sons)},
         "fichiers": list(FICHIERS),
         "base_poids": POINT_DE_MONTAGE,
         "comfy": DOSSIER_COMFY,
@@ -2151,7 +2217,7 @@ Path("/tmp/chemins.yaml").write_text(
     "h3:\n  base_path: " + str(BASE) + "\n  diffusion_models: diffusion_models\n"
     "  text_encoders: text_encoders\n  vae: vae\n  loras: loras\n")
 (COMFY / "input").mkdir(exist_ok=True)
-for nom, b64 in D["images"].items():
+for nom, b64 in {**D["images"], **(D.get("sons") or {})}.items():
     (COMFY / "input" / nom).write_bytes(base64.b64decode(b64))
 
 journal = open("/tmp/comfy.log", "w")
@@ -2408,6 +2474,7 @@ PAGE_HTML = r"""<!doctype html>
   <p class="note" id="fiche_etat"></p>
   <div id="fiche_images" class="grille"></div>
   <div id="fiche_planche"></div>
+  <div id="fiche_voix"></div>
   <p class="note">Les images sont faites par l'image du Studio (clé Google, gratuite) : d'abord le
   portrait de face, d'après la description, puis les autres angles à partir de lui, pour garder le même
   visage. Rejouez ou supprimez celles qui ne vont pas.</p>
@@ -3176,6 +3243,7 @@ async function montrerFiche(){
   const id = document.getElementById("fiche_choix").value;
   document.getElementById("fiche_images").innerHTML = "";
   document.getElementById("fiche_planche").innerHTML = "";
+  document.getElementById("fiche_voix").innerHTML = "";
   document.getElementById("fiche_supprimer").hidden = !id;
   document.getElementById("fiche_creer").hidden = !!id;
   for (const champ of ["fiche_nom", "fiche_description"]){
@@ -3236,6 +3304,70 @@ function dessinerFiche(f){
     grille.appendChild(cas);
   }
   if (personne) dessinerPlanche(f);
+  document.getElementById("fiche_voix").innerHTML = "";
+  if (personne) dessinerVoix(f);
+}
+
+// Le profil voix du personnage (29/09) : un exemple à cloner, ou une voix générée
+// dans sa langue ; il part avec ses photos dans chaque plan en mode « Références ».
+function dessinerVoix(f){
+  const zone = document.getElementById("fiche_voix");
+  const t = document.createElement("b");
+  t.textContent = "Voix du personnage";
+  const note = document.createElement("p");
+  note.className = "note";
+  note.textContent = "La même voix dans tous les plans où le personnage part avec sa fiche : H3 en reprend le "
+    + "timbre, jamais les mots. De 3 à 15 s de parole claire, une seule personne, sans musique. "
+    + "La voix générée est celle du Studio pour la langue choisie : deux personnages de même langue "
+    + "auront alors le même timbre.";
+  zone.append(t, note);
+  if (f.voix){
+    const lecteur = document.createElement("audio");
+    lecteur.controls = true;
+    lecteur.src = f.voix.son;
+    zone.append(lecteur, document.createElement("br"),
+      (f.voix.source === "generee" ? "Voix générée" : "Exemple cloné") + ", " + fr(f.voix.duree_s, 1) + " s. ",
+      bouton("Retirer la voix", async () => {
+        const r = await fetch("/video-h3/fiches/" + f.id + "/voix", {method: "DELETE", headers: H});
+        if (r.ok) await chargerFiches(f.id);
+      }), document.createElement("br"));
+  }
+  const fichier = document.createElement("input");
+  fichier.type = "file";
+  fichier.accept = "audio/*,video/*";
+  fichier.setAttribute("aria-label", "Exemple de voix à cloner");
+  const droit = document.createElement("input");
+  droit.type = "checkbox";
+  const coche = document.createElement("label");
+  coche.append(droit, " j'ai le droit d'utiliser cette voix (la mienne, ou celle d'une personne d'accord)");
+  fichier.addEventListener("change", () => {
+    const f0 = fichier.files[0];
+    if (!f0) return;
+    if (!droit.checked){ ficheEtat("Cochez d'abord « j'ai le droit d'utiliser cette voix ».", true); fichier.value = ""; return; }
+    const lecteur = new FileReader();
+    lecteur.onload = () => poserVoix(f.id, {son: lecteur.result, droit: true});
+    lecteur.readAsDataURL(f0);
+  });
+  const langue = document.createElement("select");
+  langue.setAttribute("aria-label", "Langue de la voix générée");
+  for (const [v, titre] of [["French", "français"], ["English", "anglais"]]){
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = titre;
+    langue.appendChild(o);
+  }
+  zone.append("Un exemple à cloner : ", coche, " ", fichier, document.createElement("br"),
+    "Ou une voix générée en ", langue, " ",
+    bouton(f.voix ? "Remplacer par une voix générée" : "Générer la voix", () => poserVoix(f.id, {generer: langue.value})));
+}
+
+async function poserVoix(id, corps){
+  ficheEtat(corps.generer ? "Voix du Studio en cours…" : "Mise au propre de la voix…");
+  const r = await fetch("/video-h3/fiches/" + id + "/voix", {method: "POST", headers: H, body: JSON.stringify(corps)});
+  const d = await r.json();
+  if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  ficheEtat("");
+  await chargerFiches(id);
 }
 
 // La planche de personnage : la même personne sous tous les angles, faite à partir
@@ -3690,9 +3822,14 @@ document.getElementById("scenario_decouper").addEventListener("click", async () 
     ? "Relecteur : " + (rl.corrige ? "corrigé avant de vous montrer les plans — " : "")
       + texteContinuite({problemes: rl.trouves}) + (rl.erreur ? " (" + rl.erreur + ")" : "") + ". "
     : "";
+  const st = rl.second_tour;
+  const vu2 = st && st.trouves.length
+    ? "Seconde relecture : " + (st.corrige ? "corrigé aussi — " : "")
+      + texteContinuite({problemes: st.trouves}) + (st.erreur ? " (" + st.erreur + ")" : "") + ". "
+    : "";
   if (d.continuite && d.continuite.ok === false)
-    scenarioEtat(vu + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite), true);
-  else scenarioEtat(vu + "Relisez les plans, puis tournez.");
+    scenarioEtat(vu + vu2 + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite), true);
+  else scenarioEtat(vu + vu2 + "Relisez les plans, puis tournez.");
 });
 
 function texteContinuite(c){

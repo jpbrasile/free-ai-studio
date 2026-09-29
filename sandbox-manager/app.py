@@ -4438,6 +4438,13 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
         raise HTTPException(502, str(exc)) from exc
     continuite = await _continuite(plans, scenario)
     plans, continuite, relecture = await _relire_et_corriger(plans, continuite, scenario)
+    # Second tour (29/09, gare : la seconde relecture a demandé le geste qui ouvre le
+    # parapluie, rien ne l'a corrigé, et le parapluie est passé tête en bas ; « oui fais
+    # le second tour de correction »). Seulement après un premier tour gardé ; mêmes
+    # règles pour être gardé.
+    if relecture.get("corrige") and continuite.get("ok") is False:
+        plans, continuite, second = await _relire_et_corriger(plans, continuite, scenario)
+        relecture["second_tour"] = second
     return {"plans": plans, "continuite": continuite, "relecture": relecture}
 
 
@@ -5157,6 +5164,11 @@ def _fiche_publique(fiche: dict, avec_images: bool = True) -> dict:
                    for a in video_h3.ANGLES if a in fiche.get("images", {})}
     d["planche"] = (video_h3.fiche_planche_data_url(fiche["id"]) if avec_images else True) \
         if fiche.get("planche") else None
+    d["voix"] = None
+    son = video_h3.fiche_voix(fiche["id"]) if fiche.get("voix") else None
+    if son:
+        d["voix"] = dict(fiche["voix"], son="data:audio/wav;base64," + base64.b64encode(son).decode()
+                         if avec_images else True)
     return d
 
 
@@ -5231,6 +5243,68 @@ async def video_h3_fiche_image(fid: str, angle: str, request: Request,
         image = _data_url(gros_plan)
     fiche = _fiche_ou_400(lambda: video_h3.fiche_poser_image(fid, angle, image))
     return _fiche_publique(fiche)
+
+
+@app.post("/video-h3/fiches/{fid}/voix")
+async def video_h3_fiche_voix(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le profil voix du personnage (29/09) : un exemple à cloner envoyé par la page
+    (`son`, avec `droit` coché), ou une voix générée par la voix du Studio dans la
+    langue du personnage (`generer` : "French" ou "English"). Gratuit."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    corps = corps if isinstance(corps, dict) else {}
+    _fiche_ou_400(lambda: video_h3.fiche_lire(fid))
+    langue = corps.get("generer")
+    if langue:
+        if langue not in video_h3.PHRASE_VOIX:
+            raise HTTPException(400, "La voix générée existe en français et en anglais.")
+        son, source = await _voix_du_studio(video_h3.PHRASE_VOIX[langue]), "generee"
+    else:
+        # La voix d'une vraie personne : seulement avec son accord (ou la sienne).
+        if corps.get("droit") is not True:
+            raise HTTPException(400, "Cochez « j'ai le droit d'utiliser cette voix » : la vôtre, "
+                                     "ou celle d'une personne d'accord.")
+        try:
+            son = base64.b64decode(str(corps.get("son") or "").split(",", 1)[-1], validate=False)
+        except ValueError as exc:
+            raise HTTPException(400, "Son illisible.") from exc
+        if not son or len(son) > video_h3.VOIX_MAX_OCTETS:
+            raise HTTPException(400, "Envoyez un son de 20 Mo au plus.")
+        source = "exemple"
+    try:
+        wav, duree = await asyncio.to_thread(montage.voix_de_reference, son, video_h3.VOIX_MAX_S)
+    except montage.MontageImpossible as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_poser_voix(fid, wav, duree, source)))
+
+
+@app.delete("/video-h3/fiches/{fid}/voix")
+def video_h3_fiche_voix_retirer(fid: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_retirer_voix(fid)))
+
+
+async def _voix_du_studio(texte: str) -> bytes:
+    """La voix de lecture du Studio (Piper, par le routeur, sur ce PC) : une voix par
+    langue, donc deux personnages de même langue ont le même timbre généré."""
+    cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
+    if not cle:
+        raise HTTPException(503, "La voix du Studio n'est pas joignable d'ici (clé interne du routeur absente).")
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(ROUTEUR_INTERNE + "/v1/audio/speech",
+                                  headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
+                                  json={"input": texte})
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "La voix du Studio n'a pas répondu.") from exc
+    if r.status_code >= 400 or not r.content:
+        raise HTTPException(502, "La voix du Studio n'a pas pu lire la phrase.")
+    return r.content
 
 
 @app.post("/video-h3/fiches/{fid}/planche")

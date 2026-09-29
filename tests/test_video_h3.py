@@ -1061,9 +1061,16 @@ def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(
     corrige = ('[{"image_paroles": "Leila est de dos. Leila se retourne vers la caméra et sourit.", '
                '"ambiance": "", "enchainement": "coupe"}]')
     autre = '{"etats": [], "problemes": [{"plan": 1, "citation": "", "quoi": "Le lieu n\'est pas nommé."}]}'
-    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, autre], []))
+    # Le second tour corrige ce que la seconde relecture a trouvé (29/09, parapluie de la gare).
+    lieu = corrige.replace("Leila est de dos.", "Sur un terrain de basket, Leila est de dos.")
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [decoupe, probleme, corrige, autre, lieu, '{"etats": [], "problemes": []}'], []))
     d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
-    assert d["relecture"]["corrige"] is True and d["plans"][0]["image_paroles"].startswith("Leila est de dos.")
+    assert d["relecture"]["corrige"] is True
+    assert d["relecture"]["second_tour"] == {"trouves": [{"plan": 1, "quoi": "Le lieu n'est pas nommé."}],
+                                             "corrige": True}
+    assert d["plans"][0]["image_paroles"].startswith("Sur un terrain de basket, Leila est de dos.")
+    assert d["continuite"]["ok"] is True
     # Les mots cités encore là : à compte égal, le texte d'origine reste.
     reste = ('{"etats": [], "problemes": [{"plan": 1, "citation": "", "quoi": "Autre chose."}]}')
     corrige_mal = decoupe.replace("et sourit", "et sourit largement")
@@ -1087,9 +1094,11 @@ def test_une_correction_n_est_jugee_que_sur_les_plans_qu_elle_change(h3, monkeyp
     corrige = decoupe.replace("Leila est face à la caméra et", "Leila, de profil, se retourne vers la caméra et")
     mineures = ('{"etats": [], "problemes": [{"plan": 1, "quoi": "Rappeler le décor."}, '
                 '{"plan": 2, "quoi": "Nommer la surface."}]}')
-    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, mineures], []))
+    # Le second tour ne change rien : le premier reste, les remarques restent montrées.
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, mineures, corrige], []))
     d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
     assert d["relecture"]["corrige"] is True and "se retourne" in d["plans"][2]["image_paroles"]
+    assert d["relecture"]["second_tour"]["corrige"] is False and "rien changé" in d["relecture"]["second_tour"]["erreur"]
     assert [p["plan"] for p in d["continuite"]["problemes"]] == [1, 2]   # montrées, pas comptées contre elle
     # Un problème de plus DANS le plan changé : la correction reste écartée.
     pire = ('{"etats": [], "problemes": [{"plan": 3, "quoi": "Le poing n\'est pas dit."}, '
@@ -1422,6 +1431,82 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
     for mauvais, message in (({"langues": {lea: "Klingon"}}, "inconnue"), ({"fiches": [lea, lea]}, "illisible")):
         with pytest.raises(ValueError, match=message):
             v.preparer(dict(d, **mauvais))
+
+
+WAV = b"RIFF" + b"\0" * 40 + b"\1\0" * 32000 * 4   # 4 s de faux son, déjà mis au propre
+
+
+def test_le_profil_voix_part_avec_les_photos_en_audio_de_reference(h3):
+    """29/09 : « soit on donne un exemple de voix à cloner, soit on génère un clonage
+    dans la langue du locuteur et on l'applique à tous les plans »."""
+    v = h3.video_h3
+    lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_image(james, "face", PNG)
+    v.fiche_poser_voix(james, WAV, 4.0, "exemple")
+    assert {f["nom"]: f["voix"] for f in v.fiches_liste()} == {"Léa": False, "James": True}
+    d = demande(mode="references", fiches=[lea, james], langues={lea: "French", james: "English"},
+                image_paroles="James demande « Is this seat taken? » Léa répond « Oui. »")
+    plan = v.preparer(d)
+    invite = plan["resume_public"]["invite"]
+    assert "<Subject 2> is the person in <Picture 2>. <Audio 1> is the voice-timbre reference for <Subject 2>." in invite
+    assert "<Audio 1>: reference - its vocal timbre guides the spoken voice of <Subject 2> in every line; " \
+           "the words of <Audio 1> are never said." in invite
+    assert "<Audio 2>" not in invite   # Léa n'a pas de voix : H3 lui en invente une
+    assert plan["demande"]["sons"] == {"voix_0.wav": base64.b64encode(WAV).decode()}
+    g = plan["demande"]["graphe"]
+    assert g["70"] == {"class_type": "LoadAudio", "inputs": {"audio": "voix_0.wav"}}
+    assert g["10"]["inputs"]["ref_audios.ref_audio_0"] == ["70", 0]
+    # Le script de la machine pose les sons à côté des images.
+    assert '**(D.get("sons") or {})' in v._SCRIPT
+    # Sans voix, rien ne change.
+    v.fiche_retirer_voix(james)
+    plan = v.preparer(d)
+    assert plan["demande"]["sons"] == {} and "<Audio" not in plan["resume_public"]["invite"]
+    assert not any(n["class_type"] == "LoadAudio" for n in plan["demande"]["graphe"].values())
+    # Un objet ne parle pas ; une voix trop courte est refusée.
+    ballon = v.fiche_creer("ballon", "rond", "objet")["id"]
+    with pytest.raises(ValueError, match="ne parle pas"):
+        v.fiche_poser_voix(ballon, WAV, 4.0, "exemple")
+    with pytest.raises(ValueError, match="trop courte"):
+        v.fiche_poser_voix(lea, WAV, 2.5, "exemple")
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_la_page_pose_un_exemple_de_voix_ou_en_genere_une(h3, monkeypatch, tmp_path):
+    v = h3.video_h3
+    lea = v.fiche_creer("Léa", "x")["id"]
+    son = tmp_path / "exemple.mp3"
+    # 1 s de silence puis 6 s de son : le silence du début est retiré.
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=220:r=44100",
+                    "-af", "volume='if(lt(t,1),0,1)':eval=frame", "-t", "7", str(son)], check=True)
+    exemple = "data:audio/mpeg;base64," + base64.b64encode(son.read_bytes()).decode()
+    r = client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"son": exemple})
+    assert r.status_code == 400 and "droit" in r.json()["detail"]
+    r = client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"son": exemple, "droit": True})
+    assert r.status_code == 200, r.text
+    voix = r.json()["voix"]
+    assert voix["source"] == "exemple" and 5.5 <= voix["duree_s"] <= 6.5
+    assert voix["son"].startswith("data:audio/wav;base64,")
+    # Générée : la voix du Studio lit la phrase de la langue choisie.
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    vu = {}
+    lu = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=f=330:r=22050", "-t", "5",
+                         "-f", "wav", "-"], capture_output=True, check=True).stdout
+
+    class Parle(_FauxRouteur):
+        async def post(self, url, headers=None, json=None):
+            vu.update(url=url, json=json)
+            return h3.httpx.Response(200, content=lu, request=h3.httpx.Request("POST", url))
+    monkeypatch.setattr(h3.httpx, "AsyncClient", Parle(200, None, {}))
+    r = client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"generer": "French"})
+    assert r.status_code == 200, r.text
+    assert vu["url"].endswith("/v1/audio/speech") and vu["json"] == {"input": v.PHRASE_VOIX["French"]}
+    assert r.json()["voix"]["source"] == "generee"
+    assert client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"generer": "Klingon"}).status_code == 400
+    assert client(h3).delete(f"/video-h3/fiches/{lea}/voix", headers=CLE).json()["voix"] is None
+    page = client(h3).get("/video-h3").text
+    assert "function dessinerVoix" in page and "j'ai le droit d'utiliser cette voix" in page
 
 
 def _volume_max(chemin, debut, duree):
