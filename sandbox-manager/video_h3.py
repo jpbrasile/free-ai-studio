@@ -882,11 +882,9 @@ def consigne_decoupage(scenario: str) -> str:
             "seen from the camera: left, centre or right of the frame, foreground or background, and which "
             "way each character faces. Characters stand in the foreground or middle ground, never in the "
             "far background. Two key elements never share the same place in the frame. "
-            # Premier essai de cette règle (29/09) : personnage et cible tous deux « au centre
-            # en arrière-plan », le personnage de dos pour faire face à la cible.
-            "Choose a staging where each character's face stays visible: a character who faces a target "
-            "is seen from the side or three-quarters, the target on the side they face, never behind the "
-            "camera. The camera stays on the same side of the scene in all its shots. "
+            # La règle « visages toujours visibles » a été retirée le 29/09 à la demande du
+            # propriétaire : elle contredit une action qu'on doit suivre jusqu'à sa cible.
+            "The camera stays on the same side of the scene in all its shots. "
             "Then every shot's text states the position of each key element it shows, with the same words "
             "as the staging, even when it did not change. The staging itself is not a separate part of the "
             "answer: it lives only in the shots' texts, as plain sentences.When an action aims at something, say where that "
