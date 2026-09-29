@@ -911,11 +911,36 @@ def lire_decoupage(reponse: str, scenario: str) -> list:
         plans = verifier_plans(plans)
     except ValueError as exc:
         raise ValueError("Le découpage du chat n'a pas pu être lu (" + str(exc) + ") : réessayez.") from exc
-    permises = set(repliques(scenario))
+    # Le 29/09, un découpage refusé sans dire quelle réplique : le chat avait pu
+    # changer une virgule, une majuscule, ou couper une longue réplique en deux
+    # plans (la consigne en veut une courte par plan). Ces deux cas passent ;
+    # la réplique du scénario reprend alors sa ponctuation d'origine. Un mot
+    # changé, ajouté ou perdu reste refusé, et le message le cite.
+    originales = repliques(scenario)
+    permises = [_norme_replique(r) for r in originales]
+    morceaux: dict = {}
     for i, p in enumerate(plans):
-        if any(r not in permises for r in repliques(p["image_paroles"] + " " + p["ambiance"])):
-            raise ValueError(f"Le découpage a inventé ou changé une réplique (plan {i + 1}) : réessayez.")
+        for r in repliques(p["image_paroles"] + " " + p["ambiance"]):
+            n = _norme_replique(r)
+            if n in permises:
+                origine = originales[permises.index(n)]
+                p["image_paroles"] = p["image_paroles"].replace(r, origine)
+                continue
+            j = next((k for k, ligne in enumerate(permises) if n and f" {n} " in f" {ligne} "), None)
+            if j is None:
+                raise ValueError(f"Le découpage a inventé ou changé une réplique (plan {i + 1} : « {r} » "
+                                 "n'est pas dans le scénario) : réessayez.")
+            morceaux.setdefault(j, []).append(n)
+    for j, ms in morceaux.items():
+        if " ".join(ms) != permises[j]:
+            raise ValueError(f"Le découpage a coupé la réplique « {originales[j]} » sans la garder "
+                             "entière : réessayez.")
     return plans
+
+
+def _norme_replique(texte: str) -> str:
+    """Une réplique sans ponctuation, majuscules ni espaces en trop : ce qui s'entend."""
+    return " ".join(re.sub(r"[^\w]+", " ", texte.casefold()).split())
 
 
 def _chemin_scenario(sid) -> Path:

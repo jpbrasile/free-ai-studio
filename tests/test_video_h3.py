@@ -965,6 +965,19 @@ def test_le_decoupage_est_controle(h3):
     invente = '[{"image_paroles": "Elle dit « Deux cafés. »", "ambiance": "", "enchainement": "coupe"}]'
     with pytest.raises(ValueError, match="inventé"):
         v.lire_decoupage(invente, scenario)
+    with pytest.raises(ValueError, match="« Deux cafés. » n'est pas dans le scénario"):
+        v.lire_decoupage(invente, scenario)
+    # Ponctuation ou majuscule changée : acceptée, et la réplique d'origine revient.
+    retouche = '[{"image_paroles": "Elle dit « un café s\'il vous plaît »", "ambiance": "", "enchainement": "coupe"}]'
+    assert "« Un café, s'il vous plaît. »" in v.lire_decoupage(retouche, scenario)[0]["image_paroles"]
+    # Une longue réplique coupée en deux plans : acceptée si les morceaux la refont entière.
+    long = "Tom dit « Bonjour Léa, tu viens avec nous ce soir ? »"
+    coupee = ('[{"image_paroles": "Tom dit « Bonjour Léa, »", "ambiance": "", "enchainement": "coupe"}, '
+              '{"image_paroles": "Il ajoute « tu viens avec nous ce soir ? »", "ambiance": "", "enchainement": "suite"}]')
+    assert len(v.lire_decoupage(coupee, long)) == 2
+    tronquee = '[{"image_paroles": "Tom dit « Bonjour Léa, »", "ambiance": "", "enchainement": "coupe"}]'
+    with pytest.raises(ValueError, match="sans la garder entière"):
+        v.lire_decoupage(tronquee, long)
     with pytest.raises(ValueError, match="pas pu être lu"):
         v.lire_decoupage("[]", scenario)
     trop = [{"image_paroles": "x", "ambiance": "", "enchainement": "coupe"}] * (v.SCENARIO_PLANS_MAX + 1)
