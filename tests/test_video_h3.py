@@ -1160,8 +1160,8 @@ def test_la_page_cree_objets_et_poses_et_montre_le_tableau(h3):
 
 def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     """29/09, demande du propriétaire : chaque élément clé avec sa place de départ,
-    son mouvement et sa place d'arrivée ; la continuité d'une « suite » se vérifie
-    par le code."""
+    son mouvement et sa place d'arrivée ; un élément qui surgit sans origine se
+    voit par le code."""
     v = h3.video_h3
     c = v.consigne_decoupage("Leila tire.")
     assert '"elements"' in c and "copies WORD FOR WORD" in c and '"mouvement"' in c
@@ -1171,20 +1171,30 @@ def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     assert v.lire_tableau(sale) == [{"nom": "Ballon", "debut": "dans ses mains", "mouvement": "none", "fin": "au sol"}]
     assert v.lire_tableau(None) == [] and len(v.lire_tableau([sale[0]] * 20)) == v.TABLEAU_MAX
     ballon = lambda debut, fin: {"nom": "le ballon", "debut": debut, "mouvement": "", "fin": fin}  # noqa: E731
+    verre = lambda debut: {"nom": "the glass", "debut": debut, "mouvement": "", "fin": "x"}  # noqa: E731
+    tom = {"nom": "Tom", "debut": "Off-frame.", "mouvement": "walks in", "fin": "at the table"}
     plans = [{"enchainement": "coupe", "elements": [ballon("dans ses mains", "immobile au sol à droite")]},
-             {"enchainement": "suite", "elements": [ballon("Immobile au sol, à droite.", "idem")]},
-             {"enchainement": "suite", "elements": [ballon("dans ses mains", "idem")]},
-             {"enchainement": "coupe", "elements": [ballon("ailleurs", "")]}]
-    ruptures = v.ruptures_du_tableau(plans)
-    # Casse et ponctuation ne comptent pas ; une coupe peut changer de lieu.
-    assert [r["plan"] for r in ruptures] == [3] and "dans ses mains" in ruptures[0]["quoi"]
+             # Mots dans un autre ordre : plus une alerte (2 fausses sur 7 découpages, 29/09).
+             {"enchainement": "suite", "elements": [ballon("à droite, immobile au sol", "idem"), tom]},
+             {"enchainement": "suite", "elements": [verre("on the table"), verre("none")]},
+             {"enchainement": "coupe", "elements": [{"nom": "la cuisine", "debut": "au fond", "mouvement": "",
+                                                      "fin": ""}]}]
+    ruptures = v.apparitions_du_tableau(plans)
+    # Tom entre depuis le hors-champ ; le verre surgit ; une coupe peut changer de lieu.
+    assert [r["plan"] for r in ruptures] == [3, 3]
+    assert "sans avoir été vu avant" in ruptures[0]["quoi"] and "off-frame" in ruptures[1]["quoi"]
+    c = v.consigne_decoupage("x")
+    assert '"off-frame"' in c and "at most three simple steps" in c and "a cut (\"coupe\") skips" in c
+    relu = v.consigne_continuite([{"image_paroles": "x", "enchainement": "coupe"}], "x")
+    # 29/09 : « divisez le plan en deux » menait la correction à un 5e plan, refusé (2 fois sur 3).
+    assert "(8) does a shot hold more than" in relu and "never ask to split a shot" in relu
 
     # Au découpage : le tableau est gardé, et la rupture rejoint la relecture.
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     decoupe = json.dumps([
         {"elements": [ballon("dans ses mains", "au sol à droite")], "image_paroles": "Leila tire.",
          "ambiance": "", "enchainement": "coupe"},
-        {"elements": [ballon("dans le filet", "au sol")], "image_paroles": "Le ballon est au sol.",
+        {"elements": [ballon("au sol à droite", "au sol"), verre("none")], "image_paroles": "Le ballon est au sol.",
          "ambiance": "", "enchainement": "suite"}], ensure_ascii=False)
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
         [decoupe, '{"etats": [], "problemes": []}', decoupe], []))
@@ -2331,7 +2341,7 @@ def test_la_physique_s_ecrit_en_entier_au_decoupage_a_la_relecture_et_a_la_corre
     # « ne pas décrire un mouvement de deux façons » (29/09) : même règle, même relecture.
     for consigne in (v.consigne_decoupage("x"), v.consigne_correction(plans, "x")):
         assert "Describe each movement ONCE" in consigne
-    assert "(8) is a movement described twice" in v.consigne_continuite(plans, "x")
+    assert "(9) is a movement described twice" in v.consigne_continuite(plans, "x")
 
 
 def test_le_debut_serre_part_du_debut_du_texte_et_pardonne_camera_et_cache(h3):

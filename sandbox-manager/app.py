@@ -4494,9 +4494,9 @@ async def _continuite(plans: list, histoire: str) -> dict:
             [p["image_paroles"] + " " + p.get("ambiance", "") for p in plans])
     except (ValueError, HTTPException) as exc:
         return {"ok": None, "problemes": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
-    # Le tableau des éléments (29/09) : une « suite » qui ne part pas d'où le plan
-    # d'avant laisse un élément se voit sans avis de modèle.
-    ruptures = video_h3.ruptures_du_tableau(plans)
+    # Le tableau des éléments (29/09) : un élément qui surgit sans origine se voit
+    # sans avis de modèle.
+    ruptures = video_h3.apparitions_du_tableau(plans)
     if ruptures:
         c = dict(c, ok=False, problemes=c["problemes"] + ruptures)
     return c

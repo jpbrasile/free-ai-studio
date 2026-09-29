@@ -1063,8 +1063,23 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            "\"mouvement\": what it does during the shot, step by step, each contact with a named surface, or "
            "\"none\", \"fin\": where it is when the shot ends}. Use the same name for an element in every shot. "
            "In a \"suite\" shot, each element's \"debut\" copies WORD FOR WORD its \"fin\" in the previous shot. "
+           # Mesuré le 29/09 (7 découpages) : un verre ou une carafe notés « none » au
+           # départ surgissaient sur la table ou dans une main au plan 3 ou 4.
+           "\"debut\" is never \"none\" or empty: an element not yet in the frame when the shot starts has "
+           "\"debut\": \"off-frame\" (these exact English words, whatever the language) and its \"mouvement\" "
+           "shows how it comes in (walks in through the door, is handed over); an object a character will take, "
+           "fill or use is already in the table, at its place, in the first shot of that place. "
+           # Même mesure : jusqu'à cinq actions dans un plan de 5 s (entrer, s'asseoir,
+           # prendre, verser, reposer).
+           "A shot lasts about 5 seconds: it holds ONE main action (one character, or two together in one "
+           "shared gesture: a handshake, a hug), with at most three simple steps (lifts the glass, drinks, "
+           "puts it down); a line of dialogue counts as a step. When the script holds more actions than the shots can "
+           "show, a cut (\"coupe\") skips the minor steps (walking to a chair, filling a glass): the next shot "
+           "starts after them, with the places they lead to. "
            "Then write \"image_paroles\" from this table: the start places, then each movement once, in order; "
            "never a start place that a movement of the shot only reaches. ")
+HORS_CHAMP = ("off-frame", "off frame", "offframe", "off-screen", "off screen", "offscreen", "hors champ")
+_SANS_DEPART = ("", "none", "aucun", "aucune", "rien", "n/a", "-", "null")
 TABLEAU_MAX, TABLEAU_CHAMPS = 8, ("nom", "debut", "mouvement", "fin")
 
 
@@ -1078,20 +1093,29 @@ def lire_tableau(elements) -> list:
     return propres[:TABLEAU_MAX]
 
 
-def ruptures_du_tableau(plans: list) -> list:
-    """Les éléments d'une « suite » qui ne commencent pas où le plan d'avant les a
-    laissés : des problèmes de relecture, trouvés par le code."""
-    problemes = []
-    for k in range(1, len(plans)):
-        if plans[k].get("enchainement") != "suite":
-            continue
-        fins = {_norme_replique(e["nom"]): e for e in plans[k - 1].get("elements") or []}
-        for e in plans[k].get("elements") or []:
-            avant = fins.get(_norme_replique(e["nom"]))
-            if avant and avant["fin"] and e["debut"] and _norme_replique(avant["fin"]) != _norme_replique(e["debut"]):
+def apparitions_du_tableau(plans: list) -> list:
+    """Les éléments qui surgissent sans origine : un départ vide, ou, dans une
+    « suite », un élément jamais vu avant qui n'entre pas depuis le hors-champ.
+    Des problèmes de relecture, trouvés par le code.
+
+    Remplace, le 29/09, la comparaison mot pour mot des fins et des départs : sur
+    7 découpages, 59 raccords sur 60 étaient déjà justes, et ses 2 alertes étaient
+    fausses (même état, mots dans un autre ordre). Le défaut réel de cette mesure
+    était ailleurs : un verre, une carafe notés « none » au départ, qui surgissaient."""
+    problemes, vus = [], set()
+    for k, plan in enumerate(plans):
+        for e in plan.get("elements") or []:
+            nom, debut = _norme_replique(e["nom"]), _norme_replique(e["debut"])
+            if debut in {_norme_replique(x) for x in _SANS_DEPART}:
                 problemes.append({"plan": k + 1, "quoi": (
-                    f"« {e['nom']} » commence « {e['debut']} », mais le plan {k} le laisse « {avant['fin']} » : "
-                    "le début de ce plan reprend mot pour mot la fin du précédent.")[:300]})
+                    f"« {e['nom']} » n'a pas de place au début du plan : dites où il est, ou « off-frame » "
+                    "et comment il entre ; un objet ne surgit pas.")[:300]})
+            elif (k and plan.get("enchainement") == "suite" and nom not in vus
+                  and not any(debut.startswith(_norme_replique(h)) for h in HORS_CHAMP)):
+                problemes.append({"plan": k + 1, "quoi": (
+                    f"« {e['nom']} » est là au début du plan sans avoir été vu avant : placez-le dès le premier "
+                    "plan de ce lieu, ou faites-le entrer depuis le hors-champ.")[:300]})
+            vus.add(nom)
     return problemes
 
 
@@ -1544,7 +1568,10 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "(bounces on the floor, not just bounces) and where it comes to rest all written? A shot that "
             "leaves one of them out is a problem: quote the vague words. Do the hands that act get their "
             "concrete gesture (what each hand and its fingers do), not an intention? "
-            "(8) is a movement described twice or in two ways in the same shot, or does a shot give, at its "
+            "(8) does a shot hold more than about 5 seconds can show: more than one main action, or more than "
+            "three steps? Name the minor steps to leave out, skipped by the cut before the next shot: the "
+            "number of shots never changes, never ask to split a shot. "
+            "(9) is a movement described twice or in two ways in the same shot, or does a shot give, at its "
             "start, the pose that one of its own movements only reaches (\"facing the camera\", then \"turns "
             "to face the camera\")? Quote the words of the start pose. "
             # Même essai : trois alertes sur trois demandaient d'écrire ce qui était déjà écrit.
