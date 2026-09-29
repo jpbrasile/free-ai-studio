@@ -4058,6 +4058,9 @@ async def _chat_du_studio(consigne: str, quoi: str = "la traduction en anglais",
     if r.status_code >= 400:
         raise HTTPException(502, "Le chat du Studio a refusé %s : rien n'est lancé." % quoi)
     choix = (d.get("choices") or [{}])[0]
+    # 29/09 : un refus du filtre du modèle arrivait en réponse vide, lue comme « rien à dire ».
+    if str(choix.get("finish_reason") or "").startswith("content_filter"):
+        raise HTTPException(502, "Le filtre du modèle a refusé %s : rien n'est lancé." % quoi)
     return (choix.get("message") or {}).get("content") or ""
 
 
@@ -4542,7 +4545,7 @@ async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
         return []
     try:
         tenues = video_h3.lire_tenues(await _chat_du_studio(
-            video_h3.consigne_tenues(plans, [(f["nom"], f.get("description", "")) for f in fiches]),
+            video_h3.consigne_tenues(plans, [f["nom"] for f in fiches]),
             "le relevé des tenues"), [f["nom"] for f in fiches])
     except HTTPException:
         return []

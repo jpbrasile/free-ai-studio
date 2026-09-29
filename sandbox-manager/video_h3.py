@@ -1157,14 +1157,16 @@ def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
 # Décision du propriétaire : « si on change les vêtements on le fait pour tous les
 # plans et on rajoute une photo de référence pour la consistance ».
 
-def consigne_tenues(plans: list, fiches: list) -> str:
-    """`fiches` : [(nom, description)] ; la description donne la tenue de la fiche."""
-    return ("Here are the shots of a short film and the casting sheet of each character. For each character, "
-            "say which clothing the shots give them when it differs from their casting sheet; leave it empty "
-            "when the shots name no clothing or the same clothing. Answer in French, JSON only: "
+def consigne_tenues(plans: list, noms: list) -> str:
+    """Les noms seuls, jamais la description de la fiche : le 29/09, l'âge d'une fiche
+    (15 ans) à côté d'une question de vêtements a fait filtrer la demande par Gemini
+    (« content_filter: PROHIBITED_CONTENT »), réponse vide. Toute tenue que les plans
+    nomment reçoit sa photo, même si c'est celle de la fiche : sans danger."""
+    return ("Here are the shots of a short film. For each character named below, say which clothing the "
+            "shots give them; leave it empty when the shots name no clothing. Answer in French, JSON only: "
             "{\"tenues\": [{\"nom\": \"...\", \"tenue\": \"...\"}]}, the clothing only, in a few words, as "
-            "the shots say it.\n\nCasting sheets: %s\n\nShots: %s"
-            % (json.dumps([{"nom": n, "description": d} for n, d in fiches], ensure_ascii=False),
+            "the shots say it.\n\nCharacters: %s\n\nShots: %s"
+            % (json.dumps(list(noms), ensure_ascii=False),
                json.dumps([p["image_paroles"] for p in plans], ensure_ascii=False)))
 
 

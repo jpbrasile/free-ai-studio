@@ -5,6 +5,7 @@ Ici : la demande, le graphe, la garde de licence, les refus avant location, et
 que rien de ComfyUI (GPL-3.0) n'est importé par le code du Studio.
 """
 import ast
+import asyncio
 import base64
 import json
 import re
@@ -1139,7 +1140,8 @@ def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, 
              {"image_paroles": "Léa, en robe de cocktail noire, s'assoit.", "ambiance": "", "enchainement": "coupe"}]
     r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
     assert r.status_code == 200, r.text
-    assert "manteau rouge" in json.dumps(vus[0], ensure_ascii=False)   # la fiche est lue pour comparer
+    # Le nom seul : la description d'une fiche (un âge) a fait filtrer la demande (29/09).
+    assert "manteau rouge" not in json.dumps(vus[0], ensure_ascii=False)
     assert "robe de cocktail noire" in demandes[0]["prompt"] and demandes[0]["image_reference"]
     sc = r.json()
     assert [(t["nom"], t["tenue"]) for t in sc["tenues"]] == [("Léa", "robe de cocktail noire")]
@@ -1148,6 +1150,14 @@ def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, 
         invite = v.preparer(p["payload"])["resume_public"]["invite"]
         assert "wears the clothing of <Picture 2>" in invite
     assert v.lire_tenues("rien de lisible", ["Léa"]) == {}
+
+
+def test_un_refus_du_filtre_du_modele_se_dit(h3, monkeypatch):
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(
+        200, {"choices": [{"finish_reason": "content_filter: PROHIBITED_CONTENT", "index": 0}]}, {}))
+    with pytest.raises(h3.HTTPException, match="filtre du modèle a refusé le relevé"):
+        asyncio.run(h3._chat_du_studio("x", "le relevé des tenues"))
 
 
 def test_un_plan_en_echec_arrete_le_scenario(h3, monkeypatch):
