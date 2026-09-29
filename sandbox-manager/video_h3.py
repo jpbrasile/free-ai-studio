@@ -886,7 +886,12 @@ def consigne_decoupage(scenario: str) -> str:
             # propriétaire : elle contredit une action qu'on doit suivre jusqu'à sa cible.
             "The camera stays on the same side of the scene in all its shots. "
             "Then every shot's text states the position of each key element it shows, with the same words "
-            "as the staging, even when it did not change. The staging itself is not a separate part of the "
+            "as the staging, even when it did not change. "
+            # Remesure du 29/09 : un livre déjà sur la table avant d'y être posé, un
+            # personnage « seul » alors que l'autre est arrivé.
+            "These positions describe the START of the shot: a character or object appears in them only "
+            "once it has arrived in the story, and a word that is no longer true (alone, empty, still in "
+            "the hand…) is not repeated. The staging itself is not a separate part of the "
             "answer: it lives only in the shots' texts, as plain sentences.When an action aims at something, say where that "
             "thing is and that the character faces it. Describe a physical action step by step: what moves "
             "the object, where it goes, where it ends. "

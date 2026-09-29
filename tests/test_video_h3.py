@@ -1095,7 +1095,8 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     # Essai du 29/09 : geste étalé sur trois plans, élément du lieu absent au départ, caméra qui avance.
     for regle in ("never spread one gesture over several shots", "already visible from the start",
                   "the camera stays at that framing", "fix the STAGING of each place",
-                  "every shot's text states the position of each key element", "what moves the object"):
+                  "every shot's text states the position of each key element", "what moves the object",
+                  "These positions describe the START of the shot"):
         assert regle in v.consigne_decoupage("Un film."), regle
     assert v.CADRAGE in v.consigne_correction([], "retour")
     assert "close-up shows one character only" in v.CADRAGE
