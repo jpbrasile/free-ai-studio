@@ -3342,6 +3342,23 @@ def test_visages_epingle_ses_sources_et_n_installe_ni_insightface_ni_audiolock(s
     assert len(vi.FR_COMMIT) == 40 and len(vi.DETECTEUR_REVISION) == 40
 
 
+def test_visages_chaque_passage_part_sur_la_grille_h3_et_revient_a_sa_longueur(sandbox):
+    # 30/09 : FaceRefine complète un passage hors grille (17k+5) avec l'image de référence ;
+    # passages de 119 images portés à 124, visages des ~11 dernières en bouillie violet et or.
+    vi = sandbox.visages
+    assert [vi.sur_la_grille(n) for n in (1, 5, 6, 22, 34, 85, 119, 124, 125)] == [5, 5, 22, 22, 39, 90, 124, 124, 141]
+    for n in range(1, 200):
+        o = vi.ordre_sur_la_grille(n)
+        assert len(o) == vi.sur_la_grille(n) and o[:n] == list(range(n)) and set(o) <= set(range(n))
+        # Le miroir : jamais un saut de plus d'une image, donc le même plan, sans à-coup.
+        assert all(abs(x - y) <= 1 for x, y in zip(o, o[1:]))
+    assert vi.ordre_sur_la_grille(3) == [0, 1, 2, 1, 0]
+    assert vi.estimation_passages([(119, 1)]) == vi.estimation_passages([(124, 1)])
+    s = vi._SCRIPT
+    # La source suit l'ordre ; la sortie est recoupée à [de, a), image ET son, avant le bout à bout.
+    assert 'P["ordre"]' in s and "trim=end_frame=" in s and "atrim=end=" in s and "apad=whole_dur=" in s
+
+
 def test_visages_le_devis_refuse_le_trop_long_et_le_trop_nombreux(sandbox):
     vi = sandbox.visages
     d = vi.prix(123, 2)
@@ -3871,6 +3888,8 @@ def test_finaliser_fait_les_visages_puis_la_4k_en_une_location_chacun(h3, monkey
     assert [(x["de"], x["a"], x["source"]) for x in v["passages"]] == [(0, 124, "source_0.mp4"),
                                                                       (247, 370, "source_1.mp4")]
     assert v["delai_s"] == h3.visages.delai_passages([(124, 1), (123, 1)])
+    # Envoyés sur la grille H3 : 124 déjà dessus, 123 porté à 124 par son miroir.
+    assert [len(x["ordre"]) for x in v["passages"]] == [124, 124] and v["passages"][1]["ordre"][-2:] == [122, 121]
     # Les photos de chaque passage sont les siennes : la 2e passe lit la photo suivante.
     photos = [[n["inputs"]["image"] for n in x["graphe"].values() if n["class_type"] == "LoadImage"]
               for x in v["passages"]]

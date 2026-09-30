@@ -67,6 +67,27 @@ CHOIX = ("left_most", "right_most", "centre_most", "largest_face", "largest_face
 VISAGE_MINUSCULE_PX = 12
 
 
+def sur_la_grille(n: int) -> int:
+    """La longueur que H3 calcule pour `n` images : la première de la forme 17k+5 qui les
+    contient. FaceRefine arrondit en complétant avec l'image de RÉFÉRENCE ; mesuré le
+    30/09/2026 sur le film campus (« des trucs bizarres sur les visages ») : passages de
+    119 images, portés à 124, visages des ~11 dernières images remplacés par une bouillie
+    violet et or ; ceux de 124 images, propres."""
+    return max(5, n + (5 - n) % 17)
+
+
+def ordre_sur_la_grille(n: int) -> list:
+    """Les images du passage à donner à FaceRefine, déjà sur la grille : le passage, puis
+    lui-même en miroir (…, n-2, n-3, …) jusqu'à la longueur de la grille. Le miroir garde
+    le même plan et le même visage, là où l'image voisine du film appartient souvent au
+    plan suivant (les passages sont coupés aux changements de plan) et tirerait le lissage
+    du recadrage (21 images) vers un autre visage. La sortie est recoupée aux `n` premières."""
+    if n == 1:
+        return [0] * sur_la_grille(1)
+    periode = 2 * (n - 1)
+    return [j % periode if j % periode < n else periode - j % periode for j in range(sur_la_grille(n))]
+
+
 def estimation_s(images: int, sujets: int) -> float:
     return estimation_passages([(images, sujets)])
 
@@ -74,8 +95,9 @@ def estimation_s(images: int, sujets: int) -> float:
 def estimation_passages(passages: list) -> float:
     """Une location, un seul chargement du modèle, les passages [(images, sujets)] l'un
     après l'autre : le démarrage ne se paie qu'une fois (30/09/2026, demande du
-    propriétaire : « autant avoir un seul chargement et en série »)."""
-    return DEMARRAGE_S + sum(s * n * S_PAR_IMAGE_ET_PASSE for n, s in passages)
+    propriétaire : « autant avoir un seul chargement et en série »). Chaque passage se
+    calcule à sa longueur sur la grille (`sur_la_grille`)."""
+    return DEMARRAGE_S + sum(s * sur_la_grille(n) * S_PAR_IMAGE_ET_PASSE for n, s in passages)
 
 
 def tient_en_une_location(passages: list) -> bool:
@@ -92,7 +114,7 @@ def delai_s(images: int, sujets: int) -> int:
 
 
 def delai_passages(passages: list) -> int:
-    calcul = sum(s * n * S_PAR_IMAGE_ET_PASSE for n, s in passages)
+    calcul = sum(s * sur_la_grille(n) * S_PAR_IMAGE_ET_PASSE for n, s in passages)
     return min(DUREE_MAX_S, int((2 * DEMARRAGE_S + calcul) * 1.5) + 120)
 
 
@@ -236,6 +258,7 @@ def demande_passages(video: bytes, passages: list) -> dict:
         source = "source.mp4" if len(passages) == 1 else "source_%d.mp4" % k
         prefixe = "visages/v" if len(passages) == 1 else "visages/p%02d_" % k
         sortie.append({"de": int(de), "a": int(a), "source": source, "prefixe": prefixe,
+                       "ordre": ordre_sur_la_grille(int(a) - int(de)),
                        "graphe": graphe(passes, prefixe, source, premiere)})
     return {"video": base64.b64encode(video).decode(), "de": sortie[0]["de"], "a": sortie[-1]["a"],
             "passages": sortie, "images_par_seconde": video_h3.IMAGES_PAR_SECONDE,
@@ -331,12 +354,28 @@ for nom, b64 in D["images"].items():
 film = Path("/tmp/film.mp4")
 film.write_bytes(base64.b64decode(D["video"]))
 ips, de, a = D["images_par_seconde"], D["de"], D["a"]
-for P in D["passages"]:
+for k, P in enumerate(D["passages"]):
+    # Le passage déjà sur la grille H3 (P["ordre"] : lui, puis son miroir), sinon FaceRefine
+    # le complète avec l'image de référence et les visages de la fin tournent en bouillie.
+    brut, rang = Path("/tmp/brut_%d" % k), Path("/tmp/rang_%d" % k)
+    brut.mkdir()
+    rang.mkdir()
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(film), "-vf",
                         "select='between(n\\,%d\\,%d)',setpts=N/FRAME_RATE/TB" % (P["de"], P["a"] - 1),
-                        "-af", "aselect='between(t\\,%.4f\\,%.4f)',asetpts=N/SR/TB" % (P["de"] / ips, P["a"] / ips),
+                        "-vsync", "0", str(brut / "%05d.png")], capture_output=True, text=True)
+    images = sorted(brut.glob("*.png"))
+    if r.returncode or len(images) != P["a"] - P["de"]:
+        print("MONTAGE_ECHOUE %d images sur %d. %s" % (len(images), P["a"] - P["de"], r.stderr[-1500:]),
+              file=sys.stderr)
+        sys.exit(9)
+    for j, i in enumerate(P["ordre"]):
+        os.link(images[i], rang / ("%05d.png" % j))
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(ips), "-i", str(rang / "%05d.png"),
+                        "-i", str(film), "-map", "0:v", "-map", "1:a", "-af",
+                        "atrim=start=%.4f:end=%.4f,asetpts=PTS-STARTPTS,apad=whole_dur=%.4f"
+                        % (P["de"] / ips, P["a"] / ips, len(P["ordre"]) / ips),
                         "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", "-c:a", "aac",
-                        str(entree / P["source"])], capture_output=True, text=True)
+                        "-frames:v", str(len(P["ordre"])), str(entree / P["source"])], capture_output=True, text=True)
     if r.returncode:
         print("MONTAGE_ECHOUE " + r.stderr[-1500:], file=sys.stderr)
         sys.exit(9)
@@ -423,19 +462,19 @@ calcul_s = round(time.time() - t_pret, 1)
 journal.flush()
 rapports = [l for l in Path("/tmp/comfy.log").read_text(errors="replace").splitlines() if "[H3FaceRefine]" in l]
 proc.kill()
-if len(rendus) == 1:
-    shutil.copyfile(rendus[0], OUT / "video.mp4")
-else:
-    # Bout à bout, image et son de chaque passage (le son d'origine, reposé par CreateVideo).
-    entrees = sum((["-i", str(x)] for x in rendus), [])
-    filtre = "".join("[%d:v][%d:a]" % (i, i) for i in range(len(rendus))) + \
-        "concat=n=%d:v=1:a=1[v][a]" % len(rendus)
-    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *entrees, "-filter_complex", filtre,
-                        "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
-                        "-c:a", "aac", str(OUT / "video.mp4")], capture_output=True, text=True)
-    if r.returncode:
-        print("MONTAGE_ECHOUE " + r.stderr[-1500:], file=sys.stderr)
-        sys.exit(9)
+# Chaque passage recoupé à ses [de, a) (le miroir ajouté pour la grille part), image et son
+# (le son d'origine, reposé par CreateVideo), puis bout à bout.
+entrees = sum((["-i", str(x)] for x in rendus), [])
+filtre = "".join("[%d:v]trim=end_frame=%d,setpts=PTS-STARTPTS[v%d];[%d:a]atrim=end=%.4f,asetpts=PTS-STARTPTS[a%d];"
+                 % (i, P["a"] - P["de"], i, i, (P["a"] - P["de"]) / ips, i)
+                 for i, P in enumerate(D["passages"]))
+filtre += "".join("[v%d][a%d]" % (i, i) for i in range(len(rendus))) + "concat=n=%d:v=1:a=1[v][a]" % len(rendus)
+r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *entrees, "-filter_complex", filtre,
+                    "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", str(OUT / "video.mp4")], capture_output=True, text=True)
+if r.returncode:
+    print("MONTAGE_ECHOUE " + r.stderr[-1500:], file=sys.stderr)
+    sys.exit(9)
 resume = {"de": de, "a": a, "passages": [[P["de"], P["a"]] for P in D["passages"]], "calcul_s": calcul_s,
           "calcul_par_passage_s": calculs, "demarrage_comfy_s": round(t_pret - t0, 1),
           "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "rapports": rapports[-200:]}
