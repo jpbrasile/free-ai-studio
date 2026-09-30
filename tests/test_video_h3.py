@@ -3829,3 +3829,87 @@ def test_summary_et_appears_in_comme_le_guide(h3):
     resume = t.split(" summary: ")[1].split(" retention_analysis: ")[0]
     definies = set(re.findall(r"<(?:Subject|Picture|Audio) \d+>", t.split(" summary: ")[0]))
     assert set(re.findall(r"<(?:Subject|Picture|Audio) \d+>", resume)) <= definies
+
+
+def _finaliser_monte(h3, monkeypatch, tmp_path):
+    """Un film de 370 images en trois plans ; les locations réussissent tout de suite."""
+    lance, fid = _source_visages(h3, monkeypatch, tmp_path)
+    loues = []
+
+    def reussir(quoi):
+        def run(jid, code, delai):
+            loues.append((quoi, jid, _demande_de(code)))
+            job = h3.read_job(jid)
+            job["status"] = "succeeded"
+            h3.write_job(jid, job)
+        return run
+
+    monkeypatch.setattr(h3, "run_visages", reussir("visages"))
+    monkeypatch.setattr(h3, "run_agrandir", reussir("agrandir"))
+    monkeypatch.setattr(h3, "_recoller_tous", lambda videos: b"".join(videos))
+    monkeypatch.setattr(h3.montage, "extraire", lambda video, de, a: b"plan-%d-%d" % (de, a))
+    # Le fil tourne ici, pour lire son résultat.
+    monkeypatch.setattr(h3, "_finaliser_lancer", h3.run_finaliser)
+    plans = [{"de": 0, "a": 124, "sujets": [{"fiche": fid, "choix": "left_most"}]},
+             {"de": 124, "a": 247, "sujets": []},
+             {"de": 247, "a": 370, "sujets": [{"fiche": fid, "choix": "right_most"}]}]
+    return loues, plans
+
+
+def test_finaliser_fait_les_visages_puis_la_4k_plan_par_plan(h3, monkeypatch, tmp_path):
+    loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
+    r = client(h3).post("/video-h3/finaliser", headers=CLE, json={"job": "b" * 32, "plans": plans, "echelle": "4k"})
+    assert r.status_code == 200, r.text
+    job = h3.read_job(r.json()["id"])
+    assert job["status"] == "succeeded", job.get("error")
+    # Visages des plans 1 et 3 seulement (le plan 2 n'a personne), puis 4K des trois plans.
+    assert [(q, d.get("de"), d.get("a")) for q, _, d in loues] == [
+        ("visages", 0, 124), ("visages", 247, 370), ("agrandir", None, None), ("agrandir", None, None),
+        ("agrandir", None, None)]
+    assert [d["coupes"] for q, _, d in loues if q == "agrandir"] == [[0, 124], [0, 123], [0, 123]]
+    # Le plan 2 part tel quel, extrait du film.
+    assert base64.b64decode(loues[3][2]["video"]) == b"plan-124-247"
+    f = job["finalisation"]
+    assert h3.read_job(f["film_visages"])["video"]["moteur"] == "MiniMax H3 (montage)"
+    # Le film final est en 4K : il n'entre pas dans un montage de clips 480p.
+    assert h3.read_job(f["film"])["video"]["moteur"] == "SeedVR2 (agrandissement)"
+    assert not job["video"]["moteur"].startswith("MiniMax H3")
+    assert job["video"]["devis"]["pire_usd"] > job["video"]["devis"]["estime_usd"] > 0
+
+
+def test_finaliser_attend_le_budget_puis_reprend_sans_relouer(h3, monkeypatch, tmp_path):
+    loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
+    vrai = h3.budget_modal.verifier
+    permis = [3]
+
+    def compte(*a, **k):
+        if permis[0] <= 0:
+            raise h3.budget_modal.BudgetDepasse("Budget Modal du mois atteint.")
+        permis[0] -= 1
+        return vrai(*a, **k)
+
+    monkeypatch.setattr(h3.budget_modal, "verifier", compte)
+    fid = client(h3).post("/video-h3/finaliser", headers=CLE,
+                          json={"job": "b" * 32, "plans": plans, "echelle": "4k"}).json()["id"]
+    job = h3.read_job(fid)
+    assert job["status"] == "attente" and "budget" in job["error"]
+    assert [q for q, _, _ in loues] == ["visages", "visages", "agrandir"]
+    assert job["finalisation"]["film_visages"]   # les visages sont visibles avant la 4K
+    permis[0] = 9
+    r = client(h3).post("/video-h3/finaliser/%s/reprendre" % fid, headers=CLE)
+    assert r.status_code == 200, r.text
+    assert h3.read_job(fid)["status"] == "succeeded"
+    assert [q for q, _, _ in loues] == ["visages", "visages", "agrandir", "agrandir", "agrandir"]
+    assert client(h3).post("/video-h3/finaliser/%s/reprendre" % fid, headers=CLE).status_code == 409
+
+
+def test_finaliser_refuse_des_plans_qui_ne_couvrent_pas_le_film(h3, monkeypatch, tmp_path):
+    loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
+    for mauvais in (plans[:2], [plans[0], plans[2]], [dict(plans[0], sujets=[{"fiche": "x", "choix": "au_fond"}])]
+                    + plans[1:], [dict(p, sujets=[]) for p in plans]):
+        r = client(h3).post("/video-h3/finaliser", headers=CLE,
+                            json={"job": "b" * 32, "plans": mauvais, "echelle": ""})
+        assert r.status_code == 422, mauvais
+    assert client(h3).post("/video-h3/finaliser", headers=CLE,
+                           json={"job": "b" * 32, "plans": plans, "echelle": "8k"}).status_code == 422
+    assert loues == []

@@ -4571,6 +4571,241 @@ async def video_h3_visages(request: Request, authorization: Optional[str] = Head
     return read_job(jid)
 
 
+
+# --- Finaliser un film validé : visages plan par plan, puis 4K plan par plan -----
+# Demande du propriétaire, 30/09/2026 : « applique aussi après validation de la
+# video le passage en 4k et l'amélioration des visages (en passant par le studio) ».
+# Ni l'un ni l'autre ne passe sur un film entier (devis refusés : 4K 3613 s de
+# calcul pour 2880 au plus, visages de deux personnes 729 s pour 720) : chaque
+# plan est traité seul, puis tout est recollé. Chaque étape payante vérifie le
+# budget avant de louer ; quand il manque, la finalisation attend (« attente de
+# budget ») et reprend plus tard là où elle s'est arrêtée.
+
+_FINALISATIONS_VIVANTES: set = set()   # les fils en cours ; un Studio redémarré les a perdus
+
+
+def _finaliser_plans(images: int, plans) -> list:
+    """Les plans à finaliser, bout à bout de 0 à la fin du film : un trou ou un
+    chevauchement se verrait dans le film recollé. ValueError sinon."""
+    if not isinstance(plans, list) or not plans:
+        raise ValueError("Donnez les plans du film : [{de, a, sujets}].")
+    sortie, attendu = [], 0
+    for k, p in enumerate(plans):
+        try:
+            de, a = int(p["de"]), int(p["a"])
+            sujets = [(str(s["fiche"]), str(s.get("choix") or "largest_face")) for s in p.get("sujets") or []]
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise ValueError("Plan %d illisible : {de, a, sujets: [{fiche, choix}]}." % (k + 1)) from exc
+        if de != attendu or a <= de:
+            raise ValueError("Les plans doivent se suivre sans trou depuis l'image 0 (plan %d)." % (k + 1))
+        if len(sujets) > visages.SUJETS_MAX:
+            raise ValueError("Plan %d : deux personnages au plus." % (k + 1))
+        for _, choix in sujets:
+            if choix not in visages.CHOIX:
+                raise ValueError("Plan %d : place du personnage inconnue (%s)." % (k + 1, choix))
+        sortie.append({"de": de, "a": a, "sujets": [{"fiche": f, "choix": c} for f, c in sujets],
+                       "visages": None, "agrandi": None})
+        attendu = a
+    if attendu != images:
+        raise ValueError("Les plans s'arrêtent à l'image %d, le film en a %d." % (attendu, images))
+    return sortie
+
+
+def _finaliser_devis(plans: list, echelle: str) -> dict:
+    """La somme des devis plan par plan ; ValueError si un plan est trop long."""
+    estime = pire = 0.0
+    for p in plans:
+        n = p["a"] - p["de"]
+        if p["sujets"]:
+            d = visages.prix(n, len(p["sujets"]))
+            estime, pire = estime + d["estime_usd"], pire + d["pire_usd"]
+        if echelle:
+            d = agrandir.prix(n, echelle)
+            estime, pire = estime + d["estime_usd"], pire + d["pire_usd"]
+    return {"estime_usd": round(estime, 2), "pire_usd": round(pire, 2)}
+
+
+@app.post("/video-h3/finaliser")
+async def video_h3_finaliser(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{job, plans: [{de, a, sujets: [{fiche, choix}]}], echelle ("4k", "x2" ou "")} :
+    un travail de finalisation. Le film d'origine n'est pas touché."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    source = str(corps.get("job") or "")
+    echelle = str(corps.get("echelle") or "")
+    _, images = _agrandir_source(source)
+    try:
+        plans = _finaliser_plans(images, corps.get("plans"))
+        if echelle and echelle not in agrandir.ECHELLES:
+            raise ValueError("Agrandissement non proposé.")
+        if not echelle and not any(p["sujets"] for p in plans):
+            raise ValueError("Rien à faire : ni visages ni agrandissement.")
+        devis = _finaliser_devis(plans, echelle)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if any(p["sujets"] for p in plans):
+        _garde_licence_h3()
+    _modal_ou_refus()
+    fid = uuid.uuid4().hex
+    origine = read_job(source)
+    write_job(fid, {
+        "id": fid, "provider": "local", "title": "Free AI Studio finalisation", "gpu": False,
+        "internet": False, "status": "queued", "created_at": time.time(), "artifacts": [],
+        # Pas « MiniMax H3 » : la finalisation n'entre pas dans un montage de clips 480p.
+        "video": {"moteur": "Finalisation (visages, agrandissement)", "source": source, "echelle": echelle,
+                  "devis": devis, "secondes": round(images / video_h3.IMAGES_PAR_SECONDE, 2)},
+        "finalisation": {"plans": plans, "film_visages": None, "film": None, "etape": ""},
+        "titre": ((origine.get("titre") or "Vidéo H3") + " — finalisée")[:200],
+    })
+    _finaliser_lancer(fid)
+    return read_job(fid)
+
+
+@app.post("/video-h3/finaliser/{fid}/reprendre")
+def video_h3_finaliser_reprendre(fid: str, authorization: Optional[str] = Header(default=None)):
+    """Reprend une finalisation arrêtée (budget, échec, Studio redémarré) là où elle
+    en était : les étapes réussies ne sont pas relouées."""
+    _h3_ou_404()
+    auth(authorization)
+    job = read_job(fid)
+    if "finalisation" not in job:
+        raise HTTPException(404, "Finalisation introuvable.")
+    if fid in _FINALISATIONS_VIVANTES:
+        raise HTTPException(409, "Cette finalisation tourne déjà.")
+    if job.get("status") == "succeeded":
+        raise HTTPException(409, "Cette finalisation est terminée.")
+    # Une étape louée qui tourne encore (reprise chez Modal après redémarrage) :
+    # la refaire la paierait deux fois.
+    etapes = [p.get(e) for p in job["finalisation"]["plans"] for e in ("visages", "agrandi")]
+    if any(j and read_job(j).get("status") in ("queued", "running") for j in etapes):
+        raise HTTPException(409, "Une étape de cette finalisation tourne encore : attendez sa fin.")
+    _modal_ou_refus()
+    job.update({"status": "queued", "error": ""})
+    write_job(fid, job)
+    _finaliser_lancer(fid)
+    return read_job(fid)
+
+
+def _finaliser_lancer(fid: str):
+    _FINALISATIONS_VIVANTES.add(fid)
+    threading.Thread(target=run_finaliser, args=(fid,), daemon=True).start()
+
+
+def _reussi(jid) -> bool:
+    return bool(jid) and read_job(jid).get("status") == "succeeded" and bool(_video_h3_octets(jid))
+
+
+def _finaliser_noter(fid: str, **champs):
+    job = read_job(fid)
+    job["finalisation"].update(champs)
+    write_job(fid, job)
+
+
+def run_finaliser(fid: str):
+    """Les étapes, dans l'ordre : visages de chaque plan, film aux visages refaits,
+    agrandissement de chaque plan, film final. Chaque étape louée attend sa fin."""
+    try:
+        job = read_job(fid)
+        job.update({"status": "running", "started_at": job.get("started_at") or time.time()})
+        write_job(fid, job)
+        source = job["video"]["source"]
+        echelle = job["video"]["echelle"]
+        film = _video_h3_octets(source)
+        if not film:
+            raise montage.MontageImpossible("Le film d'origine n'est plus sur ce Studio.")
+        film = film.read_bytes()
+        plans = job["finalisation"]["plans"]
+        # 1. Les visages, plan par plan.
+        for k, p in enumerate(plans):
+            if not p["sujets"] or _reussi(p["visages"]):
+                continue
+            _finaliser_noter(fid, etape="Visages du plan %d sur %d" % (k + 1, len(plans)))
+            n = p["a"] - p["de"]
+            devis = visages.prix(n, len(p["sujets"]))
+            budget_modal.verifier("video", visages.GPU, devis["delai_s"], visages.MEMOIRE_MB,
+                                  quoi="Les visages du plan %d" % (k + 1), coeurs=visages.COEURS)
+            code = visages.construire_script(film, [(s["fiche"], s["choix"]) for s in p["sujets"]],
+                                             p["de"], p["a"])
+            jid = uuid.uuid4().hex
+            write_job(jid, {
+                "id": jid, "provider": "modal", "title": "Free AI Studio visages", "gpu": True,
+                "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+                "video": {"moteur": "H3 FaceRefine (visages)", "source": source, "de": p["de"], "a": p["a"],
+                          "sujets": p["sujets"], "devis": devis, "finalisation": fid,
+                          "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},
+                "titre": "%s — visages du plan %d" % (job.get("titre") or "Film", k + 1),
+            })
+            p["visages"] = jid
+            _finaliser_noter(fid, plans=plans)
+            run_visages(jid, code, devis["delai_s"])
+            if not _reussi(jid):
+                raise montage.MontageImpossible("Les visages du plan %d ont échoué : %s"
+                                                % (k + 1, read_job(jid).get("error") or "voir le travail " + jid))
+        # Chaque plan tel qu'il entre dans l'agrandissement : visages refaits, sinon tel quel.
+        def morceau(p) -> bytes:
+            if p["sujets"]:
+                return _video_h3_octets(p["visages"]).read_bytes()
+            return montage.extraire(film, p["de"], p["a"])
+
+        # 2. Le film aux visages refaits : visible avant la 4K, et en 480p.
+        if any(p["sujets"] for p in plans) and not _reussi(read_job(fid)["finalisation"].get("film_visages")):
+            _finaliser_noter(fid, etape="Recollage des visages")
+            recolle = _recoller_tous([morceau(p) for p in plans])
+            _finaliser_noter(fid, film_visages=_film_h3(
+                recolle, {"mode": "finalisation", "mode_titre": "Visages refaits", "source": source,
+                          "finalisation": fid}, (job.get("titre") or "Film") + " — visages refaits"))
+        # 3. L'agrandissement, plan par plan.
+        if echelle:
+            for k, p in enumerate(plans):
+                if _reussi(p["agrandi"]):
+                    continue
+                _finaliser_noter(fid, etape="%s du plan %d sur %d"
+                                            % (agrandir.ECHELLES[echelle]["titre"], k + 1, len(plans)))
+                n = p["a"] - p["de"]
+                devis = agrandir.prix(n, echelle)
+                budget_modal.verifier("video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
+                                      quoi="L'agrandissement du plan %d" % (k + 1), coeurs=agrandir.COEURS)
+                code = agrandir.construire_script(morceau(p), echelle, agrandir.bornes(n))
+                jid = uuid.uuid4().hex
+                write_job(jid, {
+                    "id": jid, "provider": "modal", "title": "Free AI Studio agrandissement", "gpu": True,
+                    "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+                    "video": {"moteur": "SeedVR2 (agrandissement)", "source": p["visages"] or source,
+                              "echelle": echelle, "morceaux": 1, "devis": devis, "finalisation": fid,
+                              "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},
+                    "titre": "%s — plan %d, %s" % (job.get("titre") or "Film", k + 1, devis["titre"]),
+                })
+                p["agrandi"] = jid
+                _finaliser_noter(fid, plans=plans)
+                run_agrandir(jid, code, devis["delai_s"])
+                if not _reussi(jid):
+                    raise montage.MontageImpossible("L'agrandissement du plan %d a échoué : %s"
+                                                    % (k + 1, read_job(jid).get("error") or "voir le travail " + jid))
+            _finaliser_noter(fid, etape="Recollage final")
+            recolle = _recoller_tous([_video_h3_octets(p["agrandi"]).read_bytes() for p in plans])
+            final = _film_h3(recolle, {"mode": "finalisation", "mode_titre": "Film finalisé", "source": source,
+                                       "echelle": echelle, "finalisation": fid},
+                             read_job(fid).get("titre") or "Film finalisé",
+                             moteur="SeedVR2 (agrandissement)")
+        else:
+            final = read_job(fid)["finalisation"]["film_visages"]
+        _finaliser_noter(fid, film=final, etape="")
+        job = read_job(fid)
+        job.update({"status": "succeeded", "finished_at": time.time()})
+        write_job(fid, job)
+    except budget_modal.BudgetDepasse as exc:
+        job = read_job(fid)
+        job.update({"status": "attente", "error": "En attente de budget : " + str(exc)})
+        write_job(fid, job)
+    except (montage.MontageImpossible, ValueError, OSError) as exc:
+        job = read_job(fid)
+        job.update({"status": "failed", "error": str(exc)[:1000]})
+        write_job(fid, job)
+    finally:
+        _FINALISATIONS_VIVANTES.discard(fid)
+
+
 @app.post("/video-h3/scenario/ordonner")
 async def video_h3_scenario_ordonner(request: Request, authorization: Optional[str] = Header(default=None)):
     """Le chat du Studio range les clips cochés selon le scénario ; rien n'est loué."""
@@ -4620,7 +4855,7 @@ async def video_h3_montage(request: Request, authorization: Optional[str] = Head
                                     "clips": ordre, "plans": len(ordre)}, scenario[:60] or "Montage H3"))
 
 
-def _film_h3(film: bytes, video: dict, titre: str) -> str:
+def _film_h3(film: bytes, video: dict, titre: str, moteur: str = "MiniMax H3 (montage)") -> str:
     """Un film fait ici (montage, musique) devient un travail réussi de plus :
     jouable, téléchargeable, prolongeable. Rend son numéro."""
     jid = uuid.uuid4().hex
@@ -4638,7 +4873,7 @@ def _film_h3(film: bytes, video: dict, titre: str) -> str:
         "id": jid, "provider": "local", "title": "Free AI Studio montage H3", "gpu": False,
         "internet": False, "status": "succeeded", "created_at": time.time(), "finished_at": time.time(),
         "artifacts": [art],
-        "video": dict({"moteur": "MiniMax H3 (montage)"}, **video, secondes=secondes),
+        "video": dict({"moteur": moteur}, **video, secondes=secondes),
         "titre": titre,
     })
     return jid
