@@ -610,9 +610,19 @@ def test_une_suite_en_references_epingle_les_22_dernieres_images_et_leur_son(h3,
     assert g["10"]["class_type"] == "MiniMaxH3ReferenceToVideo"   # les fiches restent
     assert dem["videos"] == {"raccord.mp4": "UkFDQ09SRA=="}
     assert set(v.NOEUDS_RACCORD) <= set(dem["classes"])
-    # La dernière image reste une <Picture N> : le texte la nomme (docs ComfyUI : une image
-    # donnée au seul AddGuide « is not visible to the text encoder »).
-    assert list(dem["images"]) == ["ref_0.png", "ref_1.png"]
+    # Plan 4 du film campus (30/09) : H3 a coupé vers le cadrage du texte après les 22
+    # images. AddGuide ne passe rien au texte (« is not visible to the text encoder ») :
+    # la fin part aussi en <Video 1>, et le texte la dit continuée sans coupe, en
+    # « video continuation » (guide de MiniMax). Elle remplace la dernière image en <Picture N>.
+    assert g["10"]["inputs"]["ref_videos.ref_video_0"] == ["81", 0]
+    assert not any(k.startswith("ref_video_audios") for k in g["10"]["inputs"])   # les <Audio j> ne bougent pas
+    assert list(dem["images"]) == ["ref_0.png"]
+    invite = plan["resume_public"]["invite"]
+    assert "<Video 1> is the end of the previous shot." in invite
+    assert "summary: [video continuation + reference generation] The target video is a single shot with " \
+           "<Subject 1>, continuing <Video 1> without a cut. " in invite
+    assert v.SUITE_GARDE in invite and "<Picture 2>" not in invite
+    assert "detailed_description: [Shot 1] " + v.SUITE_DEBUT in invite
     # 17 images de plus, pour que les 22 reprises ne raccourcissent pas le plan ; retirées au recollage.
     assert plan["resume_public"]["images"] == 141 and dem["longueur"] == 141
     assert plan["resume_public"]["voie"] == "raccord" and v.images_a_retirer(plan) == 22

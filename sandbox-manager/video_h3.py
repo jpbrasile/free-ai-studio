@@ -1259,7 +1259,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
-                      presents=None, depart=None, parleurs=None) -> str:
+                      presents=None, depart=None, parleurs=None, suite=False) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -1273,7 +1273,8 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     du scénario partent avec chaque plan (None : toutes). `depart` : le numéro de
     <Picture N> de l'image de départ, première image de [Shot 1]. `parleurs` : {rang :
     numéro x de son (Sx)} ; la définition de sa voix le reprend (ref-en.txt, 2.4 :
-    « <Audio 1> is the voice-timbre reference for <Subject 1> (S1). »), sans en créer."""
+    « <Audio 1> is the voice-timbre reference for <Subject 1> (S1). »), sans en créer.
+    `suite` : le plan continue <Video 1>, la fin du plan précédent (voie « raccord »)."""
     definitions, garde, premiere, voix_dites, garde_sons = [], [], 1, [], []
     presents = set(range(len(nombres))) if presents is None else set(presents)
     for k, nombre in enumerate(nombres):
@@ -1331,13 +1332,17 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         definitions.append(f"<Picture {depart}> is the first frame of [Shot 1].")
         garde.append(f"<Picture {depart}> ([Shot 1] first frame): fully_preserved - the shot begins "
                      f"exactly on <Picture {depart}>: its framing, places and people.")
+    if suite:   # guide de MiniMax : « video continuation », la source citée en <Video N>
+        definitions.append("<Video 1> is the end of the previous shot.")
+        garde.append(SUITE_GARDE)
     # ref-en.txt, 3 : un préfixe de types entre crochets, puis les étiquettes déjà définies.
-    types = ["reference generation"] + (["keyframe completion"] if depart else []) \
-        + (["audio reference"] if voix_dites else [])
+    types = (["video continuation"] if suite else []) + ["reference generation"] \
+        + (["keyframe completion"] if depart else []) + (["audio reference"] if voix_dites else [])
     vus = [f"<Subject {k + 1}>" for k in range(len(nombres)) if k in presents]
     resume = (f"[{' + '.join(types)}] The target video is a single shot"
               + (" with " + _liste_anglaise(vus) if vus else "")
-              + (f", beginning from <Picture {depart}>" if depart else "") + "."
+              + (f", beginning from <Picture {depart}>" if depart else "")
+              + (", continuing <Video 1> without a cut" if suite else "") + "."
               + (" It uses " + _liste_anglaise(voix_dites) + "." if voix_dites else ""))
     return ("subject_definitions: " + " ".join(definitions) + " summary: " + resume
             + " retention_analysis: " + " ".join(garde + garde_sons))   # les sujets, puis les sons (exemple du guide)
@@ -2367,6 +2372,21 @@ def graphe_troncon(texte: str, longueur: int, graine: int, contexte: str) -> dic
 # retirées au recollage ; le plan gagne 17 images pour ne pas raccourcir.
 RACCORD_IMAGES = 22   # 17k+5, la longueur de l'exemple de la PR
 NOEUDS_RACCORD = ("LoadVideo", "GetVideoComponents", "MiniMaxH3AddGuide")
+# Film campus, plan 4 (30/09) : les 22 images épinglées au pixel près, puis H3 a
+# COUPÉ vers le cadrage du texte (« Leila at the centre, facing the camera »), que
+# la fin du plan 3 (Leila à gauche, de profil) contredisait. AddGuide ne passe
+# rien au texte : H3 lisait deux ordres contraires. Remarque du propriétaire : « le
+# placement est déjà câblé par les images du clip amont » ; décision : « hard code
+# ça dans le studio ». Le guide de MiniMax a une tâche pour cela, « video
+# continuation », la source citée en <Video N> : la fin du plan part aussi en
+# ref_videos (ComfyUI v0.37.0, 3 au plus ; images, puis vidéos, puis sons : les
+# <Audio j> des voix ne bougent pas, la vidéo part sans sa bande son), et le texte dit
+# qu'en cas de désaccord sur les places, c'est <Video 1> qui a raison.
+SUITE_GARDE = ("<Video 1> ([Shot 1] start): fully_preserved - [Shot 1] continues <Video 1> in one "
+               "continuous take, with no cut: the same framing, and every person and object in the same "
+               "place and facing the same way as at the end of <Video 1>.")
+SUITE_DEBUT = ("The shot continues <Video 1> without a cut: where each person and object stands and "
+               "faces comes from the end of <Video 1>, even where the text below places them otherwise. ")
 
 
 def ajouter_raccord(demande: dict, fin_b64: str) -> dict:
@@ -2379,6 +2399,7 @@ def ajouter_raccord(demande: dict, fin_b64: str) -> dict:
                                         "latent": ["10", 1], "image": ["81", 0], "audio": ["81", 1],
                                         "frame_idx": 0})
     g["13"]["inputs"]["conditioning"] = ["11", 0]
+    g["10"]["inputs"]["ref_videos.ref_video_0"] = ["81", 0]   # <Video 1>, lue par le texte
     demande["videos"] = {"raccord.mp4": fin_b64}
     demande["classes"] = list(demande["classes"]) + list(NOEUDS_RACCORD)
     return demande
@@ -2533,6 +2554,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     # n'a pas d'entrée first_frame, l'image part donc en dernière <Picture N>, désignée
     # comme le guide de MiniMax l'écrit (ref-en.txt, 2.2).
     depart = payload.get("depart_reference") if refs and fiches else None
+    suite = bool(payload.get("suite_video")) and refs and bool(fiches)
     if refs and fiches:
         # Le plan ne nomme pas toujours toutes les fiches du scénario : « (appears in
         # [Shot 1]) » n'est écrit que pour celles qu'il nomme (ref-en.txt, 4.1).
@@ -2542,9 +2564,11 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         for s, x in _LOCUTEUR_NUMERO.findall(nommes):
             parleurs.setdefault(int(s) - 1, int(x))
         numero = sum(nombres) + 1 if depart else None
-        texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs)
+        texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs,
+                                   suite)
                  + " detailed_description: [Shot 1] "
-                 + (f"The shot begins from <Picture {numero}>. " if numero else "") + texte)
+                 + (f"The shot begins from <Picture {numero}>. " if numero else "")
+                 + (SUITE_DEBUT if suite else "") + texte)
     # Ce que montrent la première et la dernière image, quand le Studio les a
     # créées : leur description (améliorations comprises) passe aussi à H3, pour
     # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).
@@ -2678,8 +2702,11 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
         if 0 < nb < MODES["references"]["images_max"]:
             if fin_b64:
                 base["longueur"] = longueur_avec_raccord(base.get("longueur") or LONGUEUR_PAR_DEFAUT)
-            plan = preparer(dict(base, mode="references", images=[], depart_reference=derniere_b64,
-                                 visages_seuls=visages_seuls), graine_hasard)
+            # Avec le raccord, <Video 1> remplace la dernière image en <Picture N> : la
+            # vraie première image est celle du raccord, 22 images plus tôt.
+            depart = {"suite_video": True} if fin_b64 else {"depart_reference": derniere_b64}
+            plan = preparer(dict(base, mode="references", images=[], visages_seuls=visages_seuls, **depart),
+                            graine_hasard)
             if fin_b64:
                 ajouter_raccord(plan["demande"], fin_b64)
                 voie = "raccord"
