@@ -3075,11 +3075,11 @@ def test_un_plan_a_deux_repliques_est_coupe_en_deux(h3, monkeypatch):
     assert [p["enchainement"] for p in d["plans"]] == ["coupe", "coupe", "suite"]
     assert [len(v.repliques(p["image_paroles"])) for p in d["plans"]] == [0, 1, 1]
     assert "exactly 2 consecutive shots" in vus[0][1] and "could not be used" in vus[1][1]
-    # Au-delà des 5 plans d'un scénario : la découpe n'est pas posée, et c'est dit.
-    cinq = v.verifier_plans([dict(plans[0]) for _ in range(4)] + [plans[1]])
+    # Au-delà des plans d'un scénario : la découpe n'est pas posée, et c'est dit.
+    cinq = v.verifier_plans([dict(plans[0]) for _ in range(v.SCENARIO_PLANS_MAX - 1)] + [plans[1]])
     _faux_chat(monkeypatch, h3, {"la découpe d'un plan à deux répliques": [bonne]}, vus)
     d = client(h3).post("/video-h3/scenario/scinder", headers=CLE, json={"plans": cinq}).json()
-    assert len(d["plans"]) == 5 and "au plus" in d["scissions"][0]["erreur"] and "en" not in d["scissions"][0]
+    assert len(d["plans"]) == v.SCENARIO_PLANS_MAX and "au plus" in d["scissions"][0]["erreur"] and "en" not in d["scissions"][0]
     # Le bouton de la page ne se montre que devant un plan à plusieurs répliques.
     page = v.PAGE_HTML
     assert 'id="scenario_scinder" hidden' in page and '"/video-h3/scenario/scinder"' in page
@@ -3724,16 +3724,17 @@ def test_le_studio_marque_les_repliques_d_apres_le_chat(h3, monkeypatch):
                                                                           "ne se lit pas."})
 
 
-def test_un_scenario_a_cinq_plans_mais_pas_cinq_raccords_d_affilee(h3):
-    """30/09 : 5 plans (décision du propriétaire) ; la limite mesurée des raccords reste."""
+def test_un_scenario_a_six_plans_mais_pas_cinq_raccords_d_affilee(h3):
+    """30/09 : 5 plans, puis 6 le soir (décisions du propriétaire ; une réplique par plan,
+    et le film campus en a six) ; la limite mesurée des raccords reste."""
     v = h3.video_h3
-    assert v.SCENARIO_PLANS_MAX == 5 and v.PLANS_MAX == 4
+    assert v.SCENARIO_PLANS_MAX == 6 and v.PLANS_MAX == 4
     plan = lambda e: {"image_paroles": "x", "ambiance": "", "enchainement": e}
-    assert len(v.verifier_plans([plan("coupe")] + [plan("suite")] * 3 + [plan("coupe")])) == 5
+    assert len(v.verifier_plans([plan("coupe")] + [plan("suite")] * 3 + [plan("coupe"), plan("suite")])) == 6
     with pytest.raises(ValueError, match="4 plans au plus d'affilée sans « coupe »"):
         v.verifier_plans([plan("coupe")] + [plan("suite")] * 4)
     assert "never more than 4 shots in a row" in v.consigne_decoupage("Un film.")
-    assert client(h3).get("/video-h3/etat", headers=CLE).json()["scenario"] == {"plans_max": 5}
+    assert client(h3).get("/video-h3/etat", headers=CLE).json()["scenario"] == {"plans_max": 6}
 
 
 def test_le_ton_n_est_pas_redit_quand_la_phrase_le_dit_deja(h3):

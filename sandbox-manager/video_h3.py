@@ -1507,7 +1507,9 @@ def lire_ordre(reponse: str, permis) -> list:
 # 5 plans depuis le 30/09 (décision du propriétaire, film campus) : une histoire à six
 # répliques perdait sa fin en 4 plans (découpage réel du jour). La limite mesurée des
 # raccords reste : PLANS_MAX plans au plus d'affilée sans « coupe » (verifier_plans).
-SCENARIO_PLANS_MAX = 5
+# 6 le soir même (« limite à 6 plans ») : une réplique par plan, coupée par le Studio
+# (plans_a_scinder), et le film campus en a six.
+SCENARIO_PLANS_MAX = 6
 ENCHAINEMENTS = {
     "coupe": "Nouveau plan (la fiche garde le personnage)",
     "suite": "Suite directe (repart de la dernière image du plan précédent)",
@@ -3328,7 +3330,7 @@ PAGE_HTML = r"""<!doctype html>
     <label for="scenario_chanson">Musique de fond (une chanson du Studio, posée après le tournage)</label>
     <select id="scenario_chanson"><option value="">Aucune (musique décrite au clip)</option></select>
     <label for="scenario_musique_plan">à partir du plan</label>
-    <input id="scenario_musique_plan" type="number" min="1" max="4" value="1">
+    <input id="scenario_musique_plan" type="number" min="1" max="6" value="1">
     <button id="scenario_decouper">Découper en plans</button>
     <div id="plans_liste"></div>
     <button id="plan_ajouter" hidden>Ajouter un plan</button>
@@ -4773,7 +4775,7 @@ function dessinerPlans(){
     if (p.enchainement === "coupe") bloc.appendChild(blocDepart(p));
     liste.appendChild(bloc);
   });
-  const max = ETAT && ETAT.scenario ? ETAT.scenario.plans_max : 5;
+  const max = ETAT && ETAT.scenario ? ETAT.scenario.plans_max : 6;
   document.getElementById("plan_ajouter").hidden = !PLANS.length || PLANS.length >= max;
   // Un scénario repris se rejoue (plans changés seulement), il ne se retourne pas en entier.
   document.getElementById("scenario_tourner").hidden = !PLANS.length || !!SCENARIO_TOURNE;
