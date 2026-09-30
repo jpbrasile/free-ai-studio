@@ -153,23 +153,59 @@ def recoller(premiere: bytes, suite: bytes) -> bytes:
         return sortie.read_bytes()
 
 
+# Le niveau du son d'un plan à l'autre (30/09, film campus) : H3 choisit le niveau
+# de chaque plan. Une suite par raccord le garde (le son des 22 images reprises
+# l'ancre) ; une coupe repart de rien : le plan 5 est arrivé 5 à 6 dB sous les
+# quatre premiers (−16,7 LUFS contre −10,4 à −12,3). Décision du propriétaire :
+# harmoniser, « de façon systématique ». Chaque plan recollé prend la sonie (EBU
+# R128) du film déjà monté ; un limiteur garde ses crêtes sous −1 dBFS.
+ECART_SONIE_MAX_DB = 12.0   # au-delà, c'est un plan presque muet : on ne le pousse pas plus
+ECART_SONIE_MIN_DB = 0.5    # en deçà, inaudible : rien n'est touché
+SONIE_SILENCE = -60.0       # un son plus bas que cela n'a pas de niveau à suivre
+LIMITE_CRETE = 0.891        # −1 dBFS
+
+
+def sonie(chemin: Path, debut_s: float = 0.0):
+    """La sonie intégrée (LUFS) du son de `chemin` à partir de `debut_s`, ou None
+    (pas de son, silence, ou mesure illisible)."""
+    fini = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-ss", "%.6f" % debut_s, "-i", str(chemin),
+                           "-vn", "-af", "ebur128", "-f", "null", "-"],
+                          capture_output=True, text=True, timeout=DELAI_S)
+    mesures = re.findall(r"I:\s+(-?[\d.]+) LUFS", fini.stderr or "")
+    if fini.returncode != 0 or not mesures or float(mesures[-1]) <= SONIE_SILENCE:
+        return None
+    return float(mesures[-1])
+
+
+def gain_de_suite(premiere: Path, suite: Path, debut_s: float = 0.0) -> float:
+    """Le gain (dB) qui met la suite, à partir de `debut_s`, au niveau du film `premiere`."""
+    avant, apres = sonie(premiere), sonie(suite, debut_s)
+    if avant is None or apres is None:
+        return 0.0
+    gain = max(-ECART_SONIE_MAX_DB, min(ECART_SONIE_MAX_DB, avant - apres))
+    return round(gain, 2) if abs(gain) >= ECART_SONIE_MIN_DB else 0.0
+
+
 def recoller_son(premiere: bytes, suite: bytes, retirer: int = 1) -> bytes:
     """Comme `recoller`, mais le son suit : la vidéo H3 parle (27/09/2026).
 
     `retirer` images sont ôtées du debut de la suite, et le son de la meme
     duree avec elles : 1 quand la suite part de la derniere image du premier
-    clip, 0 quand elle arrive deja coupee (prolongation par troncon)."""
+    clip, 0 quand elle arrive deja coupee (prolongation par troncon). Le son de
+    la suite prend le niveau du film (`gain_de_suite`, 30/09)."""
     with tempfile.TemporaryDirectory() as dossier:
         a, b, sortie = Path(dossier, "a.mp4"), Path(dossier, "b.mp4"), Path(dossier, "ab.mp4")
         a.write_bytes(premiere)
         b.write_bytes(suite)
         num, den = _cadence(a)
         debut_s = retirer * den / num
+        gain = gain_de_suite(a, b, debut_s)
+        niveau = (",volume=%.2fdB,alimiter=limit=%.3f:level=0:latency=1" % (gain, LIMITE_CRETE)) if gain else ""
         _lancer(["-i", str(a), "-i", str(b), "-filter_complex",
                  "[1:v]trim=start_frame=%d[bv];"
-                 "[1:a]atrim=start=%.6f,asetpts=PTS-STARTPTS[ba];"
+                 "[1:a]atrim=start=%.6f,asetpts=PTS-STARTPTS%s[ba];"
                  "[0:v][0:a][bv][ba]concat=n=2:v=1:a=1[v0][a];"
-                 "[v0]settb=%d/%d,setpts=N[v]" % (retirer, debut_s, den, num),
+                 "[v0]settb=%d/%d,setpts=N[v]" % (retirer, debut_s, niveau, den, num),
                  "-map", "[v]", "-map", "[a]", "-r", "%d/%d" % (num, den),
                  "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
                  "-c:a", "aac", "-movflags", "+faststart", str(sortie)],

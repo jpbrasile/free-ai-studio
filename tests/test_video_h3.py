@@ -653,6 +653,35 @@ def test_la_fin_d_un_film_rend_ses_22_dernieres_images_et_son_son(h3, tmp_path):
         m.fin(film.read_bytes(), 60)
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg absent")
+def test_un_plan_recolle_prend_le_niveau_sonore_du_film(h3, tmp_path):
+    """Film campus, 30/09 : le plan 5, une coupe, 5 à 6 dB sous les quatre premiers.
+    « applique au studio de façon systématique » : chaque recollage harmonise."""
+    m = h3.montage
+
+    def clip(nom, volume, frequence=440):
+        f = tmp_path / nom
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=24",
+                        "-f", "lavfi", "-i", "sine=frequency=%d" % frequence, "-t", "3", "-af", "volume=%s" % volume,
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(f)], check=True)
+        return f
+    fort, faible = clip("fort.mp4", "0.5"), clip("faible.mp4", "0.05", 660)
+    assert m.sonie(fort) - m.sonie(faible) == pytest.approx(20, abs=1)
+    assert m.gain_de_suite(fort, faible) == m.ECART_SONIE_MAX_DB   # 20 dB d'écart, 12 au plus
+    moyen = clip("moyen.mp4", "0.25", 660)   # 6 dB sous le fort : comblés entièrement
+    assert m.gain_de_suite(fort, moyen) == pytest.approx(m.sonie(fort) - m.sonie(moyen), abs=0.01)
+    film = tmp_path / "film.mp4"
+    film.write_bytes(m.recoller_son(fort.read_bytes(), faible.read_bytes(), 0))
+    avant, apres = m.sonie(fort), m.sonie(film, 3.2)
+    # Au plus 12 dB de gain : le plan faible remonte de 12 dB, pas de 20.
+    assert apres == pytest.approx(m.sonie(faible) + m.ECART_SONIE_MAX_DB, abs=1) and apres < avant
+    # Deux plans au même niveau : rien n'est touché.
+    assert m.gain_de_suite(fort, clip("pareil.mp4", "0.5", 660)) == 0.0
+    # Un plan muet ne se pousse pas.
+    muet = clip("muet.mp4", "0")
+    assert m.sonie(muet) is None and m.gain_de_suite(fort, muet) == 0.0
+
+
 def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3, monkeypatch):
     """30/09 : une suite partait de la dernière image seule, en texte brut ; Marc y était
     réinventé, sa voix aussi. Elle garde maintenant ses fiches quand elles tiennent."""
