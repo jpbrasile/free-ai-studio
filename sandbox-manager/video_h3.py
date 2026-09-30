@@ -3192,7 +3192,8 @@ async function lancerAgrandir(b, etat, jid, sid, echelle){
 // visage est recadré, regénéré par H3 d'après les photos de sa fiche, puis recollé.
 // Deux personnages au plus ; le prix d'abord, la location sur un clic.
 const PLACES = {left_most: "le plus à gauche", right_most: "le plus à droite", centre_most: "au centre",
-  largest_face: "le plus grand visage", smallest_face: "le plus petit visage"};
+  largest_face: "le plus grand visage", largest_face_2: "le 2e plus grand visage",
+  smallest_face: "le plus petit visage"};
 
 async function blocVisages(ou, jid, sid){
   const b = document.getElementById(ou);
@@ -3281,7 +3282,8 @@ async function lancerVisages(b, etat, corps){
   const suivreVisages = async () => {
     const j = await (await fetch("/video/jobs/" + d.id, {headers: H})).json();
     if (j.status === "succeeded" && j.video_url){
-      etat.textContent = "Visages refaits en " + fr((Date.now() - debut) / 60000, 0) + " min. ";
+      etat.textContent = "Visages refaits en " + fr((Date.now() - debut) / 60000, 0) + " min. "
+        + (j.avertissements || []).map(x => "⚠ " + x + " ").join("");
       const v = document.createElement("video");
       v.src = j.video_url;
       v.controls = true;

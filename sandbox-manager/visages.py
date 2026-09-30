@@ -24,6 +24,7 @@ Temps et prix : le dépôt n'en publie aucun ; ceux ci-dessous viennent du premi
 essai par le Studio, le 30/09/2026.
 """
 import base64
+import re
 
 import budget_modal
 import video_h3
@@ -58,7 +59,12 @@ PHOTOS_PAR_SUJET = 3
 VIDEO_MAX_OCTETS = 60 * 1024 * 1024
 # Valeurs des exemples du dépôt, sauf les pas : 4, ceux de notre LoRA Turbo.
 DEBRUITAGE = 0.4
-CHOIX = ("left_most", "right_most", "centre_most", "largest_face", "smallest_face")
+# « largest_face_2 » : le 2e plus grand visage (select_index 1). Essai du 30/09, parc
+# plans 1 et 4 : « right_most » a pris un passant au fond (visage de 6-7 px) au lieu de
+# Marc ; les deux personnages sont les deux plus grands visages, les passants non.
+CHOIX = ("left_most", "right_most", "centre_most", "largest_face", "largest_face_2", "smallest_face")
+# Sous cette hauteur moyenne, le visage suivi est sans doute un passant du fond.
+VISAGE_MINUSCULE_PX = 12
 
 
 def estimation_s(images: int, sujets: int) -> float:
@@ -114,8 +120,8 @@ def graphe(sujets: list, prefixe: str = "visages/v") -> dict:
             "images": images, "detector": DETECTEUR, "confidence": 0.35, "crop_factor": 3.0,
             "canvas_width": 768, "canvas_height": 768, "canvas_mode": "auto_capped_768",
             "smooth_window": 21, "size_smooth_window": 51, "smooth_method": "gaussian", "size_mode": "per_frame",
-            "identity_track": False, "select": choix, "fallback_detector": "none", "cut_detection": "none",
-            "absent_shots": "off"})
+            "identity_track": False, "select": choix.removesuffix("_2"), "select_index": int(choix.endswith("_2")),
+            "fallback_detector": "none", "cut_detection": "none", "absent_shots": "off"})
         entrees = {"clip": ["5", 0], "vae": ["6", 0], "audio_vae": ["7", 0], "prompt": invite(nb),
                    "ref_image_size": "match", "width": [k(1), 4], "height": [k(1), 5], "length": [k(1), 6]}
         for i in range(nb):
@@ -195,6 +201,21 @@ def demande(video: bytes, sujets: list, de: int, a: int) -> dict:
 
 def construire_script(video: bytes, sujets: list, de: int, a: int) -> str:
     return video_h3._emballer(_SCRIPT, demande(video, sujets, de, a))
+
+
+def avertissements(rapports: list, noms: list) -> list:
+    """Ce que le rapport du suiveur dit d'un mauvais choix, passe par passe (dans
+    l'ordre de `noms`) : un visage minuscule, ou un visage trouvé sur peu d'images."""
+    tailles = [float(m.group(1)) for m in (re.search(r"face height .*mean=([0-9.]+)px", l) for l in rapports) if m]
+    trouves = [int(m.group(1)) for m in (re.search(r"frames=\d+ +face=\d+ \((\d+)%\)", l) for l in rapports) if m]
+    dits = []
+    for nom, taille, part in zip(noms, tailles, trouves):
+        if taille < VISAGE_MINUSCULE_PX:
+            dits.append("%s : le visage suivi ne fait que %d px de haut, sans doute un passant du fond. "
+                        "Refaites avec une autre place (par exemple « 2e plus grand visage »)." % (nom, taille))
+        elif part < 50:
+            dits.append("%s : visage trouvé sur %d %% des images seulement ; le reste est deviné." % (nom, part))
+    return dits
 
 
 def phrase_d_echec(stderr: str) -> str:
@@ -343,7 +364,7 @@ if not sortis:
     echouer(6, "CALCUL_ECHOUE", "aucun fichier rendu")
 shutil.copyfile(sortis[-1], OUT / "video.mp4")
 resume = {"de": de, "a": a, "calcul_s": calcul_s, "demarrage_comfy_s": round(t_pret - t0, 1),
-          "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "rapports": rapports[-20:]}
+          "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "rapports": rapports[-80:]}
 (OUT / "resume.json").write_text(json.dumps(resume, ensure_ascii=False))
 print("VISAGES " + json.dumps(resume, ensure_ascii=False), flush=True)
 '''

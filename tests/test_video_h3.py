@@ -3323,3 +3323,21 @@ def test_la_page_propose_de_refaire_les_visages(h3):
     assert 'id="clip_visages"' in page and 'id="montage_visages"' in page
     assert "/video-h3/visages/prix?job=" in page and "Refaire les visages" in page
     assert page.count("blocVisages(") >= 4
+
+
+def test_visages_le_2e_plus_grand_et_l_avertissement_du_passant(h3):
+    """30/09, parc plans 1 et 4 : « right_most » a suivi un passant de 7 px au lieu de Marc."""
+    vi = h3.visages
+    g = vi.graphe([("left_most", 1), ("largest_face_2", 1)])
+    assert (g["101"]["inputs"]["select"], g["101"]["inputs"]["select_index"]) == ("left_most", 0)
+    assert (g["201"]["inputs"]["select"], g["201"]["inputs"]["select_index"]) == ("largest_face", 1)
+    rapports = ["[H3FaceRefine] frames=124  face=124 (100%)  body-fallback=0  interpolated=0",
+                "[H3FaceRefine] face height  min=30px  mean=34px  max=40px",
+                "[H3FaceRefine] frames=124  face=16 (13%)  body-fallback=0  interpolated=108",
+                "[H3FaceRefine] face height  min=7px  mean=7px  max=7px"]
+    dits = vi.avertissements(rapports, ["Leila", "Marc"])
+    assert len(dits) == 1 and dits[0].startswith("Marc") and "7 px" in dits[0]
+    assert vi.avertissements(rapports[:2], ["Leila"]) == []
+    job = {"stdout": "x\nVISAGES " + json.dumps({"rapports": rapports}), "video": {"sujets": [{"fiche": "?"}] * 2}}
+    h3._visages_avertir(job)
+    assert "Personnage 2" in job["avertissements"][0]

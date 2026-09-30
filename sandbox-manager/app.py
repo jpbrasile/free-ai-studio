@@ -3782,6 +3782,8 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         # Ou ce clip a ete fabrique, et pourquoi la. Deux mots sur la page,
         # et de quoi ne pas refaire le raisonnement six mois plus tard.
         "ou_calculer": job.get("ou_calculer"),
+        # Ce que le suiveur de visages dit d'un mauvais choix (visages.avertissements).
+        "avertissements": job.get("avertissements") or [],
     }
     if fichiers.get("video"):
         sortie["video_url"] = f"/video/jobs/{jid}/fichier?cle={jeton_video(jid)}"
@@ -4484,11 +4486,27 @@ def run_visages(jid: str, code: str, delai: int):
                                       coeurs=visages.COEURS)
         job = read_job(jid)
         job["budget"] = etat
+        _visages_avertir(job)
         if job.get("status") == "failed" and not job.get("error"):
             phrase = visages.phrase_d_echec(job.get("stderr", ""))
             if phrase:
                 job["error"] = phrase
         write_job(jid, job)
+
+
+def _visages_avertir(job: dict) -> None:
+    """Relit le rapport du suiveur : un passant suivi à la place du personnage se voit là."""
+    ligne = next((l for l in (job.get("stdout") or "").splitlines() if l.startswith("VISAGES ")), "")
+    try:
+        rapports = json.loads(ligne[len("VISAGES "):]).get("rapports") or []
+    except ValueError:
+        return
+    connues = {f["id"]: f["nom"] for f in video_h3.fiches_liste()}
+    noms = [connues.get(s.get("fiche"), "Personnage %d" % (i + 1))
+            for i, s in enumerate((job.get("video") or {}).get("sujets") or [])]
+    dits = visages.avertissements(rapports, noms)
+    if dits:
+        job["avertissements"] = dits
 
 
 @app.post("/video-h3/visages")
