@@ -71,6 +71,7 @@ import poids_video
 import video
 import video_h3
 import visages
+import voix_langue
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("sandbox-manager")
@@ -4916,11 +4917,13 @@ def _fiches_du_scenario(commun: dict) -> list:
         except ValueError:
             continue
         fiches.append({"id": f["id"], "nom": f["nom"], "description": f["description"],
-                       "genre": f.get("genre") or "personne", "voix": f.get("voix")})
+                       "genre": f.get("genre") or "personne", "voix": f.get("voix"),
+                       "voix_langues": f.get("voix_langues") or {}})
     return fiches
 
 
-def _voix_envoyees(plan: dict, fiches: list) -> set:
+def _voix_envoyees(plan: dict, fiches: list, langues: dict | None = None,
+                   langue: str = video_h3.LANGUE_PAROLES) -> set:
     """Les fiches dont la voix part VRAIMENT avec ce plan, comme _scenario_prepare et
     video_h3.preparer les choisissent : aucune quand les photos ne tiennent pas avec l'image
     (de départ ou dernière du plan d'avant) ; sinon les VOIX_PAR_PLAN premières personnes à
@@ -4935,10 +4938,13 @@ def _voix_envoyees(plan: dict, fiches: list) -> set:
         if not 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
             return set()
     objets = {k: f.get("genre") for k, f in enumerate(fiches) if f.get("genre", "personne") != "personne"}
-    parlent = video_h3.rangs_qui_parlent((plan.get("image_paroles", ""), plan.get("ambiance", "")),
-                                         [(f["nom"], "English") for f in fiches], objets)
-    avec_voix = [f["id"] for k, f in enumerate(fiches) if k not in objets and f.get("voix") and k in parlent]
-    return set(avec_voix[:video_h3.VOIX_PAR_PLAN])
+    # Une voix par langue parlée (30/09), choisie comme video_h3.preparer la choisit.
+    sujets = [(f["nom"], (langues or {}).get(f["id"]) or langue) for f in fiches]
+    dites = []
+    for t in (plan.get("image_paroles", ""), plan.get("ambiance", "")):
+        video_h3.attribuer_repliques(t, sujets, objets=objets, releve=dites)
+    parlants = [{} if k in objets else f for k, f in enumerate(fiches)]
+    return {fiches[k]["id"] for k, _l in video_h3.voix_du_plan(dites, parlants)}
 
 
 async def _controle_image(image: bytes, attendus: list, absents: list, personnes: list, quoi: str,
@@ -5009,7 +5015,9 @@ async def _verifier_scenario(plans: list, commun: dict, continuite=None) -> list
         continuite = await _continuite(plans, _histoire(plans))
     texte = regles.regles_texte(plans, continuite, fiches, commun.get("langues") or {},
                                 commun.get("langue") or video_h3.LANGUE_PAROLES,
-                                [_voix_envoyees(p, fiches) for p in plans])
+                                [_voix_envoyees(p, fiches, commun.get("langues") or {},
+                                                commun.get("langue") or video_h3.LANGUE_PAROLES)
+                                 for p in plans])
     rapport = []
     for k, (plan, r) in enumerate(zip(plans, texte), 1):
         if plan.get("enchainement") == "coupe" and plan.get("image_depart"):
@@ -5739,6 +5747,13 @@ def _fiche_publique(fiche: dict, avec_images: bool = True) -> dict:
     if son:
         d["voix"] = dict(fiche["voix"], son="data:audio/wav;base64," + base64.b64encode(son).decode()
                          if avec_images else True)
+    # La même voix dans d'autres langues (30/09).
+    d["voix_langues"] = {}
+    for langue, infos in (fiche.get("voix_langues") or {}).items():
+        son = video_h3.fiche_voix(fiche["id"], langue) if avec_images else b"-"
+        if son:
+            d["voix_langues"][langue] = dict(infos, son="data:audio/wav;base64," + base64.b64encode(son).decode()
+                                             if avec_images else True)
     return d
 
 
@@ -5861,6 +5876,142 @@ def video_h3_fiche_voix_retirer(fid: str, authorization: Optional[str] = Header(
     _h3_ou_404()
     auth(authorization)
     return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_retirer_voix(fid)))
+
+
+# --- La voix d'une fiche dans une autre langue (30/09) ---------------------------
+# Demande du propriétaire : « Leila part d'une voix française et la transforme en anglais,
+# à l'inverse pour l'américain ». FireRedTTS3 lit la phrase neutre de l'autre langue avec
+# le timbre de la fiche (voix_langue.py) ; le Whisper du Studio vérifie ensuite qu'elle
+# dit bien la phrase avant qu'elle soit posée.
+VOIX_LANGUE_SEUIL = 0.8   # part des mots de la phrase entendus
+
+
+def _transcrire_voix(octets: bytes) -> str | None:
+    """Ce que dit un son (Whisper du Studio, par le routeur) ; None si l'écoute manque."""
+    cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
+    if not cle:
+        return None
+    try:
+        r = httpx.post(ROUTEUR_INTERNE + "/v1/audio/transcriptions",
+                       headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
+                       files={"file": ("voix.wav", octets, "audio/wav")}, data={"model": "whisper-1"},
+                       timeout=300)
+        t = r.json().get("text") if r.status_code < 400 else None
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    return t if isinstance(t, str) else None
+
+
+def _artefact(job: dict, nom: str) -> bytes | None:
+    for a in job.get("artifacts") or []:
+        if a.get("name") == nom or str(a.get("name", "")).endswith("-" + nom):
+            m = ART / f"{a['id']}.json"
+            if m.exists():
+                p = ART / json.loads(m.read_text(encoding="utf-8"))["path"]
+                if p.is_file() and not p.is_symlink():
+                    return p.read_bytes()
+    return None
+
+
+def run_voix_langue(jid: str, fid: str, langue: str, code: str) -> None:
+    """Le clonage chez Modal (encaissé même en échec), puis l'écoute, puis la fiche."""
+    debut = time.time()
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
+    write_job(jid, job)
+    try:
+        finish_execution(jid, "modal", modal_execute(
+            jid, code, True, True, gpu_type=voix_langue.GPU_MODAL, timeout_s=voix_langue.DUREE_MAX_S,
+            memory_mb=voix_langue.MEMOIRE_MB, paquets=voix_langue.PAQUETS_MODAL, apt=voix_langue.APT_MODAL,
+            commandes=voix_langue.COMMANDES_MODAL, volume=voix_langue.VOLUME_MODELES,
+            usage=None))   # compté juste en dessous
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        etat = voix_langue.budget_consommer(time.time() - debut, cle=jid)
+        job = read_job(jid)
+        job["budget"] = etat
+        write_job(jid, job)
+    job = read_job(jid)
+    if job.get("status") != "succeeded":
+        return
+    wav = _artefact(job, "voix.wav")
+    erreur = None
+    try:
+        if not wav:
+            raise ValueError("La machine louée n'a pas rendu de voix.")
+        propre, duree = montage.voix_de_reference(wav, video_h3.VOIX_MAX_S)
+        phrase = video_h3.PHRASE_VOIX[langue]
+        entendu = _transcrire_voix(propre)
+        ecoute = video_h3.comparer_paroles("« %s »" % phrase, entendu or "") if entendu is not None else None
+        if ecoute and (ecoute.get("part") or 0) < VOIX_LANGUE_SEUIL:
+            raise ValueError("La voix clonée ne dit pas la phrase (%d %% des mots entendus : « %s ») : "
+                             "elle n'est pas posée." % (round(100 * (ecoute.get("part") or 0)), entendu[:200]))
+        infos = {"source": "clonee", "moteur": "%s@%s" % (voix_langue.MODELE["hf"], voix_langue.MODELE["revision"][:12]),
+                 "ecoute": None if ecoute is None else {"part": ecoute.get("part"), "entendu": entendu[:300]}}
+        video_h3.fiche_poser_voix_langue(fid, langue, propre, duree, infos)
+    except (ValueError, montage.MontageImpossible) as exc:
+        erreur = str(exc)
+    job = read_job(jid)
+    if erreur:
+        job.update({"status": "failed", "error": erreur[:1000]})
+    else:
+        job["voix_posee"] = {"fiche": fid, "langue": langue}
+    write_job(jid, job)
+
+
+@app.post("/video-h3/fiches/{fid}/voix/langue")
+async def video_h3_fiche_voix_langue(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """{langue} : la voix de la fiche, clonée dans cette langue par FireRedTTS3 sur Modal.
+    Rien n'est loué si le prix au pire dépasse ce qui reste."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    langue = str((corps if isinstance(corps, dict) else {}).get("langue") or "")
+    fiche = _fiche_ou_400(lambda: video_h3.fiche_lire(fid))
+    voix = fiche.get("voix") or {}
+    if not voix.get("langue"):
+        raise HTTPException(400, "Posez d'abord la voix de la fiche, avec sa langue.")
+    if langue not in video_h3.PHRASE_VOIX:
+        raise HTTPException(400, "La voix clonée existe en français et en anglais.")
+    if langue == voix["langue"]:
+        raise HTTPException(400, "La voix de la fiche est déjà dans cette langue.")
+    son = video_h3.fiche_voix(fid)
+    # Le texte dit par la voix d'origine : la phrase du Studio, sinon ce qu'en entend Whisper.
+    texte = video_h3.PHRASE_VOIX.get(voix["langue"]) if voix.get("source") == "generee" else None
+    if not texte:
+        texte = await asyncio.to_thread(_transcrire_voix, son)
+    if not texte or not texte.strip():
+        raise HTTPException(503, "L'écoute du Studio n'a pas pu lire la voix d'origine : réessayez plus tard.")
+    try:
+        code = voix_langue.construire_script(voix_langue.demande(
+            son, texte, voix["langue"], video_h3.PHRASE_VOIX[langue], langue))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _modal_ou_refus()
+    try:
+        devis = voix_langue.budget_verifier()
+    except budget_modal.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid, "provider": "modal", "title": "Voix de %s en %s" % (fiche["nom"], video_h3.LANGUES_PAROLES[langue]),
+        "gpu": True, "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+        "voix_langue": {"fiche": fid, "langue": langue, "depuis": voix["langue"],
+                        "cout_max_usd": devis.get("cout_max_usd")},
+    })
+    threading.Thread(target=run_voix_langue, args=(jid, fid, langue, code), daemon=True).start()
+    return read_job(jid)
+
+
+@app.delete("/video-h3/fiches/{fid}/voix/langue/{langue}")
+def video_h3_fiche_voix_langue_retirer(fid: str, langue: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_retirer_voix_langue(fid, langue)))
 
 
 async def _voix_du_studio(texte: str) -> bytes:

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import os
 import random
@@ -205,15 +206,125 @@ _REPLIQUE_OU_BALISE = re.compile(_PAROLES.pattern + r"|<d>\s*(?:\[[^\]]*\]\s*)?(
 _NOM_DE_LANGUE = {**{k.lower(): k for k in LANGUES_PAROLES}, **{v: k for k, v in LANGUES_PAROLES.items()}}
 
 
+# L'émotion d'une réplique (30/09, demande du propriétaire : « l'utilisation des émotions
+# dans H3 »). FireRedTTS3 n'en met aucune sur une voix clonée (article des auteurs,
+# arXiv 2608.17492) ; H3 si : il prend le TIMBRE de <Audio j> et le ton écrit à côté de
+# la réplique — « <Subject 3> (S1), using the clear youthful voice timbre referenced from
+# <Audio 1>, exclaims with light annoyance » (VIDEO_PROMPT_WRITING_GUIDE_ref_en.md).
+# La marque se met en tête de la réplique, avec ou sans langue :
+# « [anglais, joie] I made the team! », « [tristesse] Elle n'est pas venue… ».
+# Chaque émotion : son nom sur la page, puis le ton que lit H3.
+EMOTIONS = {
+    "joie": ("joie", "overjoyed, bursting with happiness"),
+    "tristesse": ("tristesse", "sadly, the voice close to tears"),
+    "colere": ("colère", "angrily, the voice tense and raised"),
+    "peur": ("peur", "fearfully, the voice trembling"),
+    "surprise": ("surprise", "in surprise, the voice rising"),
+    "calme": ("calme", "calmly and gently"),
+    "tendresse": ("tendresse", "tenderly and softly"),
+    "enthousiasme": ("enthousiasme", "enthusiastically, full of energy"),
+    "ironie": ("ironie", "with an amused, ironic cadence"),
+    "gene": ("gêne", "awkwardly, hesitating"),
+    "fatigue": ("fatigue", "wearily, tired"),
+    "rire": ("rire", "laughing while speaking"),
+    "chuchote": ("chuchoté", "in a whisper"),
+    "crie": ("crié", "shouting"),
+}
+# Les autres mots qu'on écrit pour la même émotion, en français et en anglais (sans accents).
+_EMOTION_SYNONYMES = {
+    "joyeux": "joie", "joyeuse": "joie", "heureux": "joie", "heureuse": "joie", "joy": "joie",
+    "happy": "joie", "joyful": "joie", "triste": "tristesse", "sad": "tristesse", "sadness": "tristesse",
+    "en colere": "colere", "fache": "colere", "fachee": "colere", "angry": "colere", "anger": "colere",
+    "effraye": "peur", "effrayee": "peur", "apeure": "peur", "apeuree": "peur", "fear": "peur",
+    "scared": "peur", "afraid": "peur", "surpris": "surprise", "surprised": "surprise", "calm": "calme",
+    "tendre": "tendresse", "tender": "tendresse", "enthousiaste": "enthousiasme",
+    "enthusiastic": "enthousiasme", "excited": "enthousiasme", "ironique": "ironie", "ironic": "ironie",
+    "gene": "gene", "genee": "gene", "awkward": "gene", "fatigue": "fatigue", "fatiguee": "fatigue",
+    "tired": "fatigue", "en riant": "rire", "riant": "rire", "laughing": "rire", "chuchote": "chuchote",
+    "chuchotee": "chuchote", "murmure": "chuchote", "whisper": "chuchote", "whispering": "chuchote",
+    "cri": "crie", "criee": "crie", "shouting": "crie", "shout": "crie",
+    # Les noms anglais que MARQUES apprend au chat du Studio.
+    "tenderness": "tendresse", "enthusiasm": "enthousiasme", "irony": "ironie", "awkwardness": "gene",
+    "tiredness": "fatigue",
+}
+EMOTIONS_ANGLAIS = ("joy", "sadness", "anger", "fear", "surprise", "calm", "tenderness", "enthusiasm",
+                    "irony", "awkwardness", "tiredness", "laughing", "whisper", "shouting")
+
+# Ce que le chat du Studio sait de la marque (découpage, correction, traduction de
+# l'histoire). Demande du propriétaire, 30/09 : « le LLM qui crée le script connaît
+# cette syntaxe pour produire les scripts ». Chaque réplique porte la langue de SES
+# mots : un personnage qui passe au français garde ainsi la bonne voix (règle 4).
+MARQUES = ("Each line of dialogue starts, inside its « », with a mark in square brackets: the language its words "
+           "are in, then, when the script says or clearly shows how the line is said, one emotion, e.g. "
+           "« [English, joy] I made the team! » or « [French, sadness] Elle n'est pas venue… ». Languages: "
+           + ", ".join(LANGUES_PAROLES) + ". Emotions: " + ", ".join(EMOTIONS_ANGLAIS) + ". Keep every mark "
+           "already written; add a missing one; never change the words of the line itself. ")
+
+
+def _sans_accents(mot: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", mot) if unicodedata.category(c) != "Mn")
+
+
+def emotion_connue(mot: str):
+    """La clé de EMOTIONS pour ce mot (« joyeuse », « sad »…), sinon None."""
+    m = " ".join(_sans_accents(str(mot or "")).lower().split())
+    return m if m in EMOTIONS else _EMOTION_SYNONYMES.get(m)
+
+
+_MARQUE = re.compile(r"\s*\[([^\]]+)\]\s*(.*)", re.S)
+
+
+def _lire_marque(contenu: str):
+    """(langue, émotion) si chaque morceau de la marque est une langue ou une émotion
+    connue, une de chaque au plus ; sinon None (ce n'est pas une marque)."""
+    langue = emotion = None
+    for morceau in re.split(r"[,;/|+]", contenu):
+        mot = morceau.strip().lower()
+        if not mot:
+            return None
+        if mot in _NOM_DE_LANGUE and langue is None:
+            langue = _NOM_DE_LANGUE[mot]
+        elif emotion_connue(mot) and emotion is None:
+            emotion = emotion_connue(mot)
+        else:
+            return None
+    return langue, emotion
+
+
+def marque_de_replique(dite: str, defaut: str) -> tuple:
+    """(langue, émotion ou None, réplique sans la marque)."""
+    m = _MARQUE.match(dite)
+    lue = _lire_marque(m.group(1)) if m else None
+    if lue:
+        return lue[0] or defaut, lue[1], m.group(2).strip()
+    return defaut, None, dite
+
+
 def langue_de_replique(dite: str, defaut: str) -> tuple:
     """Une réplique peut dire sa langue en tête : « [English] Nice to meet you! »
     ou « [anglais] … ». Le même personnage passe ainsi d'une langue à l'autre,
-    de la même voix (essai du 28/09).
+    de la même voix (essai du 28/09). La marque peut aussi porter une émotion
+    (« [anglais, joie] », 30/09) : elle est retirée ici avec la langue.
     Rend (langue, réplique sans la marque)."""
-    m = re.match(r"\s*\[([^\]]+)\]\s*(.*)", dite, re.S)
-    if m and m.group(1).strip().lower() in _NOM_DE_LANGUE:
-        return _NOM_DE_LANGUE[m.group(1).strip().lower()], m.group(2).strip()
-    return defaut, dite
+    langue, _emotion, reste = marque_de_replique(dite, defaut)
+    return langue, reste
+
+
+def marques_inconnues(texte: str) -> list:
+    """Les marques en tête de réplique qui ne se lisent pas (« [joyeus] ») : elles seraient
+    DITES par le personnage. La page refuse avant de lancer."""
+    fautes = []
+    for m in _PAROLES.finditer(str(texte or "")):
+        dite = next(g for g in m.groups() if g)
+        tete = _MARQUE.match(dite)
+        if tete and not _lire_marque(tete.group(1)) and len(tete.group(1)) <= 40:
+            fautes.append(tete.group(1).strip())
+    return fautes
+
+
+def _ton(emotion) -> str:
+    """Le ton lu par H3, avec ses virgules : « , overjoyed, bursting with happiness, »."""
+    return ", %s," % EMOTIONS[emotion][1] if emotion else ""
 
 
 def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(S1)") -> str:
@@ -223,8 +334,8 @@ def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(
         return texte
 
     def balise(m):
-        sa_langue, dite = langue_de_replique(next(g for g in m.groups() if g), langue)
-        return f"{locuteur} <d>[{sa_langue}] {dite}</d>"
+        sa_langue, emotion, dite = marque_de_replique(next(g for g in m.groups() if g), langue)
+        return f"{locuteur}{_ton(emotion)} <d>[{sa_langue}] {dite}</d>"
     return _PAROLES.sub(balise, texte)
 
 
@@ -241,7 +352,8 @@ def _motif_nom(nom: str) -> str:
 _SANS_ARTICLE = re.compile(r"\b(?:the|a|an)\s+(<Subject \d+>)", re.I)
 
 
-def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, objets=()) -> str:
+def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, objets=(),
+                        audios=None, releve=None) -> str:
     """Plusieurs personnages (guide de MiniMax, ref-en.txt, 5.4) : `sujets` est la
     liste des (nom, langue) dans l'ordre des <Subject N>.
 
@@ -257,7 +369,13 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, obj
     Sinon, la réplique porte `<Subject N> (Sx) <d>[langue] …</d>`.
 
     `garder_noms` : le clip part d'une image de départ, sans photos de fiche à
-    désigner ; les noms restent des noms, seuls les (Sx) et les langues sont posés."""
+    désigner ; les noms restent des noms, seuls les (Sx) et les langues sont posés.
+
+    Une marque « [langue, émotion] » en tête de réplique (30/09) : la langue va dans
+    `<d>[…]`, l'émotion devient le ton écrit devant, forme du guide de MiniMax.
+    `audios` : {rang : {langue : numéro de <Audio j>}} ; un personnage qui a DEUX voix
+    dans le plan (une par langue) reçoit, à chaque réplique, celle de sa langue.
+    `releve` : liste où ajouter (rang, langue) de chaque réplique, dans l'ordre."""
     texte = str(texte or "")
     repliques_vues = list(_PAROLES.finditer(texte))
     dans_une_replique = [(m.start(), m.end()) for m in repliques_vues]
@@ -294,10 +412,19 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, obj
             sortie.append((texte[debut:fin] if garder_noms else f"<Subject {valeur + 1}>") + marque)
         else:
             k = parleur[debut]
-            sa_langue, dite = langue_de_replique(next(g for g in valeur.groups() if g), sujets[k][1])
-            qui = "" if debut in dit_par_son_nom else "%s (S%d) " % (
-                sujets[k][0] if garder_noms else f"<Subject {k + 1}>", locuteurs[k])
-            sortie.append(f"{qui}<d>[{sa_langue}] {dite}</d>")
+            sa_langue, emotion, dite = marque_de_replique(next(g for g in valeur.groups() if g), sujets[k][1])
+            if releve is not None:
+                releve.append((k, sa_langue))
+            siennes = (audios or {}).get(k) or {}
+            timbre = (", using the voice timbre referenced from <Audio %d>," % siennes[sa_langue]
+                      if len(siennes) > 1 and sa_langue in siennes else "")
+            ton = (timbre[:-1] + _ton(emotion)) if timbre and emotion else (timbre or _ton(emotion))
+            if debut in dit_par_son_nom:
+                sortie.append(f"{ton.strip(', ')}, <d>[{sa_langue}] {dite}</d>" if ton
+                              else f"<d>[{sa_langue}] {dite}</d>")
+            else:
+                qui = "%s (S%d)" % (sujets[k][0] if garder_noms else f"<Subject {k + 1}>", locuteurs[k])
+                sortie.append(f"{qui}{ton} <d>[{sa_langue}] {dite}</d>")
     sortie.append(texte[pos:])
     return "".join(sortie)
 
@@ -672,6 +799,48 @@ def fiche_poser_voix(fid, wav: bytes, duree_s: float, source: str, langue: str) 
     (_dossier_fiche(fid) / VOIX_FICHIER).write_bytes(wav)
     fiche["voix"] = {"source": source, "duree_s": duree_s, "langue": langue,
                      "pose_le": time.strftime("%Y-%m-%d %H:%M:%S")}  # date-machine
+    # Les voix des autres langues venaient de l'ancienne : elles ne lui ressemblent plus.
+    _retirer_voix_langues(fiche)
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+# La même voix dans d'autres langues (30/09) : clonée par FireRedTTS3 (voix_langue.py)
+# depuis la voix de la fiche. Leila parle anglais avec SON timbre ; l'Américain parle
+# français avec le sien, accent compris. Une par langue, à côté de la voix d'origine.
+def _fichier_voix_langue(langue: str) -> str:
+    return "voix_%s.wav" % langue
+
+
+def fiche_poser_voix_langue(fid, langue: str, wav: bytes, duree_s: float, infos: dict) -> dict:
+    fiche = fiche_lire(fid)
+    if not fiche.get("voix"):
+        raise ValueError("La fiche n'a pas encore de voix : posez-la d'abord.")
+    if langue not in LANGUES_PAROLES or langue == fiche["voix"].get("langue"):
+        raise ValueError("Langue de voix inconnue.")
+    if duree_s < VOIX_MIN_S:
+        raise ValueError(f"Voix trop courte : {VOIX_MIN_S:g} s de parole au moins.")
+    (_dossier_fiche(fid) / _fichier_voix_langue(langue)).write_bytes(wav)
+    fiche.setdefault("voix_langues", {})[langue] = dict(
+        infos, duree_s=duree_s, depuis=fiche["voix"].get("langue"),
+        pose_le=time.strftime("%Y-%m-%d %H:%M:%S"))  # date-machine
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def _retirer_voix_langues(fiche: dict, langue: str | None = None) -> None:
+    for l in [langue] if langue else list(fiche.get("voix_langues") or {}):
+        (_dossier_fiche(fiche["id"]) / _fichier_voix_langue(l)).unlink(missing_ok=True)
+        (fiche.get("voix_langues") or {}).pop(l, None)
+    if not fiche.get("voix_langues"):
+        fiche.pop("voix_langues", None)
+
+
+def fiche_retirer_voix_langue(fid, langue: str) -> dict:
+    fiche = fiche_lire(fid)
+    if langue not in (fiche.get("voix_langues") or {}):
+        raise ValueError("Cette fiche n'a pas de voix dans cette langue.")
+    _retirer_voix_langues(fiche, langue)
     _fiche_ecrire(fiche)
     return fiche
 
@@ -679,15 +848,48 @@ def fiche_poser_voix(fid, wav: bytes, duree_s: float, source: str, langue: str) 
 def fiche_retirer_voix(fid) -> dict:
     fiche = fiche_lire(fid)
     fiche.pop("voix", None)
+    _retirer_voix_langues(fiche)
     (_dossier_fiche(fid) / VOIX_FICHIER).unlink(missing_ok=True)
     _fiche_ecrire(fiche)
     return fiche
 
 
-def fiche_voix(fid) -> bytes | None:
+def langues_de_voix(fiche: dict) -> list:
+    """Les langues où la fiche a une voix : celle d'origine d'abord."""
+    d = [fiche["voix"]["langue"]] if (fiche.get("voix") or {}).get("langue") else []
+    return d + [l for l in (fiche.get("voix_langues") or {}) if l not in d]
+
+
+def fiche_voix(fid, langue: str | None = None) -> bytes | None:
+    """La voix d'origine ; avec `langue`, celle de cette langue (None s'il n'y en a pas)."""
     fiche = fiche_lire(fid)
-    chemin = _dossier_fiche(fid) / VOIX_FICHIER
-    return chemin.read_bytes() if fiche.get("voix") and chemin.is_file() else None
+    if not fiche.get("voix"):
+        return None
+    if langue and langue != fiche["voix"].get("langue"):
+        if langue not in (fiche.get("voix_langues") or {}):
+            return None
+        chemin = _dossier_fiche(fid) / _fichier_voix_langue(langue)
+    else:
+        chemin = _dossier_fiche(fid) / VOIX_FICHIER
+    return chemin.read_bytes() if chemin.is_file() else None
+
+
+def voix_du_plan(dites: list, fiches: list) -> list:
+    """Les voix qui partent avec un plan : [(rang, langue de la voix)], VOIX_PAR_PLAN au plus.
+    `dites` : (rang, langue) de chaque réplique, dans l'ordre (attribuer_repliques, releve) ;
+    `fiches` : dicts avec « voix » et « voix_langues ». Par personnage, dans l'ordre des
+    fiches, la voix de chaque langue qu'il parle ; faute de celle-là, sa voix d'origine
+    (une seule fois) — le timbre au moins, comme avant le 30/09."""
+    choisies = []
+    for k, fiche in enumerate(fiches):
+        if not fiche.get("voix"):
+            continue
+        a = langues_de_voix(fiche) or [None]
+        for _k, langue in [d for d in dites if d[0] == k]:
+            voix = langue if langue in a else a[0]
+            if (k, voix) not in choisies:
+                choisies.append((k, voix))
+    return choisies[:VOIX_PAR_PLAN]
 
 
 # --- La planche de personnage : la même personne sous tous les angles (28/09) -----
@@ -954,7 +1156,15 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
             continue
         definitions.append(f"<Subject {k + 1}> is the person in {images}.")
         j = (voix or {}).get(k)
-        if j:   # le profil voix (29/09), dans la forme du guide de MiniMax
+        if isinstance(j, dict) and len(j) == 1:
+            j = next(iter(j.values()))
+        if isinstance(j, dict):   # une voix par langue parlée dans ce plan (30/09)
+            for langue, n in j.items():
+                definitions.append(f"<Audio {n}> is the voice-timbre reference for <Subject {k + 1}> "
+                                   f"speaking {langue}.")
+                garde.append(f"<Audio {n}>: reference - its vocal timbre guides the spoken voice of "
+                             f"<Subject {k + 1}> in every {langue} line; the words of <Audio {n}> are never said.")
+        elif j:   # le profil voix (29/09), dans la forme du guide de MiniMax
             definitions.append(f"<Audio {j}> is the voice-timbre reference for <Subject {k + 1}>.")
             garde.append(f"<Audio {j}>: reference - its vocal timbre guides the spoken voice of <Subject {k + 1}> "
                          f"in every line; the words of <Audio {j}> are never said.")
@@ -1037,7 +1247,9 @@ def lire_traduction(reponse: str, payload: dict) -> dict:
 def consigne_histoire_anglais(histoire: str) -> str:
     return ("Translate this story into English, for a film script. Text between quotation marks (« », “ ” or "
             "\" \") is spoken dialogue: copy it EXACTLY, untranslated, with its quotation marks, and keep any "
-            "[language] mark in front of it. Keep every name of a person as it is written. Translate every other "
+            "mark in square brackets in front of it ([language], [emotion] or [language, emotion]); when the "
+            "story says in words how a line is said (happily, in tears, whispering…), keep that too. Keep "
+            "every name of a person as it is written. Translate every other "
             "word, names of places and objects included. Answer with the translated story only, nothing else."
             "\n\n" + histoire)
 
@@ -1348,12 +1560,13 @@ def consigne_decoupage(scenario: str) -> str:
             "Say the framing of each shot; the camera stays at that framing (no zoom, no move) unless the "
             "script asks for a camera movement. %s"
             "Write in the language of the script. Dialogue must be copied EXACTLY from the script, "
-            "between « »; never invent dialogue. For each shot give \"elements\" (the table), "
+            "between « »; never invent dialogue. %s"
+            "For each shot give \"elements\" (the table), "
             "\"image_paroles\" (what we see, "
             "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
             "\"coupe\" for a new camera shot or place, \"suite\" when it continues the previous shot "
             "without a cut. The first shot is \"coupe\". Answer with the JSON array only.\n\n%s"
-            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, scenario))
+            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, scenario))
 
 
 def verifier_plans(plans) -> list:
@@ -1674,7 +1887,8 @@ def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
             "so that the feedback is fixed: be explicit about who is in the frame. Name clothing only when "
             "the story or the shots already give it, and then the same clothing in every shot. Keep the "
             "same number of shots in the same order, keep each \"enchainement\", and copy every line of "
-            "dialogue between « » EXACTLY in its own shot; never add, move or remove dialogue. Change only what "
+            "dialogue between « » EXACTLY in its own shot; never add, move or remove dialogue. " + MARQUES
+            + "Change only what "
             "the feedback requires; write in the language of the shots. "
             # Le 28/09, pour effacer un défaut d'image, la correction a fait asseoir un
             # personnage avant qu'on l'y invite : on change la façon de montrer, pas l'histoire.
@@ -2059,23 +2273,37 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             avec_tenue.add(len(nombres))
         if " ".join(str(ecrites.get(fiche["id"]) or "").split()):
             ecrites_k[len(nombres)] = " ".join(ecrites[fiche["id"]].split())
-        son = fiche_voix(fiche["id"])
-        if son:
-            candidates.append((len(nombres), son))
+        if fiche.get("voix"):
+            candidates.append(len(nombres))
         de_la_fiche += images_fiche
         nombres.append(len(images_fiche))
     image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
+    # Une marque mal écrite (« [joyeus] ») serait DITE par le personnage (30/09).
+    inconnues = marques_inconnues(image_paroles) + marques_inconnues(ambiance)
+    if inconnues:
+        raise ValueError("Marque de réplique inconnue : « [%s] ». Une marque donne la langue et/ou "
+                         "l'émotion (menu « Langue et émotion d'une réplique »)." % inconnues[0])
     if fiches:
         sujets = [(f["nom"], langues.get(f["id"], langue)) for f in fiches]
         # Une voix ne part qu'avec qui parle dans ce plan : envoyée à un personnage muet,
         # H3 le faisait parler quand même (film du parc, 30/09, plan 3).
-        parlent = rangs_qui_parlent((image_paroles, ambiance), sujets, objets)
-        for k, son in candidates:
-            if k in parlent and len(sons) < VOIX_PAR_PLAN:
+        # Et dans la langue de chaque réplique (30/09) : Leila en anglais avec sa voix anglaise.
+        dites = []
+        for t in (image_paroles, ambiance):
+            attribuer_repliques(t, sujets, objets=objets, releve=dites)
+        avec_voix = [f if k in candidates else {} for k, f in enumerate(fiches)]
+        for k, langue in voix_du_plan(dites, avec_voix):
+            son = fiche_voix(fiches[k]["id"], langue)
+            if son:
                 sons.append(base64.b64encode(son).decode())
-                voix_k[k] = len(sons)
-        image_paroles = attribuer_repliques(image_paroles, sujets, garder_noms=not refs, objets=objets)
-        ambiance = attribuer_repliques(ambiance, sujets, garder_noms=not refs, objets=objets)
+                voix_k.setdefault(k, {})[langue] = len(sons)
+        # Chaque réplique nomme la voix de sa langue quand son personnage en a deux ici.
+        audios = {k: dict(v, **{l: v.get(l, next(iter(v.values()))) for _k, l in dites if _k == k})
+                  for k, v in voix_k.items()}
+        image_paroles = attribuer_repliques(image_paroles, sujets, garder_noms=not refs, objets=objets,
+                                            audios=audios if refs else None)
+        ambiance = attribuer_repliques(ambiance, sujets, garder_noms=not refs, objets=objets,
+                                       audios=audios if refs else None)
         # « holding the <Subject 3> » : la balise est le nom, sans article (guide MiniMax ;
         # remarque du propriétaire, 30/09).
         image_paroles, ambiance = (_SANS_ARTICLE.sub(r"\1", t) for t in (image_paroles, ambiance))
@@ -2516,6 +2744,29 @@ def pire_cas_poids() -> float:
 
 # --- La page -----------------------------------------------------------------------
 
+def aide_marques(cible: str) -> str:
+    """Le menu « Langue et émotion d'une réplique » (30/09), fait depuis EMOTIONS : la page,
+    le Studio et le chat du Studio lisent la même liste."""
+    lignes = "".join("<tr><td>[%s]</td><td>%s</td></tr>" % (nom, html.escape(ton))
+                     for nom, ton in EMOTIONS.values())
+    options_l = '<option value="">— langue —</option>' + "".join(
+        '<option value="%s">%s</option>' % (nom, nom) for nom in LANGUES_PAROLES.values())
+    options_e = '<option value="">— émotion —</option>' + "".join(
+        '<option value="%s">%s</option>' % (nom, nom) for nom, _ton in EMOTIONS.values())
+    return ('<details class="note marques" data-cible="%s"><summary>Langue et émotion d\'une réplique</summary>'
+            "<p>En tête d'une réplique, entre crochets, sa <b>langue</b> et/ou son <b>émotion</b> : "
+            "« [anglais, joie] I made the team! », « [tristesse] Elle n'est pas venue… ». C'est <b>H3</b> qui "
+            "joue l'émotion : le Studio lui écrit le ton ci-dessous à côté de la réplique, et lui envoie la voix "
+            "du personnage dans la langue de la réplique. Sans marque, la réplique garde la langue du "
+            "personnage et un ton neutre ; une émotion écrite en toutes lettres (« folle de joie, elle "
+            "crie… ») est lue aussi. Le chat du Studio pose ces marques quand il découpe un scénario.</p>"
+            "<p>Placez le curseur juste après « , puis : <select class=\"marque_langue\">%s</select> "
+            "<select class=\"marque_emotion\">%s</select> <button type=\"button\" class=\"marque_inserer\">"
+            "Insérer la marque</button></p>"
+            "<table><tr><th>marque</th><th>ton demandé à H3</th></tr>%s</table></details>"
+            % (cible, options_l, options_e, lignes))
+
+
 PAGE_HTML = r"""<!doctype html>
 <html lang="fr">
 <head>
@@ -2637,10 +2888,11 @@ PAGE_HTML = r"""<!doctype html>
   <select id="langue">__LANGUES__</select>
   <details class="note"><summary>Conseils pour les paroles</summary>
   Une réplique dans une autre langue la dit en tête : « Bonjour ! » puis
-  « [anglais] Nice to meet you! » — même personnage, même voix.
+  « [anglais] Nice to meet you! » — même personnage, même voix (sa voix anglaise, si sa fiche en a une).
   Pour des paroles nettes : une seule personne parle, visage vers la caméra, une seule action par plan,
   et pas plus de 2 mots par seconde (une dizaine pour 5 s). Les textes sont des exemples : modifiez-les librement.
   </details>
+  __AIDE_MARQUES_image_paroles__
   <details class="plie"><summary>2. Ambiance sonore et 3. musique</summary>
   <label for="ambiance">2. Ambiance sonore</label>
   <textarea id="ambiance">Pluie, circulation au loin.</textarea>
@@ -2743,6 +2995,7 @@ PAGE_HTML = r"""<!doctype html>
 <div class="bloc section" id="montage_bloc">
   <label for="scenario">Scénario (le récit : découpé en plans pour un tournage neuf, ou pour ranger des clips déjà faits)</label>
   <textarea id="scenario" maxlength="2000"></textarea>
+  __AIDE_MARQUES_scenario__
   <!-- Hors des parties repliables : le 29/09, replié avec le montage, le film tourné ne se voyait plus. -->
   <div id="montage_resultat" hidden>
     <b>🎬 Le film</b>
@@ -3665,6 +3918,20 @@ function dessinerFiche(f){
   if (personne) dessinerVoix(f);
 }
 
+// Le menu « Langue et émotion d'une réplique » (30/09) : insère la marque au curseur.
+document.addEventListener("click", ev => {
+  const b = ev.target.closest(".marque_inserer");
+  if (!b) return;
+  const d = b.closest("details");
+  const t = document.getElementById(d.dataset.cible);
+  const m = [d.querySelector(".marque_langue").value, d.querySelector(".marque_emotion").value].filter(Boolean).join(", ");
+  if (!t || !m) return;
+  const p = typeof t.selectionStart === "number" ? t.selectionStart : t.value.length;
+  t.value = t.value.slice(0, p) + "[" + m + "] " + t.value.slice(p);
+  t.focus();
+  t.selectionStart = t.selectionEnd = p + m.length + 3;
+});
+
 // Le profil voix du personnage (29/09) : un exemple à cloner, ou une voix générée
 // dans sa langue ; il part avec ses photos dans chaque plan en mode « Références ».
 function dessinerVoix(f){
@@ -3690,6 +3957,29 @@ function dessinerVoix(f){
         const r = await fetch("/video-h3/fiches/" + f.id + "/voix", {method: "DELETE", headers: H});
         if (r.ok) await chargerFiches(f.id);
       }), document.createElement("br"));
+  }
+  // La même voix dans l'autre langue (30/09) : Leila en anglais, l'Américain en français.
+  if (f.voix && f.voix.langue){
+    const nomLangue = v => (([...document.getElementById("langue").options].find(o => o.value === v) || {}).textContent || v);
+    for (const [l, v] of Object.entries(f.voix_langues || {})){
+      const lecteur = document.createElement("audio");
+      lecteur.controls = true;
+      lecteur.src = v.son;
+      const ecoute = v.ecoute && v.ecoute.part != null ? " Le Studio y entend " + Math.round(100 * v.ecoute.part) + " % de la phrase." : "";
+      zone.append(document.createElement("br"), "Sa voix en " + nomLangue(l) + " : ", lecteur, document.createElement("br"),
+        "même timbre, clonée par FireRedTTS3 depuis sa voix en " + nomLangue(v.depuis) + ", " + fr(v.duree_s, 1) + " s." + ecoute + " ",
+        bouton("Retirer", async () => {
+          const r = await fetch("/video-h3/fiches/" + f.id + "/voix/langue/" + l, {method: "DELETE", headers: H});
+          if (r.ok) await chargerFiches(f.id);
+        }), document.createElement("br"));
+    }
+    for (const l of ["French", "English"]){
+      if (l === f.voix.langue || (f.voix_langues || {})[l]) continue;
+      zone.append(document.createElement("br"),
+        bouton("Créer sa voix en " + nomLangue(l), () => voixLangue(f.id, l)),
+        " même timbre, dite en " + nomLangue(l) + " (FireRedTTS3 sur Modal, quelques centimes, 1 à 5 min). "
+        + "L'accent de sa langue d'origine reste en partie.", document.createElement("br"));
+    }
   }
   const fichier = document.createElement("input");
   fichier.type = "file";
@@ -3722,6 +4012,21 @@ function dessinerVoix(f){
   zone.append("Un exemple à cloner, parlé en ", parle, " : ", coche, " ", fichier, document.createElement("br"),
     "Ou une voix générée en ", langue, " ",
     bouton(f.voix ? "Remplacer par une voix générée" : "Générer la voix", () => poserVoix(f.id, {generer: langue.value})));
+}
+
+async function voixLangue(id, langue){
+  ficheEtat("Voix clonée en cours chez Modal (1 à 5 min)…");
+  const r = await fetch("/video-h3/fiches/" + id + "/voix/langue", {method: "POST", headers: H, body: JSON.stringify({langue})});
+  let d = await r.json();
+  if (!r.ok){ ficheEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  while (["queued", "running"].includes(d.status)){
+    await new Promise(ok => setTimeout(ok, 5000));
+    const s = await fetch("/jobs/" + d.id, {headers: H});
+    if (s.ok) d = await s.json();
+  }
+  if (d.status !== "succeeded" || d.error){ ficheEtat(d.error || "La voix clonée a échoué.", true); return; }
+  ficheEtat("");
+  await chargerFiches(id);
 }
 
 async function poserVoix(id, corps){
@@ -4668,7 +4973,8 @@ rafraichir().then(majInvitesImages).then(() => chargerFiches("")).then(chargerCl
 </script>
 </body>
 </html>
-""".replace("__LANGUES__", "".join(
+""".replace("__AIDE_MARQUES_image_paroles__", aide_marques("image_paroles")).replace(
+    "__AIDE_MARQUES_scenario__", aide_marques("scenario")).replace("__LANGUES__", "".join(
     f'<option value="{code}"{" selected" if code == LANGUE_PAROLES else ""}>{nom}</option>'
     for code, nom in LANGUES_PAROLES.items())).replace("__HORS_CHAMP__", json.dumps(
     sorted({_norme_replique(h) for h in HORS_CHAMP + _HORS_CHAMP_DEDANS}))).replace("__ENCHAINEMENTS__", json.dumps(ENCHAINEMENTS,

@@ -166,7 +166,7 @@ def regle_voix(plan: dict, fiches: list, langues: dict, langue: str, envoyees=No
         return resultat(None, "Pas de réplique dans ce plan.")
     if envoyees is None:
         envoyees = {f["id"] for f in fiches}
-    fautes, locuteurs = [], []
+    fautes, locuteurs, paires = [], [], []
     for replique, k, sans_fiche in dites:
         court = "« %s »" % (replique[:40] + ("…" if len(replique) > 40 else ""))
         if sans_fiche:
@@ -178,26 +178,34 @@ def regle_voix(plan: dict, fiches: list, langues: dict, langue: str, envoyees=No
         f = parlants[k]
         voulue, _ = video_h3.langue_de_replique(replique, (langues or {}).get(f["id"]) or langue)
         voix = f.get("voix") or {}
+        # La voix d'origine, et les mêmes clonées dans d'autres langues (30/09).
+        en = [voix.get("langue")] + list(f.get("voix_langues") or {}) if voix else []
         if not voix:
             fautes.append(court + " : la fiche de %s n'a pas de voix" % f["nom"])
         elif not voix.get("langue"):
             fautes.append(court + " : la langue de la voix de %s n'est pas notée (reposez la voix)" % f["nom"])
-        elif voix["langue"] != voulue:
-            fautes.append(court + " : %s parle %s, sa voix est en %s" % (
+        elif voulue not in en:
+            fautes.append(court + " : %s parle %s, sa voix est en %s (créez-la en %s depuis sa fiche)" % (
                 f["nom"], video_h3.LANGUES_PAROLES.get(voulue, voulue),
-                video_h3.LANGUES_PAROLES.get(voix["langue"], voix["langue"])))
+                " et en ".join(video_h3.LANGUES_PAROLES.get(l, l) for l in en),
+                video_h3.LANGUES_PAROLES.get(voulue, voulue)))
         elif f["id"] not in envoyees:
             fautes.append(court + " : la voix de %s ne part pas avec ce plan%s" % (
                 f["nom"], " (plan « suite » parti de la dernière image seule)"
                 if plan.get("enchainement") == "suite" else ""))
         if f["id"] not in locuteurs:
             locuteurs.append(f["id"])
+        if (f["id"], voulue) not in paires:
+            paires.append((f["id"], voulue))
     # Audit du 30/09 : « Ils volent ! » dit par un Marc inventé, d'un timbre inconnu, dans
     # une suite partie sans fiche. Depuis, une suite garde ses fiches quand elles tiennent
     # avec la dernière image ; l'appelant dit lesquelles partent (`envoyees`).
     if len(locuteurs) > video_h3.VOIX_PAR_PLAN:
         fautes.append("%d personnages parlent, %d voix au plus partent avec un plan" % (
             len(locuteurs), video_h3.VOIX_PAR_PLAN))
+    elif len(paires) > video_h3.VOIX_PAR_PLAN:
+        fautes.append("%d voix (une par personnage et par langue), %d au plus partent avec un plan" % (
+            len(paires), video_h3.VOIX_PAR_PLAN))
     return resultat(not fautes, " ; ".join(fautes) + ("." if fautes else ""))
 
 

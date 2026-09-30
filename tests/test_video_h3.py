@@ -1786,7 +1786,7 @@ def test_une_replique_dit_sa_langue_et_le_personnage_garde_sa_voix(h3):
                           "to meet you!</d>")
     assert v.repliques(texte) == ["Bonjour !", "Nice to meet you!"]
     # Une marque qui n'est pas une langue reste dans la réplique.
-    assert v.balises_paroles("« [rire] Enfin ! »", "French") == "(S1) <d>[French] [rire] Enfin !</d>"
+    assert v.balises_paroles("« [soupir] Enfin ! »", "French") == "(S1) <d>[French] [soupir] Enfin !</d>"
     assert v.langue_de_replique("[Japanese] はい", "French") == ("Japanese", "はい")
 
 
@@ -3341,3 +3341,203 @@ def test_visages_le_2e_plus_grand_et_l_avertissement_du_passant(h3):
     job = {"stdout": "x\nVISAGES " + json.dumps({"rapports": rapports}), "video": {"sujets": [{"fiche": "?"}] * 2}}
     h3._visages_avertir(job)
     assert "Personnage 2" in job["avertissements"][0]
+
+
+# --- 30/09 : la langue et l'émotion d'une réplique, la voix par langue --------------
+# Demande du propriétaire : « Leila part d'une voix française et la transforme en anglais,
+# à l'inverse pour l'américain […] avec aussi l'utilisation des émotions dans H3, menu
+# déroulant pour expliquer la syntaxe. le llm qui crée le script connaît cette syntaxe ».
+
+def test_la_marque_donne_la_langue_et_le_ton_que_joue_h3(h3):
+    v = h3.video_h3
+    assert v.marque_de_replique("[anglais, joie] I made the team!", "French") == ("English", "joie", "I made the team!")
+    assert v.marque_de_replique("[sad] Elle n'est pas venue…", "French") == ("French", "tristesse",
+                                                                          "Elle n'est pas venue…")
+    assert v.marque_de_replique("[French; whisper] Chut.", "English") == ("French", "chuchote", "Chut.")
+    # Deux émotions, un mot inconnu : ce n'est pas une marque, elle reste dite.
+    for pas_une in ("[joie, colère] Non.", "[soupir] Enfin !"):
+        assert v.marque_de_replique(pas_une, "French") == ("French", None, pas_une)
+    joie = v.EMOTIONS["joie"][1]
+    assert v.balises_paroles("Elle crie « [English, joy] I made it! »", "French") == \
+        "Elle crie (S1), %s, <d>[English] I made it!</d>" % joie
+    # Le guide de MiniMax : le ton s'écrit à côté de la réplique, la voix vient de l'<Audio>.
+    assert v.attribuer_repliques("Léa dit « [tristesse] Il est parti. »", [("Léa", "French")]) == \
+        "<Subject 1> (S1) dit %s, <d>[French] Il est parti.</d>" % v.EMOTIONS["tristesse"][1]
+    assert v.marques_inconnues("Léa : « [joyeus] Salut ! » puis « [anglais] Hi! »") == ["joyeus"]
+    # Chaque émotion que le chat apprend se relit.
+    assert all(v.emotion_connue(e) for e in v.EMOTIONS_ANGLAIS)
+    assert len({v.emotion_connue(e) for e in v.EMOTIONS_ANGLAIS}) == len(v.EMOTIONS)
+
+
+def test_le_chat_du_studio_connait_la_marque(h3):
+    v = h3.video_h3
+    for consigne in (v.consigne_decoupage("Léa dit « Bonjour » à Tyler."),
+                     v.consigne_correction([{"image_paroles": "x"}], "trop sombre")):
+        assert v.MARQUES in consigne
+    assert "[English, joy]" in v.MARQUES and all(e in v.MARQUES for e in v.EMOTIONS_ANGLAIS)
+
+
+def test_une_marque_illisible_est_refusee_avant_de_louer(h3):
+    with pytest.raises(ValueError, match="Marque de réplique inconnue : « \\[joyeus\\] »"):
+        h3.video_h3.preparer(demande(image_paroles="Elle dit « [joyeus] Salut ! »"))
+
+
+def test_la_voix_par_langue_se_pose_se_retire_et_part_avec_la_bonne_replique(h3, sans_regles):
+    v = h3.video_h3
+    leila = v.fiche_creer("Leila", "x")["id"]
+    v.fiche_poser_image(leila, "face", PNG)
+    with pytest.raises(ValueError, match="pas encore de voix"):
+        v.fiche_poser_voix_langue(leila, "English", WAV, 4.0, {})
+    v.fiche_poser_voix(leila, WAV, 4.0, "generee", "French")
+    with pytest.raises(ValueError, match="Langue de voix inconnue"):
+        v.fiche_poser_voix_langue(leila, "French", WAV, 4.0, {})
+    anglais = WAV + b"EN"
+    v.fiche_poser_voix_langue(leila, "English", anglais, 4.0, {"source": "clonee"})
+    fiche = v.fiche_lire(leila)
+    assert v.langues_de_voix(fiche) == ["French", "English"]
+    assert fiche["voix_langues"]["English"]["depuis"] == "French"
+    assert v.fiche_voix(leila, "English") == anglais and v.fiche_voix(leila, "French") == WAV
+    assert v.fiche_voix(leila, "German") is None
+    # Une réplique en français, une en anglais : les deux voix partent, chacune pour sa langue.
+    d = demande(mode="references", fiches=[leila], langues={leila: "French"},
+                image_paroles="Leila dit « [joie] J'ai réussi ! » puis « [English, joy] I made it! »")
+    plan = v.preparer(d)
+    invite = plan["resume_public"]["invite"]
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1> speaking French." in invite
+    assert "<Audio 2> is the voice-timbre reference for <Subject 1> speaking English." in invite
+    assert "using the voice timbre referenced from <Audio 2>, overjoyed" in invite
+    assert plan["demande"]["sons"] == {"voix_0.wav": base64.b64encode(WAV).decode(),
+                                       "voix_1.wav": base64.b64encode(anglais).decode()}
+    # Qu'une langue : un seul <Audio>, dans la forme d'avant.
+    plan = v.preparer(dict(d, image_paroles="Leila dit « [English] Hi! »"))
+    assert plan["demande"]["sons"] == {"voix_0.wav": base64.b64encode(anglais).decode()}
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1>." in plan["resume_public"]["invite"]
+    # Sans voix anglaise, l'anglais part avec la voix d'origine (le timbre au moins).
+    v.fiche_retirer_voix_langue(leila, "English")
+    assert "voix_langues" not in v.fiche_lire(leila)
+    plan = v.preparer(dict(d, image_paroles="Leila dit « [English] Hi! »"))
+    assert plan["demande"]["sons"] == {"voix_0.wav": base64.b64encode(WAV).decode()}
+    with pytest.raises(ValueError, match="pas de voix dans cette langue"):
+        v.fiche_retirer_voix_langue(leila, "English")
+    # Reposer la voix d'origine efface les voix clonées depuis l'ancienne.
+    v.fiche_poser_voix_langue(leila, "English", anglais, 4.0, {})
+    v.fiche_poser_voix(leila, WAV, 4.0, "exemple", "French")
+    assert "voix_langues" not in v.fiche_lire(leila) and v.fiche_voix(leila, "English") is None
+
+
+def test_voix_du_plan_une_voix_par_personnage_et_par_langue(h3):
+    v = h3.video_h3
+    leila = {"voix": {"langue": "French"}, "voix_langues": {"English": {}}}
+    tyler = {"voix": {"langue": "English"}}
+    dites = [(0, "French"), (1, "French"), (0, "English"), (0, "French")]
+    assert v.voix_du_plan(dites, [leila, tyler]) == [(0, "French"), (0, "English"), (1, "English")]
+    assert v.voix_du_plan([(1, "French")], [leila, {}]) == []
+    assert len(v.voix_du_plan([(k, l) for k in range(2) for l in ("French", "English")],
+                              [leila, dict(tyler, voix_langues={"French": {}})])) == v.VOIX_PAR_PLAN
+
+
+def test_la_regle_4_accepte_la_voix_clonee_et_compte_les_langues(h3):
+    r = h3.regles
+    leila = {"id": "l1", "nom": "Leila", "genre": "personne", "voix": {"langue": "French"}}
+    plan = {"image_paroles": "Leila dit « [anglais, joie] I made it! »"}
+    faute = r.regle_voix(plan, [leila], {}, "French")
+    assert faute["ok"] is False and "créez-la en anglais" in faute["pourquoi"]
+    assert r.regle_voix(plan, [dict(leila, voix_langues={"English": {}})], {}, "French")["ok"] is True
+    tyler = {"id": "t1", "nom": "Tyler", "genre": "personne", "voix": {"langue": "English"},
+             "voix_langues": {"French": {}}}
+    deux = dict(leila, voix_langues={"English": {}})
+    quatre = {"image_paroles": "Leila dit « Salut. » puis « [English] Hi. » Tyler dit « Hey. » puis « [French] Salut. »"}
+    x = r.regle_voix(quatre, [deux, tyler], {"t1": "English"}, "French")
+    assert x["ok"] is False and "4 voix (une par personnage et par langue)" in x["pourquoi"]
+
+
+def _fiche_qui_parle(h3, source="generee", langue="French"):
+    v = h3.video_h3
+    fid = v.fiche_creer("Leila", "x")["id"]
+    v.fiche_poser_voix(fid, WAV, 4.0, source, langue)
+    return fid
+
+
+def test_la_voix_dans_une_autre_langue_se_demande_et_se_refuse_avant_de_louer(h3, monkeypatch):
+    v = h3.video_h3
+    c = client(h3)
+    sans = v.fiche_creer("Tyler", "x")["id"]
+    r = c.post(f"/video-h3/fiches/{sans}/voix/langue", headers=CLE, json={"langue": "English"})
+    assert r.status_code == 400 and "Posez d'abord la voix" in r.json()["detail"]
+    fid = _fiche_qui_parle(h3)
+    for langue, message in (("German", "français et en anglais"), ("French", "déjà dans cette langue")):
+        r = c.post(f"/video-h3/fiches/{fid}/voix/langue", headers=CLE, json={"langue": langue})
+        assert r.status_code == 400 and message in r.json()["detail"]
+    lance = []
+    monkeypatch.setattr(h3, "run_voix_langue", lambda *a: lance.append(a))
+    r = c.post(f"/video-h3/fiches/{fid}/voix/langue", headers=CLE, json={"langue": "English"})
+    assert r.status_code == 503 and lance == []   # Modal pas branché
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    h3.budget_modal.poser("dialogue", 0, h3.budget_modal.plafond_de("dialogue") - 0.01, 1)
+    r = c.post(f"/video-h3/fiches/{fid}/voix/langue", headers=CLE, json={"langue": "English"})
+    assert r.status_code == 429 and lance == []
+    h3.budget_modal.poser("dialogue", 0, 0, 0)
+    r = c.post(f"/video-h3/fiches/{fid}/voix/langue", headers=CLE, json={"langue": "English"})
+    assert r.status_code == 200, r.text
+    job = r.json()
+    assert job["status"] == "queued" and job["voix_langue"] == {
+        "fiche": fid, "langue": "English", "depuis": "French", "cout_max_usd": job["voix_langue"]["cout_max_usd"]}
+    assert len(lance) == 1 and lance[0][:3] == (job["id"], fid, "English")
+    # La voix d'origine est générée : son texte est la phrase du Studio, sans écoute.
+    d = json.loads(base64.b64decode(re.search(r'"([A-Za-z0-9+/=]{40,})"', lance[0][3]).group(1)))
+    assert d["texte_reference"] == v.PHRASE_VOIX["French"] and d["texte"] == v.PHRASE_VOIX["English"]
+    # Un exemple téléversé : son texte vient de l'écoute ; sans écoute, rien n'est loué.
+    autre = _fiche_qui_parle(h3, "exemple", "English")
+    monkeypatch.setattr(h3, "_transcrire_voix", lambda octets: None)
+    r = c.post(f"/video-h3/fiches/{autre}/voix/langue", headers=CLE, json={"langue": "French"})
+    assert r.status_code == 503 and len(lance) == 1
+
+
+def test_la_voix_clonee_n_est_posee_que_si_le_studio_l_entend_dire_la_phrase(h3, monkeypatch):
+    v = h3.video_h3
+    fid = _fiche_qui_parle(h3)
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: {"exit_code": 0, "stdout": "VOIX_OK {}",
+                                                              "stderr": "", "artifacts": []})
+    monkeypatch.setattr(h3, "_artefact", lambda job, nom: b"WAV-CLONE" if nom == "voix.wav" else None)
+    monkeypatch.setattr(h3.montage, "voix_de_reference", lambda wav, maxi: (wav + b"-propre", 5.2))
+    entendu = {"texte": "Hello, my name is on my card. The weather is nice today, and I am calmly telling you "
+                        "about my day, without rushing."}
+    monkeypatch.setattr(h3, "_transcrire_voix", lambda octets: entendu["texte"])
+    jid = "e" * 32
+    h3.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    avant = h3.budget_modal.vue("dialogue")["appels"].get("dialogue", 0)
+    h3.run_voix_langue(jid, fid, "English", "print(1)")
+    job = h3.read_job(jid)
+    assert job["status"] == "succeeded" and job["voix_posee"] == {"fiche": fid, "langue": "English"}
+    assert v.fiche_voix(fid, "English") == b"WAV-CLONE-propre"
+    assert v.fiche_lire(fid)["voix_langues"]["English"]["ecoute"]["part"] >= h3.VOIX_LANGUE_SEUIL
+    assert h3.budget_modal.vue("dialogue")["appels"]["dialogue"] == avant + 1
+    # Une voix qui dit autre chose n'est pas posée ; la location est comptée quand même.
+    v.fiche_retirer_voix_langue(fid, "English")
+    entendu["texte"] = "Ah, abelmi."
+    jid = "f" * 32
+    h3.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    h3.run_voix_langue(jid, fid, "English", "print(1)")
+    job = h3.read_job(jid)
+    assert job["status"] == "failed" and "ne dit pas la phrase" in job["error"]
+    assert v.fiche_voix(fid, "English") is None
+    assert h3.budget_modal.vue("dialogue")["appels"]["dialogue"] == avant + 2
+
+
+def test_la_page_explique_la_marque_et_cree_la_voix_dans_l_autre_langue(h3):
+    html = client(h3).get("/video-h3").text
+    assert "__AIDE_MARQUES" not in html
+    assert html.count("<summary>Langue et émotion d'une réplique</summary>") == 2
+    assert 'data-cible="scenario"' in html and 'data-cible="image_paroles"' in html
+    assert "Insérer la marque" in html and "marque_inserer" in html
+    for nom, ton in h3.video_h3.EMOTIONS.values():
+        assert "<td>[%s]</td>" % nom in html
+    assert "async function voixLangue(" in html and "/voix/langue" in html
+    assert "Créer sa voix en " in html
+    fid = _fiche_qui_parle(h3)
+    h3.video_h3.fiche_poser_voix_langue(fid, "English", WAV, 4.0, {"source": "clonee"})
+    fiche = client(h3).get(f"/video-h3/fiches/{fid}", headers=CLE).json()
+    assert list(fiche["voix_langues"]) == ["English"]
+    assert fiche["voix_langues"]["English"]["son"].startswith("data:audio/wav;base64,")
+    r = client(h3).delete(f"/video-h3/fiches/{fid}/voix/langue/English", headers=CLE)
+    assert r.status_code == 200 and r.json()["voix_langues"] == {}
