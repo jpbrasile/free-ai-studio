@@ -3857,19 +3857,26 @@ def _finaliser_monte(h3, monkeypatch, tmp_path):
     return loues, plans
 
 
-def test_finaliser_fait_les_visages_puis_la_4k_plan_par_plan(h3, monkeypatch, tmp_path):
+def test_finaliser_fait_les_visages_puis_la_4k_en_une_location_chacun(h3, monkeypatch, tmp_path):
     loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
     r = client(h3).post("/video-h3/finaliser", headers=CLE, json={"job": "b" * 32, "plans": plans, "echelle": "4k"})
     assert r.status_code == 200, r.text
     job = h3.read_job(r.json()["id"])
     assert job["status"] == "succeeded", job.get("error")
-    # Visages des plans 1 et 3 seulement (le plan 2 n'a personne), puis 4K des trois plans.
-    # Les passages d'une même étape partent ensemble : leur ordre d'arrivée est libre.
-    assert [q for q, _, _ in loues] == ["visages"] * 2 + ["agrandir"] * 3
-    assert sorted((d["de"], d["a"]) for q, _, d in loues if q == "visages") == [(0, 124), (247, 370)]
-    assert sorted(d["coupes"] for q, _, d in loues if q == "agrandir") == [[0, 123], [0, 123], [0, 124]]
-    # Le plan 2 part tel quel, extrait du film.
-    assert b"plan-124-247" in [base64.b64decode(d["video"]) for q, _, d in loues if q == "agrandir"]
+    # 30/09 : une location par étape, un seul chargement des modèles, les passages en série
+    # (sept locations en parallèle avaient lu ensemble les 26 Go du modèle de texte).
+    assert [q for q, _, _ in loues] == ["visages", "agrandir"]
+    v = loues[0][2]
+    # Visages des plans 1 et 3 seulement : le plan 2 n'a personne.
+    assert [(x["de"], x["a"], x["source"]) for x in v["passages"]] == [(0, 124, "source_0.mp4"),
+                                                                      (247, 370, "source_1.mp4")]
+    assert v["delai_s"] == h3.visages.delai_passages([(124, 1), (123, 1)])
+    # Les photos de chaque passage sont les siennes : la 2e passe lit la photo suivante.
+    photos = [[n["inputs"]["image"] for n in x["graphe"].values() if n["class_type"] == "LoadImage"]
+              for x in v["passages"]]
+    assert photos == [["ref_0.png"], ["ref_1.png"]] and sorted(v["images"]) == ["ref_0.png", "ref_1.png"]
+    # La 4K des trois plans, coupée à leurs fins, en une location.
+    assert loues[1][2]["coupes"] == [0, 124, 247, 370]
     f = job["finalisation"]
     assert h3.read_job(f["film_visages"])["video"]["moteur"] == "MiniMax H3 (montage)"
     # Le film final est en 4K : il n'entre pas dans un montage de clips 480p.
@@ -3881,7 +3888,7 @@ def test_finaliser_fait_les_visages_puis_la_4k_plan_par_plan(h3, monkeypatch, tm
 def test_finaliser_attend_le_budget_puis_reprend_sans_relouer(h3, monkeypatch, tmp_path):
     loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
     vrai = h3.budget_modal.verifier
-    permis = [3]
+    permis = [1]
 
     def compte(*a, **k):
         if permis[0] <= 0:
@@ -3894,13 +3901,13 @@ def test_finaliser_attend_le_budget_puis_reprend_sans_relouer(h3, monkeypatch, t
                           json={"job": "b" * 32, "plans": plans, "echelle": "4k"}).json()["id"]
     job = h3.read_job(fid)
     assert job["status"] == "attente" and "budget" in job["error"]
-    assert [q for q, _, _ in loues] == ["visages", "visages", "agrandir"]
+    assert [q for q, _, _ in loues] == ["visages"]
     assert job["finalisation"]["film_visages"]   # les visages sont visibles avant la 4K
     permis[0] = 9
     r = client(h3).post("/video-h3/finaliser/%s/reprendre" % fid, headers=CLE)
     assert r.status_code == 200, r.text
     assert h3.read_job(fid)["status"] == "succeeded"
-    assert [q for q, _, _ in loues] == ["visages", "visages", "agrandir", "agrandir", "agrandir"]
+    assert [q for q, _, _ in loues] == ["visages", "agrandir"]
     assert client(h3).post("/video-h3/finaliser/%s/reprendre" % fid, headers=CLE).status_code == 409
 
 
@@ -3916,29 +3923,35 @@ def test_finaliser_refuse_des_plans_qui_ne_couvrent_pas_le_film(h3, monkeypatch,
     assert loues == []
 
 
-def test_finaliser_loue_les_passages_en_meme_temps(h3, monkeypatch, tmp_path):
-    """Trois passages de visages : aucun ne finit avant que les trois soient partis."""
+def test_finaliser_reprend_les_passages_deja_faits_et_loue_le_reste_ensemble(h3, monkeypatch, tmp_path):
+    """Une finalisation d'avant le 30/09 au soir (un travail par passage) : les passages
+    réussis sont repris tels quels, ceux qui restent partent en UNE location."""
     loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
     plans[1]["sujets"] = plans[0]["sujets"]
-    ensemble = threading.Barrier(3, timeout=5)
-
-    def run(jid, code, delai):
-        ensemble.wait()   # en série, le premier attendrait seul : BrokenBarrierError
-        job = h3.read_job(jid)
-        job["status"] = "succeeded"
-        h3.write_job(jid, job)
-
-    monkeypatch.setattr(h3, "run_visages", run)
-    fid = client(h3).post("/video-h3/finaliser", headers=CLE,
-                          json={"job": "b" * 32, "plans": plans, "echelle": ""}).json()["id"]
+    fait = "9" * 32
+    h3.write_job(fait, {"id": fait, "status": "succeeded", "video": {"de": 0, "a": 124}})
+    fid = "8" * 32
+    h3.write_job(fid, {"id": fid, "status": "failed", "titre": "Le parc — finalisée",
+                       "video": {"moteur": "Finalisation (visages, agrandissement)", "source": "b" * 32,
+                                 "echelle": ""},
+                       "finalisation": {"plans": [dict(plans[0], visages=fait, agrandi=None),
+                                                  dict(plans[1], visages=None, agrandi=None),
+                                                  dict(plans[2], visages=None, agrandi=None)],
+                                        "film_visages": None, "film": None, "etape": ""}})
+    assert client(h3).post("/video-h3/finaliser/%s/reprendre" % fid, headers=CLE).status_code == 200
     job = h3.read_job(fid)
     assert job["status"] == "succeeded", job.get("error")
-    assert job["finalisation"]["film"] == job["finalisation"]["film_visages"]
-    # Le budget est retenu à chaque départ, pas seulement vérifié : deux départs
-    # simultanés ne passent pas sur le même reste. (La location simulée n'encaisse
-    # rien, donc les trois retenues sont encore là.)
-    pire = h3.visages.prix(124, 1)["pire_usd"]
-    assert h3.budget_modal.en_cours_usd() >= 2.9 * pire
+    assert [q for q, _, _ in loues] == ["visages"]
+    assert [(x["de"], x["a"]) for x in loues[0][2]["passages"]] == [(124, 247), (247, 370)]
+    assert job["finalisation"]["plans"][0]["visages"] == fait
+
+
+def test_trop_de_passages_pour_une_location_en_font_plusieurs_en_serie(h3):
+    g = h3._groupes([(k, 124, 2) for k in range(10)], h3._tient_visages)
+    assert [len(x) for x in g] == [5, 5] and all(h3._tient_visages(x) for x in g)
+    assert not h3._tient_visages(g[0] + g[1][:1])
+    g = h3._groupes([(k, 124, 0) for k in range(6)], h3._tient_4k("4k"))
+    assert [len(x) for x in g] == [4, 2]
 
 
 def test_un_fondu_et_une_coupe_se_trouvent_dans_l_image(sandbox, tmp_path):

@@ -504,3 +504,26 @@ def vignettes(video: bytes, numeros: list, largeur: int = 320) -> list:
             raise MontageImpossible("Les vignettes du film n'ont pas pu être extraites.")
         par_numero = dict(zip(rangees, (f.read_bytes() for f in fichiers)))
     return [par_numero[int(n)] for n in numeros]
+
+
+def coller_sans_reencoder(videos: list) -> bytes:
+    """Des vidéos faites par la même machine, de mêmes réglages, mises bout à bout
+    sans réencodage : un film 4K réencodé ici prendrait plusieurs minutes de
+    processeur (finalisation, 30/09/2026). Nombre d'images vérifié."""
+    if len(videos) == 1:
+        return videos[0]
+    with tempfile.TemporaryDirectory() as dossier:
+        chemins = []
+        for k, v in enumerate(videos):
+            c = Path(dossier, "m%02d.mp4" % k)
+            c.write_bytes(v)
+            chemins.append(c)
+        liste, sortie = Path(dossier, "liste.txt"), Path(dossier, "film.mp4")
+        liste.write_text("".join("file '%s'\n" % c.name for c in chemins))
+        _lancer(["-f", "concat", "-safe", "0", "-i", str(liste), "-c", "copy", "-movflags", "+faststart",
+                 str(sortie)], "La mise bout à bout")
+        attendu = sum(images(c) for c in chemins)
+        if images(sortie) != attendu:
+            raise MontageImpossible("La mise bout à bout a rendu %d images au lieu de %d."
+                                    % (images(sortie), attendu))
+        return sortie.read_bytes()

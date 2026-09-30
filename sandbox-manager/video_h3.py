@@ -3859,7 +3859,7 @@ async function blocFinaliser(ou, jid, sid){
 function dessinerFinaliser(b, jid, d){
   const aide = document.createElement("p");
   aide.className = "note";
-  aide.textContent = "Chaque passage est traité sur sa propre machine, tous en même temps. Cochez les "
+  aide.textContent = "Une machine louée pour les visages, une pour la 4K (deux si le film est long) : les modèles se chargent une fois, les passages passent l'un après l'autre. Cochez les "
     + "personnages dont le VISAGE se voit dans le passage (pas de dos), deux au plus : un visage absent "
     + "serait pris sur quelqu'un d'autre. « Fondu » : le Studio a vu un changement de scène à cet endroit.";
   b.appendChild(aide);

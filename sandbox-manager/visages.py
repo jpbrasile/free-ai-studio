@@ -68,11 +68,50 @@ VISAGE_MINUSCULE_PX = 12
 
 
 def estimation_s(images: int, sujets: int) -> float:
-    return DEMARRAGE_S + sujets * images * S_PAR_IMAGE_ET_PASSE
+    return estimation_passages([(images, sujets)])
+
+
+def estimation_passages(passages: list) -> float:
+    """Une location, un seul chargement du modèle, les passages [(images, sujets)] l'un
+    après l'autre : le démarrage ne se paie qu'une fois (30/09/2026, demande du
+    propriétaire : « autant avoir un seul chargement et en série »)."""
+    return DEMARRAGE_S + sum(s * n * S_PAR_IMAGE_ET_PASSE for n, s in passages)
+
+
+def tient_en_une_location(passages: list) -> bool:
+    return estimation_passages(passages) <= DUREE_MAX_S * 0.8
 
 
 def delai_s(images: int, sujets: int) -> int:
-    return min(DUREE_MAX_S, int(estimation_s(images, sujets) * 1.5) + 120)
+    """Le démarrage compte double dans la marge, quelle que soit la longueur : le 30/09,
+    quatre passages loués en même temps (finalisation) ont lu ensemble les 26 Go du
+    modèle de texte sur le disque Modal ; deux ont fini en 142 et 149 s, les deux plus
+    courts chargeaient encore à 316 et 344 s et ont été coupés à leur délai (365 et
+    396 s), qui dépendait de leur longueur alors que le démarrage n'en dépend pas."""
+    return delai_passages([(images, sujets)])
+
+
+def delai_passages(passages: list) -> int:
+    calcul = sum(s * n * S_PAR_IMAGE_ET_PASSE for n, s in passages)
+    return min(DUREE_MAX_S, int((2 * DEMARRAGE_S + calcul) * 1.5) + 120)
+
+
+def prix_passages(passages: list) -> dict:
+    """Le devis d'une location pour plusieurs passages ; ValueError si trop long."""
+    if not passages or any(n <= 0 for n, _ in passages):
+        raise ValueError("Vidéo vide.")
+    if any(not 1 <= s <= SUJETS_MAX for _, s in passages):
+        raise ValueError("Un ou deux personnages par traitement.")
+    estime = estimation_passages(passages)
+    if estime > DUREE_MAX_S * 0.8:
+        raise ValueError("Trop long en une fois (%d s de calcul estimées, %d au plus) : "
+                         "traitez un plan à la fois." % (estime, int(DUREE_MAX_S * 0.8)))
+    par_s = budget_modal.prix_seconde(GPU, MEMOIRE_MB, COEURS)
+    delai = delai_passages(passages)
+    return {"images": sum(n for n, _ in passages), "sujets": max(s for _, s in passages),
+            "passages": len(passages), "secondes_estimees": round(estime),
+            "estime_usd": round(par_s * estime, 2), "pire_usd": round(par_s * delai, 2),
+            "delai_s": delai, "mesure": True}
 
 
 def prix(images: int, sujets: int) -> dict:
@@ -81,14 +120,9 @@ def prix(images: int, sujets: int) -> dict:
         raise ValueError("Vidéo vide.")
     if not 1 <= sujets <= SUJETS_MAX:
         raise ValueError("Un ou deux personnages par traitement.")
-    estime = estimation_s(images, sujets)
-    if estime > DUREE_MAX_S * 0.8:
-        raise ValueError("Trop long en une fois (%d s de calcul estimées, %d au plus) : "
-                         "traitez un plan à la fois." % (estime, int(DUREE_MAX_S * 0.8)))
-    par_s = budget_modal.prix_seconde(GPU, MEMOIRE_MB, COEURS)
-    return {"images": images, "sujets": sujets, "secondes_estimees": round(estime),
-            "estime_usd": round(par_s * estime, 2), "pire_usd": round(par_s * delai_s(images, sujets), 2),
-            "delai_s": delai_s(images, sujets), "mesure": True}
+    d = prix_passages([(images, sujets)])
+    del d["passages"]
+    return d
 
 
 def invite(nb_photos: int) -> str:
@@ -97,11 +131,11 @@ def invite(nb_photos: int) -> str:
             "<Subject 1>, who moves exactly as in the source frames. non_diegetic_music: N/A")
 
 
-def graphe(sujets: list, prefixe: str = "visages/v") -> dict:
+def graphe(sujets: list, prefixe: str = "visages/v", source: str = "source.mp4", premiere_photo: int = 0) -> dict:
     """`sujets` : [(choix, nombre de photos)], dans l'ordre des passes. Format API."""
     nom = lambda chemin: chemin.split("/")[1]  # noqa: E731
     g = {
-        "1": _n("LoadVideo", {"file": "source.mp4"}),
+        "1": _n("LoadVideo", {"file": source}),
         "2": _n("GetVideoComponents", {"video": ["1", 0]}),
         "3": _n("UNETLoader", {"unet_name": nom(video_h3.FICHIERS[0]), "weight_dtype": "default"}),
         "4": _n("LoraLoaderModelOnly", {"model": ["3", 0], "lora_name": nom(video_h3.FICHIERS[4]),
@@ -112,7 +146,7 @@ def graphe(sujets: list, prefixe: str = "visages/v") -> dict:
         "8": _n("KSamplerSelect", {"sampler_name": "res_multistep"}),
         "9": _n("RandomNoise", {"noise_seed": 42}),
     }
-    images, photo = ["2", 0], 0
+    images, photo = ["2", 0], premiere_photo
     for p, (choix, nb) in enumerate(sujets):
         b = 100 * (p + 1)
         k = lambda i: str(b + i)  # noqa: E731
@@ -177,26 +211,45 @@ def photos(fid) -> list:
 
 def demande(video: bytes, sujets: list, de: int, a: int) -> dict:
     """`sujets` : [(fiche, choix)]. `de`, `a` : les images du clip à traiter [de, a)."""
+    return demande_passages(video, [(de, a, sujets)])
+
+
+def demande_passages(video: bytes, passages: list) -> dict:
+    """`passages` : [(de, a, [(fiche, choix)])], dans l'ordre du film. Une location :
+    ComfyUI démarre une fois, les modèles se chargent une fois, les passages passent
+    l'un après l'autre ; la vidéo rendue est leur suite, bout à bout, avec leur son."""
     if len(video) > VIDEO_MAX_OCTETS:
         raise ValueError("Vidéo trop lourde pour être traitée ici.")
-    if not 1 <= len(sujets) <= SUJETS_MAX:
-        raise ValueError("Un ou deux personnages par traitement.")
-    refs, passes = [], []
-    for fid, choix in sujets:
-        if choix not in CHOIX:
-            raise ValueError("Place du personnage inconnue : %s." % choix)
-        p = photos(fid)
-        refs += p
-        passes.append((choix, len(p)))
-    return {"video": base64.b64encode(video).decode(), "de": int(de), "a": int(a),
-            "images_par_seconde": video_h3.IMAGES_PAR_SECONDE,
+    refs, sortie = [], []
+    for k, (de, a, sujets) in enumerate(passages):
+        if not 1 <= len(sujets) <= SUJETS_MAX:
+            raise ValueError("Un ou deux personnages par traitement.")
+        if not 0 <= int(de) < int(a):
+            raise ValueError("Passage vide.")
+        passes, premiere = [], len(refs)
+        for fid, choix in sujets:
+            if choix not in CHOIX:
+                raise ValueError("Place du personnage inconnue : %s." % choix)
+            p = photos(fid)
+            refs += p
+            passes.append((choix, len(p)))
+        source = "source.mp4" if len(passages) == 1 else "source_%d.mp4" % k
+        prefixe = "visages/v" if len(passages) == 1 else "visages/p%02d_" % k
+        sortie.append({"de": int(de), "a": int(a), "source": source, "prefixe": prefixe,
+                       "graphe": graphe(passes, prefixe, source, premiere)})
+    return {"video": base64.b64encode(video).decode(), "de": sortie[0]["de"], "a": sortie[-1]["a"],
+            "passages": sortie, "images_par_seconde": video_h3.IMAGES_PAR_SECONDE,
             "images": {"ref_%d.png" % i: b for i, b in enumerate(refs)},
-            "graphe": graphe(passes), "classes": list(CLASSES), "comfy": video_h3.DOSSIER_COMFY,
+            "graphe": sortie[0]["graphe"], "classes": list(CLASSES), "comfy": video_h3.DOSSIER_COMFY,
             "base_poids": video_h3.POINT_DE_MONTAGE, "fichiers": list(video_h3.FICHIERS),
             "detecteur": {"depot": DETECTEUR_DEPOT, "revision": DETECTEUR_REVISION, "nom": DETECTEUR,
                           "octets": DETECTEUR_OCTETS, "dossier": DOSSIER_DETECTEUR},
             # Le délai de la location : le script rend la main (DELAI) avant d'être coupé.
-            "delai_s": delai_s(int(a) - int(de), len(sujets))}
+            "delai_s": delai_passages([(int(a) - int(de), len(s)) for de, a, s in passages])}
+
+
+def construire_script_passages(video: bytes, passages: list) -> str:
+    return video_h3._emballer(_SCRIPT, demande_passages(video, passages))
 
 
 def construire_script(video: bytes, sujets: list, de: int, a: int) -> str:
@@ -278,14 +331,15 @@ for nom, b64 in D["images"].items():
 film = Path("/tmp/film.mp4")
 film.write_bytes(base64.b64decode(D["video"]))
 ips, de, a = D["images_par_seconde"], D["de"], D["a"]
-r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(film), "-vf",
-                    "select='between(n\\,%d\\,%d)',setpts=N/FRAME_RATE/TB" % (de, a - 1),
-                    "-af", "aselect='between(t\\,%.4f\\,%.4f)',asetpts=N/SR/TB" % (de / ips, a / ips),
-                    "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", "-c:a", "aac",
-                    str(entree / "source.mp4")], capture_output=True, text=True)
-if r.returncode:
-    print("MONTAGE_ECHOUE " + r.stderr[-1500:], file=sys.stderr)
-    sys.exit(9)
+for P in D["passages"]:
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(film), "-vf",
+                        "select='between(n\\,%d\\,%d)',setpts=N/FRAME_RATE/TB" % (P["de"], P["a"] - 1),
+                        "-af", "aselect='between(t\\,%.4f\\,%.4f)',asetpts=N/SR/TB" % (P["de"] / ips, P["a"] / ips),
+                        "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                        str(entree / P["source"])], capture_output=True, text=True)
+    if r.returncode:
+        print("MONTAGE_ECHOUE " + r.stderr[-1500:], file=sys.stderr)
+        sys.exit(9)
 
 journal = open("/tmp/comfy.log", "w")
 proc = subprocess.Popen(
@@ -332,39 +386,59 @@ absents = [x for x in D["classes"] if x not in info]
 if absents:
     echouer(4, "NOEUD_ABSENT", absents)
 
-corps = json.dumps({"prompt": D["graphe"], "client_id": "free-ai-studio"}).encode()
-try:
-    with urllib.request.urlopen(urllib.request.Request(URL + "/prompt", data=corps,
-                                headers={"Content-Type": "application/json"}), timeout=60) as r:
-        rep = json.loads(r.read())
-except urllib.error.HTTPError as e:
-    echouer(5, "GRAPHE_REFUSE", e.read().decode(errors="replace"))
-if rep.get("node_errors") or "prompt_id" not in rep:
-    echouer(5, "GRAPHE_REFUSE", json.dumps(rep))
-pid, etat, limite = rep["prompt_id"], None, t0 + D["delai_s"] - 60
-while time.time() < limite:
-    h = lire("/history/" + pid)
-    if pid in h:
-        etat = h[pid]
-        break
-    if proc.poll() is not None:
-        echouer(7, "COMFY_ARRETE", "pendant le calcul")
-    pic = max(pic, vram())
-    time.sleep(2)
-if etat is None:
-    echouer(8, "DELAI", "%d s" % D["delai_s"])
-if etat.get("status", {}).get("status_str") != "success":
-    echouer(6, "CALCUL_ECHOUE", json.dumps(etat.get("status", {}).get("messages", []))[-3000:])
+limite, rendus, calculs = t0 + D["delai_s"] - 60, [], []
+for k, P in enumerate(D["passages"]):
+    debut_passage = time.time()
+    corps = json.dumps({"prompt": P["graphe"], "client_id": "free-ai-studio"}).encode()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(URL + "/prompt", data=corps,
+                                    headers={"Content-Type": "application/json"}), timeout=60) as r:
+            rep = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        echouer(5, "GRAPHE_REFUSE", e.read().decode(errors="replace"))
+    if rep.get("node_errors") or "prompt_id" not in rep:
+        echouer(5, "GRAPHE_REFUSE", json.dumps(rep))
+    pid, etat = rep["prompt_id"], None
+    while time.time() < limite:
+        h = lire("/history/" + pid)
+        if pid in h:
+            etat = h[pid]
+            break
+        if proc.poll() is not None:
+            echouer(7, "COMFY_ARRETE", "pendant le passage %d" % (k + 1))
+        pic = max(pic, vram())
+        time.sleep(2)
+    if etat is None:
+        echouer(8, "DELAI", "%d s, au passage %d" % (D["delai_s"], k + 1))
+    if etat.get("status", {}).get("status_str") != "success":
+        echouer(6, "CALCUL_ECHOUE", json.dumps(etat.get("status", {}).get("messages", []))[-3000:])
+    dossier, _, debut_nom = ("/tmp/sortie/" + P["prefixe"]).rpartition("/")
+    trouves = sorted(Path(dossier).glob(debut_nom + "*"))
+    if not trouves:
+        echouer(6, "CALCUL_ECHOUE", "aucun fichier rendu au passage %d" % (k + 1))
+    rendus.append(trouves[-1])
+    calculs.append(round(time.time() - debut_passage, 1))
+    print("passage %d/%d : %.1f s" % (k + 1, len(D["passages"]), calculs[-1]), flush=True)
 calcul_s = round(time.time() - t_pret, 1)
 journal.flush()
 rapports = [l for l in Path("/tmp/comfy.log").read_text(errors="replace").splitlines() if "[H3FaceRefine]" in l]
 proc.kill()
-sortis = sorted(Path("/tmp/sortie/visages").glob("v*"))
-if not sortis:
-    echouer(6, "CALCUL_ECHOUE", "aucun fichier rendu")
-shutil.copyfile(sortis[-1], OUT / "video.mp4")
-resume = {"de": de, "a": a, "calcul_s": calcul_s, "demarrage_comfy_s": round(t_pret - t0, 1),
-          "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "rapports": rapports[-80:]}
+if len(rendus) == 1:
+    shutil.copyfile(rendus[0], OUT / "video.mp4")
+else:
+    # Bout à bout, image et son de chaque passage (le son d'origine, reposé par CreateVideo).
+    entrees = sum((["-i", str(x)] for x in rendus), [])
+    filtre = "".join("[%d:v][%d:a]" % (i, i) for i in range(len(rendus))) + \
+        "concat=n=%d:v=1:a=1[v][a]" % len(rendus)
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *entrees, "-filter_complex", filtre,
+                        "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", str(OUT / "video.mp4")], capture_output=True, text=True)
+    if r.returncode:
+        print("MONTAGE_ECHOUE " + r.stderr[-1500:], file=sys.stderr)
+        sys.exit(9)
+resume = {"de": de, "a": a, "passages": [[P["de"], P["a"]] for P in D["passages"]], "calcul_s": calcul_s,
+          "calcul_par_passage_s": calculs, "demarrage_comfy_s": round(t_pret - t0, 1),
+          "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "rapports": rapports[-200:]}
 (OUT / "resume.json").write_text(json.dumps(resume, ensure_ascii=False))
 print("VISAGES " + json.dumps(resume, ensure_ascii=False), flush=True)
 '''
