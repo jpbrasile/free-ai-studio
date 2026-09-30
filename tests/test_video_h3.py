@@ -3295,3 +3295,31 @@ def test_visages_encaisse_la_location_meme_en_echec(h3, monkeypatch):
     h3.run_visages(jid, "code", 600)
     assert vus and vus[0][:2] == ("video", h3.visages.GPU)
     assert "nœuds" in h3.read_job(jid)["error"]
+
+
+def test_visages_le_devis_dit_les_personnes_et_les_plans_du_clip(h3, monkeypatch, tmp_path):
+    lance, fid = _source_visages(h3, monkeypatch, tmp_path)
+    v = h3.video_h3
+    marc = v.fiche_creer("Marc", "homme")["id"]
+    sans_photo = v.fiche_creer("Zoé", "femme")["id"]
+    ballon = v.fiche_creer("ballon", "orange", genre="objet")["id"]
+    for f in (marc, ballon):
+        v.fiche_poser_image(f, "face", PNG)
+    job = h3.read_job("b" * 32)
+    job["video"] = {"scenario": "d" * 32, "fiches": [{"id": i} for i in (marc, ballon, sans_photo, fid)]}
+    h3.write_job("b" * 32, job)
+    d = client(h3).get("/video-h3/visages/prix?job=" + "b" * 32 + "&sujets=2", headers=CLE).json()
+    # Les personnes du clip avec photo, dans son ordre ; pas l'objet.
+    assert [f["id"] for f in d["fiches"]] == [marc, fid]
+    assert d["scenario"] == "d" * 32 and [p["plan"] for p in d["plans"]] == [1, 2, 3]
+    assert (d["de"], d["a"]) == (0, 370) and d["devis"]["sujets"] == 2
+    # Trop de personnages : le devis le dit, sans erreur.
+    assert "refus" in client(h3).get("/video-h3/visages/prix?job=" + "b" * 32 + "&sujets=3",
+                                     headers=CLE).json()["devis"]
+
+
+def test_la_page_propose_de_refaire_les_visages(h3):
+    page = client(h3).get("/video-h3", headers=CLE).text
+    assert 'id="clip_visages"' in page and 'id="montage_visages"' in page
+    assert "/video-h3/visages/prix?job=" in page and "Refaire les visages" in page
+    assert page.count("blocVisages(") >= 4

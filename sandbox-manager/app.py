@@ -4432,12 +4432,37 @@ def video_h3_visages_prix(job: str = Query(...), sujets: int = Query(1), de: Opt
     _h3_ou_404()
     auth(authorization)
     _, images = _agrandir_source(job)
+    video = read_job(job).get("video") or {}
+    scenario = scenario or str(video.get("scenario") or "")
     de, a = _visages_bornes(images, de, a, scenario, plan)
     try:
         devis = visages.prix(a - de, sujets)
     except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    return {"de": de, "a": a, "devis": devis, "choix": list(visages.CHOIX), "budget": budget_modal.vue("video")}
+        devis = {"refus": str(exc)}
+    return {"de": de, "a": a, "images": images, "devis": devis, "choix": list(visages.CHOIX),
+            "fiches": _visages_fiches(video), "scenario": scenario, "plans": _visages_plans(scenario, images),
+            "budget": budget_modal.vue("video")}
+
+
+def _visages_fiches(video: dict) -> list:
+    """Les personnes du clip, dans l'ordre du clip ; sinon toutes celles du casting.
+    Un objet n'a pas de visage à refaire."""
+    connues = {f["id"]: f for f in video_h3.fiches_liste()}
+    ids = [f.get("id") for f in video.get("fiches") or [] if isinstance(f, dict)] or list(connues)
+    return [{"id": i, "nom": connues[i]["nom"]} for i in ids
+            if i in connues and connues[i]["genre"] == "personne" and connues[i]["angles"]]
+
+
+def _visages_plans(sid: str, images: int) -> list:
+    """Les plans du scénario présents dans cette vidéo : une suite contient aussi ceux d'avant."""
+    if not sid:
+        return []
+    try:
+        fins = _fins_images(video_h3.scenario_lire(sid))
+    except (ValueError, OSError):
+        return []
+    debuts = [0] + fins[:-1]
+    return [{"plan": k + 1, "de": d, "a": f} for k, (d, f) in enumerate(zip(debuts, fins)) if d < f <= images]
 
 
 def run_visages(jid: str, code: str, delai: int):

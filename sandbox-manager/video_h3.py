@@ -2728,6 +2728,7 @@ PAGE_HTML = r"""<!doctype html>
     <video id="lecteur" controls playsinline></video>
     <p><a id="telecharger" href="#">Enregistrer le clip</a></p>
     <div id="clip_agrandir" class="agrandir"></div>
+    <div id="clip_visages" class="agrandir"></div>
     <p class="note" id="fiche"></p>
     <button id="juger_clip">Faire juger ce clip (gratuit : images et répliques)</button>
     <p class="note" id="jugement_clip"></p>
@@ -2748,6 +2749,7 @@ PAGE_HTML = r"""<!doctype html>
     <video id="montage_lecteur" controls playsinline></video>
     <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
     <div id="montage_agrandir" class="agrandir"></div>
+    <div id="montage_visages" class="agrandir"></div>
   </div>
   <details class="plie" open><summary>Tourner un scénario neuf</summary>
     <span class="note">le scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
@@ -3186,6 +3188,121 @@ async function lancerAgrandir(b, etat, jid, sid, echelle){
   suivreAgrandi();
 }
 
+// Refaire les visages petits d'un clip ou d'un film (FaceRefine, 30/09) : chaque
+// visage est recadré, regénéré par H3 d'après les photos de sa fiche, puis recollé.
+// Deux personnages au plus ; le prix d'abord, la location sur un clic.
+const PLACES = {left_most: "le plus à gauche", right_most: "le plus à droite", centre_most: "au centre",
+  largest_face: "le plus grand visage", smallest_face: "le plus petit visage"};
+
+async function blocVisages(ou, jid, sid){
+  const b = document.getElementById(ou);
+  b.textContent = "";
+  const q = "/video-h3/visages/prix?job=" + jid + (sid ? "&scenario=" + sid : "");
+  const r = await fetch(q, {headers: H});
+  if (!r.ok) return;
+  const d = await r.json();
+  if (!d.fiches.length) return;
+  const titre = document.createElement("b");
+  titre.textContent = "Refaire les visages (petits ou flous)";
+  b.appendChild(titre);
+  const aide = document.createElement("p");
+  aide.className = "note";
+  aide.textContent = "Chaque visage est redessiné d'après les photos de sa fiche. Deux personnages au plus ; "
+    + "dites où chacun se trouve dans l'image. Le clip d'origine n'est pas touché.";
+  b.appendChild(aide);
+  const lignes = d.fiches.map((f, i) => {
+    const l = document.createElement("div");
+    const c = document.createElement("input");
+    c.type = "checkbox";
+    c.checked = i < 2;
+    const nom = document.createElement("span");
+    nom.textContent = " " + f.nom + " : ";
+    const place = document.createElement("select");
+    for (const p of d.choix) place.add(new Option(PLACES[p] || p, p));
+    place.value = d.choix[Math.min(i, 1)];
+    l.append(c, nom, place);
+    b.appendChild(l);
+    return {fiche: f.id, c: c, place: place};
+  });
+  let plan = null;
+  if (d.plans.length > 1){
+    plan = document.createElement("select");
+    plan.add(new Option("toute la vidéo", ""));
+    for (const p of d.plans) plan.add(new Option("plan " + p.plan, p.plan));
+    plan.value = d.plans[d.plans.length - 1].plan;
+    const lp = document.createElement("div");
+    lp.append("Passage : ", plan);
+    b.appendChild(lp);
+  }
+  const k = document.createElement("button");
+  const etat = document.createElement("p");
+  etat.className = "note";
+  b.append(k, etat);
+  const choisis = () => lignes.filter(x => x.c.checked);
+  const majPrixVisages = async () => {
+    const n = choisis().length;
+    k.disabled = true;
+    if (n < 1 || n > 2){
+      k.textContent = "Refaire les visages";
+      etat.textContent = n ? "Deux personnages au plus par traitement." : "Cochez au moins un personnage.";
+      return;
+    }
+    etat.textContent = "";
+    const p = await (await fetch(q + "&sujets=" + n + (plan && plan.value ? "&plan=" + plan.value : ""),
+      {headers: H})).json();
+    if (p.devis.refus){
+      k.textContent = "Refaire les visages : trop long";
+      etat.textContent = p.devis.refus;
+      return;
+    }
+    k.disabled = false;
+    k.textContent = "Refaire les visages — ≈ " + fr(p.devis.estime_usd, 2) + " $ (au pire "
+      + fr(p.devis.pire_usd, 2) + " $), ≈ " + fr(p.devis.secondes_estimees / 60, 0) + " min";
+  };
+  lignes.forEach(x => { x.c.addEventListener("change", majPrixVisages); });
+  if (plan) plan.addEventListener("change", majPrixVisages);
+  k.addEventListener("click", () => lancerVisages(b, etat, {job: jid, scenario: d.scenario,
+    plan: plan && plan.value ? Number(plan.value) : null,
+    sujets: choisis().map(x => ({fiche: x.fiche, choix: x.place.value}))}));
+  majPrixVisages();
+}
+
+async function lancerVisages(b, etat, corps){
+  b.querySelectorAll("button, input, select").forEach(k => k.disabled = true);
+  etat.textContent = "Location de la machine…";
+  const r = await fetch("/video-h3/visages", {method: "POST", headers: H, body: JSON.stringify(corps)});
+  const d = await r.json();
+  if (!r.ok){
+    etat.textContent = typeof d.detail === "string" ? d.detail : "Refusé.";
+    b.querySelectorAll("button, input, select").forEach(k => k.disabled = false);
+    return;
+  }
+  const debut = Date.now();
+  const suivreVisages = async () => {
+    const j = await (await fetch("/video/jobs/" + d.id, {headers: H})).json();
+    if (j.status === "succeeded" && j.video_url){
+      etat.textContent = "Visages refaits en " + fr((Date.now() - debut) / 60000, 0) + " min. ";
+      const v = document.createElement("video");
+      v.src = j.video_url;
+      v.controls = true;
+      v.setAttribute("playsinline", "");
+      etat.appendChild(v);
+      const a = document.createElement("a");
+      a.href = j.video_url + "&telecharger=1&nom=visages";
+      a.textContent = "Enregistrer la vidéo aux visages refaits";
+      etat.appendChild(a);
+      return;
+    }
+    if (j.status === "failed" || j.status === "cancelled"){
+      etat.textContent = "Échec : " + (j.message || j.error || "voir le journal du travail " + d.id);
+      return;
+    }
+    etat.textContent = "Visages en cours… " + fr((Date.now() - debut) / 60000, 0) + " min écoulées.";
+    setTimeout(suivreVisages, 15000);
+  };
+  suivreVisages();
+}
+
 function suivre(jid){
   fetch("/video/jobs/" + jid, {headers: H}).then(r => r.json()).then(j => {
     const st = document.getElementById("statut");
@@ -3194,7 +3311,7 @@ function suivre(jid){
       document.getElementById("resultat").hidden = false;
       document.getElementById("lecteur").src = j.video_url;
       document.getElementById("telecharger").href = j.video_url + "&telecharger=1&nom=clip-h3";
-      if (CLIP_COURANT !== jid) blocAgrandir("clip_agrandir", jid, "");
+      if (CLIP_COURANT !== jid){ blocAgrandir("clip_agrandir", jid, ""); blocVisages("clip_visages", jid, ""); }
       const r = j.resume || {};
       const v = j.video || {};
       document.getElementById("fiche").textContent = "Graine " + r.graine + " ; " + fr(r.calcul_s, 0)
@@ -3846,6 +3963,7 @@ document.getElementById("montage_lancer").addEventListener("click", async () => 
   document.getElementById("montage_lecteur").src = j.video_url;
   document.getElementById("montage_telecharger").href = j.video_url + "&telecharger=1&nom=film-h3";
   blocAgrandir("montage_agrandir", d.id, "");
+  blocVisages("montage_visages", d.id, "");
   chargerClips();
 });
 
@@ -4155,7 +4273,7 @@ async function ouvrirScenario(sid){
     document.getElementById("montage_lecteur").src = sc.video_url;
     document.getElementById("montage_telecharger").href = sc.video_url + "&telecharger=1&nom=film-h3";
     const m = /\/video\/jobs\/([0-9a-f]{32})\//.exec(sc.video_url);
-    if (m) blocAgrandir("montage_agrandir", m[1], sid);
+    if (m){ blocAgrandir("montage_agrandir", m[1], sid); blocVisages("montage_visages", m[1], sid); }
   }
 }
 
