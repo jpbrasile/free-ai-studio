@@ -5196,6 +5196,14 @@ async def _ecouter(video: bytes, texte: str) -> dict:
         return t
 
     if muet:
+        # Rien au-dessus de -35 dB : pas de voix, et Whisper n'est pas appelé. Rejeu du
+        # parc, 30/09 : sur le plan 2 (-57 dB en moyenne), il inventait « I'm going to
+        # make a » (sans parole à 0,25, sous le seuil) ; le plan 3 parlé avait 3 passages.
+        try:
+            if not await asyncio.to_thread(montage.passages_parles, video):
+                return video_h3.comparer_paroles(texte, "")
+        except montage.MontageImpossible:
+            pass
         # Le clip entier suffit : on cherche une voix, pas une réplique à retrouver.
         async with httpx.AsyncClient(timeout=300) as client:
             entendu = await transcrire(client, "clip.mp4", video, "video/mp4")

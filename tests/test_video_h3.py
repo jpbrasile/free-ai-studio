@@ -1735,7 +1735,16 @@ def test_un_plan_sans_replique_est_ecoute_et_une_voix_y_est_une_faute(h3, monkey
     vous étiez… » ; le juge n'écoutait pas les plans sans réplique."""
     import asyncio
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    # Rejeu du parc : un plan à -57 dB, sans passage parlé, n'est pas envoyé à Whisper
+    # (qui y inventait « I'm going to make a », sans parole à 0,25).
     monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [])
+    ecoutes = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille(
+        "", [{"text": "I'm going to make a", "segments": [{"text": "I'm going to make a", "no_speech_prob": 0.25}]}],
+        ecoutes, {}))
+    r = asyncio.run(h3._ecouter(b"CLIP", "Marc ramasse le cerf-volant."))
+    assert r["ok"] is None and ecoutes == []
+    monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [(0.84, 2.08), (2.13, 3.05)])
     parle = {"text": "Bien. Jaffer, vous étiez", "no_speech_prob": 0.26}
     souffle = {"text": "Bye.", "no_speech_prob": 0.74}
     for reponse, ok, doute in (({"text": parle["text"], "segments": [parle]}, False, False),
