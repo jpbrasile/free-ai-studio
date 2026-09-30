@@ -1935,6 +1935,18 @@ def test_une_musique_du_studio_se_pose_sous_un_film(h3, monkeypatch, tmp_path):
         assert c.post("/video-h3/musique", headers=CLE, json=dict(base, **corps)).status_code == code
 
 
+def test_aucune_fonction_du_studio_n_en_cache_une_autre():
+    # 30/09 : un second « _ecouter » (sous-titres) a été écrasé par celui du juge, défini
+    # plus bas ; le test des sous-titres remplaçait la fonction par un faux et n'a rien vu.
+    import ast
+    import collections
+    for nom in ("app.py", "montage.py", "video_h3.py", "visages.py", "agrandir.py", "chanson.py"):
+        arbre = ast.parse((Path(__file__).parents[1] / "sandbox-manager" / nom).read_text(encoding="utf-8"))
+        noms = collections.Counter(n.name for n in arbre.body
+                                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+        assert not [k for k, v in noms.items() if v > 1], nom
+
+
 def test_les_repliques_se_recoupent_aux_pauses_seulement_si_plusieurs_phrases(h3):
     m = h3.montage
     # Film campus, 30/09 : 0,54 s AU MILIEU d'une réplique, 0,59 s ENTRE deux personnages.
@@ -1966,7 +1978,7 @@ def test_un_film_4k_se_sous_titre_en_francais_puis_prend_sa_musique(h3, monkeypa
                                                                     (13.76, 20.06, [(13.76, 16.39), (16.98, 20.06)])])
     monkeypatch.setattr(h3.montage, "son_du_passage", lambda v, de, a: b"%.2f" % de)
     entendus = {b"3.08": "Hey, are you lost?", b"13.56": "Je parle un peu français. Ton accent est trop mignon !"}
-    monkeypatch.setattr(h3, "_ecouter", lambda son: entendus[son])
+    monkeypatch.setattr(h3, "_ecouter_replique", lambda son: entendus[son])
     consignes = []
 
     async def chat(consigne, quoi="", **_):

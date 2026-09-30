@@ -5118,7 +5118,7 @@ SOUS_TITRES_CONSIGNE = (
     "corrigées) ; une autre langue est traduite naturellement, courte, sans guillemets. Rien d'autre.\n\n")
 
 
-def _ecouter(octets: bytes) -> str | None:
+def _ecouter_replique(octets: bytes) -> str | None:
     """Ce que dit un passage (Whisper du Studio, par le routeur), les segments sans
     parole écartés ; None si l'écoute manque."""
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
@@ -5155,7 +5155,7 @@ def run_sous_titres(jid: str, film_jid: str):
         video = _video_h3_octets(film_jid).read_bytes()
         repliques = []
         for de, a, morceaux in montage.passages_de_voix(video):
-            t = _ecouter(montage.son_du_passage(video, max(0.0, de - 0.2), a + 0.2))
+            t = _ecouter_replique(montage.son_du_passage(video, max(0.0, de - 0.2), a + 0.2))
             if t is None:
                 raise montage.MontageImpossible("L'écoute du film a échoué (transcription du routeur).")
             repliques += montage.repartir(morceaux, t)
