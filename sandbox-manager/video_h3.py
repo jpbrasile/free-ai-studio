@@ -3420,6 +3420,9 @@ PAGE_HTML = r"""<!doctype html>
     <input id="musique_fondu" type="number" min="0" max="5" step="0.1" value="0.3">
     </details>
     <button id="musique_poser">Poser la musique</button>
+    <button id="sous_titrer">Sous-titrer ce film en français</button>
+    <span class="note">les répliques sont écoutées, traduites en français (chat gratuit du Studio) et écrites
+    dans l'image ; rien n'est loué. Sous-titrez avant de poser la musique : elle gênerait l'écoute.</span>
     <p class="note" id="musique_etat"></p>
     <div id="musique_resultat" hidden>
       <video id="musique_lecteur" controls playsinline></video>
@@ -4636,13 +4639,16 @@ async function chargerClips(){
   const mf = document.getElementById("musique_film");
   const gardeMf = mf.value;
   mf.innerHTML = "";
-  for (const c of CLIPS){
+  // Les films en haute définition d'abord : on les finit (sous-titres, musique) après la 4K.
+  const films = (d.films_hd || []).map(f => ({id: f.id, cree_a: f.cree_a, secondes: f.secondes,
+    invite: (f.echelle || "").toUpperCase() + " · " + (f.titre || "")})).concat(CLIPS);
+  for (const c of films){
     const o = document.createElement("option");
     o.value = c.id;
     o.textContent = quandLocal(c.cree_a) + " · " + fr(c.secondes || 0, 1) + " s · " + (c.invite || "").slice(0, 60);
     mf.appendChild(o);
   }
-  if (CLIPS.some(c => c.id === gardeMf)) mf.value = gardeMf;
+  if (films.some(c => c.id === gardeMf)) mf.value = gardeMf;
 }
 
 document.getElementById("musique_poser").addEventListener("click", async () => {
@@ -4664,6 +4670,30 @@ document.getElementById("musique_poser").addEventListener("click", async () => {
   document.getElementById("musique_lecteur").src = lien.video_url;
   document.getElementById("musique_telecharger").href = lien.video_url + "&telecharger=1&nom=film-h3";
   chargerClips();
+});
+
+document.getElementById("sous_titrer").addEventListener("click", async () => {
+  const e = document.getElementById("musique_etat");
+  e.className = "note";
+  e.textContent = "Sous-titres : écoute des répliques…";
+  const r = await fetch("/video-h3/sous-titres", {method: "POST", headers: H, body: JSON.stringify({
+    film: document.getElementById("musique_film").value})});
+  const j = await r.json();
+  if (!r.ok){ e.className = "refus"; e.textContent = typeof j.detail === "string" ? j.detail : "Refusé."; return; }
+  let d = null;
+  for (;;){
+    await new Promise(ok => setTimeout(ok, 4000));
+    d = await fetch("/video/jobs/" + j.id, {headers: H}).then(x => x.json());
+    if (d.status === "succeeded" || d.status === "failed") break;
+    e.textContent = "Sous-titres : " + (d.etape || "en attente") + "…";
+  }
+  if (d.status === "failed"){ e.className = "refus"; e.textContent = d.message || "Les sous-titres ont échoué."; return; }
+  e.textContent = "Film sous-titré : il est ci-dessous, et dans la liste des films pour y poser la musique.";
+  document.getElementById("musique_resultat").hidden = false;
+  document.getElementById("musique_lecteur").src = d.video_url;
+  document.getElementById("musique_telecharger").href = d.video_url + "&telecharger=1&nom=film-sous-titre";
+  await chargerClips();
+  document.getElementById("musique_film").value = j.id;
 });
 
 function dessinerFilmsHd(films){

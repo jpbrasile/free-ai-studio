@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -1932,6 +1933,82 @@ def test_une_musique_du_studio_se_pose_sous_un_film(h3, monkeypatch, tmp_path):
     for corps, code in (({"chanson": "e" * 32}, 404), ({"film": "e" * 32}, 404), ({"volume": 2}, 400)):
         base = {"film": "a" * 32, "chanson": c_id, "debut_s": 1}
         assert c.post("/video-h3/musique", headers=CLE, json=dict(base, **corps)).status_code == code
+
+
+def test_les_repliques_se_recoupent_aux_pauses_seulement_si_plusieurs_phrases(h3):
+    m = h3.montage
+    # Film campus, 30/09 : 0,54 s AU MILIEU d'une réplique, 0,59 s ENTRE deux personnages.
+    assert m.repartir([(3.28, 3.67), (4.21, 5.03)], "Hey, are you lost?") == [(3.28, 5.03, "Hey, are you lost?")]
+    assert m.repartir([(13.76, 16.39), (16.98, 20.06)], "Je parle un peu français. Ton accent est trop mignon !") \
+        == [(13.76, 16.39, "Je parle un peu français."), (16.98, 20.06, "Ton accent est trop mignon !")]
+    # Une pause courte (0,37 s) ne coupe pas, même si Whisper met un point.
+    assert m.repartir([(6.61, 10.01), (10.38, 11.25)], "Yes! I can't find the science building.") \
+        == [(6.61, 11.25, "Yes! I can't find the science building.")]
+    assert m.repartir([(1.0, 2.0)], "  ") == []
+    cales = m.calage([(3.28, 5.03, "Hé, tu es perdue ?"), (5.2, 5.4, "Oui !"), (9.0, 9.5, "Bon.")])
+    assert cales[0] == (3.13, 5.03, "Hé, tu es perdue ?")          # pas au-delà de la voix : la suivante suit
+    assert all(x[1] < y[0] for x, y in zip(cales, cales[1:]))      # jamais deux à la fois
+    assert cales[1][1] - cales[1][0] >= m.SOUS_TITRE_MIN_S
+    assert m.srt(cales[:1]) == "1\n00:00:03,130 --> 00:00:05,030\nHé, tu es perdue ?\n\n"
+
+
+def test_un_film_4k_se_sous_titre_en_francais_puis_prend_sa_musique(h3, monkeypatch, tmp_path):
+    fichiers = _deux_clips(h3, monkeypatch, tmp_path)
+    hd = "e" * 32
+    _clip_reussi(h3, hd, moteur="SeedVR2 (agrandissement)")
+    job = h3.read_job(hd)
+    job["video"]["echelle"] = "4k"
+    h3.write_job(hd, job)
+    fichiers[hd] = tmp_path / "hd.mp4"
+    fichiers[hd].write_bytes(b"FILM4K")
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "k")
+    monkeypatch.setattr(h3.montage, "passages_de_voix", lambda v: [(3.28, 5.03, [(3.28, 3.67), (4.21, 5.03)]),
+                                                                    (13.76, 20.06, [(13.76, 16.39), (16.98, 20.06)])])
+    monkeypatch.setattr(h3.montage, "son_du_passage", lambda v, de, a: b"%.2f" % de)
+    entendus = {b"3.08": "Hey, are you lost?", b"13.56": "Je parle un peu français. Ton accent est trop mignon !"}
+    monkeypatch.setattr(h3, "_ecouter", lambda son: entendus[son])
+    consignes = []
+
+    async def chat(consigne, quoi="", **_):
+        consignes.append(consigne)
+        return '```json\n["Hé, tu es perdue ?", "Je parle un peu français.", "Ton accent est trop mignon !"]\n```'
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    incruste = []
+    monkeypatch.setattr(h3.montage, "incruster_sous_titres", lambda f, s: incruste.append((f, s)) or f + b"+ST")
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 724)
+    c = client(h3)
+    r = c.post("/video-h3/sous-titres", headers=CLE, json={"film": hd})
+    assert r.status_code == 200, r.text
+    for _ in range(150):   # le vrai fil : l'écoute et la traduction y tournent
+        time.sleep(0.2)
+        try:
+            st = h3.read_job(r.json()["id"])
+        except OSError:    # Windows : le fichier est en train d'être remplacé
+            continue
+        if st["status"] in ("succeeded", "failed"):
+            break
+    assert st["status"] == "succeeded", st.get("error")
+    assert '"Hey, are you lost?"' in consignes[0] and "français" in consignes[0]
+    assert [x["texte"] for x in st["video"]["sous_titres"]] == ["Hé, tu es perdue ?", "Je parle un peu français.",
+                                                                "Ton accent est trop mignon !"]
+    assert incruste[0][0] == b"FILM4K" and "00:00:16,830 --> " in incruste[0][1]
+    # Il reste un film 4K : dans la liste HD, pas parmi les clips 480p à monter.
+    assert st["video"]["moteur"] == "SeedVR2 (agrandissement)" and st["video"]["echelle"] == "4k"
+    listes = c.get("/video-h3/clips", headers=CLE).json()
+    assert st["id"] in [f["id"] for f in listes["films_hd"]] and st["id"] not in [x["id"] for x in listes["clips"]]
+    # Puis la musique sur le film sous-titré, qui reste 4K.
+    son = tmp_path / "son.flac"
+    son.write_bytes(b"SON")
+    monkeypatch.setattr(h3, "_chansons_pretes", lambda: [{"id": "c" * 32, "titre": "Campus", "cree_a": 0}])
+    monkeypatch.setattr(h3, "chanson_fichiers", lambda jid: {"son": {"path": str(son)}})
+    monkeypatch.setattr(h3.montage, "poser_musique", lambda f, s, *reste: f + s)
+    r = c.post("/video-h3/musique", headers=CLE, json={"film": st["id"], "chanson": "c" * 32, "sous_paroles": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["video"]["moteur"] == "SeedVR2 (agrandissement)" and r.json()["video"]["echelle"] == "4k"
+    # L'écoute absente : refus avant tout travail.
+    monkeypatch.delenv("FREE_TIER_MANAGER_KEY")
+    assert c.post("/video-h3/sous-titres", headers=CLE, json={"film": hd}).status_code == 503
+    assert c.post("/video-h3/sous-titres", headers=CLE, json={"film": "z" * 32}).status_code == 404
 
 
 def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch, sans_regles):
@@ -3905,7 +3982,9 @@ def test_finaliser_fait_les_visages_puis_la_4k_en_une_location_chacun(h3, monkey
     assert h3.read_job(f["film"])["video"]["moteur"] == "SeedVR2 (agrandissement)"
     # La page le retrouve (« 4k dans studio ») ; les morceaux de l'agrandissement, non.
     hd = client(h3).get("/video-h3/clips", headers=CLE).json()["films_hd"]
-    assert [x["id"] for x in hd] == [f["film"]] and hd[0]["echelle"] == "4k" and "cle=" in hd[0]["video_url"]
+    film = next(x for x in hd if x["id"] == f["film"])
+    assert film["echelle"] == "4k" and "cle=" in film["video_url"]
+    assert not {p["agrandi"] for p in f["plans"]} & {x["id"] for x in hd}
     assert not job["video"]["moteur"].startswith("MiniMax H3")
     assert job["video"]["devis"]["pire_usd"] > job["video"]["devis"]["estime_usd"] > 0
 

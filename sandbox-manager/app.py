@@ -5076,7 +5076,7 @@ def _mettre_musique(film_jid: str, chanson_jid: str, debut_s: float, volume: flo
                     depart_chanson_s: float = 0.0, fondu_s: float = 0.3, sous_paroles: bool = False) -> str:
     """Pose la musique d'une chanson sous un film H3 ; rend le numéro du nouveau film."""
     film = _video_h3_octets(film_jid)
-    if not film or film_jid not in {c["id"] for c in _clips_h3()}:
+    if not film or film_jid not in _films_du_studio():
         raise ValueError("Ce film n'est plus sur ce Studio.")
     if chanson_jid not in {c["id"] for c in _chansons_pretes()}:
         raise ValueError("Cette musique n'est plus sur ce Studio.")
@@ -5084,12 +5084,165 @@ def _mettre_musique(film_jid: str, chanson_jid: str, debut_s: float, volume: flo
     avec = montage.poser_musique(film.read_bytes(), son.read_bytes(), debut_s, volume,
                                  depart_chanson_s, fondu_s, sous_paroles)
     avant = read_job(film_jid).get("video") or {}
+    # Un film en haute définition le reste : même moteur, même échelle (30/09, film campus 4K).
     return _film_h3(avec, {"mode": "musique", "mode_titre": "Film et musique", "invite": avant.get("invite", ""),
                            "clips": [film_jid], "plans": avant.get("plans") or 1,
+                           **({"echelle": avant["echelle"]} if avant.get("echelle") else {}),
                            "musique": {"chanson": chanson_jid, "debut_s": round(debut_s, 3), "volume": volume,
                                        "depart_chanson_s": round(depart_chanson_s, 3),
                                        "fondu_s": round(fondu_s, 3), "sous_paroles": sous_paroles}},
-                    (read_job(film_jid).get("titre") or "Film H3")[:50] + " + musique")
+                    (read_job(film_jid).get("titre") or "Film H3")[:50] + " + musique",
+                    moteur=_moteur_du_film(avant))
+
+
+def _films_du_studio() -> set:
+    """Les films qu'on peut reprendre (musique, sous-titres) : clips H3 et films HD."""
+    return {c["id"] for c in _clips_h3()} | {f["id"] for f in _films_hd()}
+
+
+def _moteur_du_film(video: dict) -> str:
+    """Un film HD reste HD (il n'entre pas dans un montage de clips 480p)."""
+    m = str(video.get("moteur") or "")
+    return m if m == "SeedVR2 (agrandissement)" else "MiniMax H3 (montage)"
+
+
+# --- Sous-titres en français, faits ici (30/09/2026) ---------------------------
+# Demande du propriétaire : « il manque la musique et les sous titres… via le studio »,
+# puis « tout en français ». Rien n'est loué : l'écoute (Whisper) et la traduction passent
+# par le routeur gratuit, l'incrustation par ffmpeg sur ce PC.
+
+SOUS_TITRES_CONSIGNE = (
+    "Voici les répliques d'un film, transcrites à l'oreille, dans l'ordre, en JSON. Rends UNIQUEMENT une "
+    "liste JSON de chaînes, de même longueur, dans le même ordre : chaque réplique en sous-titre français. "
+    "Une réplique déjà en français est recopiée (seules les fautes évidentes de transcription sont "
+    "corrigées) ; une autre langue est traduite naturellement, courte, sans guillemets. Rien d'autre.\n\n")
+
+
+def _ecouter(octets: bytes) -> str | None:
+    """Ce que dit un passage (Whisper du Studio, par le routeur), les segments sans
+    parole écartés ; None si l'écoute manque."""
+    cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
+    if not cle:
+        return None
+    try:
+        r = httpx.post(ROUTEUR_INTERNE + "/v1/audio/transcriptions",
+                       headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
+                       files={"file": ("passage.mp3", octets, "audio/mpeg")},
+                       data={"model": "whisper-1", "details": "segments"}, timeout=300)
+        d = r.json() if r.status_code < 400 else {}
+    except (httpx.HTTPError, ValueError):
+        return None
+    t = d.get("text") if isinstance(d, dict) else None
+    if not isinstance(t, str):
+        return None
+    if isinstance(d.get("segments"), list) and d["segments"]:
+        t, _ = video_h3.segments_parles(d["segments"])
+    return t
+
+
+def lire_liste_json(reponse: str, n: int) -> list:
+    """La liste de `n` chaînes rendue par le chat ; ValueError sinon."""
+    m = re.search(r"\[.*\]", reponse or "", re.S)
+    liste = json.loads(m.group(0)) if m else None
+    if not isinstance(liste, list) or len(liste) != n or not all(isinstance(x, str) and x.strip() for x in liste):
+        raise ValueError("La traduction n'a pas rendu %d répliques." % n)
+    return [" ".join(x.split()) for x in liste]
+
+
+def run_sous_titres(jid: str, film_jid: str):
+    try:
+        _job_noter(jid, status="running", started_at=time.time(), etape="Écoute des répliques")
+        video = _video_h3_octets(film_jid).read_bytes()
+        repliques = []
+        for de, a, morceaux in montage.passages_de_voix(video):
+            t = _ecouter(montage.son_du_passage(video, max(0.0, de - 0.2), a + 0.2))
+            if t is None:
+                raise montage.MontageImpossible("L'écoute du film a échoué (transcription du routeur).")
+            repliques += montage.repartir(morceaux, t)
+        if not repliques:
+            raise montage.MontageImpossible("Aucune réplique entendue dans ce film.")
+        _job_noter(jid, etape="Traduction en français")
+        consigne = SOUS_TITRES_CONSIGNE + json.dumps([t for _, _, t in repliques], ensure_ascii=False)
+        try:
+            francais = lire_liste_json(_dans_un_fil(_chat_du_studio(consigne, "la traduction des sous-titres")),
+                                       len(repliques))
+        except HTTPException as exc:
+            raise montage.MontageImpossible(str(exc.detail)) from exc
+        except ValueError as exc:
+            raise montage.MontageImpossible(str(exc)) from exc
+        cales = montage.calage([(de, a, f) for (de, a, _), f in zip(repliques, francais)])
+        texte_srt = montage.srt(cales)
+        _job_noter(jid, etape="Incrustation dans l'image")
+        film = montage.incruster_sous_titres(video, texte_srt)
+        chemin = JOBS / jid / "video.mp4"
+        chemin.write_bytes(film)
+        try:
+            art = add_artifact(jid, chemin, "montage")
+        finally:
+            chemin.unlink(missing_ok=True)
+        job = read_job(jid)
+        job["video"]["sous_titres"] = [{"de": de, "a": a, "entendu": e, "texte": f}
+                                       for (de, a, f), (_, _, e) in zip(cales, repliques)]
+        job["video"]["srt"] = texte_srt
+        job.update({"status": "succeeded", "finished_at": time.time(), "artifacts": [art], "etape": "",
+                    "error": ""})
+        write_job(jid, job)
+    except Exception as exc:  # noqa: BLE001 -- la phrase va à la page, le travail finit en échec
+        _job_noter(jid, etape="")
+        terminer_en_echec(jid, str(exc) if isinstance(exc, montage.MontageImpossible)
+                          else "Les sous-titres ont échoué : %s" % type(exc).__name__)
+
+
+def _dans_un_fil(coro):
+    """Le résultat d'une coroutine depuis du code synchrone, dans un fil à part :
+    asyncio.run refuse de tourner là où une boucle est déjà active."""
+    sortie, erreurs = [], []
+
+    def tourner():
+        try:
+            sortie.append(asyncio.run(coro))
+        except BaseException as exc:  # noqa: BLE001 -- relevée dans le fil appelant
+            erreurs.append(exc)
+    fil = threading.Thread(target=tourner)
+    fil.start()
+    fil.join()
+    if erreurs:
+        raise erreurs[0]
+    return sortie[0]
+
+
+def _job_noter(jid: str, **champs):
+    job = read_job(jid)
+    job.update(champs)
+    write_job(jid, job)
+
+
+@app.post("/video-h3/sous-titres")
+async def video_h3_sous_titres(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{film} : le même film, sous-titré en français dans l'image. Rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    film_jid = str(corps.get("film") or "")
+    if film_jid not in _films_du_studio() or not _video_h3_octets(film_jid):
+        raise HTTPException(404, "Ce film n'est plus sur ce Studio.")
+    if not os.getenv("FREE_TIER_MANAGER_KEY", "").strip():
+        raise HTTPException(503, "L'écoute et la traduction passent par le routeur du Studio, "
+                                 "injoignable d'ici (clé interne absente) : rien n'est lancé.")
+    origine = read_job(film_jid)
+    avant = origine.get("video") or {}
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid, "provider": "local", "title": "Free AI Studio sous-titres", "gpu": False, "internet": False,
+        "status": "queued", "created_at": time.time(), "artifacts": [],
+        "video": dict({"moteur": _moteur_du_film(avant), "mode": "sous_titres", "mode_titre": "Film sous-titré",
+                       "source": film_jid, "clips": [film_jid], "invite": avant.get("invite", ""),
+                       "plans": avant.get("plans") or 1, "secondes": avant.get("secondes")},
+                      **({"echelle": avant["echelle"]} if avant.get("echelle") else {})),
+        "titre": ((origine.get("titre") or "Film H3")[:60] + " (sous-titré)"),
+    })
+    threading.Thread(target=run_sous_titres, args=(jid, film_jid), daemon=True).start()
+    return read_job(jid)
 
 
 @app.post("/video-h3/musique")

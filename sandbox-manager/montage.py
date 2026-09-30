@@ -277,10 +277,11 @@ def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0
 PASSAGES_MAX = 8
 
 
-def lire_silences(journal: str, duree_s: float, min_s: float = 0.3, marge_s: float = 0.25) -> list:
+def lire_silences(journal: str, duree_s: float, min_s: float = 0.3, marge_s: float = 0.25,
+                  maximum: int = PASSAGES_MAX) -> list:
     """Les passages NON silencieux d'après le journal de `silencedetect`, élargis
     de `marge_s`, ceux de moins de `min_s` écartés (bruits de pas). Rend
-    [(debut, fin)], au plus PASSAGES_MAX, dans l'ordre."""
+    [(debut, fin)], au plus `maximum`, dans l'ordre."""
     silences, debut = [], None
     for m in re.finditer(r"silence_(start|end): (-?[\d.]+)", journal):
         t = max(0.0, float(m.group(2)))
@@ -296,7 +297,7 @@ def lire_silences(journal: str, duree_s: float, min_s: float = 0.3, marge_s: flo
         if a - t >= min_s:
             passages.append((round(max(0.0, t - marge_s), 2), round(min(duree_s, a + marge_s), 2)))
         t = b
-    return passages[:PASSAGES_MAX]
+    return passages[:maximum]
 
 
 def passages_parles(video: bytes) -> list:
@@ -315,6 +316,130 @@ def passages_parles(video: bytes) -> list:
             raise MontageImpossible("La recherche des passages parlés a échoué.")
         h, m, s = duree.groups()
         return lire_silences(fini.stderr, int(h) * 3600 + int(m) * 60 + float(s))
+
+
+# Sous-titres (30/09/2026, « il manque la musique et les sous-titres… via le studio »).
+# Mesuré sur le film campus : à -35 dB sur tout le spectre, l'ambiance fait un seul passage
+# de 17 à 28 s ; dans la bande de la voix (300-3400 Hz) à -30 dB, sept morceaux pour six
+# répliques. Une pause ne suffit pas à dire qui parle : 0,54 s au MILIEU de « Hey, are you
+# lost? », 0,59 s ENTRE « Je… parle un peu français » et la réponse de Leila. Donc les
+# morceaux proches (moins de VOIX_TROU_S) sont écoutés ensemble, puis recoupés aux pauses
+# d'au moins VOIX_COUPURE_S seulement si ce qui est entendu fait plusieurs phrases.
+VOIX_BANDE = "highpass=f=300,lowpass=f=3400,"
+VOIX_SEUIL_DB = -30
+VOIX_TROU_S = 0.8
+VOIX_COUPURE_S = 0.5
+REPLIQUES_MAX = 200
+SOUS_TITRE_MIN_S = 1.2     # le temps de lire une réplique courte
+SOUS_TITRE_APRES_S = 0.5   # le sous-titre reste un peu après la voix
+DELAI_INCRUSTATION_S = 1800
+
+
+def passages_de_voix(video: bytes) -> list:
+    """[(debut, fin, [(debut, fin) des morceaux])] en secondes : ce qui s'écoute d'un coup."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "entree")
+        a.write_bytes(video)
+        fini = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(a), "-vn", "-af",
+                               VOIX_BANDE + "silencedetect=n=%ddB:d=0.35" % VOIX_SEUIL_DB, "-f", "null", "-"],
+                              capture_output=True, text=True, timeout=DELAI_S)
+        duree = re.search(r"Duration: (\d+):(\d+):([\d.]+)", fini.stderr or "")
+        if fini.returncode != 0 or not duree:
+            raise MontageImpossible("La recherche des répliques a échoué.")
+        h, m, s = duree.groups()
+        bruts = lire_silences(fini.stderr, int(h) * 3600 + int(m) * 60 + float(s), min_s=0.3, marge_s=0.0,
+                              maximum=REPLIQUES_MAX)
+    passages = []
+    for de, a in bruts:
+        if passages and de - passages[-1][1] < VOIX_TROU_S:
+            passages[-1] = (passages[-1][0], a, passages[-1][2] + [(de, a)])
+        else:
+            passages.append((de, a, [(de, a)]))
+    return passages
+
+
+def repartir(morceaux: list, texte: str) -> list:
+    """Ce qui a été entendu sur un passage, rendu en répliques [(de, a, texte)] : une
+    seule, sauf si le texte fait plusieurs phrases ET que le passage a des pauses d'au
+    moins VOIX_COUPURE_S ; on coupe alors aux plus longues, les phrases réparties au
+    prorata de leur longueur et de la durée des parts."""
+    texte = " ".join(texte.split())
+    phrases = [p for p in re.split(r"(?<=[.!?…])\s+", texte) if p]
+    pauses = sorted(((morceaux[i + 1][0] - morceaux[i][1], i) for i in range(len(morceaux) - 1)
+                     if morceaux[i + 1][0] - morceaux[i][1] >= VOIX_COUPURE_S), reverse=True)
+    coupes = sorted(i for _, i in pauses[:max(0, len(phrases) - 1)])
+    if not coupes:
+        return [(morceaux[0][0], morceaux[-1][1], texte)] if texte else []
+    parts, d = [], 0
+    for i in coupes + [len(morceaux) - 1]:
+        parts.append((morceaux[d][0], morceaux[i][1]))
+        d = i + 1
+    duree = sum(b - a for a, b in parts)
+    bornes, t = [], 0.0
+    for a, b in parts:
+        t += (b - a) / duree
+        bornes.append(t)
+    lettres = sum(len(p) for p in phrases)
+    textes, c = [[] for _ in parts], 0
+    for j, p in enumerate(phrases):
+        milieu = (c + len(p) / 2) / lettres
+        c += len(p)
+        k = next(k for k, b in enumerate(bornes) if milieu <= b + 1e-9)
+        # Autant de phrases que de parts : une chacune, dans l'ordre.
+        textes[j if len(phrases) == len(parts) else k].append(p)
+    sortie = []
+    for (a, b), ps in zip(parts, textes):
+        if ps:
+            sortie.append((a, b, " ".join(ps)))
+        elif sortie:
+            sortie[-1] = (sortie[-1][0], b, sortie[-1][2])
+    return sortie
+
+
+def calage(repliques: list) -> list:
+    """[(de, a, texte)] entendus -> [(de, a, texte)] à afficher : un peu avant la voix,
+    assez longtemps pour être lus, jamais par-dessus le suivant."""
+    sortie = []
+    for k, (de, a, texte) in enumerate(repliques):
+        debut = max(0.0, de - 0.15, sortie[-1][1] + 0.05 if sortie else 0.0)
+        fin = max(a + SOUS_TITRE_APRES_S, debut + SOUS_TITRE_MIN_S)
+        if k + 1 < len(repliques):
+            fin = min(fin, max(a, repliques[k + 1][0] - 0.2))
+        sortie.append((round(debut, 2), round(fin, 2), texte))
+    return sortie
+
+
+def srt(repliques: list) -> str:
+    """Le fichier .srt de [(de, a, texte)] déjà calés."""
+    def t(s):
+        ms = round(s * 1000)
+        return "%02d:%02d:%02d,%03d" % (ms // 3600000, ms // 60000 % 60, ms // 1000 % 60, ms % 1000)
+    return "".join("%d\n%s --> %s\n%s\n\n" % (i + 1, t(de), t(a), " ".join(texte.split()))
+                   for i, (de, a, texte) in enumerate(repliques))
+
+
+def incruster_sous_titres(film: bytes, texte_srt: str) -> bytes:
+    """Les sous-titres dessinés dans l'image (visibles partout, sur un téléphone comme
+    dans une page). Taille relative à la hauteur de l'image : pareil en 480p et en 4K.
+    Le son est gardé tel quel ; seules les images sont réencodées."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, s, sortie = Path(dossier, "film.mp4"), Path(dossier, "sous.srt"), Path(dossier, "sous_titre.mp4")
+        a.write_bytes(film)
+        s.write_text(texte_srt, encoding="utf-8")
+        style = ("FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
+                 "BorderStyle=1,Outline=1.2,Shadow=0,MarginV=18")
+        fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-vf",
+                               "subtitles=sous.srt:charenc=UTF-8:force_style='%s'" % style,
+                               "-map", "0:v", "-map", "0:a?", "-c:v", "libx264", "-crf", "17", "-preset", "medium",
+                               "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                              capture_output=True, text=True, timeout=DELAI_INCRUSTATION_S, cwd=dossier)
+        if fini.returncode != 0:
+            raise MontageImpossible("L'incrustation des sous-titres a échoué : %s"
+                                    % (fini.stderr or "").strip()[-300:])
+        if images(sortie) != images(a):
+            raise MontageImpossible("L'incrustation des sous-titres a changé le nombre d'images : "
+                                    "le film n'est pas rendu.")
+        return sortie.read_bytes()
 
 
 def son_du_passage(video: bytes, debut_s: float, fin_s: float) -> bytes:
