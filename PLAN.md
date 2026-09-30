@@ -1375,7 +1375,12 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                 - `detailed_description: [Shot 1] …`.
                 - Image de départ : `<Picture N> is the first frame of [Shot 1].` dans les définitions, `<Picture N> ([Shot 1] first frame): fully_preserved - …` dans `retention_analysis`, et « The shot begins from <Picture N>. » dans la description.
                 - **Écart trouvé par cette relecture, et corrigé :** la définition d'une voix reprend le (Sx) du locuteur, comme `<Audio 1> is the voice-timbre reference for <Subject 2> (S1).` (ref-en.txt, 2.4).
-                - Suite : 1630 verts. Préparation à blanc du film campus : aucune règle non suivie. Effet sur H3 non mesuré.
+                - Suite : 1630 verts. Préparation à blanc du film campus : aucune règle non suivie.
+                - **Plan 1 tourné le 30/09 avec cette invite, sur l'ordre « tourne le plan 1 »** (scénario `2f4ee365`, travail `7222c242`) :
+                  - 768p, 124 images (5,17 s) sur une A100 ; 186 s de location, dont 148 s de calcul ; environ 0,21 $ (crédit restant : 5,09 $ avant, 4,88 $ après ; pire cas annoncé : 0,96 $).
+                  - Image, vue sur 5 vues fixes : Leila au centre, la carte dépliée ; Tyler entre par la gauche et finit à droite, tourné vers elle. Un seul exemplaire de chacun.
+                  - Son : Whisper medium (local) entend « Hey, are you lost? » en anglais (p = 0,98), mot pour mot.
+                  - **Non vérifié :** que la voix soit celle de Tyler et que le ton soit amusé (écoute du propriétaire), ainsi que la ressemblance des visages avec les fiches. Un seul clip : on ne peut rien en conclure sur l'effet de `summary` et d'« appears in ».
               - Le relecteur (un chat) signale de nouveau, au plan 5, deux actions principales (deux répliques). Cette remarque varie d'un passage à l'autre.
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
