@@ -1269,13 +1269,17 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         premiere += nombre
         if k in objets and (objets.get(k) if isinstance(objets, dict) else None) == "pose":
             definitions.append(f"<Subject {k + 1}> is the hand pose in {images}.")
-            garde.append(f"<Subject {k + 1}> is a hand pose only: the hands and fingers take exactly this "
-                         "position when the text names it; it adds no person and no object.")
+            garde.append(f"<Subject {k + 1}>: fully_preserved - a hand pose only: the hands and fingers take "
+                         f"exactly the position of {images} when the text names it; it adds no person and no object.")
             continue
+        # Forme du guide de MiniMax (VIDEO_PROMPT_WRITING_GUIDE_ref_en.md, 4.1) : une ligne par
+        # étiquette, « <Subject N>: fully_preserved - … ». Les images y sont NOMMÉES (30/09,
+        # remarque du propriétaire) : « the reference pictures » ne disait pas lesquelles,
+        # avec Leila en <Picture 1…4> et Tyler en <Picture 5…8>.
         if k in objets:
             definitions.append(f"<Subject {k + 1}> is the object in {images}.")
-            garde.append(f"<Subject {k + 1}> keeps the shape, colour and size of the reference pictures; there "
-                         "is exactly one of it in every frame where it appears.")
+            garde.append(f"<Subject {k + 1}>: fully_preserved - the shape, colour and size of the object in "
+                         f"{images} are retained; there is exactly one of it in every frame where it appears.")
             continue
         definitions.append(f"<Subject {k + 1}> is the person in {images}.")
         j = (voix or {}).get(k)
@@ -1300,11 +1304,12 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         porte = (f" <Subject {k + 1}> wears {ecrite} in every frame, also when seen from behind, in profile "
                  "or from afar." if ecrite else "")
         if k in tenues:   # la dernière de ses images le montre dans la tenue du scénario (29/09)
-            garde.append(f"<Subject {k + 1}> keeps the face and hair of the reference pictures and wears the "
-                         f"clothing of <Picture {premiere - 1}>, as one single person." + porte)
+            garde.append(f"<Subject {k + 1}>: fully_preserved - the face and hair of the person in {images} "
+                         f"are retained, with the clothing of <Picture {premiere - 1}>, as one single person."
+                         + porte)
             continue
-        garde.append(f"<Subject {k + 1}> keeps the face, hair and clothing of the reference pictures, "
-                     "as one single person." + porte)
+        garde.append(f"<Subject {k + 1}>: fully_preserved - the face, hair and clothing of the person in "
+                     f"{images} are retained, as one single person." + porte)
     return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
 
 

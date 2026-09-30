@@ -841,8 +841,9 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
                               image_paroles="Elle sourit et dit « Bonjour. »"))
     invite = plan["resume_public"]["invite"]
     assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. "
-                             "retention_analysis: <Subject 1> keeps the face, hair and clothing of the "
-                             "reference pictures, as one single person. detailed_description: Elle sourit")
+                             "retention_analysis: <Subject 1>: fully_preserved - the face, hair and clothing "
+                             "of the person in <Picture 1>, <Picture 2> are retained, as one single person. "
+                             "detailed_description: Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
     assert "manteau rouge" not in invite and "Léa" not in invite
@@ -1394,7 +1395,7 @@ def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, 
     for p in fils[0][1]:
         assert p["payload"]["tenues"] == {fid: PNG}
         invite = v.preparer(p["payload"])["resume_public"]["invite"]
-        assert "wears the clothing of <Picture 2>" in invite
+        assert "with the clothing of <Picture 2>, as one single person" in invite
     assert v.lire_tenues("rien de lisible", ["Léa"]) == {}
 
 
@@ -1492,9 +1493,10 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
     plan = v.preparer(d)
     assert plan["resume_public"]["invite"] == (
         "subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. <Subject 2> is the "
-        "person in <Picture 3>. retention_analysis: <Subject 1> keeps the face, hair and clothing of the "
-        "reference pictures, as one single person. <Subject 2> keeps the face, hair and clothing of the "
-        "reference pictures, as one single person. "
+        "person in <Picture 3>. retention_analysis: <Subject 1>: fully_preserved - the face, hair and "
+        "clothing of the person in <Picture 1>, <Picture 2> are retained, as one single person. <Subject 2>: "
+        "fully_preserved - the face, hair and clothing of the person in <Picture 3> are retained, as one "
+        "single person. "
         # Chaque personnage n'est placé qu'une fois, par la description elle-même.
         "detailed_description: <Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
         "<Subject 1> (S2) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
@@ -3651,3 +3653,17 @@ def test_la_regle_1_lit_the_only_comme_un_article(h3):
     r = h3.regles
     assert r.nomme_dans("the only bulletin board", "Leila faces right towards the bulletin board.")
     assert not r.nomme_dans("the only bulletin board", "Leila faces right towards the board.")
+
+
+def test_retention_nomme_les_images_de_chaque_sujet_comme_le_guide(h3):
+    """30/09, remarque du propriétaire : « of the reference pictures » ne disait pas
+    lesquelles. Guide de MiniMax (ref_en, 4.1) : « <Subject 1>: fully_preserved - … »."""
+    v = h3.video_h3
+    t = v.sujets_des_fiches([4, 4, 1, 1], objets={2: "objet", 3: "pose"})
+    assert ("<Subject 1>: fully_preserved - the face, hair and clothing of the person in <Picture 1>, "
+            "<Picture 2>, <Picture 3>, <Picture 4> are retained") in t
+    assert "<Subject 2>: fully_preserved - the face, hair and clothing of the person in <Picture 5>, " in t
+    assert "<Subject 3>: fully_preserved - the shape, colour and size of the object in <Picture 9> " in t
+    assert "<Subject 4>: fully_preserved - a hand pose only: the hands and fingers take exactly the " \
+           "position of <Picture 10>" in t
+    assert "reference pictures" not in t
