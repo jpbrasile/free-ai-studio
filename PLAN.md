@@ -1398,6 +1398,10 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                   - **C'est H3 qui coupe**, juste après les images épinglées : SSIM 21→22 dans le clip brut à 0,346 au plan 4, contre 0,950 au plan 2 et 0,967 au plan 3.
                   - **Hypothèse non prouvée :** le texte du plan 4 met Leila « at the centre of the frame, facing the camera », alors que la fin du plan 3 la montre à gauche, de profil.
                   - Réplique : « Son accent est trop mignon. » (fr, 0,97), pour un texte qui dit « Ton ». Coût : environ 0,26 $.
+                - **Plan 4 retourné le 30/09 (scénario `600a8f4d`, commit `be5e11e`), même texte, même réglages, plans 1 à 3 repris.** Remarque du propriétaire : « le placement est déjà câblé par les images du clip amont » ; décision : « hard code ça dans le studio ». La fin du plan part aussi en `ref_videos` (`<Video 1>`, que le texte voit ; AddGuide ne lui passe rien), le summary passe en « video continuation » (guide de MiniMax), et le texte dit que `<Video 1>` est continuée sans coupe et fait foi pour les places.
+                  - **Jonction 361→362 : SSIM 0,938** (0,352 avant). Dans le clip brut, une seule baisse sous 0,85 : 0,78 à l'image 124, remontée à 0,92 en deux images — Leila éclate de rire, même cadrage, pas une coupe (planche vue).
+                  - Réplique : « Ton accent est trop mignon. » (Whisper, segment 16–20 s). Coût : environ 0,31 $ (crédit restant 3,63 $).
+                  - Une prise ne prouve pas la cause à elle seule (une autre graine aurait pu ne pas couper) ; elle montre que le changement ne casse rien et que la coupe a disparu.
               - Le relecteur (un chat) signale de nouveau, au plan 5, deux actions principales (deux répliques). Cette remarque varie d'un passage à l'autre.
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
