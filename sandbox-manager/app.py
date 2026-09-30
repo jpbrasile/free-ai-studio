@@ -3795,6 +3795,8 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "ou_calculer": job.get("ou_calculer"),
         # Ce que le suiveur de visages dit d'un mauvais choix (visages.avertissements).
         "avertissements": job.get("avertissements") or [],
+        # Les étapes d'une finalisation (visages, 4K) et ses films.
+        "finalisation": job.get("finalisation"),
     }
     if fichiers.get("video"):
         sortie["video_url"] = f"/video/jobs/{jid}/fichier?cle={jeton_video(jid)}"
@@ -4702,47 +4704,144 @@ def _finaliser_noter(fid: str, **champs):
     write_job(fid, job)
 
 
+def _finaliser_decoupe(source: str, sid: str, film: bytes, images: int) -> list:
+    """Les passages proposés : coupés aux fins de plans du scénario, aux jointures des
+    clips d'un montage, et aux coupes ou fondus vus dans l'image (montage.transitions) ;
+    un passage trop long pour une machine est partagé en parts égales (agrandir.bornes).
+    Un fondu au milieu d'un plan change les visages présents : chaque côté a les siens."""
+    video = read_job(source).get("video") or {}
+    fins = set()
+    sid = sid or str(video.get("scenario") or "")
+    if sid:
+        try:
+            f = _fins_images(video_h3.scenario_lire(sid))
+        except (ValueError, OSError):
+            f = []
+        if f and abs(f[-1] - images) <= 2:
+            fins |= set(f[:-1])
+    somme = 0
+    for c in video.get("clips") or []:
+        somme += round(float((read_job(c).get("video") or {}).get("secondes") or 0) * video_h3.IMAGES_PAR_SECONDE)
+        fins.add(somme)
+    fins = {x for x in fins if 0 < x < images}
+    vues = [t for t in montage.transitions(film)
+            if all(abs(t - x) > montage.TRANSITION_PAS for x in fins | {0, images})]
+    bornes = agrandir.bornes(images, sorted(fins | set(vues)))
+    return [{"de": d, "a": a, "transition": d in vues} for d, a in zip(bornes, bornes[1:])]
+
+
+@app.post("/video-h3/finaliser/prix")
+async def video_h3_finaliser_prix(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{job, scenario?, plans?, echelle?} : sans plans, les passages proposés (avec une
+    vignette chacun, pour voir qui s'y trouve) ; avec, le devis. Rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    source = str(corps.get("job") or "")
+    echelle = str(corps.get("echelle") or "")
+    chemin, images = _agrandir_source(source)
+    video = read_job(source).get("video") or {}
+    sortie = {"images": images, "fiches": _visages_fiches(video), "choix": list(visages.CHOIX),
+              "echelles": [{"echelle": e, "titre": v["titre"]} for e, v in agrandir.ECHELLES.items()],
+              "budget": budget_modal.vue("video")}
+    if corps.get("plans") is None:
+        film = chemin.read_bytes()
+        try:
+            plans = await asyncio.to_thread(_finaliser_decoupe, source, str(corps.get("scenario") or ""),
+                                            film, images)
+            images_du_milieu = [(p["de"] + p["a"]) // 2 for p in plans]
+            vues = await asyncio.to_thread(montage.vignettes, film, images_du_milieu)
+        except montage.MontageImpossible as exc:
+            raise HTTPException(503, str(exc)) from exc
+        for p, v in zip(plans, vues):
+            p["vignette"] = "data:image/jpeg;base64," + base64.b64encode(v).decode()
+        sortie["plans"] = plans
+        return sortie
+    try:
+        plans = _finaliser_plans(images, corps.get("plans"))
+        if echelle and echelle not in agrandir.ECHELLES:
+            raise ValueError("Agrandissement non proposé.")
+        sortie["devis"] = _finaliser_devis(plans, echelle)
+    except ValueError as exc:
+        sortie["devis"] = {"refus": str(exc)}
+    return sortie
+
+
+def _finaliser_vague(fid: str, plans: list, champ: str, titre: str, preparer) -> None:
+    """Loue en même temps une machine par passage dont `champ` n'est pas encore réussi,
+    et attend qu'elles aient toutes fini. `preparer(k, p, jid)` écrit le travail et
+    RÉSERVE son pire cas (budget_modal.reserver : deux départs ne passent pas sur le
+    même reste), puis rend (fonction de location, code, délai). Ce que le budget ne
+    couvre plus attend : BudgetDepasse, levée après la fin des autres."""
+    fils, refus = [], None
+    for k, p in enumerate(plans):
+        if (champ == "visages" and not p["sujets"]) or _reussi(p[champ]):
+            continue
+        jid = uuid.uuid4().hex
+        try:
+            louer, code, delai = preparer(k, p, jid)
+        except budget_modal.BudgetDepasse as exc:
+            refus = refus or str(exc)
+            continue
+        p[champ] = jid
+        fils.append((k, jid, threading.Thread(target=louer, args=(jid, code, delai), daemon=True)))
+    _finaliser_noter(fid, plans=plans, etape="%s : %d passage(s) en même temps" % (titre, len(fils)))
+    for _, _, f in fils:
+        f.start()
+    for _, _, f in fils:
+        f.join()
+    rates = ["passage %d : %s" % (k + 1, read_job(jid).get("error") or "voir le travail " + jid)
+             for k, jid, _ in fils if not _reussi(jid)]
+    if rates:
+        raise montage.MontageImpossible("%s a échoué — %s" % (titre, " ; ".join(rates)))
+    if refus:
+        raise budget_modal.BudgetDepasse(refus)
+
+
 def run_finaliser(fid: str):
-    """Les étapes, dans l'ordre : visages de chaque plan, film aux visages refaits,
-    agrandissement de chaque plan, film final. Chaque étape louée attend sa fin."""
+    """Les étapes, dans l'ordre : visages de tous les passages en même temps, film aux
+    visages refaits, agrandissement de tous les passages en même temps, film final."""
     try:
         job = read_job(fid)
         job.update({"status": "running", "started_at": job.get("started_at") or time.time()})
         write_job(fid, job)
         source = job["video"]["source"]
         echelle = job["video"]["echelle"]
+        titre_film = job.get("titre") or "Film"
         film = _video_h3_octets(source)
         if not film:
             raise montage.MontageImpossible("Le film d'origine n'est plus sur ce Studio.")
         film = film.read_bytes()
         plans = job["finalisation"]["plans"]
-        # 1. Les visages, plan par plan.
-        for k, p in enumerate(plans):
-            if not p["sujets"] or _reussi(p["visages"]):
-                continue
-            _finaliser_noter(fid, etape="Visages du plan %d sur %d" % (k + 1, len(plans)))
+
+        def preparer_visages(k, p, jid):
             n = p["a"] - p["de"]
             devis = visages.prix(n, len(p["sujets"]))
-            budget_modal.verifier("video", visages.GPU, devis["delai_s"], visages.MEMOIRE_MB,
-                                  quoi="Les visages du plan %d" % (k + 1), coeurs=visages.COEURS)
             code = visages.construire_script(film, [(s["fiche"], s["choix"]) for s in p["sujets"]],
                                              p["de"], p["a"])
-            jid = uuid.uuid4().hex
+            budget_modal.reserver(jid, "video", visages.GPU, devis["delai_s"], visages.MEMOIRE_MB,
+                                  quoi="Les visages du passage %d" % (k + 1), coeurs=visages.COEURS)
             write_job(jid, {
                 "id": jid, "provider": "modal", "title": "Free AI Studio visages", "gpu": True,
                 "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
                 "video": {"moteur": "H3 FaceRefine (visages)", "source": source, "de": p["de"], "a": p["a"],
                           "sujets": p["sujets"], "devis": devis, "finalisation": fid,
                           "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},
-                "titre": "%s — visages du plan %d" % (job.get("titre") or "Film", k + 1),
+                "titre": "%s — visages du passage %d" % (titre_film, k + 1),
             })
-            p["visages"] = jid
-            _finaliser_noter(fid, plans=plans)
-            run_visages(jid, code, devis["delai_s"])
-            if not _reussi(jid):
-                raise montage.MontageImpossible("Les visages du plan %d ont échoué : %s"
-                                                % (k + 1, read_job(jid).get("error") or "voir le travail " + jid))
-        # Chaque plan tel qu'il entre dans l'agrandissement : visages refaits, sinon tel quel.
+            return run_visages, code, devis["delai_s"]
+
+        # 1. Les visages, tous les passages en même temps.
+        _finaliser_vague(fid, plans, "visages", "Visages", preparer_visages)
+        dits = []
+        for k, p in enumerate(plans):
+            if p["visages"]:
+                dits += ["Passage %d — %s" % (k + 1, x) for x in read_job(p["visages"]).get("avertissements") or []]
+        job = read_job(fid)
+        job["avertissements"] = dits
+        write_job(fid, job)
+
+        # Chaque passage tel qu'il entre dans l'agrandissement : visages refaits, sinon tel quel.
         def morceau(p) -> bytes:
             if p["sujets"]:
                 return _video_h3_octets(p["visages"]).read_bytes()
@@ -4754,45 +4853,37 @@ def run_finaliser(fid: str):
             recolle = _recoller_tous([morceau(p) for p in plans])
             _finaliser_noter(fid, film_visages=_film_h3(
                 recolle, {"mode": "finalisation", "mode_titre": "Visages refaits", "source": source,
-                          "finalisation": fid}, (job.get("titre") or "Film") + " — visages refaits"))
-        # 3. L'agrandissement, plan par plan.
+                          "finalisation": fid}, titre_film + " — visages refaits"))
+
+        def preparer_agrandi(k, p, jid):
+            n = p["a"] - p["de"]
+            devis = agrandir.prix(n, echelle)
+            code = agrandir.construire_script(morceau(p), echelle, agrandir.bornes(n))
+            budget_modal.reserver(jid, "video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
+                                  quoi="L'agrandissement du passage %d" % (k + 1), coeurs=agrandir.COEURS)
+            write_job(jid, {
+                "id": jid, "provider": "modal", "title": "Free AI Studio agrandissement", "gpu": True,
+                "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+                "video": {"moteur": "SeedVR2 (agrandissement)", "source": p["visages"] or source,
+                          "echelle": echelle, "morceaux": 1, "devis": devis, "finalisation": fid,
+                          "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},
+                "titre": "%s — passage %d, %s" % (titre_film, k + 1, devis["titre"]),
+            })
+            return run_agrandir, code, devis["delai_s"]
+
+        # 3. L'agrandissement, tous les passages en même temps.
         if echelle:
-            for k, p in enumerate(plans):
-                if _reussi(p["agrandi"]):
-                    continue
-                _finaliser_noter(fid, etape="%s du plan %d sur %d"
-                                            % (agrandir.ECHELLES[echelle]["titre"], k + 1, len(plans)))
-                n = p["a"] - p["de"]
-                devis = agrandir.prix(n, echelle)
-                budget_modal.verifier("video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
-                                      quoi="L'agrandissement du plan %d" % (k + 1), coeurs=agrandir.COEURS)
-                code = agrandir.construire_script(morceau(p), echelle, agrandir.bornes(n))
-                jid = uuid.uuid4().hex
-                write_job(jid, {
-                    "id": jid, "provider": "modal", "title": "Free AI Studio agrandissement", "gpu": True,
-                    "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
-                    "video": {"moteur": "SeedVR2 (agrandissement)", "source": p["visages"] or source,
-                              "echelle": echelle, "morceaux": 1, "devis": devis, "finalisation": fid,
-                              "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},
-                    "titre": "%s — plan %d, %s" % (job.get("titre") or "Film", k + 1, devis["titre"]),
-                })
-                p["agrandi"] = jid
-                _finaliser_noter(fid, plans=plans)
-                run_agrandir(jid, code, devis["delai_s"])
-                if not _reussi(jid):
-                    raise montage.MontageImpossible("L'agrandissement du plan %d a échoué : %s"
-                                                    % (k + 1, read_job(jid).get("error") or "voir le travail " + jid))
+            _finaliser_vague(fid, plans, "agrandi", agrandir.ECHELLES[echelle]["titre"], preparer_agrandi)
             _finaliser_noter(fid, etape="Recollage final")
             recolle = _recoller_tous([_video_h3_octets(p["agrandi"]).read_bytes() for p in plans])
             final = _film_h3(recolle, {"mode": "finalisation", "mode_titre": "Film finalisé", "source": source,
                                        "echelle": echelle, "finalisation": fid},
-                             read_job(fid).get("titre") or "Film finalisé",
-                             moteur="SeedVR2 (agrandissement)")
+                             titre_film, moteur="SeedVR2 (agrandissement)")
         else:
             final = read_job(fid)["finalisation"]["film_visages"]
         _finaliser_noter(fid, film=final, etape="")
         job = read_job(fid)
-        job.update({"status": "succeeded", "finished_at": time.time()})
+        job.update({"status": "succeeded", "finished_at": time.time(), "error": ""})
         write_job(fid, job)
     except budget_modal.BudgetDepasse as exc:
         job = read_job(fid)

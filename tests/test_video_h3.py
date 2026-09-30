@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -3863,12 +3864,12 @@ def test_finaliser_fait_les_visages_puis_la_4k_plan_par_plan(h3, monkeypatch, tm
     job = h3.read_job(r.json()["id"])
     assert job["status"] == "succeeded", job.get("error")
     # Visages des plans 1 et 3 seulement (le plan 2 n'a personne), puis 4K des trois plans.
-    assert [(q, d.get("de"), d.get("a")) for q, _, d in loues] == [
-        ("visages", 0, 124), ("visages", 247, 370), ("agrandir", None, None), ("agrandir", None, None),
-        ("agrandir", None, None)]
-    assert [d["coupes"] for q, _, d in loues if q == "agrandir"] == [[0, 124], [0, 123], [0, 123]]
+    # Les passages d'une même étape partent ensemble : leur ordre d'arrivée est libre.
+    assert [q for q, _, _ in loues] == ["visages"] * 2 + ["agrandir"] * 3
+    assert sorted((d["de"], d["a"]) for q, _, d in loues if q == "visages") == [(0, 124), (247, 370)]
+    assert sorted(d["coupes"] for q, _, d in loues if q == "agrandir") == [[0, 123], [0, 123], [0, 124]]
     # Le plan 2 part tel quel, extrait du film.
-    assert base64.b64decode(loues[3][2]["video"]) == b"plan-124-247"
+    assert b"plan-124-247" in [base64.b64decode(d["video"]) for q, _, d in loues if q == "agrandir"]
     f = job["finalisation"]
     assert h3.read_job(f["film_visages"])["video"]["moteur"] == "MiniMax H3 (montage)"
     # Le film final est en 4K : il n'entre pas dans un montage de clips 480p.
@@ -3913,3 +3914,74 @@ def test_finaliser_refuse_des_plans_qui_ne_couvrent_pas_le_film(h3, monkeypatch,
     assert client(h3).post("/video-h3/finaliser", headers=CLE,
                            json={"job": "b" * 32, "plans": plans, "echelle": "8k"}).status_code == 422
     assert loues == []
+
+
+def test_finaliser_loue_les_passages_en_meme_temps(h3, monkeypatch, tmp_path):
+    """Trois passages de visages : aucun ne finit avant que les trois soient partis."""
+    loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
+    plans[1]["sujets"] = plans[0]["sujets"]
+    ensemble = threading.Barrier(3, timeout=5)
+
+    def run(jid, code, delai):
+        ensemble.wait()   # en série, le premier attendrait seul : BrokenBarrierError
+        job = h3.read_job(jid)
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "run_visages", run)
+    fid = client(h3).post("/video-h3/finaliser", headers=CLE,
+                          json={"job": "b" * 32, "plans": plans, "echelle": ""}).json()["id"]
+    job = h3.read_job(fid)
+    assert job["status"] == "succeeded", job.get("error")
+    assert job["finalisation"]["film"] == job["finalisation"]["film_visages"]
+    # Le budget est retenu à chaque départ, pas seulement vérifié : deux départs
+    # simultanés ne passent pas sur le même reste. (La location simulée n'encaisse
+    # rien, donc les trois retenues sont encore là.)
+    pire = h3.visages.prix(124, 1)["pire_usd"]
+    assert h3.budget_modal.en_cours_usd() >= 2.9 * pire
+
+
+def test_un_fondu_et_une_coupe_se_trouvent_dans_l_image(sandbox, tmp_path):
+    """Film campus, 30/09 : le fondu de fin du plan 6 ne se voit pas d'une image à l'autre
+    (score de scène 0,006) ; il se voit sur une demi-seconde."""
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg absent")
+    film = tmp_path / "f.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc2=s=160x90:r=24:d=3",
+                    "-f", "lavfi", "-i", "color=c=0x2060c0:s=160x90:r=24:d=3",
+                    "-f", "lavfi", "-i", "color=c=0xe0c020:s=160x90:r=24:d=2",
+                    "-filter_complex", "[0][1]xfade=transition=fade:duration=0.5:offset=2.5[a];[a][2]concat=n=2[v]",
+                    "-map", "[v]", "-pix_fmt", "yuv420p", str(film)], check=True)
+    # Fondu de 2,5 à 3 s (images 60 à 72), coupe franche à 5,5 s (image 132).
+    vues = sandbox.montage.transitions(film.read_bytes())
+    assert len(vues) == 2 and abs(vues[0] - 66) <= 4 and abs(vues[1] - 132) <= 2, vues
+    v = sandbox.montage.vignettes(film.read_bytes(), [100, 10])
+    assert len(v) == 2 and all(x[:2] == b"\xff\xd8" for x in v)
+
+
+def test_finaliser_propose_des_passages_coupes_aux_fondus(h3, monkeypatch, tmp_path):
+    loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
+    h3.write_job("b" * 32, {"id": "b" * 32, "status": "succeeded", "titre": "Le parc",
+                            "video": {"scenario": "d" * 32}})
+    # Scénario 124/247/370 ; un fondu vu à 300, un autre collé à la fin d'un plan (écarté).
+    monkeypatch.setattr(h3.montage, "transitions", lambda film: [250, 300])
+    monkeypatch.setattr(h3.montage, "vignettes", lambda film, n: [b"jpg"] * len(n))
+    d = client(h3).post("/video-h3/finaliser/prix", headers=CLE, json={"job": "b" * 32}).json()
+    assert [(p["de"], p["a"], p["transition"]) for p in d["plans"]] == [
+        (0, 124, False), (124, 247, False), (247, 300, False), (300, 370, True)]
+    assert d["plans"][0]["vignette"].startswith("data:image/jpeg;base64,") and d["fiches"]
+    # Avec des plans : le devis, ou le refus dit.
+    d = client(h3).post("/video-h3/finaliser/prix", headers=CLE,
+                        json={"job": "b" * 32, "plans": plans, "echelle": "4k"}).json()
+    assert d["devis"]["pire_usd"] > d["devis"]["estime_usd"] > 0
+    d = client(h3).post("/video-h3/finaliser/prix", headers=CLE,
+                        json={"job": "b" * 32, "plans": plans[:2], "echelle": "4k"}).json()
+    assert "refus" in d["devis"] and loues == []
+
+
+
+def test_la_page_propose_de_finaliser_le_film(h3):
+    page = client(h3).get("/video-h3", headers=CLE).text
+    assert 'id="montage_finaliser"' in page and 'blocFinaliser("montage_finaliser"' in page
+    assert "/video-h3/finaliser/prix" in page and "/reprendre" in page and "au pire" in page

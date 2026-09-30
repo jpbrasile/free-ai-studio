@@ -3313,6 +3313,7 @@ PAGE_HTML = r"""<!doctype html>
     <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
     <div id="montage_agrandir" class="agrandir"></div>
     <div id="montage_visages" class="agrandir"></div>
+    <div id="montage_finaliser" class="agrandir"></div>
   </div>
   <details class="plie" open><summary>Tourner un scénario neuf</summary>
     <span class="note">le scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
@@ -3830,6 +3831,149 @@ async function blocVisages(ou, jid, sid){
     plan: plan && plan.value ? Number(plan.value) : null,
     sujets: choisis().map(x => ({fiche: x.fiche, choix: x.place.value}))}));
   majPrixVisages();
+}
+
+// Finaliser un film validé : visages refaits passage par passage, puis 4K, tout en même
+// temps chez Modal (30/09/2026). Le Studio propose les passages (plans, coupes et fondus
+// vus dans l'image) avec une vignette : on coche qui est visible dans chacun.
+async function blocFinaliser(ou, jid, sid){
+  const b = document.getElementById(ou);
+  b.textContent = "";
+  const titre = document.createElement("b");
+  titre.textContent = "Finaliser le film (visages refaits, puis 4K)";
+  const ouvrir = document.createElement("button");
+  ouvrir.textContent = "Préparer la finalisation (gratuit : découpe et vignettes)";
+  b.append(titre, document.createElement("br"), ouvrir);
+  ouvrir.addEventListener("click", async () => {
+    ouvrir.disabled = true;
+    ouvrir.textContent = "Recherche des plans, coupes et fondus…";
+    const r = await fetch("/video-h3/finaliser/prix", {method: "POST", headers: H,
+      body: JSON.stringify({job: jid, scenario: sid})});
+    const d = await r.json();
+    if (!r.ok){ ouvrir.textContent = typeof d.detail === "string" ? d.detail : "Refusé."; return; }
+    ouvrir.remove();
+    dessinerFinaliser(b, jid, d);
+  });
+}
+
+function dessinerFinaliser(b, jid, d){
+  const aide = document.createElement("p");
+  aide.className = "note";
+  aide.textContent = "Chaque passage est traité sur sa propre machine, tous en même temps. Cochez les "
+    + "personnages dont le VISAGE se voit dans le passage (pas de dos), deux au plus : un visage absent "
+    + "serait pris sur quelqu'un d'autre. « Fondu » : le Studio a vu un changement de scène à cet endroit.";
+  b.appendChild(aide);
+  const lignes = d.plans.map((p, i) => {
+    const l = document.createElement("div");
+    l.className = "passage";
+    const img = document.createElement("img");
+    img.src = p.vignette;
+    img.width = 160;
+    const texte = document.createElement("div");
+    texte.textContent = "Passage " + (i + 1) + " : " + fr(p.de / 24, 1) + " à " + fr(p.a / 24, 1) + " s"
+      + (p.transition ? " (fondu)" : "");
+    l.append(img, texte);
+    const sujets = d.fiches.map((f, j) => {
+      const c = document.createElement("input");
+      c.type = "checkbox";
+      c.checked = j < 2;
+      const place = document.createElement("select");
+      for (const x of d.choix) place.add(new Option(PLACES[x] || x, x));
+      place.value = j === 0 ? "largest_face" : "largest_face_2";
+      const s = document.createElement("div");
+      s.append(c, " " + f.nom + " : ", place);
+      texte.appendChild(s);
+      c.addEventListener("change", majPrixFinal);
+      return {fiche: f.id, c: c, place: place};
+    });
+    b.appendChild(l);
+    return {de: p.de, a: p.a, sujets: sujets};
+  });
+  const echelle = document.createElement("select");
+  for (const e of d.echelles) echelle.add(new Option("puis " + e.titre, e.echelle));
+  echelle.add(new Option("sans agrandissement", ""));
+  echelle.value = "4k";
+  const k = document.createElement("button");
+  const etat = document.createElement("p");
+  etat.className = "note";
+  const le = document.createElement("div");
+  le.append("Agrandissement : ", echelle);
+  b.append(le, k, etat);
+  const corps = () => ({job: jid, echelle: echelle.value, plans: lignes.map(l => ({de: l.de, a: l.a,
+    sujets: l.sujets.filter(s => s.c.checked).map(s => ({fiche: s.fiche, choix: s.place.value}))}))});
+  async function majPrixFinal(){
+    k.disabled = true;
+    const p = await (await fetch("/video-h3/finaliser/prix", {method: "POST", headers: H,
+      body: JSON.stringify(corps())})).json();
+    if (p.devis.refus){ k.textContent = "Finaliser le film"; etat.textContent = p.devis.refus; return; }
+    etat.textContent = "Il reste " + fr(p.budget.reste_usd, 2) + " $ ce mois-ci ; ce qui ne tient pas "
+      + "attend le mois suivant, sans rien perdre de ce qui est fait.";
+    k.disabled = false;
+    k.textContent = "Finaliser le film — ≈ " + fr(p.devis.estime_usd, 2) + " $ (au pire "
+      + fr(p.devis.pire_usd, 2) + " $)";
+  }
+  echelle.addEventListener("change", majPrixFinal);
+  k.addEventListener("click", async () => {
+    b.querySelectorAll("button, input, select").forEach(x => x.disabled = true);
+    const r = await fetch("/video-h3/finaliser", {method: "POST", headers: H, body: JSON.stringify(corps())});
+    const f = await r.json();
+    if (!r.ok){
+      etat.textContent = typeof f.detail === "string" ? f.detail : "Refusé.";
+      b.querySelectorAll("button, input, select").forEach(x => x.disabled = false);
+      return;
+    }
+    suivreFinalisation(b, etat, f.id);
+  });
+  majPrixFinal();
+}
+
+async function montrerFilm(etat, jid, legende, nom){
+  const j = await (await fetch("/video/jobs/" + jid, {headers: H})).json();
+  if (!j.video_url) return;
+  const t = document.createElement("p");
+  t.textContent = legende;
+  const v = document.createElement("video");
+  v.src = j.video_url;
+  v.controls = true;
+  v.setAttribute("playsinline", "");
+  const a = document.createElement("a");
+  a.href = j.video_url + "&telecharger=1&nom=" + nom;
+  a.textContent = "Enregistrer";
+  etat.append(t, v, a);
+}
+
+async function suivreFinalisation(b, etat, fid){
+  const debut = Date.now();
+  const tour = async () => {
+    const j = await (await fetch("/video/jobs/" + fid, {headers: H})).json();
+    const f = j.finalisation || {};
+    const dits = (j.avertissements || []).map(x => "⚠ " + x).join(" ");
+    if (j.status === "succeeded"){
+      etat.textContent = "Film finalisé en " + fr((Date.now() - debut) / 60000, 0) + " min. " + dits;
+      if (f.film_visages && f.film_visages !== f.film)
+        await montrerFilm(etat, f.film_visages, "Visages refaits (480p) :", "film-visages");
+      await montrerFilm(etat, f.film, "Film finalisé :", "film-final");
+      return;
+    }
+    if (j.status === "attente" || j.status === "failed"){
+      etat.textContent = (j.status === "attente" ? "" : "Échec : ") + (j.message || "") + " " + dits;
+      if (f.film_visages) await montrerFilm(etat, f.film_visages, "Déjà fait — visages refaits (480p) :",
+                                            "film-visages");
+      const reprendre = document.createElement("button");
+      reprendre.textContent = "Reprendre là où elle s'est arrêtée";
+      reprendre.addEventListener("click", async () => {
+        const r = await fetch("/video-h3/finaliser/" + fid + "/reprendre", {method: "POST", headers: H});
+        const d = await r.json();
+        if (!r.ok){ etat.append(" " + (typeof d.detail === "string" ? d.detail : "Refusé.")); return; }
+        suivreFinalisation(b, etat, fid);
+      });
+      etat.appendChild(reprendre);
+      return;
+    }
+    etat.textContent = (f.etape || "En file") + "… " + fr((Date.now() - debut) / 60000, 0) + " min écoulées.";
+    setTimeout(tour, 15000);
+  };
+  tour();
 }
 
 async function lancerVisages(b, etat, corps){
@@ -4582,6 +4726,7 @@ document.getElementById("montage_lancer").addEventListener("click", async () => 
   document.getElementById("montage_telecharger").href = j.video_url + "&telecharger=1&nom=film-h3";
   blocAgrandir("montage_agrandir", d.id, "");
   blocVisages("montage_visages", d.id, "");
+  blocFinaliser("montage_finaliser", d.id, "");
   chargerClips();
 });
 
@@ -4914,7 +5059,7 @@ async function ouvrirScenario(sid){
     document.getElementById("montage_lecteur").src = sc.video_url;
     document.getElementById("montage_telecharger").href = sc.video_url + "&telecharger=1&nom=film-h3";
     const m = /\/video\/jobs\/([0-9a-f]{32})\//.exec(sc.video_url);
-    if (m){ blocAgrandir("montage_agrandir", m[1], sid); blocVisages("montage_visages", m[1], sid); }
+    if (m){ blocAgrandir("montage_agrandir", m[1], sid); blocVisages("montage_visages", m[1], sid); blocFinaliser("montage_finaliser", m[1], sid); }
   }
 }
 

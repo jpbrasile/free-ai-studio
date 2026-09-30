@@ -430,3 +430,77 @@ def images(chemin: Path) -> int:
         return int(_sonde(chemin, "nb_read_frames", compter=True))
     except ValueError as exc:
         raise MontageImpossible("Le nombre d'images de la vidéo est illisible.") from exc
+
+
+# --- Les coupes et les fondus à l'intérieur d'une vidéo (30/09/2026) ---------------
+# Film campus : le plan 6 finit par un fondu de H3 vers un gros plan de Leila. Le score
+# de scène de ffmpeg (image à image) y vaut 0,006 contre 0,606 pour une coupe franche :
+# un fondu ne se voit que sur la distance. On compare donc les couleurs de l'image i et
+# de l'image i + 12 (une demi-seconde). Mesuré sur ce film : 0,76 dans le fondu, 0,61 à
+# la coupe franche, au plus 0,38 ailleurs (Tyler entrant en gros plan de dos), 0,19 au
+# plus hors du plan 1.
+TRANSITION_PAS = 12
+TRANSITION_SEUIL = 0.5
+_VIGNETTE = (32, 18)
+
+
+def _histogramme(pixels: bytes) -> list:
+    """8 cases par couleur, en part des pixels."""
+    h = [0] * 24
+    for i in range(0, len(pixels), 3):
+        h[pixels[i] >> 5] += 1
+        h[8 + (pixels[i + 1] >> 5)] += 1
+        h[16 + (pixels[i + 2] >> 5)] += 1
+    n = len(pixels) // 3
+    return [x / n for x in h]
+
+
+def ecarts_de_couleur(video: bytes, pas: int = TRANSITION_PAS) -> list:
+    """Pour chaque image i, l'écart (0 à 1) entre ses couleurs et celles de l'image i + pas."""
+    largeur, hauteur = _VIGNETTE
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "a.mp4")
+        a.write_bytes(video)
+        fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-i", str(a), "-vf",
+                               "scale=%d:%d:flags=area" % (largeur, hauteur), "-an",
+                               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                              capture_output=True, timeout=DELAI_S)
+    if fini.returncode != 0:
+        raise MontageImpossible("Les images de la vidéo n'ont pas pu être lues pour trouver ses coupes.")
+    taille = largeur * hauteur * 3
+    hs = [_histogramme(fini.stdout[k:k + taille]) for k in range(0, len(fini.stdout) - taille + 1, taille)]
+    return [sum(abs(x - y) for x, y in zip(hs[i], hs[i + pas])) / 2 for i in range(len(hs) - pas)]
+
+
+def transitions(video: bytes, pas: int = TRANSITION_PAS, seuil: float = TRANSITION_SEUIL) -> list:
+    """Les images où la vidéo change de scène (coupe ou fondu), au milieu du changement.
+    Un changement couvre les paires (i, i + pas) au-dessus du seuil, de s à e : il se
+    trouve entre s et e + pas."""
+    ecarts = ecarts_de_couleur(video, pas)
+    sortie, debut = [], None
+    for i, e in enumerate(ecarts + [0.0]):
+        if e >= seuil and debut is None:
+            debut = i
+        elif e < seuil and debut is not None:
+            sortie.append(round((debut + i - 1 + pas) / 2))
+            debut = None
+    return sortie
+
+
+def vignettes(video: bytes, numeros: list, largeur: int = 320) -> list:
+    """Les images demandées (numéros d'image), en JPEG, dans l'ordre : de quoi voir
+    qui est dans chaque passage avant de choisir."""
+    if not numeros:
+        return []
+    with tempfile.TemporaryDirectory() as dossier:
+        entree = Path(dossier, "a.mp4")
+        entree.write_bytes(video)
+        choix = "+".join("eq(n\\,%d)" % int(n) for n in sorted(set(numeros)))
+        _lancer(["-i", str(entree), "-vf", "select='%s',scale=%d:-2" % (choix, largeur), "-vsync", "0",
+                 "-q:v", "5", str(Path(dossier, "v%03d.jpg"))], "L'extraction des vignettes")
+        rangees = sorted(set(numeros))
+        fichiers = sorted(Path(dossier).glob("v*.jpg"))
+        if len(fichiers) != len(rangees):
+            raise MontageImpossible("Les vignettes du film n'ont pas pu être extraites.")
+        par_numero = dict(zip(rangees, (f.read_bytes() for f in fichiers)))
+    return [par_numero[int(n)] for n in numeros]
