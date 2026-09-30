@@ -604,7 +604,12 @@ def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3,
     invite = plan["resume_public"]["invite"]
     assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>. "
                              "<Subject 2> is the person in <Picture 2>. ")
-    assert "detailed_description: <Picture 3> is the first frame of [Shot 1]. " in invite
+    # Forme du guide de MiniMax (ref-en.txt, 2.2, 3, 4.1, 5.3).
+    assert "<Subject 2> is the person in <Picture 2>. <Picture 3> is the first frame of [Shot 1]. " in invite
+    assert "summary: [reference generation + keyframe completion] The target video is a single shot with " \
+           "<Subject 1> and <Subject 2>, beginning from <Picture 3>. " in invite
+    assert "<Picture 3> ([Shot 1] first frame): fully_preserved - the shot begins exactly on <Picture 3>" in invite
+    assert "detailed_description: [Shot 1] The shot begins from <Picture 3>. " in invite
     assert "<Subject 1> (S1) regarde <Subject 2> et dit <d>[French] Oui.</d>" in invite
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert plan["resume_public"]["voie"] == "image"
@@ -841,9 +846,11 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
                               image_paroles="Elle sourit et dit « Bonjour. »"))
     invite = plan["resume_public"]["invite"]
     assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. "
-                             "retention_analysis: <Subject 1>: fully_preserved - the face, hair and clothing "
+                             "summary: [reference generation] The target video is a single shot with "
+                             "<Subject 1>. retention_analysis: <Subject 1> (appears in [Shot 1]): "
+                             "fully_preserved - the face, hair and clothing "
                              "of the person in <Picture 1>, <Picture 2> are retained, as one single person. "
-                             "detailed_description: Elle sourit")
+                             "detailed_description: [Shot 1] Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
     assert "manteau rouge" not in invite and "Léa" not in invite
@@ -1493,12 +1500,13 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
     plan = v.preparer(d)
     assert plan["resume_public"]["invite"] == (
         "subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>. <Subject 2> is the "
-        "person in <Picture 3>. retention_analysis: <Subject 1>: fully_preserved - the face, hair and "
-        "clothing of the person in <Picture 1>, <Picture 2> are retained, as one single person. <Subject 2>: "
-        "fully_preserved - the face, hair and clothing of the person in <Picture 3> are retained, as one "
-        "single person. "
+        "person in <Picture 3>. summary: [reference generation] The target video is a single shot with "
+        "<Subject 1> and <Subject 2>. retention_analysis: <Subject 1> (appears in [Shot 1]): fully_preserved "
+        "- the face, hair and clothing of the person in <Picture 1>, <Picture 2> are retained, as one single "
+        "person. <Subject 2> (appears in [Shot 1]): fully_preserved - the face, hair and clothing of the "
+        "person in <Picture 3> are retained, as one single person. "
         # Chaque personnage n'est placé qu'une fois, par la description elle-même.
-        "detailed_description: <Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
+        "detailed_description: [Shot 1] <Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
         "<Subject 1> (S2) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
@@ -1523,7 +1531,9 @@ def test_le_profil_voix_part_avec_les_photos_en_audio_de_reference(h3, sans_regl
                 image_paroles="James demande « Is this seat taken? » Léa répond « Oui. »")
     plan = v.preparer(d)
     invite = plan["resume_public"]["invite"]
-    assert "<Subject 2> is the person in <Picture 2>. <Audio 1> is the voice-timbre reference for <Subject 2>." in invite
+    # Le (Sx) de James repris, pas créé (ref-en.txt, 2.4).
+    assert "<Subject 2> is the person in <Picture 2>. <Audio 1> is the voice-timbre reference for " \
+           "<Subject 2> (S1)." in invite
     assert "<Audio 1>: reference - its vocal timbre guides the spoken voice of <Subject 2> in every line; " \
            "the words of <Audio 1> are never said." in invite
     assert "<Audio 2>" not in invite   # Léa n'a pas de voix : H3 lui en invente une
@@ -2396,7 +2406,7 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     p0 = a_tourner[0]["payload"]
     assert p0["mode"] == "references" and p0["depart_reference"] == base64.b64encode(CADRE).decode()
     plan = v.preparer(dict(p0, depart_reference=PNG))
-    assert "detailed_description: <Picture 4> is the first frame of [Shot 1]. " in plan["resume_public"]["invite"]
+    assert "detailed_description: [Shot 1] The shot begins from <Picture 4>. " in plan["resume_public"]["invite"]
     assert list(plan["demande"]["images"]) == [f"ref_{i}.png" for i in range(4)]
     # Des fiches sans photo : l'image seule, et les fiches donnent les voix.
     lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
@@ -3412,15 +3422,18 @@ def test_la_voix_par_langue_se_pose_se_retire_et_part_avec_la_bonne_replique(h3,
                 image_paroles="Leila dit « [joie] J'ai réussi ! » puis « [English, joy] I made it! »")
     plan = v.preparer(d)
     invite = plan["resume_public"]["invite"]
-    assert "<Audio 1> is the voice-timbre reference for <Subject 1> speaking French." in invite
-    assert "<Audio 2> is the voice-timbre reference for <Subject 1> speaking English." in invite
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1> (S1) speaking French." in invite
+    assert "<Audio 2> is the voice-timbre reference for <Subject 1> (S1) speaking English." in invite
+    assert "summary: [reference generation + audio reference] The target video is a single shot with " \
+           "<Subject 1>. It uses <Audio 1> as the voice-timbre reference for <Subject 1> speaking French " \
+           "and <Audio 2> as the voice-timbre reference for <Subject 1> speaking English. " in invite
     assert "using the voice timbre referenced from <Audio 2>, overjoyed" in invite
     assert plan["demande"]["sons"] == {"voix_0.wav": base64.b64encode(WAV).decode(),
                                        "voix_1.wav": base64.b64encode(anglais).decode()}
     # Qu'une langue : un seul <Audio>, dans la forme d'avant.
     plan = v.preparer(dict(d, image_paroles="Leila dit « [English] Hi! »"))
     assert plan["demande"]["sons"] == {"voix_0.wav": base64.b64encode(anglais).decode()}
-    assert "<Audio 1> is the voice-timbre reference for <Subject 1>." in plan["resume_public"]["invite"]
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1> (S1)." in plan["resume_public"]["invite"]
     # Sans voix anglaise, l'anglais part avec la voix d'origine (le timbre au moins).
     v.fiche_retirer_voix_langue(leila, "English")
     assert "voix_langues" not in v.fiche_lire(leila)
@@ -3660,10 +3673,31 @@ def test_retention_nomme_les_images_de_chaque_sujet_comme_le_guide(h3):
     lesquelles. Guide de MiniMax (ref_en, 4.1) : « <Subject 1>: fully_preserved - … »."""
     v = h3.video_h3
     t = v.sujets_des_fiches([4, 4, 1, 1], objets={2: "objet", 3: "pose"})
-    assert ("<Subject 1>: fully_preserved - the face, hair and clothing of the person in <Picture 1>, "
+    assert ("<Subject 1> (appears in [Shot 1]): fully_preserved - the face, hair and clothing of the person in <Picture 1>, "
             "<Picture 2>, <Picture 3>, <Picture 4> are retained") in t
-    assert "<Subject 2>: fully_preserved - the face, hair and clothing of the person in <Picture 5>, " in t
-    assert "<Subject 3>: fully_preserved - the shape, colour and size of the object in <Picture 9> " in t
-    assert "<Subject 4>: fully_preserved - a hand pose only: the hands and fingers take exactly the " \
+    assert "<Subject 2> (appears in [Shot 1]): fully_preserved - the face, hair and clothing of the person in <Picture 5>, " in t
+    assert "<Subject 3> (appears in [Shot 1]): fully_preserved - the shape, colour and size of the object in <Picture 9> " in t
+    assert "<Subject 4> (appears in [Shot 1]): fully_preserved - a hand pose only: the hands and fingers take exactly the " \
            "position of <Picture 10>" in t
     assert "reference pictures" not in t
+
+
+def test_summary_et_appears_in_comme_le_guide(h3):
+    """30/09, demande du propriétaire : « ajoute summary et appears in ». Syntaxe relue
+    le même jour dans skills/h3-prompt-writing/references/ref-en.txt (3 et 4.1)."""
+    v = h3.video_h3
+    # Seuls les sujets que le plan nomme « appear » ; le summary vient entre les deux sections.
+    t = v.sujets_des_fiches([1, 1, 1], presents={0, 2}, voix={0: 1}, parleurs={0: 2})
+    assert t.index("subject_definitions:") < t.index(" summary: ") < t.index(" retention_analysis: ")
+    assert "<Subject 1> (appears in [Shot 1]): fully_preserved" in t
+    assert "<Subject 2>: fully_preserved" in t and "<Subject 2> (appears" not in t
+    assert "<Subject 3> (appears in [Shot 1]): fully_preserved" in t
+    assert "summary: [reference generation + audio reference] The target video is a single shot with " \
+           "<Subject 1> and <Subject 3>. It uses <Audio 1> as the voice-timbre reference for <Subject 1>. " in t
+    assert "<Audio 1> is the voice-timbre reference for <Subject 1> (S2)." in t
+    # Pas de (Sx) dans retention_analysis (ref-en.txt, 5.4).
+    assert "(S" not in t.split(" retention_analysis: ")[1]
+    # Le summary n'introduit aucune étiquette nouvelle.
+    resume = t.split(" summary: ")[1].split(" retention_analysis: ")[0]
+    definies = set(re.findall(r"<(?:Subject|Picture|Audio) \d+>", t.split(" summary: ")[0]))
+    assert set(re.findall(r"<(?:Subject|Picture|Audio) \d+>", resume)) <= definies

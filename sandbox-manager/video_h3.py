@@ -553,6 +553,7 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, obj
 
 
 _LOCUTEUR = re.compile(r"<Subject (\d+)> \(S\d+\)")
+_LOCUTEUR_NUMERO = re.compile(r"<Subject (\d+)> \(S(\d+)\)")
 
 
 def rangs_qui_parlent(textes, sujets: list, objets=()) -> set:
@@ -1257,43 +1258,59 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
     return sortie
 
 
-def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None) -> str:
+def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
+                      presents=None, depart=None, parleurs=None) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
     l'invite, elle a été DITE par le personnage (essai du 28/09, « Femme de 35
-    ans, cheveux bruns… »). `voix` : {rang de la fiche : numéro de son <Audio j>}."""
-    definitions, garde, premiere = [], [], 1
+    ans, cheveux bruns… »). `voix` : {rang de la fiche : numéro de son <Audio j>}.
+
+    Rend `subject_definitions`, `summary` et `retention_analysis`, dans l'ordre du guide
+    de MiniMax (VIDEO_PROMPT_WRITING_GUIDE_ref_en.md, 1 à 4 ; demande du propriétaire,
+    30/09 : « ajoute summary et appears in »). `presents` : les rangs que le texte du
+    plan nomme — eux seuls sont dits « (appears in [Shot 1]) », car toutes les fiches
+    du scénario partent avec chaque plan (None : toutes). `depart` : le numéro de
+    <Picture N> de l'image de départ, première image de [Shot 1]. `parleurs` : {rang :
+    numéro x de son (Sx)} ; la définition de sa voix le reprend (ref-en.txt, 2.4 :
+    « <Audio 1> is the voice-timbre reference for <Subject 1> (S1). »), sans en créer."""
+    definitions, garde, premiere, voix_dites, garde_sons = [], [], 1, [], []
+    presents = set(range(len(nombres))) if presents is None else set(presents)
     for k, nombre in enumerate(nombres):
         images = ", ".join(f"<Picture {premiere + i}>" for i in range(nombre))
         premiere += nombre
+        ou = f"<Subject {k + 1}>" + (" (appears in [Shot 1])" if k in presents else "")
         if k in objets and (objets.get(k) if isinstance(objets, dict) else None) == "pose":
             definitions.append(f"<Subject {k + 1}> is the hand pose in {images}.")
-            garde.append(f"<Subject {k + 1}>: fully_preserved - a hand pose only: the hands and fingers take "
+            garde.append(f"{ou}: fully_preserved - a hand pose only: the hands and fingers take "
                          f"exactly the position of {images} when the text names it; it adds no person and no object.")
             continue
         # Forme du guide de MiniMax (VIDEO_PROMPT_WRITING_GUIDE_ref_en.md, 4.1) : une ligne par
-        # étiquette, « <Subject N>: fully_preserved - … ». Les images y sont NOMMÉES (30/09,
-        # remarque du propriétaire) : « the reference pictures » ne disait pas lesquelles,
-        # avec Leila en <Picture 1…4> et Tyler en <Picture 5…8>.
+        # étiquette, « <Subject N> (appears in [Shot 1]): fully_preserved - … ». Les images y
+        # sont NOMMÉES (30/09, remarque du propriétaire) : « the reference pictures » ne disait
+        # pas lesquelles, avec Leila en <Picture 1…4> et Tyler en <Picture 5…8>.
         if k in objets:
             definitions.append(f"<Subject {k + 1}> is the object in {images}.")
-            garde.append(f"<Subject {k + 1}>: fully_preserved - the shape, colour and size of the object in "
+            garde.append(f"{ou}: fully_preserved - the shape, colour and size of the object in "
                          f"{images} are retained; there is exactly one of it in every frame where it appears.")
             continue
         definitions.append(f"<Subject {k + 1}> is the person in {images}.")
         j = (voix or {}).get(k)
         if isinstance(j, dict) and len(j) == 1:
             j = next(iter(j.values()))
+        sx = f" (S{parleurs[k]})" if (parleurs or {}).get(k) else ""
         if isinstance(j, dict):   # une voix par langue parlée dans ce plan (30/09)
             for langue, n in j.items():
-                definitions.append(f"<Audio {n}> is the voice-timbre reference for <Subject {k + 1}> "
+                definitions.append(f"<Audio {n}> is the voice-timbre reference for <Subject {k + 1}>{sx} "
                                    f"speaking {langue}.")
-                garde.append(f"<Audio {n}>: reference - its vocal timbre guides the spoken voice of "
+                garde_sons.append(f"<Audio {n}>: reference - its vocal timbre guides the spoken voice of "
                              f"<Subject {k + 1}> in every {langue} line; the words of <Audio {n}> are never said.")
+                voix_dites.append(f"<Audio {n}> as the voice-timbre reference for <Subject {k + 1}> "
+                                  f"speaking {langue}")
         elif j:   # le profil voix (29/09), dans la forme du guide de MiniMax
-            definitions.append(f"<Audio {j}> is the voice-timbre reference for <Subject {k + 1}>.")
-            garde.append(f"<Audio {j}>: reference - its vocal timbre guides the spoken voice of <Subject {k + 1}> "
+            definitions.append(f"<Audio {j}> is the voice-timbre reference for <Subject {k + 1}>{sx}.")
+            voix_dites.append(f"<Audio {j}> as the voice-timbre reference for <Subject {k + 1}>")
+            garde_sons.append(f"<Audio {j}>: reference - its vocal timbre guides the spoken voice of <Subject {k + 1}> "
                          f"in every line; the words of <Audio {j}> are never said.")
         # Une seule personne, dit ici et pas dans la description : le 28/09, une
         # phrase « In the foreground: only <Subject 1>… » plaçait Léa une première
@@ -1304,13 +1321,31 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         porte = (f" <Subject {k + 1}> wears {ecrite} in every frame, also when seen from behind, in profile "
                  "or from afar." if ecrite else "")
         if k in tenues:   # la dernière de ses images le montre dans la tenue du scénario (29/09)
-            garde.append(f"<Subject {k + 1}>: fully_preserved - the face and hair of the person in {images} "
+            garde.append(f"{ou}: fully_preserved - the face and hair of the person in {images} "
                          f"are retained, with the clothing of <Picture {premiere - 1}>, as one single person."
                          + porte)
             continue
-        garde.append(f"<Subject {k + 1}>: fully_preserved - the face, hair and clothing of the person in "
+        garde.append(f"{ou}: fully_preserved - the face, hair and clothing of the person in "
                      f"{images} are retained, as one single person." + porte)
-    return "subject_definitions: " + " ".join(definitions) + " retention_analysis: " + " ".join(garde)
+    if depart:   # ref-en.txt, 2.2 et 4.1 : l'image elle-même est une ancre de plan
+        definitions.append(f"<Picture {depart}> is the first frame of [Shot 1].")
+        garde.append(f"<Picture {depart}> ([Shot 1] first frame): fully_preserved - the shot begins "
+                     f"exactly on <Picture {depart}>: its framing, places and people.")
+    # ref-en.txt, 3 : un préfixe de types entre crochets, puis les étiquettes déjà définies.
+    types = ["reference generation"] + (["keyframe completion"] if depart else []) \
+        + (["audio reference"] if voix_dites else [])
+    vus = [f"<Subject {k + 1}>" for k in range(len(nombres)) if k in presents]
+    resume = (f"[{' + '.join(types)}] The target video is a single shot"
+              + (" with " + _liste_anglaise(vus) if vus else "")
+              + (f", beginning from <Picture {depart}>" if depart else "") + "."
+              + (" It uses " + _liste_anglaise(voix_dites) + "." if voix_dites else ""))
+    return ("subject_definitions: " + " ".join(definitions) + " summary: " + resume
+            + " retention_analysis: " + " ".join(garde + garde_sons))   # les sujets, puis les sons (exemple du guide)
+
+
+def _liste_anglaise(elements: list) -> str:
+    """« a », « a and b », « a, b and c »."""
+    return elements[0] if len(elements) == 1 else ", ".join(elements[:-1]) + " and " + elements[-1]
 
 
 # --- La traduction en anglais, dans tous les modes ---------------------------------
@@ -2448,7 +2483,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         image_paroles, ambiance = (_SANS_ARTICLE.sub(r"\1", t) for t in (image_paroles, ambiance))
     texte = invite(image_paroles, ambiance, payload.get("musique", ""), langue, "(S1)",
                    # Rubriques du mode références, dans l'ordre de la consigne de MiniMax
-                   # (skills/h3-prompt-writing/SKILL.md) ; `summary` n'est pas écrit.
+                   # (skills/h3-prompt-writing/SKILL.md).
                    "overall_soundscape: " if refs and fiches else "Sound: ")
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
@@ -2457,10 +2492,18 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     # n'a pas d'entrée first_frame, l'image part donc en dernière <Picture N>, désignée
     # comme le guide de MiniMax l'écrit (ref-en.txt, 2.2).
     depart = payload.get("depart_reference") if refs and fiches else None
-    if depart:
-        texte = f"<Picture {sum(nombres) + 1}> is the first frame of [Shot 1]. " + texte
     if refs and fiches:
-        texte = sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k) + " detailed_description: " + texte
+        # Le plan ne nomme pas toujours toutes les fiches du scénario : « (appears in
+        # [Shot 1]) » n'est écrit que pour celles qu'il nomme (ref-en.txt, 4.1).
+        nommes = image_paroles + " " + ambiance
+        presents = {k for k in range(len(nombres)) if f"<Subject {k + 1}>" in nommes}
+        parleurs = {}
+        for s, x in _LOCUTEUR_NUMERO.findall(nommes):
+            parleurs.setdefault(int(s) - 1, int(x))
+        numero = sum(nombres) + 1 if depart else None
+        texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs)
+                 + " detailed_description: [Shot 1] "
+                 + (f"The shot begins from <Picture {numero}>. " if numero else "") + texte)
     # Ce que montrent la première et la dernière image, quand le Studio les a
     # créées : leur description (améliorations comprises) passe aussi à H3, pour
     # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).

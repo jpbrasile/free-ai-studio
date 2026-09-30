@@ -93,7 +93,7 @@ def prix(images: int, sujets: int) -> dict:
 
 def invite(nb_photos: int) -> str:
     """Un sujet, ses photos, un gros plan : le recadrage ne montre que son visage."""
-    return (video_h3.sujets_des_fiches([nb_photos]) + " detailed_description: A close-up of the face of "
+    return (video_h3.sujets_des_fiches([nb_photos]) + " detailed_description: [Shot 1] A close-up of the face of "
             "<Subject 1>, who moves exactly as in the source frames. non_diegetic_music: N/A")
 
 
