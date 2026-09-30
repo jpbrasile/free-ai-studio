@@ -4750,30 +4750,43 @@ def _fiches_du_scenario(commun: dict) -> list:
     return fiches
 
 
-async def _regles_depart(plan: dict, fiches: list) -> dict:
-    """Règles 6 à 8 d'un plan parti de son image : compte des éléments, texte ajouté,
-    visage de chaque personnage présent. Gardé par image et par attendus : un second
-    contrôle de la même image ne rappelle pas le modèle."""
-    attendus = regles.attendus_du_depart(plan, [(f["nom"], f["description"], f["genre"]) for f in fiches])
-    personnes = [(f, a) for a in attendus if a["personne"] for f in fiches
-                 if regles._cle(f["nom"]) == regles._cle(a["nom"])]
-    empreinte = hashlib.sha256(json.dumps([plan["image_depart"], attendus, [f["id"] for f, _ in personnes]],
-                                          ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
-    # Pas dans DOSSIER_DEPARTS même : depart_lire y prend le premier « <id>.* ».
-    cache = video_h3.DOSSIER_DEPARTS / "regles" / f"{plan['image_depart']}-{empreinte}.json"
-    try:
-        return {int(n): v for n, v in json.loads(cache.read_text(encoding="utf-8")).items()}
-    except (OSError, ValueError):
-        pass
-    image = video_h3.depart_lire(plan["image_depart"])
-    presence = None
-    if attendus:
-        try:
-            presence = regles.lire_presence(await _chat_du_studio(
-                regles.consigne_presence(attendus), "le contrôle de l'image de départ",
-                images=[_data_url(image)], modele=video_h3.MODELE_JUGE), len(attendus))
-        except (ValueError, HTTPException):
-            presence = None
+def _voix_envoyees(plan: dict, fiches: list) -> set:
+    """Les fiches dont la voix part VRAIMENT avec ce plan, comme _scenario_prepare et
+    video_h3.preparer les choisissent : aucune pour une suite ni pour un départ d'image
+    seule (mode « première image ») ; sinon les VOIX_PAR_PLAN premières personnes à
+    voix, dans l'ordre des fiches. Revue du 30/09 : la règle 4 disait « suivie » pour
+    une voix qui ne partait pas."""
+    if plan.get("enchainement") == "suite":
+        return set()
+    if plan.get("image_depart"):
+        nb_photos = 0
+        for f in fiches:
+            try:
+                nb_photos += len(video_h3.fiche_lire(f["id"]).get("images") or {})
+            except ValueError:
+                pass
+        if not 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
+            return set()
+    avec_voix = [f["id"] for f in fiches if f.get("genre", "personne") == "personne" and f.get("voix")]
+    return set(avec_voix[:video_h3.VOIX_PAR_PLAN])
+
+
+async def _controle_image(image: bytes, attendus: list, absents: list, personnes: list, quoi: str,
+                          essais: int = 1):
+    """Règles 6 à 8 sur une image (de départ, ou la dernière du plan d'avant) : présence
+    et nombre de chaque élément, hors champ compris, texte ajouté, visage de chaque
+    personnage de fiche présent. Rend (règles, erreur de lecture ou "")."""
+    presence, erreur = None, ""
+    if attendus or absents:
+        for _ in range(essais):
+            try:
+                presence = regles.lire_presence(await _chat_du_studio(
+                    regles.consigne_presence(attendus, absents), quoi, images=[_data_url(image)],
+                    modele=video_h3.MODELE_JUGE), len(attendus) + len(absents))
+                erreur = ""
+                break
+            except (ValueError, HTTPException) as exc:
+                erreur = str(getattr(exc, "detail", exc))
     ressemblances = {}
     for f, a in personnes:
         try:
@@ -4781,7 +4794,37 @@ async def _regles_depart(plan: dict, fiches: list) -> dict:
             ressemblances[f["nom"]] = avis.get("ressemblance")
         except HTTPException:
             ressemblances[f["nom"]] = None
-    r = regles.regles_depart(attendus, presence, ressemblances)
+    return regles.regles_depart(attendus, presence, ressemblances, absents), erreur
+
+
+async def _regles_depart(plan: dict, fiches: list) -> dict:
+    """Règles 6 à 8 d'un plan parti de son image : compte des éléments, texte ajouté,
+    visage de chaque personnage présent. Gardé par image et par attendus : un second
+    contrôle de la même image ne rappelle pas le modèle."""
+    triplets = [(f["nom"], f["description"], f["genre"]) for f in fiches]
+    attendus = regles.attendus_du_depart(plan, triplets)
+    absents = regles.absents_du_depart(plan, triplets)
+    personnes = [(f, a) for a in attendus if a["personne"] for f in fiches
+                 if regles._cle(f["nom"]) == regles._cle(a["nom"])]
+    # La clé compte aussi les photos des fiches et le modèle qui voit (revue du 30/09 :
+    # une photo changée gardait l'ancien verdict de visage).
+    photos = []
+    for f, _ in personnes:
+        try:
+            photos.append(sorted((video_h3.fiche_lire(f["id"]).get("images") or {}).items()))
+        except ValueError:
+            photos.append(None)
+    empreinte = hashlib.sha256(json.dumps([plan["image_depart"], attendus, absents, [f["id"] for f, _ in personnes],
+                                           photos, video_h3.MODELE_JUGE],
+                                          ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    # Pas dans DOSSIER_DEPARTS même : depart_lire y prend le premier « <id>.* ».
+    cache = video_h3.DOSSIER_DEPARTS / "regles" / f"{plan['image_depart']}-{empreinte}.json"
+    try:
+        return {int(n): v for n, v in json.loads(cache.read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError):
+        pass
+    image = video_h3.depart_lire(plan["image_depart"])
+    r, _ = await _controle_image(image, attendus, absents, personnes, "le contrôle de l'image de départ")
     if all(v["ok"] is not None for v in r.values()):   # un contrôle illisible se refait
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
@@ -4795,7 +4838,8 @@ async def _verifier_scenario(plans: list, commun: dict, continuite=None) -> list
     if continuite is None:
         continuite = await _continuite(plans, _histoire(plans))
     texte = regles.regles_texte(plans, continuite, fiches, commun.get("langues") or {},
-                                commun.get("langue") or video_h3.LANGUE_PAROLES)
+                                commun.get("langue") or video_h3.LANGUE_PAROLES,
+                                [_voix_envoyees(p, fiches) for p in plans])
     rapport = []
     for k, (plan, r) in enumerate(zip(plans, texte), 1):
         if plan.get("enchainement") == "coupe" and plan.get("image_depart"):
@@ -5320,24 +5364,30 @@ def _controle_derniere_image(sid: str, i: int, image: bytes):
     sc = video_h3.scenario_lire(sid)
     plan = sc["plans"][i]
     fiches = _fiches_du_scenario(sc.get("reglages") or {"fiche": sc.get("fiche"), "fiches": sc.get("fiches")})
-    attendus = regles.attendus_du_depart(plan, [(f["nom"], f["description"], f["genre"]) for f in fiches])
-    if not attendus:
+    triplets = [(f["nom"], f["description"], f["genre"]) for f in fiches]
+    attendus = regles.attendus_du_depart(plan, triplets)
+    absents = regles.absents_du_depart(plan, triplets)
+    if not attendus and not absents:
         return None
-    try:
-        presence = regles.lire_presence(asyncio.run(_chat_du_studio(
-            regles.consigne_presence(attendus), "le contrôle de la dernière image", images=[_data_url(image)],
-            modele=video_h3.MODELE_JUGE)), len(attendus))
-    except (ValueError, HTTPException) as exc:
-        presence, erreur = None, str(getattr(exc, "detail", exc))
-    else:
-        erreur = ""
-    r = regles.regles_depart(attendus, presence, {})
-    note = {"plan": i + 1, "regles": regles.en_liste({6: r[6], 8: r[8]}), "erreur": erreur}
+    personnes = [(f, a) for a in attendus if a["personne"] for f in fiches
+                 if regles._cle(f["nom"]) == regles._cle(a["nom"])]
+    # Revue du 30/09 : une réponse illisible laissait passer la suite ; on redemande une
+    # fois, puis on s'arrête. Le visage (7) et le texte ajouté (8) comptent aussi : la
+    # suite part de cette image, sans fiche, et garde ce qu'elle montre.
+    r, erreur = asyncio.run(_controle_image(image, attendus, absents, personnes,
+                                            "le contrôle de la dernière image", essais=2))
+    note = {"plan": i + 1, "regles": regles.en_liste(r), "erreur": erreur}
     video_h3.scenario_noter(sid, controles_suite=(sc.get("controles_suite") or []) + [note])
-    if r[6]["ok"] is False and not sc.get("force"):
-        return ("la dernière image du plan %d ne montre pas ce que ce plan attend (%s) : le tourner recréerait "
+    if sc.get("force"):
+        return None
+    fautes = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in regles.NUMEROS["depart"] if r[n]["ok"] is False]
+    if fautes:
+        return ("la dernière image du plan %d ne montre pas ce que le plan %d attend (%s) : le tourner recréerait "
                 "ce qui manque ou doublerait ce qui est en trop. Retournez le plan %d, ou relancez avec "
-                "« tourner quand même »." % (i, r[6]["pourquoi"], i))
+                "« tourner quand même »." % (i, i + 1, " ; ".join(fautes), i))
+    if (attendus or absents) and r[6]["ok"] is None:
+        return ("la dernière image du plan %d n'a pas pu être contrôlée (%s) : le plan %d n'est pas tourné "
+                "à l'aveugle. Relancez, ou relancez avec « tourner quand même »." % (i, erreur or "illisible", i + 1))
     return None
 
 

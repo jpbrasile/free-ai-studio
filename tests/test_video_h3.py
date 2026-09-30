@@ -3029,13 +3029,25 @@ def test_une_suite_ne_part_pas_d_une_derniere_image_fausse(h3, monkeypatch):
                             "fiche": fid, "fiches": [], "reglages": {"fiche": fid, "fiches": None}})
     vus = []
     _faux_chat(monkeypatch, h3, {"le contrôle de la dernière image": [
-        '{"comptes": [0], "texte_ajoute": false}', '{"comptes": [1], "texte_ajoute": false}', "illisible"]}, vus)
+        '{"comptes": [0], "texte_ajoute": false}', '{"comptes": [1], "texte_ajoute": false}',
+        "illisible", '{"comptes": [1], "texte_ajoute": true}', "illisible", "illisible"]}, vus)
     arret = h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG))
-    assert "la dernière image du plan 1 ne montre pas ce que ce plan attend (Compté : Marc ×0.)" in arret
+    assert "la dernière image du plan 1 ne montre pas ce que le plan 2 attend (règle 6 : Compté : Marc ×0.)" in arret
     assert h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG)) is None
-    assert h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG)) is None   # illisible : on tourne
+    # Illisible une fois : redemandé ; la bulle ajoutée (règle 8) arrête aussi.
+    assert "règle 8 : Texte ou bulle" in h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG))
+    # Illisible deux fois : on ne tourne pas à l'aveugle (revue du 30/09).
+    assert "n'a pas pu être contrôlée" in h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG))
     notes = v.scenario_lire(sc["id"])["controles_suite"]
-    assert [n["regles"][0]["ok"] for n in notes] == [False, True, None] and notes[2]["erreur"]
+    assert [n["regles"][0]["ok"] for n in notes] == [False, True, True, None] and notes[3]["erreur"]
+    # Un élément hors champ au début est compté, et doit être à 0.
+    plans[1]["elements"].append({"nom": "Leila", "debut": "off-frame", "mouvement": "walks in", "fin": "left"})
+    v.scenario_noter(sc["id"], plans=plans)
+    _faux_chat(monkeypatch, h3, {"le contrôle de la dernière image": '{"comptes": [1, 1], "texte_ajoute": false}'}, vus)
+    assert "Leila ×1 (doit être hors champ)" in h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG))
+    assert "must NOT be visible yet" in vus[-1][1]
+    plans[1]["elements"].pop()
+    v.scenario_noter(sc["id"], plans=plans)
     # « Tourner quand même » : noté, pas arrêté.
     v.scenario_noter(sc["id"], force=True)
     _faux_chat(monkeypatch, h3, {"le contrôle de la dernière image": '{"comptes": [2], "texte_ajoute": false}'}, [])
@@ -3052,3 +3064,14 @@ def test_le_juge_rend_les_regles_9_a_12_du_plan_tourne(h3, monkeypatch):
                                     {"elements": [{"nom": "Marc", "fin": "clapping"}]}))
     assert r[10] == {"ok": False, "pourquoi": "deux Marc"} and r[11]["ok"] is True
     assert vus[0][3] == 2 and "Marc: clapping." in vus[0][1]
+
+
+def test_la_regle_4_sait_quelles_voix_partent(h3):
+    """Revue du 30/09 : la règle 4 disait « suivie » pour une voix qui ne partait pas."""
+    v = h3.video_h3
+    ids = [v.fiche_creer(n, "x")["id"] for n in ("A", "B", "C", "D")]
+    fiches = [{"id": i, "nom": n, "genre": "personne", "voix": {"langue": "French"}} for i, n in zip(ids, "ABCD")]
+    assert h3._voix_envoyees({"enchainement": "suite"}, fiches) == set()
+    assert h3._voix_envoyees({"enchainement": "coupe"}, fiches) == set(ids[:3])
+    # Parti d'une image sans photo de fiche : mode « première image », aucune voix.
+    assert h3._voix_envoyees({"enchainement": "coupe", "image_depart": "x"}, fiches) == set()

@@ -84,9 +84,17 @@ def test_regle_4_chaque_locuteur_a_sa_voix_dans_sa_langue(r):
     assert "parle anglais" in regle([LEILA, marc])["pourquoi"]
     # Personne de nommé, ou un nom sans fiche.
     plan["image_paroles"] = "« Il vole ! »"
-    assert "personne n'est nommé" in regle([LEILA, marc])["pourquoi"]
+    assert "aucun personnage de fiche n'est nommé" in regle([LEILA, marc])["pourquoi"]
     plan.update(image_paroles="Tom says : « Il vole ! »", elements=[el("Tom", "left")])
-    assert "Tom n'a pas de fiche" in regle([LEILA, marc])["pourquoi"]
+    assert "Tom n'a pas de fiche de personne" in regle([LEILA, marc])["pourquoi"]
+    # Revue du 30/09 : un nom du tableau sans verbe de parole ne vole pas la réplique.
+    plan.update(image_paroles="The yellow kite dips. Marc shouts « Il vole ! »",
+                elements=[el("the yellow kite", "sky"), el("Marc", "left")])
+    assert regle([LEILA, marc, KITE])["ok"] is True
+    # La voix qui ne part pas avec ce plan (mode première image, ou au-delà de trois).
+    plan["image_paroles"] = "Marc says : « Il vole ! »"
+    assert "ne part pas avec ce plan" in r.regle_voix(plan, [LEILA, marc], {}, "French", envoyees=set())["pourquoi"]
+    assert r.regle_voix(plan, [LEILA, marc], {}, "French", envoyees={"m1"})["ok"] is True
     # Pas de réplique : sans objet.
     plan["image_paroles"] = "Leila runs."
     assert regle([LEILA])["ok"] is None
@@ -102,9 +110,16 @@ def test_regle_4_une_suite_part_sans_voix(r):
 
 def test_qui_parle_suit_la_regle_d_attribution(r):
     t = "Léa smiles. James turns to Léa and says « Of course. » She answers « Merci. »"
-    assert r.qui_parle(t, ["Léa", "James"]) == [("Of course.", 1), ("Merci.", 0)]
-    assert r.qui_parle("« Hi. »", ["Léa"]) == [("Hi.", None)]
-    assert r.qui_parle("Lea says « Hi. »", ["Léa"]) == [("Hi.", 0)]
+    assert r.qui_parle(t, ["Léa", "James"]) == [("Of course.", 1, None), ("Merci.", 0, None)]
+    assert r.qui_parle("« Hi. »", ["Léa"]) == [("Hi.", None, None)]
+    assert r.qui_parle("Lea says « Hi. »", ["Léa"]) == [("Hi.", 0, None)]
+    assert r.qui_parle("Tom asks « Hi? »", ["Léa"], ["Tom"]) == [("Hi?", None, "Tom")]
+
+
+def test_position_ignore_le_regard_et_la_main(r):
+    """Revue du 30/09 : « facing left » ou « right hand » n'est pas une place du cadre."""
+    assert r.position("in the foreground, right, facing left") == ("foreground", "right")
+    assert r.position("background, centre, kite in her left hand") == ("background", "centre")
 
 
 def test_regle_5_rien_n_est_cree_deux_fois(r):
@@ -118,6 +133,44 @@ def test_regle_5_rien_n_est_cree_deux_fois(r):
     # Le mot d'une réplique n'est pas une action.
     plan.update(image_paroles="Léa says « It appears now. »", elements=[el("Léa", "in the foreground, left")])
     assert r.regle_deux_fois([plan], 1)["ok"] is True
+
+
+@pytest.mark.parametrize("texte", ["Léa walks into the room.", "Léa comes back to the counter.",
+                                   "Léa reappears behind the shelf.", "Léa runs in.", "Léa is back.",
+                                   "James waits. She enters the shop."])
+def test_regle_5_les_entrees_que_la_revue_a_trouvees(r, texte):
+    """Revue du 30/09 : seules « enters » et « walks in » étaient lues ; le pronom échappait."""
+    plan = {"image_paroles": texte, "ambiance": "", "enchainement": "suite",
+            "elements": [el("Léa", "in the foreground, left"), el("James", "background, right")]}
+    x = r.regle_deux_fois([plan], 1)
+    assert x["ok"] is False and ("Léa" in x["pourquoi"] or "James" in x["pourquoi"])
+
+
+def test_regle_5_un_second_exemplaire_et_une_entree_sans_nom(r):
+    plan = {"image_paroles": "A second Léa walks up.", "ambiance": "", "enchainement": "coupe",
+            "elements": [el("Léa", "in the foreground, left")]}
+    assert "un second Léa" in r.regle_deux_fois([plan], 1)["pourquoi"]
+    plan["image_paroles"] = "She enters the shop."
+    assert "par un pronom" in r.regle_deux_fois([plan], 1)["pourquoi"]
+
+
+def test_regle_5_une_action_refaite_au_plan_suivant(r):
+    """Revue du 30/09 : le cerf-volant retombe une seconde fois, coupe ou suite."""
+    p1 = {"image_paroles": "The kite falls.", "enchainement": "coupe",
+          "elements": [el("kite", "sky", "on the grass", "falls down to the grass")]}
+    for enchainement in ("coupe", "suite"):
+        p2 = {"image_paroles": "The kite falls.", "enchainement": enchainement,
+              "elements": [el("kite", "on the grass", "on the grass", "falls down onto the grass")]}
+        assert "kite refait au plan 2 le mouvement du plan 1" in r.regle_deux_fois([p1, p2], 2)["pourquoi"]
+    p2["elements"][0]["mouvement"] = "is picked up by Marc"
+    assert r.regle_deux_fois([p1, p2], 2)["ok"] is True
+
+
+def test_hors_champ_est_une_seule_regle(sandbox):
+    """Revue du 30/09 : « out of frame » comptait présent pour une règle, absent pour l'autre."""
+    v = sandbox.video_h3
+    assert v.hors_champ("off-frame") and v.hors_champ("out of frame") and v.hors_champ("not yet visible")
+    assert not v.hors_champ("in the foreground, left")
 
 
 def test_regle_5_une_suite_repart_de_la_derniere_image_du_plan_d_avant(r):

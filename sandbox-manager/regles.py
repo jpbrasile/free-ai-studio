@@ -55,7 +55,7 @@ def present_au_debut(e: dict) -> bool:
     debut = video_h3._norme_replique(e.get("debut", ""))
     if debut in {video_h3._norme_replique(x) for x in video_h3._SANS_DEPART}:
         return False
-    return not any(debut.startswith(video_h3._norme_replique(h)) for h in video_h3.HORS_CHAMP)
+    return not video_h3.hors_champ(debut)
 
 
 def mots_du_nom(nom: str) -> list:
@@ -68,13 +68,23 @@ def nomme_dans(nom: str, texte: str) -> bool:
     return bool(mots) and all(m in dans for m in mots)
 
 
+# Ce qui dit une direction sans dire une place : « facing right », « left hand »…
+# Revue du 30/09 : « foreground, centre, facing right » était lu (foreground, right).
+_PAS_UNE_PLACE = re.compile(
+    r"\b(?:facing|looking|turned|turning|pointing|leaning|glancing|gazing|seen from the|profile facing)"
+    r"(?: to| towards| toward)?(?: the)? (?:left|right|centre|center|camera|forward|away)\b"
+    r"|\b(?:left|right) (?:hand|hands|arm|arms|foot|feet|leg|legs|shoulder|shoulders|side of \w+ body|eye|ear)\b")
+
+
 def position(debut: str):
-    """(profondeur, côté) lus au début d'un élément ; None s'il en manque un."""
-    t = " ".join(video_h3._mots(debut))
-    profondeur = next((v for k, v in _PROFONDEURS if re.search(r"\b%s\b" % k, t)), None)
+    """(profondeur, côté) lus au début d'un élément ; None s'il en manque un. Le premier
+    mot de place l'emporte (la place est écrite en tête : « foreground, left, … »)."""
+    t = _PAS_UNE_PLACE.sub(" ", " ".join(video_h3._mots(debut)))
+    trouve = lambda paires, texte: min(((m.start(), v) for k, v in paires
+                                        for m in re.finditer(r"\b%s\b" % k, texte)), default=(0, None))[1]
+    profondeur = trouve(_PROFONDEURS, t)
     # Le côté se lit après la profondeur : « middle ground » n'est pas un côté.
-    reste = re.sub(r"\bmiddle (ground|distance)\b", " ", t)
-    cote = next((v for k, v in _COTES if re.search(r"\b%s\b" % k, reste)), None)
+    cote = trouve(_COTES, re.sub(r"\bmiddle (ground|distance)\b", " ", t))
     return (profondeur, cote) if profondeur and cote else None
 
 
@@ -96,51 +106,76 @@ def _hors_champ(etat: str) -> bool:
 
 # --- Règle 4 : qui parle, et avec quelle voix ---------------------------------------
 
-def qui_parle(texte: str, noms: list) -> list:
-    """[(réplique, rang du nom qui la dit, ou None)] : la règle de attribuer_repliques
-    (le PREMIER nom de la phrase de la réplique, sinon le dernier nommé avant), sans
-    le repli « le premier personnage » : ici, un locuteur inconnu est une faute."""
+# Un verbe de parole juste après un nom sans fiche : « Tom says », « Tom asks ».
+_PAROLE = re.compile(r"^\W*(?:\w+\W+){0,3}?(?:says?|said|asks?|asked|shouts?|shouted|answers?|answered|replies|"
+                     r"replied|calls?|called|whispers?|whispered|cries|cried|exclaims?|exclaimed|responds?|"
+                     r"responded|adds?|added|tells?|told|murmurs?|yells?|yelled|dit|demande|répond|crie)\b", re.I)
+
+
+def qui_parle(texte: str, personnes: list, autres=()) -> list:
+    """[(réplique, rang dans `personnes` ou None, nom sans fiche ou None)].
+
+    `personnes` : les noms des fiches de PERSONNES, seuls locuteurs possibles, comme
+    dans attribuer_repliques, qui fait le texte envoyé : le premier d'entre eux nommé
+    dans la phrase de la réplique, sinon le dernier nommé avant. `autres` : les noms du
+    tableau sans fiche de personne ; un de ceux-là suivi d'un verbe de parole dans la
+    phrase (« Tom says ») est un locuteur sans fiche, donc une faute. Revue du 30/09 :
+    les fiches et le tableau comptés ensemble faisaient dire « Leila n'a pas de fiche »
+    à une réplique que Leila dit bien, et un objet nommé en tête de phrase parlait."""
     texte = str(texte or "")
     vues = list(video_h3._PAROLES.finditer(texte))
     dedans = [(m.start(), m.end()) for m in vues]
-    places = sorted((m.start(), k) for k, nom in enumerate(noms) if str(nom).strip()
-                    for m in re.finditer(video_h3._motif_nom(nom), texte, re.I)
-                    if not any(a <= m.start() < b for a, b in dedans))
+
+    def places(noms):
+        return sorted((m.start(), m.end(), k) for k, nom in enumerate(noms) if str(nom).strip()
+                      for m in re.finditer(video_h3._motif_nom(nom), texte, re.I)
+                      if not any(a <= m.start() < b for a, b in dedans))
+    les_personnes, les_autres = places(personnes), places(autres)
     sortie, fin_precedente = [], 0
     for m in vues:
         avant = texte[fin_precedente:m.start()]
         debut_phrase = fin_precedente + max(avant.rfind(c) for c in ".!?;\n") + 1
-        dans_la_phrase = [k for a, k in places if debut_phrase <= a < m.start()]
-        plus_tot = [k for a, k in places if a < debut_phrase]
-        k = dans_la_phrase[0] if dans_la_phrase else plus_tot[-1] if plus_tot else None
-        sortie.append((next(g for g in m.groups() if g).strip(), k))
+        dans_la_phrase = [k for a, _, k in les_personnes if debut_phrase <= a < m.start()]
+        plus_tot = [k for a, _, k in les_personnes if a < debut_phrase]
+        sans_fiche = [autres[k] for a, b, k in les_autres
+                      if debut_phrase <= a < m.start() and _PAROLE.search(texte[b:m.start()])]
+        replique = next(g for g in m.groups() if g).strip()
+        if dans_la_phrase:
+            sortie.append((replique, dans_la_phrase[0], None))
+        elif sans_fiche:
+            sortie.append((replique, None, sans_fiche[0]))
+        else:
+            sortie.append((replique, plus_tot[-1] if plus_tot else None, None))
         fin_precedente = m.end()
     return sortie
 
 
-def regle_voix(plan: dict, fiches: list, langues: dict, langue: str) -> dict:
+def regle_voix(plan: dict, fiches: list, langues: dict, langue: str, envoyees=None) -> dict:
     """Règle 4. `fiches` : les fiches du scénario (dicts du Studio : id, nom, genre, voix) ;
-    `langues` : {fiche : langue de ses répliques} ; `langue` : celle par défaut.
+    `langues` : {fiche : langue de ses répliques} ; `langue` : celle par défaut ;
+    `envoyees` : les fiches dont la voix part VRAIMENT avec ce plan (mode et place
+    comptés par l'appelant ; None : toutes, un plan « suite » n'en emporte aucune).
     Décision du propriétaire, 30/09 : « all speaker is created with a profile before
     hand including its voice in the appropriate language : to be hard coded in studio »."""
     texte = plan.get("image_paroles", "") + " " + plan.get("ambiance", "")
-    noms = [f["nom"] for f in fiches] + [e["nom"] for e in plan.get("elements") or []]
-    dites = qui_parle(texte, noms)
+    parlants = [f for f in fiches if f.get("genre", "personne") == "personne"]
+    connus = {_cle(f["nom"]) for f in fiches}
+    autres = [e["nom"] for e in plan.get("elements") or [] if _cle(e["nom"]) not in connus]
+    dites = qui_parle(texte, [f["nom"] for f in parlants], autres)
     if not dites:
         return resultat(None, "Pas de réplique dans ce plan.")
+    if envoyees is None:
+        envoyees = set() if plan.get("enchainement") == "suite" else {f["id"] for f in fiches}
     fautes, locuteurs = [], []
-    for replique, k in dites:
+    for replique, k, sans_fiche in dites:
         court = "« %s »" % (replique[:40] + ("…" if len(replique) > 40 else ""))
+        if sans_fiche:
+            fautes.append(court + " : %s n'a pas de fiche de personne" % sans_fiche)
+            continue
         if k is None:
-            fautes.append(court + " : personne n'est nommé pour la dire")
+            fautes.append(court + " : aucun personnage de fiche n'est nommé pour la dire")
             continue
-        if k >= len(fiches):
-            fautes.append(court + " : %s n'a pas de fiche" % noms[k])
-            continue
-        f = fiches[k]
-        if f.get("genre", "personne") != "personne":
-            fautes.append(court + " : « %s » est un objet, il ne parle pas" % f["nom"])
-            continue
+        f = parlants[k]
         voulue, _ = video_h3.langue_de_replique(replique, (langues or {}).get(f["id"]) or langue)
         voix = f.get("voix") or {}
         if not voix:
@@ -151,6 +186,8 @@ def regle_voix(plan: dict, fiches: list, langues: dict, langue: str) -> dict:
             fautes.append(court + " : %s parle %s, sa voix est en %s" % (
                 f["nom"], video_h3.LANGUES_PAROLES.get(voulue, voulue),
                 video_h3.LANGUES_PAROLES.get(voix["langue"], voix["langue"])))
+        elif f["id"] not in envoyees and plan.get("enchainement") != "suite":
+            fautes.append(court + " : la voix de %s ne part pas avec ce plan" % f["nom"])
         if f["id"] not in locuteurs:
             locuteurs.append(f["id"])
     # Un plan « suite » part de la dernière image, sans fiche : aucune voix ne part avec
@@ -168,10 +205,18 @@ def regle_voix(plan: dict, fiches: list, langues: dict, langue: str) -> dict:
 
 # Ce qui fait ENTRER un élément dans le cadre : dit d'un élément déjà là, le modèle
 # le dessine une seconde fois (librairie, 30/09 : Léa « enters » alors que la
-# première image la montrait déjà ; deux Léa sur l'image de départ).
-_ENTREE = re.compile(r"\b(enters?|entering|entered|walks? in|walking in|comes? in|coming in|steps? in|"
-                     r"steps? into|appears?|appearing|comes? into (?:view|frame|the frame)|"
-                     r"into (?:view|frame|the frame)|pops? up|emerges?)\b", re.I)
+# première image la montrait déjà ; deux Léa sur l'image de départ). La revue du 30/09
+# a trouvé « walks into the room », « comes back », « reappears », « runs in », « is
+# back », et le sujet dit par un pronom (« She enters »).
+_ENTREE = re.compile(
+    r"\b(?:enters?|entering|entered|re-?enters?|(?:walks?|walking|walked|runs?|running|ran|rushes|rushing|"
+    r"rushed|hurries|hurrying|hurried|steps?|stepping|stepped|comes?|coming|came|bursts?|slips?|strolls?|"
+    r"wanders?|marches|marching|dashes|dashing|skips?|skipping|jogs?|jogging) (?:in|into|back)\b|"
+    r"(?:re)?appears?|(?:re)?appearing|(?:re)?appeared|returns?|returning|returned|is back|are back|"
+    r"comes? into (?:view|frame|the frame|shot)|into (?:view|frame|the frame|shot)|pops? up|popping up|"
+    r"emerges?|emerging|emerged|arrives? (?:in|into) (?:the )?(?:frame|shot|view|scene|room|shop|park))",
+    re.I)
+_PRONOMS = re.compile(r"\b(he|she|they|it|his|her|him|their)\b", re.I)
 
 
 def _phrases(texte: str) -> list:
@@ -179,33 +224,85 @@ def _phrases(texte: str) -> list:
     return [p for p in re.split(r"[.;!?\n]", video_h3._PAROLES.sub(" ", str(texte or ""))) if p.strip()]
 
 
+SANS_NOM = "?"   # une entrée dont le sujet n'est dit que par un pronom, sans nom avant
+
+
+def entrants(texte: str, noms: list) -> set:
+    """Les noms (de `noms`) que le texte fait entrer : le nom qui précède le verbe
+    d'entrée dans sa phrase ; sans nom, un pronom renvoie au dernier nommé avant ; sans
+    nom avant du tout, SANS_NOM (« She enters » : qui ?)."""
+    sortie, dernier = set(), None
+    for phrase in _phrases(texte):
+        cites = sorted((m.start(), nom) for nom in noms if str(nom).strip()
+                       for m in re.finditer(video_h3._motif_nom(nom), phrase, re.I))
+        # Les mots d'un nom sans accent ni article : « the red ball » cité « the ball » ne compte pas.
+        if not cites:
+            cites = [(0, nom) for nom in noms if nomme_dans(nom, phrase)]
+        for m in _ENTREE.finditer(phrase):
+            avant = [nom for a, nom in cites if a < m.start()]
+            if avant:
+                sortie.add(avant[-1])
+            elif _PRONOMS.search(phrase[:m.start()]):
+                sortie.add(dernier or SANS_NOM)
+        if cites:
+            dernier = cites[-1][1]
+    return sortie
+
+
 def _entre(nom: str, texte: str) -> bool:
-    return any(nomme_dans(nom, p) and _ENTREE.search(p) for p in _phrases(texte))
+    return nom in entrants(texte, [nom])
+
+
+def _meme_mouvement(a: str, b: str) -> bool:
+    """Deux mouvements qui disent la même action (mots pleins en commun, 70 % au moins)."""
+    vides = {"none", "the", "a", "an", "and", "then", "his", "her", "their", "its", "with", "to", "of",
+             "on", "in", "at", "by", "from", "into", "onto", "up", "down", "it", "him", "them"}
+    ma = {m for m in video_h3._mots(a) if m not in vides and len(m) > 2}
+    mb = {m for m in video_h3._mots(b) if m not in vides and len(m) > 2}
+    if not ma or not mb:
+        return False
+    # « falls down » deux fois : un seul mot plein, mais le même.
+    return ma == mb or (len(ma) >= 2 and len(mb) >= 2 and len(ma & mb) / min(len(ma), len(mb)) >= 0.7)
 
 
 def regle_deux_fois(plans: list, k: int) -> dict:
-    """Règle 5 pour le plan k (compté de 1). Deux sources de doublon, lues dans le tableau :
-    un élément présent au début que le texte (ou son mouvement) fait entrer ; et, pour une
+    """Règle 5 pour le plan k (compté de 1). Trois sources de doublon, lues dans le tableau :
+    un élément présent au début que le texte (ou son mouvement) fait entrer ; pour une
     suite, un élément sur la dernière image du plan d'avant qui manque au tableau, part
-    hors champ, change de place, ou entre."""
+    hors champ ou change de place ; et, pour tout plan, un mouvement déjà fait au plan
+    d'avant (revue du 30/09 : le cerf-volant qui retombe une seconde fois)."""
     plan = plans[k - 1]
     elements = plan.get("elements") or []
     if not elements:
         return resultat(None, "Plan sans tableau des éléments.")
     fautes = []
+    noms = [e["nom"] for e in elements]
+    entres = entrants(plan.get("image_paroles", ""), noms)
     for e in elements:
-        if present_au_debut(e) and (_entre(e["nom"], plan.get("image_paroles", ""))
-                                     or _ENTREE.search(str(e.get("mouvement", "")))):
+        if present_au_debut(e) and (e["nom"] in entres or _ENTREE.search(str(e.get("mouvement", "")))):
             fautes.append("%s est déjà à l'image au début, et le plan le fait entrer" % e["nom"])
+        # « A second Lea », « another kite » : le texte demande lui-même un double.
+        motif = r"\b(?:a second|another|a copy of|a double of|two|both)\s+" + video_h3._motif_nom(e["nom"])
+        if re.search(motif, video_h3._PAROLES.sub(" ", plan.get("image_paroles", "")), re.I):
+            fautes.append("le texte demande un second %s" % e["nom"])
+    if SANS_NOM in entres:
+        fautes.append("le texte fait entrer quelqu'un par un pronom, sans le nommer : nommez qui entre")
+    avant = plans[k - 2].get("elements") or [] if k > 1 else []
+    precedents = {_cle(e["nom"]): e for e in avant}
+    for e in elements:
+        p = precedents.get(_cle(e["nom"]))
+        if p and _meme_mouvement(p.get("mouvement", ""), e.get("mouvement", "")):
+            fautes.append("%s refait au plan %d le mouvement du plan %d (« %s »)"
+                          % (e["nom"], k, k - 1, str(e.get("mouvement", ""))[:60]))
     if plan.get("enchainement") == "suite" and k > 1:
         ici = {_cle(e["nom"]): e for e in elements}
-        for avant in plans[k - 2].get("elements") or []:
-            fin = str(avant.get("fin", ""))
+        for a in avant:
+            fin = str(a.get("fin", ""))
             if _hors_champ(fin):
                 continue
-            e = ici.get(_cle(avant["nom"]))
+            e = ici.get(_cle(a["nom"]))
             if e is None:
-                fautes.append("%s est sur la dernière image du plan d'avant mais absent du tableau" % avant["nom"])
+                fautes.append("%s est sur la dernière image du plan d'avant mais absent du tableau" % a["nom"])
                 continue
             if not present_au_debut(e):
                 fautes.append("%s est déjà sur la dernière image du plan d'avant, pas hors champ" % e["nom"])
@@ -217,8 +314,10 @@ def regle_deux_fois(plans: list, k: int) -> dict:
     return resultat(not fautes, " ; ".join(fautes) + ("." if fautes else ""))
 
 
-def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, langue=video_h3.LANGUE_PAROLES) -> list:
-    """Règles 0 à 5, par le code seul. `fiches` : les fiches du scénario (id, nom, genre, voix)."""
+def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, langue=video_h3.LANGUE_PAROLES,
+                 envoyees=None) -> list:
+    """Règles 0 à 5, par le code seul. `fiches` : les fiches du scénario (id, nom, genre, voix) ;
+    `envoyees` : pour chaque plan, les fiches dont la voix part avec lui (None : toutes)."""
     personnes = {_cle(f["nom"]) for f in fiches or [] if f.get("genre", "personne") == "personne"}
     problemes = {}
     for p in (continuite or {}).get("problemes") or []:
@@ -251,7 +350,7 @@ def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, lang
             r[3] = resultat(None, "Pas de personnage de fiche à placer.")
         else:
             r[3] = resultat(not ensemble, " ; ".join(" et ".join(n) + " partent du même endroit" for n in ensemble))
-        r[4] = regle_voix(plan, fiches or [], langues or {}, langue)
+        r[4] = regle_voix(plan, fiches or [], langues or {}, langue, (envoyees or [None] * len(plans))[k - 1])
         r[5] = regle_deux_fois(plans, k)
         rapport.append(r)
     return rapport
@@ -273,10 +372,25 @@ def attendus_du_depart(plan: dict, fiches: list) -> list:
     return attendus
 
 
-def consigne_presence(attendus: list) -> str:
+def absents_du_depart(plan: dict, fiches: list) -> list:
+    """Ce qui NE doit PAS être sur l'image de départ : les éléments hors champ au début
+    (revue du 30/09 : Marc déjà dessiné alors qu'il devait entrer plus tard, puis entré
+    une seconde fois). Même forme qu'attendus_du_depart."""
+    par_nom = {_cle(n): (d, g) for n, d, g in fiches or []}
+    return [{"nom": e["nom"], "ou": e["debut"], "description": par_nom.get(_cle(e["nom"]), ("", ""))[0],
+             "personne": par_nom.get(_cle(e["nom"]), ("", ""))[1] == "personne"}
+            for e in plan.get("elements") or [] if not present_au_debut(e)]
+
+
+def consigne_presence(attendus: list, absents=()) -> str:
+    tous = list(attendus) + list(absents)
     liste = " ".join("%d. %s%s, expected: %s." % (i + 1, a["nom"], (" (" + a["description"] + ")") if a["description"]
-                                                  else "", a["ou"]) for i, a in enumerate(attendus))
-    return ("This image is the FIRST FRAME of a video shot. Expected in it, each exactly once: " + liste + " "
+                                                  else "", a["ou"] if i < len(attendus) else "NOT in the image yet")
+                     for i, a in enumerate(tous))
+    attendu = ("Items 1 to %d are expected each exactly once; items %d to %d must NOT be visible yet (count "
+               "0 when absent). " % (len(attendus), len(attendus) + 1, len(tous))) if absents else \
+        "Expected in it, each exactly once. "
+    return ("This image is the FIRST FRAME of a video shot. Items: " + liste + " " + attendu +
             "For each numbered item, count how many times it appears in the image (0 if absent, 2 or more if "
             "the same person or the same object is shown twice). Then say whether a speech bubble, a caption, "
             "subtitles or any text was ADDED over the picture (text that belongs to the scene, like a sign or "
@@ -286,6 +400,7 @@ def consigne_presence(attendus: list) -> str:
 
 
 def lire_presence(reponse: str, nombre: int) -> dict:
+    """`nombre` : attendus ET absents, dans l'ordre de consigne_presence."""
     t = str(reponse or "")
     debut, fin = t.find("{"), t.rfind("}")
     try:
@@ -299,15 +414,19 @@ def lire_presence(reponse: str, nombre: int) -> dict:
             "remarque": " ".join(str(d.get("remarque") or "").split())[:300]}
 
 
-def regles_depart(attendus: list, presence, ressemblances: dict) -> dict:
+def regles_depart(attendus: list, presence, ressemblances: dict, absents=()) -> dict:
     """Règles 6 à 8. `presence` : lire_presence(), ou None si illisible ;
-    `ressemblances` : {nom : "forte" | "moyenne" | "faible" | None}."""
+    `ressemblances` : {nom : "forte" | "moyenne" | "faible" | None} ;
+    `absents` : les éléments hors champ au début, comptés après les attendus."""
     r = {}
     if presence is None:
         r[6] = resultat(None, "Le contrôle de l'image n'a pas pu être lu.")
         r[8] = resultat(None, "Le contrôle de l'image n'a pas pu être lu.")
     else:
-        faux = ["%s ×%d" % (a["nom"], c) for a, c in zip(attendus, presence["comptes"]) if c != 1]
+        comptes = presence["comptes"]
+        faux = ["%s ×%d" % (a["nom"], c) for a, c in zip(attendus, comptes) if c != 1]
+        faux += ["%s ×%d (doit être hors champ)" % (a["nom"], c)
+                 for a, c in zip(absents, comptes[len(attendus):]) if c != 0]
         r[6] = resultat(not faux, ("Compté : " + ", ".join(faux) + ".") if faux else "")
         r[8] = resultat(not presence["texte_ajoute"], "Texte ou bulle ajouté sur l'image."
                         if presence["texte_ajoute"] else "")

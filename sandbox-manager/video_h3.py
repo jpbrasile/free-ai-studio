@@ -1204,6 +1204,19 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            "Then write \"image_paroles\" from this table: the start places, then each movement once, in order; "
            "never a start place that a movement of the shot only reaches. ")
 HORS_CHAMP = ("off-frame", "off frame", "offframe", "off-screen", "off screen", "offscreen", "hors champ")
+# Revue du 30/09 : la page ne reconnaissait que « off-frame » et « hors champ », le code
+# toute la liste ; un « off-screen » partait donc dessiné sur l'image de départ, puis
+# entrait dans le plan : deux fois à l'image. Une seule règle, ici, pour les deux.
+_HORS_CHAMP_DEDANS = ("off frame", "offframe", "off screen", "offscreen", "hors champ", "out of frame",
+                      "out of shot", "off camera", "not visible", "not yet visible", "unseen", "invisible")
+
+
+def hors_champ(etat: str) -> bool:
+    """L'état d'un élément le dit hors du cadre (« off-frame », « out of frame »…)."""
+    t = f" {_norme_replique(str(etat or ''))} "
+    return any(f" {_norme_replique(h)} " in t for h in HORS_CHAMP + _HORS_CHAMP_DEDANS)
+
+
 _SANS_DEPART = ("", "none", "aucun", "aucune", "rien", "n/a", "-", "null")
 TABLEAU_MAX, TABLEAU_CHAMPS = 8, ("nom", "debut", "mouvement", "fin")
 
@@ -1236,7 +1249,7 @@ def apparitions_du_tableau(plans: list) -> list:
                     f"« {e['nom']} » n'a pas de place au début du plan : dites où il est, ou « off-frame » "
                     "et comment il entre ; un objet ne surgit pas.")[:300]})
             elif (k and plan.get("enchainement") == "suite" and nom not in vus
-                  and not any(debut.startswith(_norme_replique(h)) for h in HORS_CHAMP)):
+                  and not hors_champ(e["debut"])):
                 problemes.append({"plan": k + 1, "quoi": (
                     f"« {e['nom']} » est là au début du plan sans avoir été vu avant : placez-le dès le premier "
                     "plan de ce lieu, ou faites-le entrer depuis le hors-champ.")[:300]})
@@ -1748,7 +1761,10 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "vanishes, jumps to another place or changes between shots; an event of the story that no shot "
             "shows; a shot whose text contradicts itself; two characters each doing their own main action in "
             "one shot; two characters at the same place of the frame (same depth and same side) at the same "
-            "moment. \"detail\" = a precision the video model usually gets right on its own or that barely "
+            "moment; an action already completed in an earlier shot that happens again (something falls, "
+            "enters or is picked up a second time) without the story asking for it; a character or object "
+            "that starts a shot in a state other than the one it ended the previous shot in, with nothing "
+            "shown to change it. \"detail\" = a precision the video model usually gets right on its own or that barely "
             "shows: which way someone faces, looks or turns the head (always a detail), which hand, the exact "
             "side or depth in the frame, naming a target earlier, wording. When unsure, \"detail\". "
             "Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
@@ -2719,6 +2735,7 @@ PAGE_HTML = r"""<!doctype html>
         <textarea id="retours" maxlength="2000"></textarea>
       </div>
       <button id="suite_lancer">Lancer</button>
+      <button id="rejouer_forcer" hidden>Rejouer quand même (payant)</button>
       <div id="jugement"></div>
       <div id="suite_pause" hidden>
         <p class="refus">Pause avant de payer : décochez les fausses alertes et relisez le texte en gras.</p>
@@ -2806,8 +2823,15 @@ function sansParoles(t){
 // élément du tableau. Mesuré le 30/09 (deux films, 28 images) : depuis le texte entier du
 // plan, 6 images sur 14 montraient deux fois une personne ou un objet (l'action entière
 // dessinée d'un coup) ; depuis l'état « debut », 0 sur 14.
+// La même règle que le serveur (video_h3.hors_champ), sur la même liste.
+const HORS_CHAMP = __HORS_CHAMP__;
+function horsChamp(etat){
+  const t = " " + String(etat || "").toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, " ").trim() + " ";
+  return HORS_CHAMP.some(h => t.includes(" " + h + " "));
+}
+
 function texteDepart(p){
-  const presents = (p.elements || []).filter(e => e && e.nom && e.debut && !/off-frame|hors champ/i.test(e.debut));
+  const presents = (p.elements || []).filter(e => e && e.nom && e.debut && !horsChamp(e.debut));
   if (!presents.length) return PREFIXE.premiere + sansParoles(p.image_paroles);
   const cadre = sansParoles(p.image_paroles).split(".")[0];
   return PREFIXE.premiere + cadre + ". " + presents.map(e => e.nom + " : " + e.debut + ".").join(" ");
@@ -4131,9 +4155,18 @@ async function actionCorriger(){
   else scenarioEtat("Texte corrigé : les changements sont en gras." + tels + " Relisez, puis choisissez « Rejouer ».");
 }
 
-async function actionRejouer(){
+async function actionRejouer(forcer){
   occupe("Contrôle et traduction des plans à retourner…");
-  const r = await appeler("/video-h3/scenario/" + SCENARIO_TOURNE + "/rejouer", {plans: PLANS, retourner: [...RETOURNER]});
+  const bouton = document.getElementById("rejouer_forcer");
+  const rep = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/rejouer", {method: "POST", headers: H,
+    body: JSON.stringify({plans: PLANS, retourner: [...RETOURNER], forcer: !!forcer})});
+  const r = await rep.json();
+  if (!rep.ok){
+    // Revue du 30/09 : le rejeu refusé par une règle n'offrait pas « quand même ».
+    bouton.hidden = !(r.detail && r.detail.passe_droit);
+    throw new Error(messageDeRefus(r));
+  }
+  bouton.hidden = true;
   const sc = await attendreScenario(r.id);
   if (sc.etat !== "réussi") return scenarioEtat("Rejeu " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
   chargerClips();
@@ -4387,6 +4420,17 @@ async function tournerScenario(forcer){
   if (SCENARIO_TOURNE === d.id) await actionJuger();
 }
 
+document.getElementById("rejouer_forcer").addEventListener("click", async () => {
+  if (!SCENARIO_TOURNE) return;
+  try {
+    await actionRejouer(true);
+  } catch (e) {
+    scenarioEtat(e.message, true);
+  } finally {
+    libre();
+  }
+});
+
 document.getElementById("scenario_forcer").addEventListener("click", async () => {
   try {
     await tournerScenario(true);
@@ -4441,5 +4485,6 @@ rafraichir().then(majInvitesImages).then(() => chargerFiches("")).then(chargerCl
 </html>
 """.replace("__LANGUES__", "".join(
     f'<option value="{code}"{" selected" if code == LANGUE_PAROLES else ""}>{nom}</option>'
-    for code, nom in LANGUES_PAROLES.items())).replace("__ENCHAINEMENTS__", json.dumps(ENCHAINEMENTS,
+    for code, nom in LANGUES_PAROLES.items())).replace("__HORS_CHAMP__", json.dumps(
+    sorted({_norme_replique(h) for h in HORS_CHAMP + _HORS_CHAMP_DEDANS}))).replace("__ENCHAINEMENTS__", json.dumps(ENCHAINEMENTS,
                                                                                       ensure_ascii=False))
