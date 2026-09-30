@@ -590,6 +590,59 @@ def test_sans_l_option_on_prolonge_par_la_derniere_image(h3, monkeypatch):
     assert v.garder_latent(d, "c" * 32) is d and "latent_vers" not in d
 
 
+def test_une_suite_en_references_epingle_les_22_dernieres_images_et_leur_son(h3, monkeypatch):
+    """Film campus, 30/09 : le plan 2 partait en plan large après le plan moyen du plan 1 —
+    le nœud Références n'a pas d'entrée first_frame. MiniMaxH3AddGuide épingle la fin du
+    plan précédent, image et son, à l'image 0 (PR Comfy-Org/ComfyUI #15439)."""
+    v = h3.video_h3
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    lea = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    d = demande(mode="references", fiches=[lea], image_paroles="Léa dit « Oui. »", longueur=124)
+    plan = v.preparer_prolonger(d, _clip_reussi(h3), PNG, fin_b64="UkFDQ09SRA==")
+    dem, g = plan["demande"], plan["demande"]["graphe"]
+    assert g["80"] == {"class_type": "LoadVideo", "inputs": {"file": "raccord.mp4"}}
+    assert g["81"]["class_type"] == "GetVideoComponents" and g["81"]["inputs"] == {"video": ["80", 0]}
+    assert g["11"]["class_type"] == "MiniMaxH3AddGuide"
+    assert g["11"]["inputs"] == {"positive": ["10", 0], "vae": ["4", 0], "audio_vae": ["5", 0], "latent": ["10", 1],
+                                 "image": ["81", 0], "audio": ["81", 1], "frame_idx": 0}
+    assert g["13"]["inputs"]["conditioning"] == ["11", 0]   # le guide passe par le raccord
+    assert g["10"]["class_type"] == "MiniMaxH3ReferenceToVideo"   # les fiches restent
+    assert dem["videos"] == {"raccord.mp4": "UkFDQ09SRA=="}
+    assert set(v.NOEUDS_RACCORD) <= set(dem["classes"])
+    # La dernière image reste une <Picture N> : le texte la nomme (docs ComfyUI : une image
+    # donnée au seul AddGuide « is not visible to the text encoder »).
+    assert list(dem["images"]) == ["ref_0.png", "ref_1.png"]
+    # 17 images de plus, pour que les 22 reprises ne raccourcissent pas le plan ; retirées au recollage.
+    assert plan["resume_public"]["images"] == 141 and dem["longueur"] == 141
+    assert plan["resume_public"]["voie"] == "raccord" and v.images_a_retirer(plan) == 22
+    assert "22 dernières images" in plan["resume_public"]["mode_titre"]
+    # Le script écrit la vidéo du raccord dans l'entrée de ComfyUI.
+    assert '**(D.get("videos") or {})' in v.construire_script(dem)
+    # Au bout de la grille, pas de pas de plus.
+    assert v.longueur_avec_raccord(v.LONGUEURS[-1]) == v.LONGUEURS[-1]
+    # Sans fin fournie, rien ne change : la dernière image, 1 image retirée.
+    plan = v.preparer_prolonger(d, _clip_reussi(h3), PNG)
+    assert "11" not in plan["demande"]["graphe"] and v.images_a_retirer(plan) == 1
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg absent")
+def test_la_fin_d_un_film_rend_ses_22_dernieres_images_et_son_son(h3, tmp_path):
+    m = h3.montage
+    film = tmp_path / "film.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=24",
+                    "-f", "lavfi", "-i", "sine=frequency=440", "-t", "2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", str(film)], check=True)
+    fin = tmp_path / "fin.mp4"
+    fin.write_bytes(m.fin(film.read_bytes(), 22))
+    assert m.images(fin) == 22
+    son = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_type",
+                          "-of", "csv=p=0", str(fin)], capture_output=True, text=True).stdout.strip()
+    assert son == "audio"
+    with pytest.raises(m.MontageImpossible, match="moins que"):
+        m.fin(film.read_bytes(), 60)
+
+
 def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3, monkeypatch):
     """30/09 : une suite partait de la dernière image seule, en texte brut ; Marc y était
     réinventé, sa voix aussi. Elle garde maintenant ses fiches quand elles tiennent."""
@@ -686,6 +739,7 @@ def test_prolonger_part_de_la_derniere_image_puis_recolle(h3, monkeypatch, tmp_p
     video.write_bytes(b"mp4")
     monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
     monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG))
+    monkeypatch.setattr(h3.montage, "fin", lambda octets, n: b"raccord")
     lance = []
     monkeypatch.setattr(h3, "run_video_h3", lambda *a: lance.append(a))
     assert client(h3).post("/video-h3/prolonger", headers=CLE,
@@ -1339,6 +1393,7 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     video.write_bytes(b"mp4")
     monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
     monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG))
+    monkeypatch.setattr(h3.montage, "fin", lambda octets, n: b"raccord")
     tournes = []
 
     def tourner(jid, code, precedent, retirer):
@@ -1363,7 +1418,9 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     assert v1["invite"].startswith("subject_definitions:") and "<Subject 1> walks" in v1["invite"]
     assert "<Subject 1> wears a red coat in every frame, also when seen from behind" in v1["invite"]
     assert v.fiche_tenue_de_base(fid) == "a red coat"
-    assert (p2, r2) == (j1, 1) and v2["mode"] == "prolonger" and v2["plans"] == 2
+    # Suite avec fiche : le raccord natif (30/09), 22 images reprises puis retirées au recollage.
+    assert (p2, r2) == (j1, 22) and v2["mode"] == "prolonger" and v2["plans"] == 2
+    assert v2["voie"] == "raccord" and v2["images"] == 141
     assert "(S1) <d>[French] Bonjour.</d>" in v2["invite"]
     assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
 

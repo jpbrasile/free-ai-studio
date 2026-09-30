@@ -350,6 +350,18 @@ def extraire(video: bytes, premiere: int, fin: int) -> bytes:
         return sortie.read_bytes()
 
 
+def fin(video: bytes, nombre: int) -> bytes:
+    """Les `nombre` dernières images d'un film, son compris : le raccord que le plan
+    suivant épingle à son image 0 (30/09/2026, MiniMaxH3AddGuide)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "a.mp4")
+        a.write_bytes(video)
+        total = images(a)
+    if total < nombre:
+        raise MontageImpossible("Le plan précédent a %d images, moins que les %d du raccord." % (total, nombre))
+    return extraire(video, total - nombre, total)
+
+
 def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:

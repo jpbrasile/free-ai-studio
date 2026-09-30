@@ -2355,6 +2355,47 @@ def graphe_troncon(texte: str, longueur: int, graine: int, contexte: str) -> dic
     return g
 
 
+# --- Le raccord natif d'une suite en « Références » (30/09) -----------------------
+# Le nœud Références n'a pas d'entrée first_frame : la dernière image du plan
+# précédent n'y était qu'une <Picture N> de plus, et H3 recadrait (film campus,
+# 30/09 : plan 2 parti en plan large après un plan moyen ; remarque du
+# propriétaire). ComfyUI v0.37.0 a MiniMaxH3AddGuide, qui épingle des images ET
+# leur son à une image donnée ; son exemple de continuation (PR Comfy-Org/ComfyUI
+# #15439) : « feed the first 22 frames of an existing video plus its audio into one
+# AddGuide at frame_idx 0 and the model generates the continuation of both streams ».
+# Décision du propriétaire, 30/09 : « oui code-le ». Les 22 images reprises sont
+# retirées au recollage ; le plan gagne 17 images pour ne pas raccourcir.
+RACCORD_IMAGES = 22   # 17k+5, la longueur de l'exemple de la PR
+NOEUDS_RACCORD = ("LoadVideo", "GetVideoComponents", "MiniMaxH3AddGuide")
+
+
+def ajouter_raccord(demande: dict, fin_b64: str) -> dict:
+    """Épingle `fin_b64` (mp4 : les RACCORD_IMAGES dernières images du plan
+    précédent et leur son) à l'image 0 du plan : image et son continuent."""
+    g = demande["graphe"]
+    g["80"] = _n("LoadVideo", {"file": "raccord.mp4"})
+    g["81"] = _n("GetVideoComponents", {"video": ["80", 0]})
+    g["11"] = _n("MiniMaxH3AddGuide", {"positive": ["10", 0], "vae": ["4", 0], "audio_vae": ["5", 0],
+                                        "latent": ["10", 1], "image": ["81", 0], "audio": ["81", 1],
+                                        "frame_idx": 0})
+    g["13"]["inputs"]["conditioning"] = ["11", 0]
+    demande["videos"] = {"raccord.mp4": fin_b64}
+    demande["classes"] = list(demande["classes"]) + list(NOEUDS_RACCORD)
+    return demande
+
+
+def longueur_avec_raccord(longueur: int) -> int:
+    """Le pas suivant de la grille : le raccord reprend 22 images, le plan en gagne 17."""
+    plus = int(longueur) + 17
+    return plus if plus in LONGUEURS else int(longueur)
+
+
+def images_a_retirer(plan: dict) -> int:
+    """Au recollage : 1 image (la dernière, montrée deux fois) par la dernière image,
+    le raccord entier par raccord, rien par tronçon (déjà coupé sur la carte)."""
+    return {"image": 1, "raccord": RACCORD_IMAGES}.get(plan["resume_public"].get("voie"), 0)
+
+
 def garder_latent(demande: dict, jid: str) -> dict:
     """Option tronçon : le latent de ce clip reste sur le disque Modal, pour le
     plan qui le prolongera. Sans l'option, rien n'est ajouté au graphe."""
@@ -2601,9 +2642,11 @@ def voie_prolonger(precedent: dict) -> str:
 
 
 def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[str] = None,
-                       graine_hasard=None) -> dict:
+                       graine_hasard=None, fin_b64: Optional[str] = None) -> dict:
     """Le plan qui suit un clip H3 réussi. Mêmes contrôles que `preparer` ;
-    la page envoie les trois cases de la suite, la durée et la graine."""
+    la page envoie les trois cases de la suite, la durée et la graine. `fin_b64` :
+    les RACCORD_IMAGES dernières images du précédent, son compris (mp4), épinglées
+    au début d'une suite en « Références » (voie « raccord »)."""
     v = precedent.get("video") or {}
     if not str(v.get("moteur", "")).startswith("MiniMax H3"):
         raise ValueError("Seul un clip H3 se prolonge ici.")
@@ -2633,15 +2676,21 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
         ids = base.get("fiches") or ([base["fiche"]] if base.get("fiche") else [])
         nb, visages_seuls = photos_avec_depart(ids) if ids else (0, False)
         if 0 < nb < MODES["references"]["images_max"]:
+            if fin_b64:
+                base["longueur"] = longueur_avec_raccord(base.get("longueur") or LONGUEUR_PAR_DEFAUT)
             plan = preparer(dict(base, mode="references", images=[], depart_reference=derniere_b64,
                                  visages_seuls=visages_seuls), graine_hasard)
+            if fin_b64:
+                ajouter_raccord(plan["demande"], fin_b64)
+                voie = "raccord"
         else:
             plan = preparer(dict(base, mode="premiere", images=[derniere_b64], fiche=None, fiches=None,
                                  langues=None), graine_hasard)
     plan["demande"]["mode"] = "prolonger"
     plan["resume_public"].update({
         "mode": "prolonger",
-        "mode_titre": "Prolonger " + ("par tronçon" if voie == "troncon" else "par la dernière image"),
+        "mode_titre": "Prolonger " + {"troncon": "par tronçon", "raccord": "par les %d dernières images"
+                                      % RACCORD_IMAGES}.get(voie, "par la dernière image"),
         "voie": voie, "precedent": str(precedent.get("id", "")), "plans": plans + 1,
     })
     return plan
@@ -2774,7 +2823,7 @@ Path("/tmp/chemins.yaml").write_text(
     "h3:\n  base_path: " + str(BASE) + "\n  diffusion_models: diffusion_models\n"
     "  text_encoders: text_encoders\n  vae: vae\n  loras: loras\n")
 (COMFY / "input").mkdir(exist_ok=True)
-for nom, b64 in {**D["images"], **(D.get("sons") or {})}.items():
+for nom, b64 in {**D["images"], **(D.get("sons") or {}), **(D.get("videos") or {})}.items():
     (COMFY / "input" / nom).write_bytes(base64.b64decode(b64))
 
 journal = open("/tmp/comfy.log", "w")

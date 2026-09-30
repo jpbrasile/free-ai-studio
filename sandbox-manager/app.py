@@ -4154,20 +4154,28 @@ async def video_h3_prolonger(request: Request, authorization: Optional[str] = He
         avant = read_job(precedent)
     except HTTPException as exc:
         raise HTTPException(404, "Ce clip n'existe plus sur ce Studio.") from exc
-    derniere = None
+    derniere = fin = None
     if video_h3.voie_prolonger(avant) == "image" and avant.get("status") == "succeeded":
         chemin = _video_h3_octets(precedent)
         if not chemin:
             raise HTTPException(404, "La vidéo de ce clip n'est plus sur ce Studio.")
         try:
-            derniere = base64.b64encode(montage.derniere_image(chemin.read_bytes())).decode()
+            derniere, fin = _derniere_et_raccord(chemin.read_bytes())
         except montage.MontageImpossible as exc:
             raise HTTPException(503, str(exc)) from exc
     try:
-        plan = video_h3.preparer_prolonger(payload, avant, derniere)
+        plan = video_h3.preparer_prolonger(payload, avant, derniere, fin_b64=fin)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return _lancer_h3(plan, precedent, retirer=1 if plan["resume_public"]["voie"] == "image" else 0)
+    return _lancer_h3(plan, precedent, retirer=video_h3.images_a_retirer(plan))
+
+
+def _derniere_et_raccord(video: bytes, fin_vue: Optional[bytes] = None) -> tuple:
+    """La dernière image (base64) et les video_h3.RACCORD_IMAGES dernières images avec
+    leur son (mp4 base64) : une suite en « Références » les épingle à son début (30/09)."""
+    fin_vue = fin_vue if fin_vue is not None else montage.derniere_image(video)
+    return (base64.b64encode(fin_vue).decode(),
+            base64.b64encode(montage.fin(video, video_h3.RACCORD_IMAGES)).decode())
 
 
 @app.post("/video-h3/image")
@@ -5653,9 +5661,10 @@ def run_scenario_h3(sid: str, a_tourner: list):
                     arret = _controle_derniere_image(sid, i, fin_vue)
                     if arret:
                         raise ValueError(arret)
-                    derniere = base64.b64encode(fin_vue).decode()
-                    plan = video_h3.preparer_prolonger(p["payload"], read_job(precedent), derniere)
-                    retirer = 1 if plan["resume_public"]["voie"] == "image" else 0
+                    derniere, fin = _derniere_et_raccord(chemin.read_bytes(), fin_vue)
+                    plan = video_h3.preparer_prolonger(p["payload"], read_job(precedent), derniere,
+                                                       fin_b64=fin)
+                    retirer = video_h3.images_a_retirer(plan)
                 else:
                     plan, retirer = video_h3.preparer(p["payload"]), 0
                 plan["resume_public"].update({"plans": i + 1, "scenario": sid,
