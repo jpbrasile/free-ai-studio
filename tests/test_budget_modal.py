@@ -842,3 +842,15 @@ def test_le_total_affiche_dit_qu_il_contient_des_travaux_aux_anciens_tarifs(
     assert "tarifs plus bas" in texte, "le total passe pour homogene"
     assert ("avant le " + date) in texte or ("avant cette date" in texte and date in texte), (
         "la reserve ne nomme pas la date du releve de prix")
+
+
+def test_le_releve_compte_les_apps_ephemeres(budget, monkeypatch):
+    """Mesure du 30/09/2026 : deployed_apps 15,85 + ephemeral_apps 7,04 (passes 4K
+    lancées par `modal run`) = credits -22,90. Le compteur ne voyait que 15,85 $ et
+    annonçait 14,15 $ de reste quand il en restait 7,10."""
+    _faux_depenses(monkeypatch, {"calcul": 15.85480449, "calcul_ephemere": 7.04293774,
+                                 "credits": -22.9, "mesure": 25.86258123})
+    budget.consommer("video", "L4", 10.0, 16384)
+    etat = budget.lire()
+    assert etat["usd_reel"] == pytest.approx(22.8977, abs=1e-3)
+    assert etat["reste_usd"] == pytest.approx(30.0 - 22.8977, abs=1e-3)

@@ -351,6 +351,10 @@ def _releve_reel() -> Optional[float]:
         return None
     montants = etat.get("montants") or {}
     valeur = montants.get("calcul")
+    if valeur is not None and montants.get("calcul_ephemere") is not None:
+        # Mesure du 30/09 : deployed_apps 15,85 + ephemeral_apps 7,04 = credits -22,90.
+        # Le compteur ne lisait que le premier et croyait rester 14 $ quand il en restait 7.
+        valeur += montants["calcul_ephemere"]
     if valeur is None:
         credits = montants.get("credits")
         valeur = abs(credits) if credits is not None else None

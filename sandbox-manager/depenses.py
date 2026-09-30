@@ -61,6 +61,8 @@ _CHAMPS = {
     "facture": ("billedcost",),
     "mesure": ("meteredcost",),
     "calcul": ("deployedapps",),
+    # Les apps lancées par `modal run` (30/09 : les passes 4K, 7,04 $) : du calcul aussi.
+    "calcul_ephemere": ("ephemeralapps",),
     "stockage": ("volumes",),
     "credits": ("credits",),
     "stockage_offert": ("freestorage",),
