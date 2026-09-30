@@ -1388,6 +1388,11 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                   - Retourné (scénario `d8c501bd`) : SSIM 123→124 **0,882**, contre 0,394 avant. Même cadrage et mêmes poses de part et d'autre de la jonction. Whisper entend les deux répliques mot pour mot.
                   - Coût : 304 s de location, contre 203 s pour le premier essai.
                   - Leila reste blonde : le raccord reprend l'image du plan 1 telle quelle.
+                - **Plan 3, le 30/09 (scénario `f90db6dc`, raccord de 22 images, règle 7 passée outre)** :
+                  - Film de 15,1 s. SSIM à la jonction 242→243 : 0,915 (0,95 à 0,97 dans le plan).
+                  - Tyler sourit, porte la main à la nuque, et dit en français « Je parle un peu français. » (Whisper, segment seul : fr, p = 0,95).
+                  - Coût : environ 0,25 $ (crédit restant : 4,45 $ puis 4,20 $).
+                  - Le cadre glisse un peu : Leila passe du centre vers la gauche au fil du plan.
               - Le relecteur (un chat) signale de nouveau, au plan 5, deux actions principales (deux répliques). Cette remarque varie d'un passage à l'autre.
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
