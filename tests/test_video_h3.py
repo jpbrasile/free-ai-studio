@@ -4168,3 +4168,50 @@ def test_un_film_trop_lourd_pour_la_reserve_finit_en_echec(h3, monkeypatch):
     fiches = [json.loads(p.read_text(encoding="utf-8")) for p in h3.JOBS.glob("*/job.json")]
     rates = [j for j in fiches if j.get("titre") == "Film trop lourd 30-09"]
     assert rates and all(j["status"] == "failed" and "réserve" in j["error"] for j in rates)
+
+
+def _encodeur(nom):
+    if not shutil.which("ffmpeg"):
+        return False
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
+    return nom in (r.stdout or "")
+
+
+@pytest.mark.skipif(not (_encodeur("libsvtav1") and shutil.which("ffprobe")), reason="SVT-AV1 absent (il est dans le conteneur)")
+def test_un_film_hd_passe_en_av1_si_la_qualite_mesuree_tient(h3, tmp_path):
+    """30/09 : « un compresseur qui garde la qualité », en 4K, sans copie H.264."""
+    m = h3.montage
+    film = tmp_path / "film.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24",
+                    "-f", "lavfi", "-i", "sine=frequency=440", "-t", "2", "-c:v", "libx264", "-crf", "10",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(film)], check=True)
+    octets, fiche = m.compacter_av1(film.read_bytes())
+    sortie = tmp_path / "av1.mp4"
+    sortie.write_bytes(octets)
+    assert fiche["codec"] == "av1" and fiche["crf"] == m.AV1_CRFS[0], fiche
+    assert m.codec_video(sortie) == "av1" and m.images(sortie) == m.images(film) and len(octets) < film.stat().st_size
+    assert fiche["psnr_y"] >= m.AV1_PSNR_Y_MOYEN_MIN and fiche["psnr_pire"] >= m.AV1_PSNR_PIRE_MIN
+    # Déjà en AV1 : rien n'est refait.
+    assert m.compacter_av1(octets) == (octets, {"codec": "av1", "deja": True})
+    # Une garde impossible à tenir : les deux réglages essayés, le film rendu tel quel.
+    m_seuil = m.AV1_PSNR_Y_MOYEN_MIN
+    try:
+        m.AV1_PSNR_Y_MOYEN_MIN = 200
+        rendu, fiche = m.compacter_av1(film.read_bytes())
+    finally:
+        m.AV1_PSNR_Y_MOYEN_MIN = m_seuil
+    assert rendu == film.read_bytes() and fiche["codec"] == "h264"
+    assert [e["crf"] for e in fiche["essais"]] == list(m.AV1_CRFS) and "qualité" in fiche["raison"]
+
+
+def test_seuls_les_films_hd_sont_compresses_et_un_echec_les_laisse_tels_quels(h3, monkeypatch):
+    appels = []
+    monkeypatch.setattr(h3.montage, "compacter_av1", lambda f: appels.append(f) or (b"AV1", {"codec": "av1", "mo": 1}))
+    assert h3._compacter_hd(b"CLIP", "MiniMax H3 (montage)") == (b"CLIP", None) and appels == []
+    assert h3._compacter_hd(b"HD", "SeedVR2 (agrandissement)") == (b"AV1", {"codec": "av1", "mo": 1})
+
+    def casse(f):
+        raise h3.montage.MontageImpossible("La mesure de qualité (PSNR) a échoué.")
+    monkeypatch.setattr(h3.montage, "compacter_av1", casse)
+    assert h3._compacter_hd(b"HD", "SeedVR2 (agrandissement)") == (
+        b"HD", {"raison": "La mesure de qualité (PSNR) a échoué."})

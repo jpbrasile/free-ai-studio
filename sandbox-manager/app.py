@@ -4321,6 +4321,7 @@ def _films_hd() -> list:
             continue
         films.append({"id": job["id"], "titre": job.get("titre") or "", "echelle": v.get("echelle", ""),
                       "secondes": v.get("secondes"), "cree_a": job.get("created_at"),
+                      "compression": v.get("compression"),
                       "video_url": f"/video/jobs/{job['id']}/fichier?cle={jeton_video(job['id'])}"})
     return films
 
@@ -4973,6 +4974,7 @@ def run_finaliser(fid: str):
             # Sans réencoder : des locations de la même machine, mêmes réglages.
             recolle = montage.coller_sans_reencoder(
                 _film_des_passages(plans, "agrandi", lambda p: _extrait(p["agrandi"], p)))
+            _finaliser_noter(fid, etape="Compression AV1 (qualité mesurée)")
             final = _film_h3(recolle, {"mode": "finalisation", "mode_titre": "Film finalisé", "source": source,
                                        "echelle": echelle, "finalisation": fid},
                              titre_film, moteur="SeedVR2 (agrandissement)")
@@ -5058,9 +5060,23 @@ def _artefact_du_film(jid: str, chemin: Path) -> dict:
     return art
 
 
+def _compacter_hd(film: bytes, moteur: str) -> tuple:
+    """Un film en haute définition passe en AV1 si la qualité mesurée tient
+    (`montage.compacter_av1`, 30/09) ; les autres, et tout échec, restent tels quels."""
+    if moteur != "SeedVR2 (agrandissement)":
+        return film, None
+    try:
+        return montage.compacter_av1(film)
+    except (montage.MontageImpossible, subprocess.TimeoutExpired) as exc:
+        return film, {"raison": str(exc) or type(exc).__name__}
+
+
 def _film_h3(film: bytes, video: dict, titre: str, moteur: str = "MiniMax H3 (montage)") -> str:
     """Un film fait ici (montage, musique) devient un travail réussi de plus :
     jouable, téléchargeable, prolongeable. Rend son numéro."""
+    film, compression = _compacter_hd(film, moteur)
+    if compression:
+        video = dict(video, compression=compression)
     jid = uuid.uuid4().hex
     write_job(jid, {"id": jid, "provider": "local", "title": "Free AI Studio montage H3",
                     "gpu": False, "internet": False, "status": "queued", "created_at": time.time(),
@@ -5222,6 +5238,10 @@ def run_sous_titres(jid: str, film_jid: str):
         texte_srt = montage.srt(cales)
         _job_noter(jid, etape="Incrustation dans l'image")
         film = montage.incruster_sous_titres(video, texte_srt)
+        moteur = str((read_job(jid).get("video") or {}).get("moteur") or "")
+        if moteur == "SeedVR2 (agrandissement)":
+            _job_noter(jid, etape="Compression AV1 (qualité mesurée)")
+        film, compression = _compacter_hd(film, moteur)
         chemin = JOBS / jid / "video.mp4"
         chemin.write_bytes(film)
         try:
@@ -5229,6 +5249,8 @@ def run_sous_titres(jid: str, film_jid: str):
         finally:
             chemin.unlink(missing_ok=True)
         job = read_job(jid)
+        if compression:
+            job["video"]["compression"] = compression
         job["video"]["sous_titres"] = [{"de": de, "a": a, "entendu": e, "texte": f}
                                        for (de, a, f), (_, _, e) in zip(cales, repliques)]
         job["video"]["srt"] = texte_srt

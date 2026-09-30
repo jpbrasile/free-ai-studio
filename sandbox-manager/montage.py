@@ -433,11 +433,14 @@ def incruster_sous_titres(film: bytes, texte_srt: str) -> bytes:
         debit = debit_video(a)
         plafond = (["-maxrate", "%dk" % (debit * 1.05 // 1000), "-bufsize", "%dk" % (debit * 2 // 1000)]
                    if debit else [])
+        # Un film déjà en AV1 le reste, au même réglage : le repasser par H.264 au
+        # débit (bas) de l'AV1 l'abîmerait.
+        video = (_av1(AV1_CRFS[0]) if codec_video(a) == "av1"
+                 else ["-c:v", "libx264", "-crf", "17", *plafond, "-preset", "medium", "-pix_fmt", "yuv420p"])
         fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-vf",
                                "subtitles=sous.srt:charenc=UTF-8:force_style='%s'" % style,
-                               "-map", "0:v", "-map", "0:a?", "-c:v", "libx264", "-crf", "17", *plafond,
-                               "-preset", "medium",
-                               "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                               "-map", "0:v", "-map", "0:a?", *video,
+                               "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
                               capture_output=True, text=True, timeout=DELAI_INCRUSTATION_S, cwd=dossier)
         if fini.returncode != 0:
             raise MontageImpossible("L'incrustation des sous-titres a échoué : %s"
@@ -489,6 +492,73 @@ def sauts_de_visages(origine: bytes, retouche: bytes, passages: list) -> list:
             trouves.append({"de": de, "a": fin, "image": de + 1 + sauts.index(haut),
                             "fois": round(haut / mediane, 1)})
     return trouves
+
+
+# --- AV1 pour les films en haute définition (30/09/2026) -----------------------
+# Demande du propriétaire : un compresseur qui garde la qualité, en post-traitement
+# 4K, codé dans le Studio, SANS copie H.264 à côté. Essai du même soir sur le film
+# campus 4K (H.264, 95,5 Mo, 30 s), SVT-AV1 preset 6, ~35 s de calcul par essai sur
+# ce PC, VMAF 4K (une image sur 4) mesuré contre le H.264 :
+#   crf 26 : 79,7 Mo, VMAF 99,6 (pire image 97,1) ; PSNR-Y 43,5, pire image 42,9
+#   crf 30 : 61,4 Mo, VMAF 99,1 (96,0) ; 42,5 / 41,8
+#   crf 34 : 46,3 Mo, VMAF 98,4 (94,7) ; 41,5 / 40,5   <- retenu : moitié du poids
+#   crf 38 : 35,2 Mo, VMAF 97,4 (93,0) ; 40,5 / 39,3
+#   crf 42 : 27,1 Mo, VMAF 96,2 (91,1) ; 39,5 / 38,1
+# Le conteneur n'a pas VMAF : la garde est le PSNR, dont les deux seuils séparent
+# crf 34 (gardé) de crf 38 (refusé) SUR CE FILM -- un seul film de calibrage.
+# La garde refuse crf 34 : on essaie crf 30 ; refusé encore : le film reste en H.264.
+AV1_CRFS = (34, 30)
+AV1_PRESET = 6
+AV1_PSNR_Y_MOYEN_MIN = 41.0   # dB, moyenne de la luminance
+AV1_PSNR_PIRE_MIN = 40.0      # dB, la pire image (toutes composantes)
+DELAI_AV1_S = 3600
+
+
+def codec_video(chemin: Path) -> str:
+    """Le codec de la première piste vidéo (« h264 », « av1 »...)."""
+    return _sonde(chemin, "codec_name")
+
+
+def _av1(crf: int) -> list:
+    return ["-c:v", "libsvtav1", "-preset", str(AV1_PRESET), "-crf", str(crf), "-pix_fmt", "yuv420p"]
+
+
+def psnr(distordu: Path, reference: Path) -> tuple:
+    """(PSNR-Y moyen, PSNR de la pire image) en dB, une image sur 4."""
+    f = ("[0:v]select='not(mod(n\\,4))',setpts=N[a];[1:v]select='not(mod(n\\,4))',setpts=N[b];[a][b]psnr")
+    fini = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(distordu), "-i", str(reference),
+                           "-lavfi", f, "-f", "null", "-"], capture_output=True, text=True, timeout=DELAI_AV1_S)
+    m = re.search(r"PSNR y:([\d.]+|inf).*?min:([\d.]+|inf)", fini.stderr or "")
+    if fini.returncode != 0 or not m:
+        raise MontageImpossible("La mesure de qualité (PSNR) a échoué.")
+    return tuple(float(x) for x in m.groups())
+
+
+def compacter_av1(film: bytes) -> tuple:
+    """Le film en AV1 s'il garde la qualité mesurée et pèse moins ; sinon tel quel.
+    Rend (octets, fiche) ; la fiche dit ce qui a été fait et mesuré."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "film.mp4")
+        a.write_bytes(film)
+        if codec_video(a) == "av1":
+            return film, {"codec": "av1", "deja": True}
+        essais = []
+        for crf in AV1_CRFS:
+            sortie = Path(dossier, "av1_%d.mp4" % crf)
+            fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-map", "0:v", "-map", "0:a?",
+                                   *_av1(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                                  capture_output=True, text=True, timeout=DELAI_AV1_S)
+            if fini.returncode != 0 or images(sortie) != images(a):
+                return film, {"codec": codec_video(a), "raison": "l'encodage AV1 a échoué", "essais": essais}
+            moyen, pire = psnr(sortie, a)
+            essai = {"crf": crf, "mo": round(sortie.stat().st_size / 1e6, 1),
+                     "psnr_y": round(moyen, 2), "psnr_pire": round(pire, 2)}
+            essais.append(essai)
+            if (moyen >= AV1_PSNR_Y_MOYEN_MIN and pire >= AV1_PSNR_PIRE_MIN
+                    and sortie.stat().st_size < a.stat().st_size):
+                return sortie.read_bytes(), dict(essai, codec="av1", avant_mo=round(len(film) / 1e6, 1),
+                                                 essais=essais)
+        return film, {"codec": codec_video(a), "raison": "la qualité mesurée ne suffisait pas", "essais": essais}
 
 
 def debit_video(chemin: Path):

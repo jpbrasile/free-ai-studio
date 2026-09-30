@@ -4705,7 +4705,11 @@ function dessinerFilmsHd(films){
     const ligne = document.createElement("div");
     const texte = document.createElement("span");
     texte.textContent = quandLocal(f.cree_a) + " · " + (f.echelle || "").toUpperCase() + " · "
-      + fr(f.secondes || 0, 1) + " s · " + (f.titre || "").slice(0, 80) + " ";
+      + fr(f.secondes || 0, 1) + " s · " + (f.titre || "").slice(0, 80) + " "
+      // La compression AV1 (30/09) : ce qu'elle a gagné, ou pourquoi elle n'a pas eu lieu.
+      + (f.compression && f.compression.codec === "av1" && f.compression.mo
+          ? "· AV1, " + fr(f.compression.mo, 1) + " Mo au lieu de " + fr(f.compression.avant_mo, 1) + " Mo "
+          : f.compression && f.compression.raison ? "· non compressé : " + f.compression.raison + " " : "");
     const voir = document.createElement("button");
     voir.textContent = "Voir";
     voir.addEventListener("click", () => {
