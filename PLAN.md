@@ -1393,6 +1393,11 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                   - Tyler sourit, porte la main à la nuque, et dit en français « Je parle un peu français. » (Whisper, segment seul : fr, p = 0,95).
                   - Coût : environ 0,25 $ (crédit restant : 4,45 $ puis 4,20 $).
                   - Le cadre glisse un peu : Leila passe du centre vers la gauche au fil du plan.
+                - **Plan 4, le 30/09 (scénario `584c10d5`) : jonction 361→362 à SSIM 0,352, une coupe franche vers un plan large.** Le propriétaire soupçonnait un défaut du raccord : vérifié sur le clip brut rendu par Modal (`jobs/<id>/modal-output/0000-video.mp4`, 141 images, avant recollage).
+                  - **Pas de défaut d'injection.** Les images brutes 0 à 21 sont bien les 22 dernières du plan 3, dans l'ordre : SSIM 0,94 à 0,95 contre les images 340 à 361 du film. L'alignement est exact : décalé d'une image, on tombe à 0,92–0,93.
+                  - **C'est H3 qui coupe**, juste après les images épinglées : SSIM 21→22 dans le clip brut à 0,346 au plan 4, contre 0,950 au plan 2 et 0,967 au plan 3.
+                  - **Hypothèse non prouvée :** le texte du plan 4 met Leila « at the centre of the frame, facing the camera », alors que la fin du plan 3 la montre à gauche, de profil.
+                  - Réplique : « Son accent est trop mignon. » (fr, 0,97), pour un texte qui dit « Ton ». Coût : environ 0,26 $.
               - Le relecteur (un chat) signale de nouveau, au plan 5, deux actions principales (deux répliques). Cette remarque varie d'un passage à l'autre.
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
