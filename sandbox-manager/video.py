@@ -810,9 +810,9 @@ def budget_verifier(gpu: str, duree_max_s: int) -> dict:
     return etat
 
 
-def budget_consommer(gpu: str, secondes: float) -> dict:
+def budget_consommer(gpu: str, secondes: float, cle: str | None = None) -> dict:
     """Encaisse le temps reellement passe, meme si le clip a echoue."""
-    etat = budget_modal.consommer("video", gpu, secondes, int(os.getenv("VIDEO_MEMORY_MB", "16384")))
+    etat = budget_modal.consommer("video", gpu, secondes, int(os.getenv("VIDEO_MEMORY_MB", "16384")), cle=cle)
     etat["clips"] = etat["appels"]["video"]
     return etat
 

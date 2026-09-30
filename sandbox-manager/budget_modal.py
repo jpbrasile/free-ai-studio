@@ -504,7 +504,8 @@ def vue(usage: str) -> dict:
     etat = lire()
     etat["plafond_total_usd"] = PLAFOND_USD
     etat["plafond_usd"] = plafond_de(usage)
-    etat["reste_usd"] = max(0.0, etat["plafond_usd"] - etat["usd"])
+    etat["en_cours_usd"] = round(en_cours_usd(), 4)
+    etat["reste_usd"] = max(0.0, etat["plafond_usd"] - etat["usd"] - etat["en_cours_usd"])
     etat["usage"] = usage
     return etat
 
@@ -530,6 +531,43 @@ def prix_seconde(gpu: Optional[str], memoire_mb: int,
     return carte + PRIX_CPU_USD_S * coeurs + PRIX_MEMOIRE_USD_S * (memoire_mb / 1024)
 
 
+# Les travaux LOUÉS et pas encore encaissés : {clé du travail : {"usd", "expire"}}.
+# Défaut relevé le 30/09/2026 (relecture de l'inventaire « Modal en parallèle ») :
+# verifier() comparait le dépensé au pire cas d'UN travail, et consommer()
+# n'encaisse qu'à la fin. Agrandir, Visages, un scénario et une chanson lancés
+# ensemble passaient donc chacun la garde, et le plafond pouvait être dépassé à
+# plusieurs. Chaque location réserve maintenant son pire cas de son départ à son
+# encaissement. En mémoire seulement : un redémarrage du service coupe aussi les
+# travaux. `expire` est un filet contre un encaissement oublié.
+_EN_COURS: Dict[str, dict] = {}
+MARGE_EXPIRATION_S = 600
+
+
+def en_cours_usd() -> float:
+    """Le pire cas des travaux loués et pas encore encaissés."""
+    with _VERROU:
+        maintenant = time.time()
+        for cle in [c for c, r in _EN_COURS.items() if r["expire"] < maintenant]:
+            del _EN_COURS[cle]
+        return sum(r["usd"] for r in _EN_COURS.values())
+
+
+def reserver(cle: str, usage: str, gpu: Optional[str], duree_max_s: int, memoire_mb: int,
+             quoi: str = "Ce calcul", suite: str = "", coeurs: Optional[float] = None) -> dict:
+    """Vérifie ET retient le pire cas, sous le verrou : deux départs simultanés ne
+    passent pas tous deux sur le même reste. Rendu par consommer(cle=) ou liberer()."""
+    with _VERROU:
+        etat = verifier(usage, gpu, duree_max_s, memoire_mb, quoi=quoi, suite=suite, coeurs=coeurs)
+        _EN_COURS[str(cle)] = {"usd": etat["cout_max_usd"],
+                               "expire": time.time() + duree_max_s + MARGE_EXPIRATION_S}
+        return etat
+
+
+def liberer(cle: str) -> None:
+    with _VERROU:
+        _EN_COURS.pop(str(cle), None)
+
+
 def plafond_de(usage: str) -> float:
     """Ce que cet usage-la peut atteindre. Le mode autonome va jusqu'au bout."""
     if usage == "autonome":
@@ -549,7 +587,8 @@ def verifier(usage: str, gpu: Optional[str], duree_max_s: int, memoire_mb: int,
     etat = vue(usage)
     pire = prix_seconde(gpu, memoire_mb, coeurs) * duree_max_s
     plafond = etat["plafond_usd"]
-    if etat["usd"] + pire > plafond:
+    retenu = en_cours_usd()
+    if etat["usd"] + retenu + pire > plafond:
         if usage == "autonome":
             detail = (
                 f"Plafond Modal du mois atteint. Déjà dépensé : "
@@ -567,6 +606,9 @@ def verifier(usage: str, gpu: Optional[str], duree_max_s: int, memoire_mb: int,
         # `suite` porte la sortie de secours propre a l'usage -- pour la chanson,
         # << Kaggle reste possible, gratuitement. >>. Un refus qui ne dit pas ce
         # qui reste ouvert se lit comme une panne.
+        if retenu:
+            detail += (f" {format_fr.en_dollars(retenu)} sont retenus par les travaux en cours "
+                       f"(leur pire cas, rendu à la fin de chacun).")
         raise BudgetDepasse(
             f"{detail} {quoi} peut coûter jusqu'à {format_fr.en_dollars(pire)}, donc il n'est pas "
             f"lancé. {suite + ' ' if suite else ''}Le compteur repart tout seul le "
@@ -596,7 +638,7 @@ def poser(usage: str, secondes: float, usd: float, appels: int) -> None:
 
 
 def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int,
-              coeurs: Optional[float] = None) -> dict:
+              coeurs: Optional[float] = None, cle: Optional[str] = None) -> dict:
     """Encaisse le temps reellement passe, MEME si le calcul a echoue.
 
     Un calcul qui plante a la derniere minute a quand meme loue la carte pendant
@@ -619,6 +661,9 @@ def consommer(usage: str, gpu: Optional[str], secondes: float, memoire_mb: int,
         etat["usd"] += depense
         etat["usd_par_usage"][usage] += depense
         etat["appels"][usage] += 1
+        if cle is not None:
+            # Dans le même verrou que l'ajout : jamais compté zéro fois ni deux fois.
+            _EN_COURS.pop(str(cle), None)
         if reel is not None:
             etat["usd_reel"] = reel
             # Rangee en clair, francisee a l'affichage par `dateFr`.

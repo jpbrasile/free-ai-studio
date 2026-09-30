@@ -688,9 +688,17 @@ def modal_execute(
     # travail sans carte ne paie que le processeur et la memoire, ce que
     # budget_modal.prix_seconde() sait faire -- le compter au prix d'un H100
     # refuserait les travaux les moins chers du service.
-    if usage:
-        budget_modal.verifier(usage, gpu_name, sandbox_lifetime, memory, coeurs=cpu,
+    # Réservé jusqu'à l'encaissement (30/09) : un travail en cours compte dans le
+    # refus des suivants. Sans `usage`, l'appelant encaisse lui-même avec cle=jid.
+    try:
+        budget_modal.reserver(jid, usage or "video", gpu_name, sandbox_lifetime, memory, coeurs=cpu,
                               quoi="Ce travail sur Modal")
+    except budget_modal.BudgetDepasse as exc:
+        if usage:
+            raise
+        # Ces appelants n'attendent que BackendUnavailable : sans cela, le fil
+        # mourrait et le travail resterait « en cours » pour toujours.
+        raise BackendUnavailable(str(exc)) from exc
     sb = None
     loue_depuis = None
     local_out = JOBS / jid / "modal-output"
@@ -793,13 +801,15 @@ def modal_execute(
         # A process exit is returned above; exceptions here are treated as infrastructure failures.
         raise BackendUnavailable(f"Modal unavailable: {type(exc).__name__}: {str(exc)[:800]}") from exc
     finally:
+        if loue_depuis is None:
+            budget_modal.liberer(jid)   # rien n'a été loué
         if usage and loue_depuis is not None:
             # Meme si le travail a echoue : la carte a ete louee pendant ce
             # temps-la. Ne compter que les reussites donnerait un compteur
             # menteur -- c'est deja la regle des trois autres usages.
             try:
                 budget_modal.consommer(usage, gpu_name,
-                                       time.time() - loue_depuis, memory, coeurs=cpu)
+                                       time.time() - loue_depuis, memory, coeurs=cpu, cle=jid)
             except Exception:
                 # Un compteur qui ne sait pas s'ecrire ne doit pas faire perdre
                 # le resultat d'un calcul qui, lui, a abouti.
@@ -3365,7 +3375,7 @@ def run_video(jid: str, code: str, gpu_type: str, ou: str):
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
         if ou == "modal":
-            reste = video.budget_consommer(gpu_type, time.time() - debut)
+            reste = video.budget_consommer(gpu_type, time.time() - debut, cle=jid)
             job = read_job(jid)
             job["budget"] = reste
             write_job(jid, job)
@@ -3870,7 +3880,7 @@ def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: 
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
         etat = budget_modal.consommer("video", video_h3.GPU, time.time() - debut,
-                                      video_h3.MEMOIRE_MB, coeurs=video_h3.COEURS)
+                                      video_h3.MEMOIRE_MB, coeurs=video_h3.COEURS, cle=jid)
         job = read_job(jid)
         job["budget"] = etat
         if job.get("status") == "failed" and not job.get("error"):
@@ -4355,7 +4365,7 @@ def run_agrandir(jid: str, code: str, delai: int):
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
         etat = budget_modal.consommer("video", agrandir.GPU, time.time() - debut,
-                                      agrandir.MEMOIRE_MB, coeurs=agrandir.COEURS)
+                                      agrandir.MEMOIRE_MB, coeurs=agrandir.COEURS, cle=jid)
         job = read_job(jid)
         job["budget"] = etat
         if job.get("status") == "failed" and not job.get("error"):
@@ -4483,7 +4493,7 @@ def run_visages(jid: str, code: str, delai: int):
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
         etat = budget_modal.consommer("video", visages.GPU, time.time() - debut, visages.MEMOIRE_MB,
-                                      coeurs=visages.COEURS)
+                                      coeurs=visages.COEURS, cle=jid)
         job = read_job(jid)
         job["budget"] = etat
         _visages_avertir(job)
@@ -6043,7 +6053,7 @@ def run_chanson(jid: str, code: str, ou: str):
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
         if ou == "modal":
-            reste = chanson.budget_consommer(chanson.GPU_MODAL, time.time() - debut)
+            reste = chanson.budget_consommer(chanson.GPU_MODAL, time.time() - debut, cle=jid)
             job = read_job(jid)
             job["budget"] = reste
             write_job(jid, job)
@@ -6440,7 +6450,7 @@ def run_dialogue(jid: str, code: str, ou: str):
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
         if ou == "modal":
-            reste = dialogue.budget_consommer(dialogue.GPU_MODAL, time.time() - debut)
+            reste = dialogue.budget_consommer(dialogue.GPU_MODAL, time.time() - debut, cle=jid)
             job = read_job(jid)
             job["budget"] = reste
             write_job(jid, job)

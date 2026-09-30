@@ -854,3 +854,55 @@ def test_le_releve_compte_les_apps_ephemeres(budget, monkeypatch):
     etat = budget.lire()
     assert etat["usd_reel"] == pytest.approx(22.8977, abs=1e-3)
     assert etat["reste_usd"] == pytest.approx(30.0 - 22.8977, abs=1e-3)
+
+
+# --- 6. Les travaux en cours retiennent leur pire cas (30/09/2026) -------------
+
+@pytest.fixture
+def sans_en_cours(budget, monkeypatch):
+    monkeypatch.setattr(budget, "_EN_COURS", {})
+    return budget
+
+
+def test_deux_travaux_ensemble_ne_passent_pas_sur_le_meme_reste(sans_en_cours):
+    """Défaut de la relecture « Modal en parallèle » : chacun passait la garde seul."""
+    b = sans_en_cours
+    b.poser("video", 0, 13.0, 1)             # 2 $ de reste sous le plafond humain de 15 $
+    duree = int(1.5 / b.prix_seconde("A100", 49152, 4))   # pire cas ≈ 1,5 $
+    b.reserver("j1", "video", "A100", duree, 49152, coeurs=4)
+    with pytest.raises(b.BudgetDepasse, match="retenus par les travaux en cours"):
+        b.reserver("j2", "video", "A100", duree, 49152, coeurs=4)
+    with pytest.raises(b.BudgetDepasse):
+        b.verifier("video", "A100", duree, 49152, coeurs=4)
+    assert b.vue("video")["en_cours_usd"] > 1.4 and b.vue("video")["reste_usd"] < 0.6
+    # L'encaissement rend la réserve, dans le même verrou : le second passe alors.
+    b.consommer("video", "A100", 10, 49152, coeurs=4, cle="j1")
+    assert b.en_cours_usd() == 0
+    b.reserver("j2", "video", "A100", duree, 49152, coeurs=4)
+    b.liberer("j2")
+    assert b.en_cours_usd() == 0
+
+
+def test_une_reserve_oubliee_expire(sans_en_cours, monkeypatch):
+    b = sans_en_cours
+    b.reserver("j", "video", None, 100, 1024)
+    assert b.en_cours_usd() > 0
+    reel = time.time
+    monkeypatch.setattr(b.time, "time", lambda: reel() + 100 + b.MARGE_EXPIRATION_S + 1)
+    assert b.en_cours_usd() == 0
+
+
+def test_modal_execute_rend_la_reserve_quand_rien_n_est_loue(sandbox, sans_en_cours, monkeypatch):
+    """Le SDK Modal est absent ici : la location échoue avant de commencer."""
+    monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    with pytest.raises(sandbox.BackendUnavailable):
+        sandbox.modal_execute("c" * 32, "print(1)", True, False, usage=None)
+    assert sans_en_cours.en_cours_usd() == 0
+
+
+def test_sans_usage_un_refus_devient_une_panne_et_ne_tue_pas_le_fil(sandbox, sans_en_cours, monkeypatch):
+    """H3, Agrandir, Visages n'attendent que BackendUnavailable dans leur fil."""
+    sans_en_cours.poser("video", 0, 14.99, 1)
+    monkeypatch.setattr(sandbox, "modal_configured", lambda: True)
+    with pytest.raises(sandbox.BackendUnavailable, match="Budget Modal"):
+        sandbox.modal_execute("d" * 32, "print(1)", True, False, usage=None, gpu_type="A100", timeout_s=900)

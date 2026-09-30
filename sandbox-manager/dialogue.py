@@ -381,9 +381,9 @@ def budget_verifier(gpu: str, duree_max_s: int) -> dict:
     return etat
 
 
-def budget_consommer(gpu: str, secondes: float) -> dict:
+def budget_consommer(gpu: str, secondes: float, cle: str | None = None) -> dict:
     """Encaisse le temps reellement passe, meme si le dialogue a echoue."""
-    etat = budget_modal.consommer("dialogue", gpu, secondes, MEMOIRE_MB)
+    etat = budget_modal.consommer("dialogue", gpu, secondes, MEMOIRE_MB, cle=cle)
     etat["dialogues"] = etat["appels"]["dialogue"]
     return etat
 
