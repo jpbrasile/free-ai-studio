@@ -1381,6 +1381,13 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
                   - Image, vue sur 5 vues fixes : Leila au centre, la carte dépliée ; Tyler entre par la gauche et finit à droite, tourné vers elle. Un seul exemplaire de chacun.
                   - Son : Whisper medium (local) entend « Hey, are you lost? » en anglais (p = 0,98), mot pour mot.
                   - **Non vérifié :** que la voix soit celle de Tyler et que le ton soit amusé (écoute du propriétaire), ainsi que la ressemblance des visages avec les fiches. Un seul clip : on ne peut rien en conclure sur l'effet de `summary` et d'« appears in ».
+                - **Plan 2, le 30/09 : la règle 7 l'a d'abord refusé, avant toute location** (« Ressemblance faible : Leila » : cheveux blonds attachés, contre des cheveux châtains lâchés sur la fiche). Tourné quand même, sur l'ordre du propriétaire.
+                  - Premier essai (scénario `b3d53355`) : l'image 124 part en plan large après le plan moyen du plan 1. SSIM entre les images 123 et 124 : **0,394**, contre 0,93 à 0,97 à l'intérieur d'un plan.
+                  - **Cause, lue dans ComfyUI v0.37.0 :** le nœud `MiniMaxH3ReferenceToVideo` n'a pas d'entrée `first_frame`. La dernière image n'y était qu'une `<Picture N>` de plus.
+                  - **Réparé (`232781c`, sur « oui code-le »)** : `MiniMaxH3AddGuide` épingle à l'image 0 les 22 dernières images du plan précédent, son compris. C'est la PR Comfy-Org/ComfyUI #15439, et son exemple de continuation. Le plan passe à 141 images ; les 22 reprises sont retirées au recollage.
+                  - Retourné (scénario `d8c501bd`) : SSIM 123→124 **0,882**, contre 0,394 avant. Même cadrage et mêmes poses de part et d'autre de la jonction. Whisper entend les deux répliques mot pour mot.
+                  - Coût : 304 s de location, contre 203 s pour le premier essai.
+                  - Leila reste blonde : le raccord reprend l'image du plan 1 telle quelle.
               - Le relecteur (un chat) signale de nouveau, au plan 5, deux actions principales (deux répliques). Cette remarque varie d'un passage à l'autre.
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
