@@ -247,6 +247,9 @@ _EMOTION_SYNONYMES = {
     # Les noms anglais que MARQUES apprend au chat du Studio.
     "tenderness": "tendresse", "enthusiasm": "enthousiasme", "irony": "ironie", "awkwardness": "gene",
     "tiredness": "fatigue",
+    # Les mots du chat pour ces émotions (film campus, 30/09).
+    "overjoyed": "joie", "ravi": "joie", "ravie": "joie", "embarrassed": "gene", "embarrasse": "gene",
+    "embarrassee": "gene",
     "amuse": "amusement", "amusee": "amusement", "amused": "amusement", "playful": "amusement",
     "taquin": "amusement", "taquine": "amusement", "teasing": "amusement",
 }
@@ -419,9 +422,31 @@ def poser_marques(plans: list, reponse: str) -> list:
     return plans
 
 
-def _ton(emotion) -> str:
-    """Le ton lu par H3, avec ses virgules : « , overjoyed, bursting with happiness, »."""
-    return ", %s," % EMOTIONS[emotion][1] if emotion else ""
+_MOTS_VIDES_DU_TON = {"in", "a", "an", "the", "with", "and", "while", "speaking", "voice"}
+
+
+def _contexte_avant(texte: str, debut: int) -> str:
+    """La phrase qui mène à la réplique : depuis la dernière fin de phrase ou réplique."""
+    t = texte[:debut]
+    return t[max(t.rfind(c) for c in ".!?;\n»”\"") + 1:]
+
+
+def _emotion_deja_dite(emotion, contexte: str) -> bool:
+    """Le texte dit déjà l'émotion juste avant la réplique (« says, amused: »)."""
+    mots = re.findall(r"[a-z]+", _sans_accents(contexte).lower())
+    if any(emotion_connue(m) == emotion for m in mots + [" ".join(p) for p in zip(mots, mots[1:])]):
+        return True
+    tete = EMOTIONS[emotion][1].split(",")[0].split()
+    return any(m in mots for m in tete if m not in _MOTS_VIDES_DU_TON)
+
+
+def _ton(emotion, contexte: str = "") -> str:
+    """Le ton lu par H3, avec ses virgules : « , overjoyed, bursting with happiness, ».
+    Rien quand la phrase le dit déjà : le 30/09, « says, amused: amused, a playful smile
+    in the voice, » partait à H3 (vérification à blanc du film campus)."""
+    if not emotion or _emotion_deja_dite(emotion, contexte):
+        return ""
+    return ", %s," % EMOTIONS[emotion][1]
 
 
 def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(S1)") -> str:
@@ -432,7 +457,7 @@ def balises_paroles(texte: str, langue: str = LANGUE_PAROLES, locuteur: str = "(
 
     def balise(m):
         sa_langue, emotion, dite = marque_de_replique(next(g for g in m.groups() if g), langue)
-        return f"{locuteur}{_ton(emotion)} <d>[{sa_langue}] {dite}</d>"
+        return f"{locuteur}{_ton(emotion, _contexte_avant(texte, m.start()))} <d>[{sa_langue}] {dite}</d>"
     return _PAROLES.sub(balise, texte)
 
 
@@ -515,7 +540,8 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, obj
             siennes = (audios or {}).get(k) or {}
             timbre = (", using the voice timbre referenced from <Audio %d>," % siennes[sa_langue]
                       if len(siennes) > 1 and sa_langue in siennes else "")
-            ton = (timbre[:-1] + _ton(emotion)) if timbre and emotion else (timbre or _ton(emotion))
+            son_ton = _ton(emotion, _contexte_avant(texte, debut))
+            ton = (timbre[:-1] + son_ton) if timbre and son_ton else (timbre or son_ton)
             if debut in dit_par_son_nom:
                 sortie.append(f"{ton.strip(', ')}, <d>[{sa_langue}] {dite}</d>" if ton
                               else f"<d>[{sa_langue}] {dite}</d>")

@@ -1364,7 +1364,10 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
               - En 4 plans, la fin de l'histoire était perdue ; le relecteur l'a vu, sa correction a échoué. Correction : `SCENARIO_PLANS_MAX` passe à 5 (décision du propriétaire), et `PLANS_MAX` = 4 reste la limite des plans d'affilée sans « coupe ».
             - **Après les corrections :** 5 plans, les 6 répliques gardées, toutes marquées, continuité OK.
             - **Préparation à blanc :** règle 4 verte sur les 5 plans. Chaque réplique part avec la voix de sa langue (tailles des fichiers contrôlées).
-            - **Reste :** plan 5, deux règles hors voix (tableau d'affichage absent du texte ; deux répliques dans le même plan). Le ton est parfois redit (« says, amused: amused, a playful smile… ») : lisible, non mesuré sur H3. Aucun clip tourné.
+            - **Deux bugs signalés par le propriétaire, corrigés le jour même :**
+              - le ton était redit (« says, amused: amused, a playful smile… ») : il n'est plus écrit quand la phrase dit déjà l'émotion ;
+              - la règle 1 déclarait absent « the only bulletin board », alors que le texte disait « towards the bulletin board ». Ce « only » vient de la consigne du découpage (« the only ball ») : il est désormais lu comme un article.
+            - Nouvelle préparation à blanc : aucune règle non suivie. Aucun clip tourné.
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
     - **20.0 La forme retenue : un seul code, deux réglages.** Pas deux copies du dépôt, qui dériveraient. Le Studio **administrateur** (le poste du propriétaire) suit `main` et ajoute ses outils de mise au point ; le Studio **client** suit une version **validée**. L'administrateur est le mainteneur des deux dépôts (18.8).

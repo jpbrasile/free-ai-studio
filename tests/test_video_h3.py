@@ -3621,3 +3621,33 @@ def test_un_scenario_a_cinq_plans_mais_pas_cinq_raccords_d_affilee(h3):
         v.verifier_plans([plan("coupe")] + [plan("suite")] * 4)
     assert "never more than 4 shots in a row" in v.consigne_decoupage("Un film.")
     assert client(h3).get("/video-h3/etat", headers=CLE).json()["scenario"] == {"plans_max": 5}
+
+
+def test_le_ton_n_est_pas_redit_quand_la_phrase_le_dit_deja(h3):
+    """Vérification à blanc du film campus, 30/09 : « says, amused: amused, a playful smile
+    in the voice, » partait à H3. Les cinq phrases du découpage réel."""
+    v = h3.video_h3
+    sujets = [("Leila", "French"), ("Tyler", "English")]
+    for texte in ("Tyler stops and says, amused: « [English, amusement] Hey, are you lost? »",
+                  "Tyler tries in French, embarrassed: « [French, awkwardness] Je… parle un peu français. »",
+                  "Leila bursts out laughing, saying: « [French, laughing] Ton accent est trop mignon ! »",
+                  "Leila faces the board, overjoyed, and yells: « [English, joy] I made the team! »",
+                  "Tyler, enthusiastic, replies to her: « [French, enthusiasm] C'est génial, Leila ! »"):
+        emotion = v.marque_de_replique(texte[texte.index("«") + 2:texte.rindex("»") - 1], "French")[1]
+        assert emotion
+        sortie = v.attribuer_repliques(texte, sujets)
+        assert v.EMOTIONS[emotion][1] not in sortie, sortie
+    # Dit nulle part avant la réplique : le ton est écrit, une fois.
+    sortie = v.attribuer_repliques("Leila replies with relief: « [English, calm] Yes! »", sujets)
+    assert sortie.count("calmly and gently") == 1
+    # La phrase d'avant ne compte pas : le « amused » de Tyler ne tait pas le ton de Leila.
+    sortie = v.attribuer_repliques("Tyler says, amused: « Hi. » Leila answers: « [English, amusement] Hi! »", sujets)
+    assert sortie.count(v.EMOTIONS["amusement"][1]) == 1
+
+
+def test_la_regle_1_lit_the_only_comme_un_article(h3):
+    """Film campus, 30/09 : « the only bulletin board » (consigne du découpage) était dit
+    absent d'un texte qui disait « towards the bulletin board »."""
+    r = h3.regles
+    assert r.nomme_dans("the only bulletin board", "Leila faces right towards the bulletin board.")
+    assert not r.nomme_dans("the only bulletin board", "Leila faces right towards the board.")

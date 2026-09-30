@@ -41,7 +41,10 @@ NUMEROS = {etape: [n for n, e, _ in REGLES if e == etape] for etape in ("texte",
 AVANT_TOURNAGE = NUMEROS["texte"] + NUMEROS["depart"]
 
 # « the », « le », « l' »… : un nom se retrouve dans le texte sans son article.
-_ARTICLES = {"the", "a", "an", "le", "la", "les", "l", "un", "une", "des", "du", "de"}
+_ARTICLES = {"the", "a", "an", "le", "la", "les", "l", "un", "une", "des", "du", "de",
+             # Le compte que la consigne du découpage fait écrire (« the only ball ») : le
+             # 30/09, « the only bulletin board » était dit absent d'un texte qui le nommait.
+             "only", "single", "seul", "seule"}
 _PROFONDEURS = (("foreground", "foreground"), ("background", "background"), ("midground", "middle"),
                 ("middle ground", "middle"), ("middle distance", "middle"))
 _COTES = (("left", "left"), ("right", "right"), ("centre", "centre"), ("center", "centre"), ("middle", "centre"))
