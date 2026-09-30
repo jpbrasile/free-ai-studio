@@ -233,8 +233,9 @@ CREDIT_OFFERT_USD = float(os.getenv("MODAL_CREDIT_MENSUEL_USD", "30"))
 PLAFOND_USD = float(os.getenv("MODAL_BUDGET_USD_PAR_MOIS", str(CREDIT_OFFERT_USD)))
 
 # Part du plafond reservee au mode autonome, que les demandes humaines ne
-# peuvent pas entamer. 50 % par decision du 19/09/2026, ajustable.
-PART_RESERVEE_AUTONOME = float(os.getenv("MODAL_PART_RESERVEE_AUTONOME", "0.5"))
+# peuvent pas entamer. 50 % par decision du 19/09/2026 ; 20 % depuis le 30/09/2026
+# (« garde 20 % », apres une nuit ou la part humaine, epuisee, bloquait les essais).
+PART_RESERVEE_AUTONOME = float(os.getenv("MODAL_PART_RESERVEE_AUTONOME", "0.2"))
 RESERVE_AUTONOME_USD = PLAFOND_USD * PART_RESERVEE_AUTONOME
 
 # Les trois compteurs d'avant, repris une seule fois pour ne pas perdre le mois
