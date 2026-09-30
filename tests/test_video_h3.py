@@ -3355,8 +3355,10 @@ def test_visages_chaque_passage_part_sur_la_grille_h3_et_revient_a_sa_longueur(s
     assert vi.ordre_sur_la_grille(3) == [0, 1, 2, 1, 0]
     assert vi.estimation_passages([(119, 1)]) == vi.estimation_passages([(124, 1)])
     s = vi._SCRIPT
-    # La source suit l'ordre ; la sortie est recoupée à [de, a), image ET son, avant le bout à bout.
-    assert 'P["ordre"]' in s and "trim=end_frame=" in s and "atrim=end=" in s and "apad=whole_dur=" in s
+    # La source suit l'ordre ; la sortie est recoupée à [de, a) avant le bout à bout, et le son
+    # vient du film (30/09 : un passage rendu sans son a fait échouer le bout à bout).
+    assert 'P["ordre"]' in s and "trim=end_frame=" in s and "apad=whole_dur=" in s
+    assert '["-i", str(film)]' in s and "asplit=" in s and "[%d:a]atrim" not in s
 
 
 def test_visages_le_devis_refuse_le_trop_long_et_le_trop_nombreux(sandbox):

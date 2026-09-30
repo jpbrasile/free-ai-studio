@@ -462,13 +462,22 @@ calcul_s = round(time.time() - t_pret, 1)
 journal.flush()
 rapports = [l for l in Path("/tmp/comfy.log").read_text(errors="replace").splitlines() if "[H3FaceRefine]" in l]
 proc.kill()
-# Chaque passage recoupé à ses [de, a) (le miroir ajouté pour la grille part), image et son
-# (le son d'origine, reposé par CreateVideo), puis bout à bout.
-entrees = sum((["-i", str(x)] for x in rendus), [])
-filtre = "".join("[%d:v]trim=end_frame=%d,setpts=PTS-STARTPTS[v%d];[%d:a]atrim=end=%.4f,asetpts=PTS-STARTPTS[a%d];"
-                 % (i, P["a"] - P["de"], i, i, (P["a"] - P["de"]) / ips, i)
-                 for i, P in enumerate(D["passages"]))
-filtre += "".join("[v%d][a%d]" % (i, i) for i in range(len(rendus))) + "concat=n=%d:v=1:a=1[v][a]" % len(rendus)
+# Chaque passage recoupé à ses [de, a) (le miroir ajouté pour la grille part), puis bout à
+# bout. Le son est pris dans le FILM, pas dans ce que rend ComfyUI : le 30/09, un des sept
+# passages est revenu sans piste son alors que sa source en avait une, et le bout à bout
+# a échoué après tout le calcul.
+sans_son = [k + 1 for k, x in enumerate(rendus) if not subprocess.run(
+    ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0", str(x)],
+    capture_output=True, text=True).stdout.strip()]
+if sans_son:
+    print("rendus sans son (le son du film est reposé) : passages %s" % sans_son, flush=True)
+n = len(rendus)
+entrees = sum((["-i", str(x)] for x in rendus), []) + ["-i", str(film)]
+filtre = "[%d:a]asplit=%d%s;" % (n, n, "".join("[s%d]" % i for i in range(n))) if n > 1 else "[%d:a]anull[s0];" % n
+filtre += "".join("[%d:v]trim=end_frame=%d,setpts=PTS-STARTPTS[v%d];[s%d]atrim=start=%.4f:end=%.4f,"
+                  "asetpts=PTS-STARTPTS[a%d];" % (i, P["a"] - P["de"], i, i, P["de"] / ips, P["a"] / ips, i)
+                  for i, P in enumerate(D["passages"]))
+filtre += "".join("[v%d][a%d]" % (i, i) for i in range(n)) + "concat=n=%d:v=1:a=1[v][a]" % n
 r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *entrees, "-filter_complex", filtre,
                     "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p",
                     "-c:a", "aac", str(OUT / "video.mp4")], capture_output=True, text=True)
@@ -477,7 +486,8 @@ if r.returncode:
     sys.exit(9)
 resume = {"de": de, "a": a, "passages": [[P["de"], P["a"]] for P in D["passages"]], "calcul_s": calcul_s,
           "calcul_par_passage_s": calculs, "demarrage_comfy_s": round(t_pret - t0, 1),
-          "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "rapports": rapports[-200:]}
+          "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "sans_son": sans_son,
+          "rapports": rapports[-200:]}
 (OUT / "resume.json").write_text(json.dumps(resume, ensure_ascii=False))
 print("VISAGES " + json.dumps(resume, ensure_ascii=False), flush=True)
 '''
