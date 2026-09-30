@@ -640,18 +640,22 @@ PHRASE_VOIX = {
 }
 
 
-def fiche_poser_voix(fid, wav: bytes, duree_s: float, source: str) -> dict:
-    """Le profil voix, déjà mis au propre (montage.voix_de_reference)."""
+def fiche_poser_voix(fid, wav: bytes, duree_s: float, source: str, langue: str) -> dict:
+    """Le profil voix, déjà mis au propre (montage.voix_de_reference), et sa langue :
+    la règle 4 (30/09) refuse de tourner une réplique dont le locuteur n'a pas de voix
+    dans la langue de cette réplique."""
     fiche = fiche_lire(fid)
     if fiche_est_objet(fiche):
         raise ValueError("Un objet ou une pose ne parle pas : la voix va sur la fiche d'une personne.")
     if source not in ("exemple", "generee"):
         raise ValueError("Source de voix inconnue.")
+    if langue not in LANGUES_PAROLES:
+        raise ValueError("Dites la langue de cette voix.")
     if duree_s < VOIX_MIN_S:
         raise ValueError(f"Voix trop courte : {VOIX_MIN_S:g} s de parole au moins "
                          f"({duree_s:g} s entendues après le silence du début).")
     (_dossier_fiche(fid) / VOIX_FICHIER).write_bytes(wav)
-    fiche["voix"] = {"source": source, "duree_s": duree_s,
+    fiche["voix"] = {"source": source, "duree_s": duree_s, "langue": langue,
                      "pose_le": time.strftime("%Y-%m-%d %H:%M:%S")}  # date-machine
     _fiche_ecrire(fiche)
     return fiche
@@ -731,8 +735,17 @@ def fiche_planche_data_url(fid):
 # générées ne ressemblaient pas à la personne ; des gros plans du visage ont
 # réglé l'essentiel. Le modèle qui voit du Studio situe le visage ; ffmpeg coupe.
 
-def consigne_visage() -> str:
-    return ("Locate the face of the main person in this image. Answer with JSON only: "
+def consigne_visage(qui: str = "", ou: str = "") -> str:
+    """`qui` : la personne à trouver (nom et description de sa fiche), `ou` : sa place
+    attendue. Sans eux, « le visage principal » : sur une image à deux personnes, le
+    30/09, 8 comparaisons sur 9 ont recadré l'autre (« forte » et « faible » croisés)."""
+    if qui:
+        cible = ("Locate the face of ONE person only: %s%s. Several people may be in the image: pick the one "
+                 "that matches this description and place, never another one. " % (
+                     qui, (", expected " + ou) if ou else ""))
+    else:
+        cible = "Locate the face of the main person in this image. "
+    return (cible + "Answer with JSON only: "
             '{"x0": ..., "y0": ..., "x1": ..., "y1": ...}, the box tight around the face (hairline to chin, '
             "ear to ear), as integers from 0 to 1000 relative to the image width (x) and height (y). "
             "If there is no face, answer {}.")
@@ -985,6 +998,34 @@ def lire_traduction(reponse: str, payload: dict) -> dict:
     return dict(payload, **{k: d.get(k, "") for k in CASES_TRADUITES})
 
 
+# Règle 0 (décision du propriétaire, 30/09 : « the hard code is to do all the post
+# processing from the user initial prompt in english ») : l'histoire est traduite une
+# fois, au début ; découpage, tableau, relectures et contrôles partent de l'anglais.
+# Les deux films du 30/09 avaient un tableau aux noms français (« le cerf-volant
+# jaune ») pour un texte anglais (« the yellow kite ») : rien ne pouvait les rapprocher.
+def consigne_histoire_anglais(histoire: str) -> str:
+    return ("Translate this story into English, for a film script. Text between quotation marks (« », “ ” or "
+            "\" \") is spoken dialogue: copy it EXACTLY, untranslated, with its quotation marks, and keep any "
+            "[language] mark in front of it. Keep every name of a person as it is written. Translate every other "
+            "word, names of places and objects included. Answer with the translated story only, nothing else."
+            "\n\n" + histoire)
+
+
+def lire_histoire_anglais(reponse: str, histoire: str) -> str:
+    """L'histoire en anglais, contrôlée : mêmes répliques, plus de français autour."""
+    t = str(reponse or "").strip()
+    if t.startswith("```"):
+        t = t.strip("`").split("\n", 1)[-1] if "\n" in t else t.strip("`")
+    t = t.strip()
+    if not t:
+        raise ValueError("La traduction de l'histoire en anglais est vide : rien n'est découpé.")
+    if repliques(t) != repliques(histoire):
+        raise ValueError("La traduction de l'histoire en anglais a changé une réplique : rien n'est découpé.")
+    if reste_du_francais(t):
+        raise ValueError("La traduction de l'histoire en anglais a laissé du français : rien n'est découpé.")
+    return t
+
+
 # Le 28/09 (clip 1180fae1), le chat du Studio a rendu une case « traduite » encore
 # en français ; lire_traduction l'a acceptée. Des mots-outils français hors des
 # répliques trahissent une case restée en français.
@@ -1115,7 +1156,7 @@ PHYSIQUE = ("Physics is never implied, the video model is poor at it: for every 
 # au début ?). Le tableau force le début, et la continuité d'un plan à l'autre se
 # vérifie alors par le code, sans avis d'un modèle.
 TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element the shot shows (each character, "
-           "every object that moves or that an action uses or aims at): {\"nom\": its name, \"debut\": where it is "
+           "every object that moves or that an action uses or aims at): {\"nom\": its name, written exactly as the shot's text names it, in English, \"debut\": where it is "
            "when the shot starts (place in the frame, which way it faces, standing or sitting, what it holds "
            "and how: which hand, which end of the object is up), "
            "\"mouvement\": what it does during the shot, step by step, each contact with a named surface, or "
@@ -1706,7 +1747,8 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "or moved without the concrete gesture or its path written; a character or object that appears, "
             "vanishes, jumps to another place or changes between shots; an event of the story that no shot "
             "shows; a shot whose text contradicts itself; two characters each doing their own main action in "
-            "one shot. \"detail\" = a precision the video model usually gets right on its own or that barely "
+            "one shot; two characters at the same place of the frame (same depth and same side) at the same "
+            "moment. \"detail\" = a precision the video model usually gets right on its own or that barely "
             "shows: which way someone faces, looks or turns the head (always a detail), which hand, the exact "
             "side or depth in the frame, naming a target earlier, wording. When unsure, \"detail\". "
             "Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
@@ -2647,7 +2689,10 @@ PAGE_HTML = r"""<!doctype html>
     <div id="plans_liste"></div>
     <button id="plan_ajouter" hidden>Ajouter un plan</button>
     <p class="note" id="scenario_prix"></p>
+    <button id="scenario_verifier" hidden>Vérifier les règles (gratuit)</button>
     <button id="scenario_tourner" hidden>Tourner le scénario</button>
+    <button id="scenario_forcer" hidden>Tourner quand même</button>
+    <div id="scenario_regles"></div>
     <button id="scenario_arreter" hidden>Arrêter le tournage</button>
     <p id="scenario_occupe" class="occupe" hidden><span class="rond"></span> <span id="scenario_occupe_texte"></span>
       <span id="scenario_chrono"></span></p>
@@ -3430,7 +3475,9 @@ function dessinerVoix(f){
     lecteur.controls = true;
     lecteur.src = f.voix.son;
     zone.append(lecteur, document.createElement("br"),
-      (f.voix.source === "generee" ? "Voix générée" : "Exemple cloné") + ", " + fr(f.voix.duree_s, 1) + " s. ",
+      (f.voix.source === "generee" ? "Voix générée" : "Exemple cloné") + ", " + fr(f.voix.duree_s, 1) + " s, "
+        + (f.voix.langue ? "en " + (([...document.getElementById("langue").options].find(o => o.value === f.voix.langue) || {}).textContent || f.voix.langue) + ". "
+           : "langue non notée : reposez la voix pour pouvoir tourner. "),
       bouton("Retirer la voix", async () => {
         const r = await fetch("/video-h3/fiches/" + f.id + "/voix", {method: "DELETE", headers: H});
         if (r.ok) await chargerFiches(f.id);
@@ -3449,7 +3496,7 @@ function dessinerVoix(f){
     if (!f0) return;
     if (!droit.checked){ ficheEtat("Cochez d'abord « j'ai le droit d'utiliser cette voix ».", true); fichier.value = ""; return; }
     const lecteur = new FileReader();
-    lecteur.onload = () => poserVoix(f.id, {son: lecteur.result, droit: true});
+    lecteur.onload = () => poserVoix(f.id, {son: lecteur.result, droit: true, langue: parle.value});
     lecteur.readAsDataURL(f0);
   });
   const langue = document.createElement("select");
@@ -3460,7 +3507,11 @@ function dessinerVoix(f){
     o.textContent = titre;
     langue.appendChild(o);
   }
-  zone.append("Un exemple à cloner : ", coche, " ", fichier, document.createElement("br"),
+  // La langue que parle l'exemple : la règle 4 la compare à celle des répliques (30/09).
+  const parle = document.createElement("select");
+  parle.setAttribute("aria-label", "Langue parlée dans l'exemple");
+  parle.innerHTML = document.getElementById("langue").innerHTML;
+  zone.append("Un exemple à cloner, parlé en ", parle, " : ", coche, " ", fichier, document.createElement("br"),
     "Ou une voix générée en ", langue, " ",
     bouton(f.voix ? "Remplacer par une voix générée" : "Générer la voix", () => poserVoix(f.id, {generer: langue.value})));
 }
@@ -3903,6 +3954,8 @@ function dessinerPlans(){
   document.getElementById("plan_ajouter").hidden = !PLANS.length || PLANS.length >= max;
   // Un scénario repris se rejoue (plans changés seulement), il ne se retourne pas en entier.
   document.getElementById("scenario_tourner").hidden = !PLANS.length || !!SCENARIO_TOURNE;
+  document.getElementById("scenario_verifier").hidden = !PLANS.length || !!SCENARIO_TOURNE;
+  document.getElementById("scenario_forcer").hidden = true;
   const opt = document.getElementById("longueur").selectedOptions[0];
   const prix = opt && ETAT ? (ETAT.durees.find(x => String(x.images) === opt.value) || {}).prix_estime_usd : null;
   document.getElementById("scenario_prix").textContent = PLANS.length
@@ -3965,6 +4018,9 @@ function dessinerJugement(jugement){
   const zone = document.getElementById("jugement");
   zone.innerHTML = "";
   DEFAUTS = [];
+  // Les règles 9 à 12 du plan tourné (30/09), sous le même tableau que celles d'avant.
+  const avecRegles = (jugement || []).filter(j => j.regles && j.regles.length);
+  if (avecRegles.length) dessinerRegles(avecRegles.map(j => ({plan: j.plan, regles: j.regles})), "Plans tournés");
   for (const j of jugement || []){
     if (!j.defauts.length){
       const p = document.createElement("p");
@@ -4118,8 +4174,73 @@ document.getElementById("suite_lancer").addEventListener("click", async () => {
 async function appeler(chemin, corps){
   const r = await fetch(chemin, {method: "POST", headers: H, body: JSON.stringify(corps || {})});
   const d = await r.json();
-  if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Refusé.");
+  if (!r.ok) throw new Error(messageDeRefus(d));
   return d;
+}
+
+// Un refus des règles (409, 30/09) porte le rapport : il s'affiche plan par plan.
+function messageDeRefus(d){
+  if (d && d.detail && typeof d.detail === "object"){
+    if (d.detail.regles) dessinerRegles(d.detail.regles, "Avant le tournage");
+    return d.detail.message || "Refusé.";
+  }
+  return typeof (d || {}).detail === "string" ? d.detail : "Refusé.";
+}
+
+// Les règles numérotées (30/09) : pour chaque plan, ✓ suivie, ✗ non suivie (avec
+// la raison), – sans objet ou illisible. Demande du propriétaire : « a reviewer that
+// say for each clip that rule n° 1 to xx are followed ».
+function dessinerRegles(rapport, titre){
+  const zone = document.getElementById("scenario_regles");
+  zone.innerHTML = "";
+  if (!rapport || !rapport.length) return;
+  const b = document.createElement("b");
+  b.textContent = "Règles — " + titre;
+  zone.appendChild(b);
+  const table = document.createElement("table");
+  const numeros = [...new Set(rapport.flatMap(p => p.regles.map(x => x.n)))].sort((a, b) => a - b);
+  const tete = table.insertRow();
+  tete.insertCell().textContent = "Plan";
+  const textes = {};
+  for (const p of rapport) for (const x of p.regles) textes[x.n] = x.regle;
+  for (const n of numeros){
+    const c = tete.insertCell();
+    c.textContent = n;
+    c.title = textes[n] || "";
+  }
+  const fautes = [];
+  for (const p of rapport){
+    const ligne = table.insertRow();
+    ligne.insertCell().textContent = p.plan;
+    for (const n of numeros){
+      const x = p.regles.find(y => y.n === n);
+      const c = ligne.insertCell();
+      c.textContent = !x ? "" : x.ok === true ? "✓" : x.ok === false ? "✗" : "–";
+      if (x){
+        c.title = x.regle + (x.pourquoi ? " — " + x.pourquoi : "");
+        if (x.ok === false) fautes.push("Plan " + p.plan + ", règle " + n + " : " + x.pourquoi);
+      }
+    }
+  }
+  zone.appendChild(table);
+  const liste = document.createElement("ul");
+  for (const f of fautes){
+    const li = document.createElement("li");
+    li.className = "refus";
+    li.textContent = f;
+    liste.appendChild(li);
+  }
+  const regles = document.createElement("details");
+  const s = document.createElement("summary");
+  s.textContent = "Les règles";
+  regles.appendChild(s);
+  for (const n of numeros){
+    const p = document.createElement("p");
+    p.className = "note";
+    p.textContent = n + ". " + (textes[n] || "");
+    regles.appendChild(p);
+  }
+  zone.append(liste, regles);
 }
 
 async function attendreScenario(sid){
@@ -4227,9 +4348,8 @@ document.getElementById("scenario_tourner").addEventListener("click", async () =
   }
 });
 
-async function tournerScenario(){
+function corpsScenario(){
   const graine = document.getElementById("graine").value;
-  occupe("Contrôle et traduction des plans (gratuit)…");
   const f1 = document.getElementById("scenario_fiche").value, f2 = document.getElementById("scenario_fiche2").value;
   const l1 = document.getElementById("scenario_langue1").value, l2 = document.getElementById("scenario_langue2").value;
   const deux = f1 && f2 && f1 !== f2;
@@ -4237,7 +4357,7 @@ async function tournerScenario(){
   // les premiers <Subject N>, et le premier parle par défaut.
   const toutes = f1 ? fichesDuScenario() : [];
   const plusieurs = toutes.length > 1;
-  const r = await fetch("/video-h3/scenario/tourner", {method: "POST", headers: H, body: JSON.stringify({
+  return {
     plans: PLANS, fiche: plusieurs ? null : (f1 || null), fiches: plusieurs ? toutes : null,
     langues: deux ? {[f1]: l1, [f2]: l2} : null,
     musique_chanson: document.getElementById("scenario_chanson").value || null,
@@ -4246,14 +4366,51 @@ async function tournerScenario(){
     musique: document.getElementById("musique").value,
     longueur: Number(document.getElementById("longueur").value),
     definition: document.getElementById("definition").value,
-    graine: graine === "" ? null : Number(graine)})});
+    graine: graine === "" ? null : Number(graine)};
+}
+
+async function tournerScenario(forcer){
+  occupe("Contrôle des règles et traduction des plans (gratuit)…");
+  const r = await fetch("/video-h3/scenario/tourner", {method: "POST", headers: H,
+                                                       body: JSON.stringify(Object.assign(corpsScenario(), {forcer: !!forcer}))});
   const d = await r.json();
-  if (!r.ok) throw new Error(typeof d.detail === "string" ? d.detail : "Refusé.");
+  if (!r.ok){
+    // Une règle non suivie : « Tourner quand même » est offert, sauf pour la voix (règle 4).
+    document.getElementById("scenario_forcer").hidden = !(d.detail && d.detail.passe_droit);
+    throw new Error(messageDeRefus(d));
+  }
+  document.getElementById("scenario_forcer").hidden = true;
+  if (d.regles) dessinerRegles(d.regles, "Avant le tournage");
   await suivreScenario(d.id);
   // Le juge gratuit passe de lui-même : le 29/09, un film fini sans jugement
   // cachait un visage qui ne ressemblait plus à sa fiche dès le deuxième plan.
   if (SCENARIO_TOURNE === d.id) await actionJuger();
 }
+
+document.getElementById("scenario_forcer").addEventListener("click", async () => {
+  try {
+    await tournerScenario(true);
+  } catch (e) {
+    scenarioEtat(e.message, true);
+  } finally {
+    libre();
+  }
+});
+
+document.getElementById("scenario_verifier").addEventListener("click", async () => {
+  occupe("Vérification des règles (gratuit)…");
+  try {
+    const d = await appeler("/video-h3/scenario/verifier", corpsScenario());
+    dessinerRegles(d.rapport, "Avant le tournage");
+    scenarioEtat(d.non_suivies.length ? d.non_suivies.length + " règle(s) non suivie(s) : corrigez les plans, "
+                 + "ou tournez quand même." : "Toutes les règles vérifiables avant le tournage sont suivies.",
+                 !!d.non_suivies.length);
+  } catch (e) {
+    scenarioEtat(e.message, true);
+  } finally {
+    libre();
+  }
+});
 
 document.getElementById("scenario_arreter").addEventListener("click", async () => {
   if (!SCENARIO) return;

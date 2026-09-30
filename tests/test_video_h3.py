@@ -38,6 +38,29 @@ def h3(sandbox, monkeypatch, tmp_path):
     return sandbox
 
 
+@pytest.fixture
+def sans_traduction(h3, monkeypatch):
+    """Les tests du découpage écrits avant la règle 0 (30/09) : l'histoire part telle
+    quelle, la traduction a ses propres tests."""
+    async def telle_quelle(histoire):
+        return histoire
+    monkeypatch.setattr(h3, "_histoire_en_anglais", telle_quelle)
+
+
+@pytest.fixture
+def sans_regles(h3, monkeypatch):
+    """Les tests du tournage et du juge écrits avant les règles numérotées (30/09) :
+    ni garde, ni contrôle de la dernière image, ni règles 10 à 12 ; elles ont leurs tests."""
+    async def aucune_garde(plans, commun, forcer, tournes=None):
+        return []
+
+    async def aucune_regle_clip(*a, **k):
+        return {}
+    monkeypatch.setattr(h3, "_garde_des_regles", aucune_garde)
+    monkeypatch.setattr(h3, "_controle_derniere_image", lambda sid, i, image: None)
+    monkeypatch.setattr(h3, "_regles_clip", aucune_regle_clip)
+
+
 def client(sandbox):
     return TestClient(sandbox.app, base_url="http://127.0.0.1:8020")
 
@@ -50,6 +73,7 @@ def client(sandbox):
     ("get", "/video-h3/fiches"), ("post", "/video-h3/fiches"),
     ("get", "/video-h3/clips"), ("post", "/video-h3/scenario/ordonner"), ("post", "/video-h3/montage"),
     ("post", "/video-h3/scenario/decouper"), ("post", "/video-h3/scenario/tourner"),
+    ("post", "/video-h3/scenario/verifier"),
     ("get", "/video-h3/scenario/" + "a" * 32), ("post", "/video-h3/musique"), ("get", "/video-h3/scenarios"),
     ("post", "/video-h3/scenario/" + "a" * 32 + "/juger"), ("post", "/video-h3/scenario/" + "a" * 32 + "/corriger"),
     ("post", "/video-h3/scenario/" + "a" * 32 + "/rejouer"), ("post", "/video-h3/depart/" + "a" * 24 + "/comparer"),
@@ -1000,7 +1024,7 @@ def test_le_decoupage_est_controle(h3):
             v.verifier_plans(mauvais)
 
 
-def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3, monkeypatch):
+def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3, monkeypatch, sans_traduction):
     """29/09 : « rajoute un reviewer pour le scénario complet qui fera comme toi »."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     scenario = "Léa est seule à une table. Tom arrive, pose un livre et dit « Tiens. »"
@@ -1035,7 +1059,7 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
     assert "BEFORE shooting" in json.dumps(vus[2], ensure_ascii=False)
 
 
-def test_le_relecteur_garde_le_texte_si_la_correction_ne_fait_pas_mieux(h3, monkeypatch):
+def test_le_relecteur_garde_le_texte_si_la_correction_ne_fait_pas_mieux(h3, monkeypatch, sans_traduction):
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     scenario = "Léa lance le ballon vers le panier."
     decoupe = '[{"image_paroles": "Léa lance le ballon.", "ambiance": "", "enchainement": "coupe"}]'
@@ -1050,7 +1074,7 @@ def test_le_relecteur_garde_le_texte_si_la_correction_ne_fait_pas_mieux(h3, monk
     assert d["continuite"]["problemes"] == [{"plan": 1, "quoi": "Le panier n'est pas placé."}]
 
 
-def test_la_correction_demande_le_modele_haut_de_gamme_gratuit(h3, monkeypatch):
+def test_la_correction_demande_le_modele_haut_de_gamme_gratuit(h3, monkeypatch, sans_traduction):
     """29/09 : free-ai-auto rendait 5 plans au lieu de 4 (4 corrections lues sur 15),
     free-ai-max 15 sur 15."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
@@ -1066,7 +1090,7 @@ def test_la_correction_demande_le_modele_haut_de_gamme_gratuit(h3, monkeypatch):
     assert [v["model"] for v in vus] == ["free-ai-auto", "free-ai-max", "free-ai-max", "free-ai-max"]
 
 
-def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(h3, monkeypatch):
+def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(h3, monkeypatch, sans_traduction):
     """29/09 : « face caméra » puis « se tourne vers la caméra » ; corrigé, la seconde
     relecture relevait un autre petit point et le compte égal rejetait la correction."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
@@ -1096,7 +1120,7 @@ def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(
     assert d["relecture"]["corrige"] is False
 
 
-def test_une_correction_n_est_jugee_que_sur_les_plans_qu_elle_change(h3, monkeypatch):
+def test_une_correction_n_est_jugee_que_sur_les_plans_qu_elle_change(h3, monkeypatch, sans_traduction):
     """29/09, 3 essais : le plan 3 réparé les trois fois, puis la seconde relecture
     ajoutait des remarques mineures sur les plans 1 et 2, restés tels quels."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
@@ -1185,7 +1209,7 @@ def test_la_page_cree_objets_et_poses_et_montre_le_tableau(h3):
         assert morceau in html
 
 
-def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
+def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch, sans_traduction):
     """29/09, demande du propriétaire : chaque élément clé avec sa place de départ,
     son mouvement et sa place d'arrivée ; un élément qui surgit sans origine se
     voit par le code."""
@@ -1239,7 +1263,7 @@ def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch):
     assert [p["plan"] for p in d["relecture"]["trouves"]] == [2]
 
 
-def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3, monkeypatch):
+def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3, monkeypatch, sans_traduction):
     """Premier essai réel (29/09) : alertes sur des mots que le plan n'a pas, et
     « corrigé » annoncé sur un texte resté le même."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
@@ -1255,7 +1279,7 @@ def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3
     assert d["relecture"]["corrige"] is False and "rien changé" in d["relecture"]["erreur"]
 
 
-def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path):
+def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path, sans_regles):
     v = h3.video_h3
     _autoriser(h3)
     v.poids_noter(True)
@@ -1308,7 +1332,7 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
 
 
-def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch):
+def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch, sans_regles):
     """29/09 : « si on change les vêtements on le fait pour tous les plans et on rajoute
     une photo de référence pour la consistance »."""
     v = h3.video_h3
@@ -1456,14 +1480,14 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
 WAV = b"RIFF" + b"\0" * 40 + b"\1\0" * 32000 * 4   # 4 s de faux son, déjà mis au propre
 
 
-def test_le_profil_voix_part_avec_les_photos_en_audio_de_reference(h3):
+def test_le_profil_voix_part_avec_les_photos_en_audio_de_reference(h3, sans_regles):
     """29/09 : « soit on donne un exemple de voix à cloner, soit on génère un clonage
     dans la langue du locuteur et on l'applique à tous les plans »."""
     v = h3.video_h3
     lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
     v.fiche_poser_image(lea, "face", PNG)
     v.fiche_poser_image(james, "face", PNG)
-    v.fiche_poser_voix(james, WAV, 4.0, "exemple")
+    v.fiche_poser_voix(james, WAV, 4.0, "exemple", "English")
     assert {f["nom"]: f["voix"] for f in v.fiches_liste()} == {"Léa": False, "James": True}
     d = demande(mode="references", fiches=[lea, james], langues={lea: "French", james: "English"},
                 image_paroles="James demande « Is this seat taken? » Léa répond « Oui. »")
@@ -1487,9 +1511,12 @@ def test_le_profil_voix_part_avec_les_photos_en_audio_de_reference(h3):
     # Un objet ne parle pas ; une voix trop courte est refusée.
     ballon = v.fiche_creer("ballon", "rond", "objet")["id"]
     with pytest.raises(ValueError, match="ne parle pas"):
-        v.fiche_poser_voix(ballon, WAV, 4.0, "exemple")
+        v.fiche_poser_voix(ballon, WAV, 4.0, "exemple", "French")
     with pytest.raises(ValueError, match="trop courte"):
-        v.fiche_poser_voix(lea, WAV, 2.5, "exemple")
+        v.fiche_poser_voix(lea, WAV, 2.5, "exemple", "French")
+    # Sa langue est notée (règle 4, 30/09) : sans elle, rien n'est posé.
+    with pytest.raises(ValueError, match="langue"):
+        v.fiche_poser_voix(lea, WAV, 4.0, "exemple", "")
 
 
 @pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
@@ -1503,10 +1530,14 @@ def test_la_page_pose_un_exemple_de_voix_ou_en_genere_une(h3, monkeypatch, tmp_p
     exemple = "data:audio/mpeg;base64," + base64.b64encode(son.read_bytes()).decode()
     r = client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"son": exemple})
     assert r.status_code == 400 and "droit" in r.json()["detail"]
+    # La langue de l'exemple est demandée (règle 4, 30/09).
     r = client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"son": exemple, "droit": True})
+    assert r.status_code == 400 and "langue" in r.json()["detail"]
+    r = client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE,
+                        json={"son": exemple, "droit": True, "langue": "Spanish"})
     assert r.status_code == 200, r.text
     voix = r.json()["voix"]
-    assert voix["source"] == "exemple" and 5.5 <= voix["duree_s"] <= 6.5
+    assert voix["source"] == "exemple" and 5.5 <= voix["duree_s"] <= 6.5 and voix["langue"] == "Spanish"
     assert voix["son"].startswith("data:audio/wav;base64,")
     # Générée : la voix du Studio lit la phrase de la langue choisie.
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
@@ -1522,11 +1553,12 @@ def test_la_page_pose_un_exemple_de_voix_ou_en_genere_une(h3, monkeypatch, tmp_p
     r = client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"generer": "French"})
     assert r.status_code == 200, r.text
     assert vu["url"].endswith("/v1/audio/speech") and vu["json"] == {"input": v.PHRASE_VOIX["French"]}
-    assert r.json()["voix"]["source"] == "generee"
+    assert r.json()["voix"]["source"] == "generee" and r.json()["voix"]["langue"] == "French"
     assert client(h3).post(f"/video-h3/fiches/{lea}/voix", headers=CLE, json={"generer": "Klingon"}).status_code == 400
     assert client(h3).delete(f"/video-h3/fiches/{lea}/voix", headers=CLE).json()["voix"] is None
     page = client(h3).get("/video-h3").text
     assert "function dessinerVoix" in page and "j'ai le droit d'utiliser cette voix" in page
+    assert "Langue parlée dans l'exemple" in page and "langue: parle.value" in page
 
 
 def _volume_max(chemin, debut, duree):
@@ -1728,7 +1760,7 @@ def test_une_musique_du_studio_se_pose_sous_un_film(h3, monkeypatch, tmp_path):
         assert c.post("/video-h3/musique", headers=CLE, json=dict(base, **corps)).status_code == code
 
 
-def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch):
+def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch, sans_regles):
     v = h3.video_h3
     _autoriser(h3)
     v.poids_noter(True)
@@ -1867,7 +1899,7 @@ def _scenario_tourne(h3, monkeypatch, tmp_path):
     return sid, plans
 
 
-def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_path):
+def test_juger_montre_chaque_plan_et_les_fiches_au_chat(h3, monkeypatch, tmp_path, sans_regles):
     sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     planches = []
@@ -2017,7 +2049,7 @@ def test_la_continuite_se_lit_et_ne_garde_que_les_plans_du_film(h3):
     assert "none missing" in consigne
 
 
-def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeypatch, tmp_path):
+def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeypatch, tmp_path, sans_regles):
     v = h3.video_h3
     sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
     v.scenario_ecrire(dict(v.scenario_lire(sid), reglages=dict(v.scenario_lire(sid)["reglages"], definition="768p")))
@@ -2524,7 +2556,7 @@ def test_le_debut_serre_part_du_debut_du_texte_et_pardonne_camera_et_cache(h3):
     assert "STARTS" not in v.consigne_debut(["Léa"])   # sans texte, rien à comparer
 
 
-def test_le_juge_regarde_le_debut_serre_et_dit_la_cause(h3, monkeypatch, tmp_path):
+def test_le_juge_regarde_le_debut_serre_et_dit_la_cause(h3, monkeypatch, tmp_path, sans_regles):
     """29/09 : planche à 0,5 s, « ok » ; à 1/8 s, un second ballon dans le filet."""
     sid, plans = _scenario_tourne(h3, monkeypatch, tmp_path)
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
@@ -2574,7 +2606,7 @@ def v_lire(h3):
     return lambda rep: h3.video_h3.lire_jugement(rep, 0.0, 12)
 
 
-def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, monkeypatch):
+def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, monkeypatch, sans_regles):
     """29/09 : « le profil dérive de la fiche de base, avec des attributs qui changent »."""
     v = h3.video_h3
     _autoriser(h3)
@@ -2829,3 +2861,194 @@ console.log(JSON.stringify([texteDepart(p), texteDepart({image_paroles: p.image_
     assert "Léa" not in avec and "enters" not in avec
     # Sans tableau : le texte du plan, répliques retirées, comme avant.
     assert "enters" in sans and "Bonjour" not in sans
+
+
+# --- Les règles numérotées, côté Studio (30/09) -------------------------------------
+
+def _faux_chat(monkeypatch, h3, reponses: dict, vus: list):
+    """Le chat du Studio rend la réponse de `reponses[quoi]` (une liste se dépile)."""
+    async def chat(consigne, quoi="la traduction en anglais", images=None, modele="free-ai-auto"):
+        vus.append((quoi, consigne, modele, len(images or [])))
+        r = reponses[quoi]
+        return r.pop(0) if isinstance(r, list) else r
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+
+
+def test_l_histoire_passe_en_anglais_avant_tout_decoupage(h3, monkeypatch):
+    """Règle 0 : « the hard code is to do all the post processing from the user initial
+    prompt in english ». Répliques intactes, sinon deux essais puis refus."""
+    vus = []
+    _faux_chat(monkeypatch, h3, {"la traduction de l'histoire en anglais": [
+        "Lea says « Hello. »",                           # réplique traduite : refusée
+        "Lea puts the book on the table and says « Bonjour. »"]}, vus)
+    histoire = "Léa pose le livre sur la table et dit « Bonjour. »"
+    assert asyncio.run(h3._histoire_en_anglais(histoire)) == \
+        "Lea puts the book on the table and says « Bonjour. »"
+    assert len(vus) == 2 and "changé une réplique" in vus[1][1] and "copy it EXACTLY" in vus[0][1]
+    _faux_chat(monkeypatch, h3, {"la traduction de l'histoire en anglais": "Léa pose le livre sur la table « Bonjour. »"}, [])
+    with pytest.raises(h3.HTTPException) as e:
+        asyncio.run(h3._histoire_en_anglais(histoire))
+    assert e.value.status_code == 502 and "laissé du français" in e.value.detail
+
+
+def test_le_decoupage_part_de_l_histoire_en_anglais(h3, monkeypatch):
+    async def en_anglais(histoire):
+        return "Lea puts the red book down and says « Bonjour. »"
+    monkeypatch.setattr(h3, "_histoire_en_anglais", en_anglais)
+    vus = []
+    decoupe = json.dumps([{"image_paroles": "Lea puts the red book down and says « Bonjour. »", "ambiance": "",
+                           "enchainement": "coupe"}], ensure_ascii=False)
+    _faux_chat(monkeypatch, h3, {"le découpage en plans": decoupe,
+                                 "le contrôle de continuité": '{"etats": [], "problemes": []}'}, vus)
+    d = client(h3).post("/video-h3/scenario/decouper", headers=CLE,
+                        json={"scenario": "Léa pose le livre rouge et dit « Bonjour. »"}).json()
+    assert d["histoire_anglais"] == "Lea puts the red book down and says « Bonjour. »"
+    assert "Lea puts the red book down" in vus[0][1] and "pose le livre" not in vus[0][1]
+
+
+def _scenario_pret(h3, avec_voix: bool):
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    fid = v.fiche_creer("Léa", "femme de 35 ans")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    if avec_voix:
+        v.fiche_poser_voix(fid, WAV, 4.0, "exemple", "French")
+    return fid
+
+
+def _tourner_sans_louer(h3, monkeypatch):
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+
+    async def rien(*a, **k):
+        return []
+    monkeypatch.setattr(h3, "_scenario_tenues", rien)
+    monkeypatch.setattr(h3, "_scenario_traduire", rien)
+    fils = []
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    return fils
+
+
+def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch):
+    """L'audit du 30/09 : une remarque bloquante vue, puis tournée quand même (parc, plan 2)."""
+    fid = _scenario_pret(h3, avec_voix=True)
+    fils = _tourner_sans_louer(h3, monkeypatch)
+    probleme = {"ok": False, "problemes": [{"plan": 1, "quoi": "deux actions à la fois", "gravite": "bloquant"}]}
+
+    async def continuite(plans, histoire):
+        return probleme
+    monkeypatch.setattr(h3, "_continuite", continuite)
+    plans = [{"image_paroles": "Léa says « Bonjour. »", "ambiance": "", "enchainement": "coupe"}]
+    c = client(h3)
+    r = c.post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 409 and not fils
+    d = r.json()["detail"]
+    assert "plan 1, règle 2 : deux actions à la fois" in d["message"] and d["passe_droit"] is True
+    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9))
+    # « Tourner quand même » : parti, et le scénario garde le rapport et le passe-droit.
+    r = c.post("/video-h3/scenario/tourner", headers=CLE,
+               json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["force"] is True and r.json()["regles"][0]["regles"][2]["ok"] is False and len(fils) == 1
+    # La route de vérification dit la même chose, sans rien lancer.
+    r = c.post("/video-h3/scenario/verifier", headers=CLE, json={"plans": plans, "fiche": fid})
+    assert r.status_code == 200 and r.json()["non_suivies"] == [[1, 2, "deux actions à la fois"]]
+
+
+def test_la_voix_du_locuteur_n_a_pas_de_passe_droit(h3, monkeypatch):
+    """Décision du 30/09 : la voix de chaque locuteur, « to be hard coded in studio »."""
+    fid = _scenario_pret(h3, avec_voix=False)
+    fils = _tourner_sans_louer(h3, monkeypatch)
+
+    async def continuite(plans, histoire):
+        return {"ok": True, "problemes": []}
+    monkeypatch.setattr(h3, "_continuite", continuite)
+    plans = [{"image_paroles": "Léa says « Bonjour. »", "ambiance": "", "enchainement": "coupe"}]
+    for forcer in (False, True):
+        r = client(h3).post("/video-h3/scenario/tourner", headers=CLE,
+                            json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": forcer})
+        assert r.status_code == 409, r.text
+        assert "règle 4" in r.json()["detail"]["message"] and r.json()["detail"]["passe_droit"] is False
+    assert not fils
+    h3.video_h3.fiche_poser_voix(fid, WAV, 4.0, "exemple", "French")
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 200, r.text
+
+
+def test_l_image_de_depart_se_controle_une_fois(h3, monkeypatch):
+    """Règles 6 à 8 : compte des éléments et visage NOMMÉ de chaque personnage."""
+    v = h3.video_h3
+    fid = v.fiche_creer("Leila", "girl, 10")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    did = v.depart_poser(PNG)
+    plan = {"image_paroles": "Leila holds the kite.", "ambiance": "", "enchainement": "coupe", "image_depart": did,
+            "elements": [{"nom": "Leila", "debut": "foreground, centre", "mouvement": "none", "fin": "x"},
+                         {"nom": "Marc", "debut": "background, left", "mouvement": "none", "fin": "x"}]}
+    vus, compares = [], []
+    _faux_chat(monkeypatch, h3, {"le contrôle de l'image de départ":
+                                 '{"comptes": [1, 0], "texte_ajoute": false, "remarque": "Marc absent"}'}, vus)
+
+    async def comparer(image, f, ou=""):
+        compares.append((f, ou))
+        return {"ressemblance": "forte"}
+    monkeypatch.setattr(h3, "_comparer_visage", comparer)
+    fiches = h3._fiches_du_scenario({"fiche": fid})
+    r = asyncio.run(h3._regles_depart(plan, fiches))
+    assert r[6] == {"ok": False, "pourquoi": "Compté : Marc ×0."} and r[7]["ok"] is True and r[8]["ok"] is True
+    assert compares == [(fid, "foreground, centre")] and vus[0][2] == v.MODELE_JUGE
+    # Gardé à part des images (depart_lire prend le premier « <id>.* »), et relu sans modèle.
+    assert v.depart_lire(did) == base64.b64decode(PNG)
+    assert asyncio.run(h3._regles_depart(plan, fiches)) == r and len(vus) == 1 and len(compares) == 1
+
+
+def test_le_visage_compare_est_celui_de_la_fiche_nommee(h3, monkeypatch):
+    """Audit du 30/09 : sur une image à deux personnes, 8 comparaisons sur 9 recadraient l'autre."""
+    v = h3.video_h3
+    assert "main person" in v.consigne_visage()
+    c = v.consigne_visage("Marc (boy, 12, red cap)", "background, left")
+    assert "ONE person only: Marc (boy, 12, red cap), expected background, left" in c and "main person" not in c
+    fid = v.fiche_creer("Marc", "boy, 12, red cap")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    vus = []
+    _faux_chat(monkeypatch, h3, {"la recherche du visage": "{}",
+                                 "l'avis sur la ressemblance": '{"ressemblance": "forte", "ecarts": ""}'}, vus)
+    monkeypatch.setattr(h3.montage, "planche_visages", lambda images: b"png")
+    asyncio.run(h3._comparer_visage(base64.b64decode(PNG), fid, "background, left"))
+    assert "ONE person only: Marc (boy, 12, red cap), expected background, left" in vus[0][1]
+
+
+def test_une_suite_ne_part_pas_d_une_derniere_image_fausse(h3, monkeypatch):
+    """Parc, plan 2 : la fin du plan 1 n'avait pas Marc ; la suite l'a recréé autrement.
+    Avant chaque suite, la vraie dernière image est contrôlée comme une image de départ."""
+    v = h3.video_h3
+    fid = v.fiche_creer("Marc", "boy")["id"]
+    plans = [{"image_paroles": "a", "ambiance": "", "enchainement": "coupe", "elements": []},
+             {"image_paroles": "Marc waves.", "ambiance": "", "enchainement": "suite",
+              "elements": [{"nom": "Marc", "debut": "background, left", "mouvement": "waves", "fin": "x"}]}]
+    sc = v.scenario_ecrire({"id": "a" * 32, "etat": "en cours", "erreur": "", "plans": plans, "travaux": [],
+                            "fiche": fid, "fiches": [], "reglages": {"fiche": fid, "fiches": None}})
+    vus = []
+    _faux_chat(monkeypatch, h3, {"le contrôle de la dernière image": [
+        '{"comptes": [0], "texte_ajoute": false}', '{"comptes": [1], "texte_ajoute": false}', "illisible"]}, vus)
+    arret = h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG))
+    assert "la dernière image du plan 1 ne montre pas ce que ce plan attend (Compté : Marc ×0.)" in arret
+    assert h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG)) is None
+    assert h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG)) is None   # illisible : on tourne
+    notes = v.scenario_lire(sc["id"])["controles_suite"]
+    assert [n["regles"][0]["ok"] for n in notes] == [False, True, None] and notes[2]["erreur"]
+    # « Tourner quand même » : noté, pas arrêté.
+    v.scenario_noter(sc["id"], force=True)
+    _faux_chat(monkeypatch, h3, {"le contrôle de la dernière image": '{"comptes": [2], "texte_ajoute": false}'}, [])
+    assert h3._controle_derniere_image(sc["id"], 1, base64.b64decode(PNG)) is None
+
+
+def test_le_juge_rend_les_regles_9_a_12_du_plan_tourne(h3, monkeypatch):
+    monkeypatch.setattr(h3.montage, "planche", lambda film, debut, duree: (b"png", 4))
+    vus = []
+    _faux_chat(monkeypatch, h3, {"le contrôle des règles du plan":
+                                 '{"regles": [{"n": 10, "ok": false, "pourquoi": "deux Marc"}, '
+                                 '{"n": 11, "ok": true}, {"n": 12, "ok": true}]}'}, vus)
+    r = asyncio.run(h3._regles_clip(b"film", 0.0, 5.0, ["Marc"], ["data:image/png;base64,AA"],
+                                    {"elements": [{"nom": "Marc", "fin": "clapping"}]}))
+    assert r[10] == {"ok": False, "pourquoi": "deux Marc"} and r[11]["ok"] is True
+    assert vus[0][3] == 2 and "Marc: clapping." in vus[0][1]

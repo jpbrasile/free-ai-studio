@@ -46,6 +46,8 @@ import format_fr
 # Le bouton « 🏠 Studio » pose sur chaque page (voir PAGES_HTML).
 import accueil
 import garde_exposition
+# Les règles numérotées du Studio vidéo et leur contrôle (30/09).
+import regles
 # Que faire d'un travail qu'un redemarrage a laisse sans personne
 # derriere lui. Le raisonnement y est pur : il se teste sans reseau.
 import reprise
@@ -4557,6 +4559,7 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
         raise HTTPException(400, "Écrivez d'abord le scénario.")
     if len(scenario) > video_h3.SCENARIO_MAX:
         raise HTTPException(400, "Scénario trop long (2 000 caractères au plus).")
+    scenario = await _histoire_en_anglais(scenario)
     reponse = await _chat_du_studio(video_h3.consigne_decoupage(scenario), "le découpage en plans")
     try:
         plans = video_h3.lire_decoupage(reponse, scenario)
@@ -4571,7 +4574,23 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
     if relecture.get("corrige") and continuite.get("ok") is False:
         plans, continuite, second = await _relire_et_corriger(plans, continuite, scenario)
         relecture["second_tour"] = second
-    return {"plans": plans, "continuite": continuite, "relecture": relecture}
+    return {"plans": plans, "continuite": continuite, "relecture": relecture, "histoire_anglais": scenario}
+
+
+async def _histoire_en_anglais(histoire: str) -> str:
+    """Règle 0 : l'histoire de l'utilisateur en anglais, avant tout découpage (30/09).
+    Toujours traduite (une histoire courte n'a pas trois mots-outils à reconnaître) ;
+    déjà en anglais, elle revient la même. Deux essais, puis refus (502)."""
+    consigne = video_h3.consigne_histoire_anglais(histoire)
+    for essai in (1, 2):
+        try:
+            return video_h3.lire_histoire_anglais(await _chat_du_studio(
+                consigne, "la traduction de l'histoire en anglais"), histoire)
+        except ValueError as exc:
+            if essai == 2:
+                raise HTTPException(502, str(exc)) from exc
+            consigne += ("\n\nYour previous answer could not be used (%s) Translate again, every word outside "
+                         "the quoted dialogue in English, the dialogue copied exactly." % exc)
 
 
 async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> tuple:
@@ -4710,6 +4729,116 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
     return commun, musique, a_tourner
 
 
+# --- Les règles numérotées, vérifiées avant le premier sou (30/09) -----------------
+# Demande du propriétaire après l'audit des deux films : « add a reviewer that say for
+# each clip that rule n° 1 to xx are followed ». Les règles et leurs contrôles sont dans
+# regles.py ; ici, ce qui appelle le modèle qui voit, et la garde du tournage.
+# La règle 4 (la voix de chaque locuteur) est « hard coded » : même « tourner quand
+# même » ne la passe pas.
+REGLES_SANS_PASSE_DROIT = (4,)
+
+
+def _fiches_du_scenario(commun: dict) -> list:
+    fiches = []
+    for fid in commun.get("fiches") or ([commun["fiche"]] if commun.get("fiche") else []):
+        try:
+            f = video_h3.fiche_lire(fid)
+        except ValueError:
+            continue
+        fiches.append({"id": f["id"], "nom": f["nom"], "description": f["description"],
+                       "genre": f.get("genre") or "personne", "voix": f.get("voix")})
+    return fiches
+
+
+async def _regles_depart(plan: dict, fiches: list) -> dict:
+    """Règles 6 à 8 d'un plan parti de son image : compte des éléments, texte ajouté,
+    visage de chaque personnage présent. Gardé par image et par attendus : un second
+    contrôle de la même image ne rappelle pas le modèle."""
+    attendus = regles.attendus_du_depart(plan, [(f["nom"], f["description"], f["genre"]) for f in fiches])
+    personnes = [(f, a) for a in attendus if a["personne"] for f in fiches
+                 if regles._cle(f["nom"]) == regles._cle(a["nom"])]
+    empreinte = hashlib.sha256(json.dumps([plan["image_depart"], attendus, [f["id"] for f, _ in personnes]],
+                                          ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
+    # Pas dans DOSSIER_DEPARTS même : depart_lire y prend le premier « <id>.* ».
+    cache = video_h3.DOSSIER_DEPARTS / "regles" / f"{plan['image_depart']}-{empreinte}.json"
+    try:
+        return {int(n): v for n, v in json.loads(cache.read_text(encoding="utf-8")).items()}
+    except (OSError, ValueError):
+        pass
+    image = video_h3.depart_lire(plan["image_depart"])
+    presence = None
+    if attendus:
+        try:
+            presence = regles.lire_presence(await _chat_du_studio(
+                regles.consigne_presence(attendus), "le contrôle de l'image de départ",
+                images=[_data_url(image)], modele=video_h3.MODELE_JUGE), len(attendus))
+        except (ValueError, HTTPException):
+            presence = None
+    ressemblances = {}
+    for f, a in personnes:
+        try:
+            avis = await _comparer_visage(image, f["id"], a["ou"])
+            ressemblances[f["nom"]] = avis.get("ressemblance")
+        except HTTPException:
+            ressemblances[f["nom"]] = None
+    r = regles.regles_depart(attendus, presence, ressemblances)
+    if all(v["ok"] is not None for v in r.values()):   # un contrôle illisible se refait
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
+    return r
+
+
+async def _verifier_scenario(plans: list, commun: dict, continuite=None) -> list:
+    """Le rapport des règles 0 à 8, plan par plan : [{plan, regles: [{n, regle, ok, pourquoi}]}].
+    Gratuit (chat du Studio et modèle qui voit)."""
+    fiches = _fiches_du_scenario(commun)
+    if continuite is None:
+        continuite = await _continuite(plans, _histoire(plans))
+    texte = regles.regles_texte(plans, continuite, fiches, commun.get("langues") or {},
+                                commun.get("langue") or video_h3.LANGUE_PAROLES)
+    rapport = []
+    for k, (plan, r) in enumerate(zip(plans, texte), 1):
+        if plan.get("enchainement") == "coupe" and plan.get("image_depart"):
+            try:
+                r.update(await _regles_depart(plan, fiches))
+            except ValueError as exc:
+                r.update({n: regles.resultat(None, str(exc)) for n in regles.NUMEROS["depart"]})
+        else:
+            r.update(regles.sans_depart(plan))
+        rapport.append({"plan": k, "regles": regles.en_liste(r)})
+    return rapport
+
+
+@app.post("/video-h3/scenario/verifier")
+async def video_h3_scenario_verifier(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Les règles 0 à 8 sur les plans, avant tout tournage ; rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    corps = corps if isinstance(corps, dict) else {}
+    try:
+        plans = video_h3.verifier_plans(corps.get("plans"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    rapport = await _verifier_scenario(plans, {k: corps.get(k) for k in REGLAGES_SCENARIO})
+    return {"rapport": rapport, "non_suivies": regles.non_suivies(rapport, regles.AVANT_TOURNAGE)}
+
+
+async def _garde_des_regles(plans: list, commun: dict, forcer: bool, tournes=None) -> list:
+    """Refuse le tournage (409) si une règle d'avant tournage n'est pas suivie, sauf
+    « tourner quand même » ; la règle de la voix n'a jamais de passe-droit.
+    `tournes` : les numéros des plans vraiment tournés (un rejeu reprend les autres)."""
+    rapport = await _verifier_scenario(plans, commun)
+    fautes = [f for f in regles.non_suivies(rapport, regles.AVANT_TOURNAGE) if tournes is None or f[0] in tournes]
+    bloquent = [f for f in fautes if f[1] in REGLES_SANS_PASSE_DROIT] if forcer else fautes
+    if bloquent:
+        raise HTTPException(409, {"message": "Règles non suivies : "
+                                  + " ; ".join("plan %d, règle %d : %s" % f for f in bloquent),
+                                  "regles": rapport, "passe_droit": not any(
+                                      f[1] in REGLES_SANS_PASSE_DROIT for f in bloquent)})
+    return rapport
+
+
 async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
     """Une tenue que les plans donnent à un personnage, autre que celle de sa fiche :
     une photo en pied dans cette tenue (image du Studio, gratuite) rejoint ses photos
@@ -4839,12 +4968,16 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     _h3_peut_louer()
+    # Les règles 0 à 8 AVANT le premier sou (30/09) : l'audit a montré des remarques
+    # bloquantes vues, puis tournées quand même.
+    forcer = corps.get("forcer") is True
+    rapport = await _garde_des_regles(plans, commun, forcer)
     try:
         tenues = await _scenario_tenues(commun, plans, a_tourner)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
-    return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues)
+    return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer)
 
 
 def _fins_images(sc: dict) -> list:
@@ -4902,8 +5035,24 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
         if morceau is not None:
             verdict["paroles"] = await _ecouter(morceau, texte)
             _ajouter_defaut_de_paroles(verdict, debut)
+        # Les règles 9 à 12, numérotées (30/09 : « for each clip that rule n° 1 to xx are followed »).
+        r = {9: regles.regle_paroles(verdict.get("paroles"))}
+        r.update(await _regles_clip(film, debut, fins[k] / ips - debut, fiches, refs, initiaux[k]))
+        verdict["regles"] = regles.en_liste(r)
         jugement.append(dict(verdict, plan=k + 1))
     return video_h3.scenario_noter(sid, jugement=jugement)
+
+
+async def _regles_clip(film: bytes, debut: float, duree: float, noms: list, refs: list, plan: dict) -> dict:
+    """Règles 10 à 12 sur la planche du plan seul (sans la seconde du plan d'avant)."""
+    try:
+        png, _ = await asyncio.to_thread(montage.planche, film, debut, duree)
+        return regles.lire_regles_clip(await _chat_du_studio(
+            regles.consigne_regles_clip(noms, plan), "le contrôle des règles du plan",
+            images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
+            modele=video_h3.MODELE_JUGE))
+    except (montage.MontageImpossible, HTTPException) as exc:
+        return {n: regles.resultat(None, str(getattr(exc, "detail", exc))) for n in (10, 11, 12)}
 
 
 def _photos_des_fiches(ids) -> tuple:
@@ -5149,13 +5298,47 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
         if i not in repris:
             p["payload"]["graine"] = None   # une nouvelle prise, pas la même
     _h3_peut_louer()
+    forcer = corps.get("forcer") is True
+    rapport = await _garde_des_regles(plans, commun, forcer,
+                                      tournes={i + 1 for i in range(len(plans)) if i not in repris})
     try:
         tenues = await _scenario_tenues(commun, plans, [p for p in a_tourner if "reprise" not in p])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, tenues=tenues, repris=[i + 1 for i in repris],
+                            regles=rapport, force=forcer,
                             plans_initiaux=parent.get("plans_initiaux") or parent["plans"])
+
+
+def _controle_derniere_image(sid: str, i: int, image: bytes):
+    """Avant un plan « suite » : la dernière image VRAIE du plan d'avant est son image de
+    départ ; la règle 6 s'y vérifie comme sur une image de départ (gratuit). Audit du
+    30/09, parc : Marc manquait sur la fin du plan 1, la suite l'a recréé en adolescent
+    dans la tenue de Leila. Rend la phrase de l'arrêt, ou None (tout va, illisible, ou
+    « tourner quand même »)."""
+    sc = video_h3.scenario_lire(sid)
+    plan = sc["plans"][i]
+    fiches = _fiches_du_scenario(sc.get("reglages") or {"fiche": sc.get("fiche"), "fiches": sc.get("fiches")})
+    attendus = regles.attendus_du_depart(plan, [(f["nom"], f["description"], f["genre"]) for f in fiches])
+    if not attendus:
+        return None
+    try:
+        presence = regles.lire_presence(asyncio.run(_chat_du_studio(
+            regles.consigne_presence(attendus), "le contrôle de la dernière image", images=[_data_url(image)],
+            modele=video_h3.MODELE_JUGE)), len(attendus))
+    except (ValueError, HTTPException) as exc:
+        presence, erreur = None, str(getattr(exc, "detail", exc))
+    else:
+        erreur = ""
+    r = regles.regles_depart(attendus, presence, {})
+    note = {"plan": i + 1, "regles": regles.en_liste({6: r[6], 8: r[8]}), "erreur": erreur}
+    video_h3.scenario_noter(sid, controles_suite=(sc.get("controles_suite") or []) + [note])
+    if r[6]["ok"] is False and not sc.get("force"):
+        return ("la dernière image du plan %d ne montre pas ce que ce plan attend (%s) : le tourner recréerait "
+                "ce qui manque ou doublerait ce qui est en trop. Retournez le plan %d, ou relancez avec "
+                "« tourner quand même »." % (i, r[6]["pourquoi"], i))
+    return None
 
 
 def run_scenario_h3(sid: str, a_tourner: list):
@@ -5193,7 +5376,11 @@ def run_scenario_h3(sid: str, a_tourner: list):
                     chemin = _video_h3_octets(precedent)
                     if not chemin:
                         raise ValueError("la vidéo du plan précédent est introuvable.")
-                    derniere = base64.b64encode(montage.derniere_image(chemin.read_bytes())).decode()
+                    fin_vue = montage.derniere_image(chemin.read_bytes())
+                    arret = _controle_derniere_image(sid, i, fin_vue)
+                    if arret:
+                        raise ValueError(arret)
+                    derniere = base64.b64encode(fin_vue).decode()
                     plan = video_h3.preparer_prolonger(p["payload"], read_job(precedent), derniere)
                     retirer = 1 if plan["resume_public"]["voie"] == "image" else 0
                 else:
@@ -5405,6 +5592,10 @@ async def video_h3_fiche_voix(fid: str, request: Request, authorization: Optiona
         if corps.get("droit") is not True:
             raise HTTPException(400, "Cochez « j'ai le droit d'utiliser cette voix » : la vôtre, "
                                      "ou celle d'une personne d'accord.")
+        # La langue de l'exemple est dite par la page (règle 4, 30/09).
+        langue = corps.get("langue")
+        if langue not in video_h3.LANGUES_PAROLES:
+            raise HTTPException(400, "Dites dans quelle langue parle cet exemple de voix.")
         try:
             son = base64.b64decode(str(corps.get("son") or "").split(",", 1)[-1], validate=False)
         except ValueError as exc:
@@ -5416,7 +5607,7 @@ async def video_h3_fiche_voix(fid: str, request: Request, authorization: Optiona
         wav, duree = await asyncio.to_thread(montage.voix_de_reference, son, video_h3.VOIX_MAX_S)
     except montage.MontageImpossible as exc:
         raise HTTPException(400, str(exc)) from exc
-    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_poser_voix(fid, wav, duree, source)))
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_poser_voix(fid, wav, duree, source, langue)))
 
 
 @app.delete("/video-h3/fiches/{fid}/voix")
@@ -5475,9 +5666,10 @@ def _data_url(octets: bytes) -> str:
     return "data:%s;base64,%s" % (type_mime, base64.b64encode(octets).decode())
 
 
-async def _gros_plan_visage(octets: bytes):
-    """Le gros plan du visage principal (PNG) ; None si le modèle qui voit n'en trouve pas."""
-    reponse = await _chat_du_studio(video_h3.consigne_visage(), "la recherche du visage",
+async def _gros_plan_visage(octets: bytes, qui: str = "", ou: str = ""):
+    """Le gros plan du visage de `qui` (sinon du visage principal), en PNG ; None si le
+    modèle qui voit n'en trouve pas."""
+    reponse = await _chat_du_studio(video_h3.consigne_visage(qui, ou), "la recherche du visage",
                                     images=[_data_url(octets)])
     visage = video_h3.lire_visage(reponse)
     if visage is None:
@@ -5520,11 +5712,13 @@ async def video_h3_visage_comparer(request: Request, authorization: Optional[str
     return await _comparer_visage(image, str(corps.get("fiche") or ""))
 
 
-async def _comparer_visage(depart: bytes, fid: str) -> dict:
+async def _comparer_visage(depart: bytes, fid: str, ou: str = "") -> dict:
     references = [base64.b64decode(b) for b in _fiche_ou_400(lambda: video_h3.fiche_images(fid))]
     if not references:
         raise HTTPException(400, "La fiche n'a encore aucune photo à comparer.")
-    visage = await _gros_plan_visage(depart) or depart
+    # Le visage de CETTE fiche, nommé et décrit (audit du 30/09, réparation 3).
+    fiche = video_h3.fiche_lire(fid)
+    visage = await _gros_plan_visage(depart, "%s (%s)" % (fiche["nom"], fiche["description"]), ou) or depart
     try:
         planche = await asyncio.to_thread(montage.planche_visages, references + [visage])
     except montage.MontageImpossible as exc:
