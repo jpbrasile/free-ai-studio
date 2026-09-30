@@ -2257,6 +2257,56 @@ def lire_correction(reponse: str, plans: list) -> list:
             for n, p in zip(nouveaux, plans)]
 
 
+# --- Un plan à plusieurs répliques, coupé en plans d'une réplique (30/09) ----------
+# Film campus : le découpage a mis deux répliques (Leila, puis Tyler) dans le plan
+# 5 malgré sa consigne ; la règle 2 l'a bloqué avant la location, et c'est à la main
+# qu'il a été coupé en 5 et 6. Décision du propriétaire : « la découpe doit être
+# hard codée (et proposée) dans le studio dans ce cas ». Le code trouve ces plans ;
+# le chat les coupe (gratuit) ; la découpe est gardée seulement si chaque morceau
+# a une seule réplique, toutes dans l'ordre et mot pour mot.
+
+def plans_a_scinder(plans: list) -> list:
+    """Les numéros (0…) des plans qui ont plus d'une réplique."""
+    return [i for i, p in enumerate(plans)
+            if len(repliques(p["image_paroles"] + " " + p.get("ambiance", ""))) > 1]
+
+
+def consigne_scission(plan: dict) -> str:
+    n = len(repliques(plan["image_paroles"] + " " + plan.get("ambiance", "")))
+    return ("This shot of a short film has %d lines of dialogue; the video model renders one line per shot "
+            "clearly, and two make the sound confused. Split it into exactly %d consecutive shots, one line each, "
+            "in the same order. The first shot keeps the place and framing of the original; each following "
+            "shot continues the previous one without a cut, from the same camera. Each shot's text says where "
+            "each key element is, with the same words as the original, then the action around its line, then "
+            "the line copied EXACTLY between « », its mark in square brackets included; a character who does not "
+            "speak in that shot only reacts, silently. Never add, change or move dialogue, never invent an "
+            "action the original does not have. " % (n, n)
+            + TABLEAU + "For each shot give \"elements\", \"image_paroles\" and \"ambiance\" (the original "
+            "sounds). Answer with the JSON array only.\n\nShot: %s" % json.dumps(plan, ensure_ascii=False))
+
+
+def lire_scission(reponse: str, plan: dict) -> list:
+    """La découpe du chat, contrôlée : une réplique par morceau, toutes, dans l'ordre."""
+    texte = plan["image_paroles"] + " " + plan.get("ambiance", "")
+    attendues = repliques(texte)
+    morceaux = lire_decoupage(reponse, texte)
+    if len(morceaux) != len(attendues):
+        raise ValueError("La découpe n'a pas rendu un plan par réplique.")
+    for k, m in enumerate(morceaux):
+        dites = repliques(m["image_paroles"] + " " + m["ambiance"])
+        if len(dites) != 1 or _norme_replique(dites[0]) != _norme_replique(attendues[k]):
+            raise ValueError("La découpe a déplacé ou perdu une réplique (morceau %d)." % (k + 1))
+    premier = dict(morceaux[0], enchainement=plan["enchainement"],
+                   **{c: plan[c] for c in ("image_depart", "description_depart") if c in plan})
+    return [premier] + [dict(m, enchainement="suite") for m in morceaux[1:]]
+
+
+def scinder(plans: list, i: int, morceaux: list) -> list:
+    """Les plans, le plan i remplacé par ses morceaux ; ValueError si les limites ne tiennent pas
+    (SCENARIO_PLANS_MAX, PLANS_MAX d'affilée sans coupe)."""
+    return verifier_plans(plans[:i] + morceaux + plans[i + 1:])
+
+
 def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:
     """Les numéros (0…) des plans repris tels quels au lieu d'être retournés :
     inchangés, non demandés, et, pour une « suite », après un plan repris
@@ -3283,6 +3333,7 @@ PAGE_HTML = r"""<!doctype html>
     <div id="plans_liste"></div>
     <button id="plan_ajouter" hidden>Ajouter un plan</button>
     <p class="note" id="scenario_prix"></p>
+    <button id="scenario_scinder" hidden>Couper les plans à plusieurs répliques, une par plan (gratuit)</button>
     <button id="scenario_verifier" hidden>Vérifier les règles (gratuit)</button>
     <button id="scenario_tourner" hidden>Tourner le scénario</button>
     <button id="scenario_forcer" hidden>Tourner quand même</button>
@@ -4727,6 +4778,9 @@ function dessinerPlans(){
   // Un scénario repris se rejoue (plans changés seulement), il ne se retourne pas en entier.
   document.getElementById("scenario_tourner").hidden = !PLANS.length || !!SCENARIO_TOURNE;
   document.getElementById("scenario_verifier").hidden = !PLANS.length || !!SCENARIO_TOURNE;
+  // Un plan à plusieurs répliques (30/09) : le Studio propose de le couper.
+  document.getElementById("scenario_scinder").hidden = !PLANS.some(p =>
+    ((p.image_paroles || "") + " " + (p.ambiance || "")).split("«").length > 2);
   document.getElementById("scenario_forcer").hidden = true;
   const opt = document.getElementById("longueur").selectedOptions[0];
   const prix = opt && ETAT ? (ETAT.durees.find(x => String(x.images) === opt.value) || {}).prix_estime_usd : null;
@@ -4763,9 +4817,26 @@ document.getElementById("scenario_decouper").addEventListener("click", async () 
   // Les marques [langue, émotion] posées par le chat (30/09) : un échec est dit.
   const mq = d.marques && d.marques.erreur
     ? " Langue et émotion des répliques non posées (" + d.marques.erreur + ") : ajoutez-les à la main." : "";
+  const sc = (d.scissions || []).length ? " Découpe : " + texteScissions(d.scissions) + "." : "";
+  const scMal = (d.scissions || []).some(n => !n.en);
   if (d.continuite && d.continuite.ok === false)
-    scenarioEtat(vu + vu2 + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite) + "." + det + mq, true);
-  else scenarioEtat(vu + vu2 + "Relisez les plans, puis tournez." + det + mq, !!mq);
+    scenarioEtat(vu + vu2 + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite) + "." + det + mq + sc, true);
+  else scenarioEtat(vu + vu2 + "Relisez les plans, puis tournez." + det + mq + sc, !!mq || scMal);
+});
+
+function texteScissions(s){
+  return (s || []).map(n => "plan " + n.plan + (n.en ? " coupé en " + n.en + " (une réplique par plan)"
+    : " garde ses répliques (" + n.erreur + ")")).join(" ; ");
+}
+
+document.getElementById("scenario_scinder").addEventListener("click", async () => {
+  scenarioEtat("Le chat du Studio coupe les plans à plusieurs répliques…");
+  const r = await fetch("/video-h3/scenario/scinder", {method: "POST", headers: H, body: JSON.stringify({plans: PLANS})});
+  const d = await r.json();
+  if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
+  PLANS = d.plans;
+  dessinerPlans();
+  scenarioEtat(texteScissions(d.scissions) + ". Relisez les plans, puis tournez.", d.scissions.some(n => !n.en));
 });
 
 function texteContinuite(c){

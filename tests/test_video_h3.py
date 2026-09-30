@@ -3054,6 +3054,37 @@ def test_le_decoupage_part_de_l_histoire_en_anglais(h3, monkeypatch):
     assert "Lea puts the red book down" in vus[0][1] and "pose le livre" not in vus[0][1]
 
 
+def test_un_plan_a_deux_repliques_est_coupe_en_deux(h3, monkeypatch):
+    """Film campus, 30/09 : deux répliques au plan 5, bloqué par la règle 2 et coupé à la
+    main. « la découpe doit être hard codée (et proposée) dans le studio dans ce cas »."""
+    v = h3.video_h3
+    plans = v.verifier_plans([
+        {"image_paroles": "Lea stands at the left.", "ambiance": ""},
+        {"image_paroles": "Lea yells « [English, joy] I made the team! » Tom replies « [French] C'est génial ! »",
+         "ambiance": "Campus", "enchainement": "coupe"}])
+    assert v.plans_a_scinder(plans) == [1]
+    bonne = json.dumps([{"image_paroles": "Lea yells « [English, joy] I made the team! » Tom smiles.", "ambiance": "Campus"},
+                        {"image_paroles": "Tom replies « [French] C'est génial ! »", "ambiance": "Campus"}],
+                       ensure_ascii=False)
+    perdue = json.dumps([{"image_paroles": "Lea yells « [English, joy] I made the team! »", "ambiance": ""},
+                         {"image_paroles": "Tom smiles.", "ambiance": ""}], ensure_ascii=False)
+    vus = []
+    _faux_chat(monkeypatch, h3, {"la découpe d'un plan à deux répliques": [perdue, bonne]}, vus)
+    d = client(h3).post("/video-h3/scenario/scinder", headers=CLE, json={"plans": plans}).json()
+    assert d["scissions"] == [{"plan": 2, "en": 2}]
+    assert [p["enchainement"] for p in d["plans"]] == ["coupe", "coupe", "suite"]
+    assert [len(v.repliques(p["image_paroles"])) for p in d["plans"]] == [0, 1, 1]
+    assert "exactly 2 consecutive shots" in vus[0][1] and "could not be used" in vus[1][1]
+    # Au-delà des 5 plans d'un scénario : la découpe n'est pas posée, et c'est dit.
+    cinq = v.verifier_plans([dict(plans[0]) for _ in range(4)] + [plans[1]])
+    _faux_chat(monkeypatch, h3, {"la découpe d'un plan à deux répliques": [bonne]}, vus)
+    d = client(h3).post("/video-h3/scenario/scinder", headers=CLE, json={"plans": cinq}).json()
+    assert len(d["plans"]) == 5 and "au plus" in d["scissions"][0]["erreur"] and "en" not in d["scissions"][0]
+    # Le bouton de la page ne se montre que devant un plan à plusieurs répliques.
+    page = v.PAGE_HTML
+    assert 'id="scenario_scinder" hidden' in page and '"/video-h3/scenario/scinder"' in page
+
+
 def _scenario_pret(h3, avec_voix: bool):
     v = h3.video_h3
     _autoriser(h3)

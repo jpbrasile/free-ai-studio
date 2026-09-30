@@ -4746,8 +4746,51 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
         plans, continuite, second = await _relire_et_corriger(plans, continuite, scenario)
         relecture["second_tour"] = second
     plans, marques = await _marquer_repliques(plans)
+    plans, scissions = await _scinder_repliques(plans)
     return {"plans": plans, "continuite": continuite, "relecture": relecture, "histoire_anglais": scenario,
-            "marques": marques}
+            "marques": marques, "scissions": scissions}
+
+
+async def _scinder_repliques(plans: list) -> tuple:
+    """Chaque plan à plusieurs répliques coupé en plans d'une réplique (30/09, film
+    campus ; « la découpe doit être hard codée (et proposée) dans le studio »). Une
+    découpe illisible, ou qui dépasserait les limites du scénario, n'est pas posée :
+    elle est dite, avec sa raison, et le plan reste tel quel."""
+    notes = []
+    for i in reversed(video_h3.plans_a_scinder(plans)):
+        note = {"plan": i + 1}
+        consigne = video_h3.consigne_scission(plans[i])
+        for essai in (1, 2):
+            try:
+                morceaux = video_h3.lire_scission(await _chat_du_studio(consigne, "la découpe d'un plan à deux répliques"),
+                                                  plans[i])
+                plans = video_h3.scinder(plans, i, morceaux)
+                note.pop("erreur", None)
+                note["en"] = len(morceaux)
+                break
+            except HTTPException as exc:
+                note["erreur"] = str(exc.detail)
+                break
+            except ValueError as exc:
+                note["erreur"] = str(exc)
+                if "au plus" in str(exc):   # une limite du scénario : redemander n'y change rien
+                    break
+                consigne += "\n\nYour previous answer could not be used (%s). Try again." % exc
+        notes.append(note)
+    return plans, sorted(notes, key=lambda n: n["plan"])
+
+
+@app.post("/video-h3/scenario/scinder")
+async def video_h3_scenario_scinder(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Les plans relus (ou un ancien scénario) : ceux à plusieurs répliques sont coupés ; rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        plans = video_h3.verifier_plans((await request.json()).get("plans"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    plans, scissions = await _scinder_repliques(plans)
+    return {"plans": plans, "scissions": scissions}
 
 
 async def _marquer_repliques(plans: list) -> tuple:
