@@ -4302,11 +4302,35 @@ def _clips_h3() -> list:
     return clips
 
 
+def _films_hd() -> list:
+    """Les films et clips agrandis (4K, 1080p) réussis, du plus récent au plus ancien. Ils
+    n'entrent pas dans un montage de clips 480p, mais la page doit les retrouver : le
+    30/09/2026, le film campus finalisé en 4K n'était plus visible nulle part dans le
+    Studio une fois le bloc « Finaliser » refermé (« 4k dans studio »). Les morceaux d'une
+    finalisation (champ `passages`) ne sont pas des films : seul le film recollé l'est."""
+    films = []
+    for p in sorted(JOBS.glob("*/job.json"), key=_date_de_fiche, reverse=True):
+        try:
+            job = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        v = job.get("video") if isinstance(job, dict) else None
+        if not isinstance(v, dict) or v.get("moteur") != "SeedVR2 (agrandissement)" or v.get("passages"):
+            continue
+        if job.get("status") != "succeeded" or not _video_h3_octets(job.get("id", "")):
+            continue
+        films.append({"id": job["id"], "titre": job.get("titre") or "", "echelle": v.get("echelle", ""),
+                      "secondes": v.get("secondes"), "cree_a": job.get("created_at"),
+                      "video_url": f"/video/jobs/{job['id']}/fichier?cle={jeton_video(job['id'])}"})
+    return films
+
+
 @app.get("/video-h3/clips")
 def video_h3_clips(authorization: Optional[str] = Header(default=None)):
     _h3_ou_404()
     auth(authorization)
-    return {"clips": _clips_h3(), "clips_max": video_h3.MONTAGE_CLIPS_MAX, "chansons": _chansons_pretes()}
+    return {"clips": _clips_h3(), "clips_max": video_h3.MONTAGE_CLIPS_MAX, "chansons": _chansons_pretes(),
+            "films_hd": _films_hd()}
 
 
 # --- Agrandir un clip ou un film H3, visages compris (SeedVR2, agrandir.py) --------

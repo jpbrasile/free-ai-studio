@@ -123,7 +123,8 @@ def test_la_page_se_parcourt_par_un_menu(h3):
     assert "if (SCENARIO_TOURNE === d.id) await actionJuger();" in page
     # Aucun lecteur dans une partie repliée : le 29/09, le film tourné y était caché.
     replies = "".join(re.findall(r"<details.*?</details>", page, re.S))
-    assert page.count("<video") == 3 and "<video" not in replies
+    # Le 4e : celui des films en haute définition (30/09, « 4k dans studio »).
+    assert page.count("<video") == 4 and "<video" not in replies
     # Les réglages rares sont repliés, pas retirés.
     for i in ("definition", "coupe", "graine", "ambiance", "musique_fondu", "clips_liste"):
         assert 'id="%s"' % i in page, i
@@ -3902,6 +3903,9 @@ def test_finaliser_fait_les_visages_puis_la_4k_en_une_location_chacun(h3, monkey
     assert h3.read_job(f["film_visages"])["video"]["moteur"] == "MiniMax H3 (montage)"
     # Le film final est en 4K : il n'entre pas dans un montage de clips 480p.
     assert h3.read_job(f["film"])["video"]["moteur"] == "SeedVR2 (agrandissement)"
+    # La page le retrouve (« 4k dans studio ») ; les morceaux de l'agrandissement, non.
+    hd = client(h3).get("/video-h3/clips", headers=CLE).json()["films_hd"]
+    assert [x["id"] for x in hd] == [f["film"]] and hd[0]["echelle"] == "4k" and "cle=" in hd[0]["video_url"]
     assert not job["video"]["moteur"].startswith("MiniMax H3")
     assert job["video"]["devis"]["pire_usd"] > job["video"]["devis"]["estime_usd"] > 0
 

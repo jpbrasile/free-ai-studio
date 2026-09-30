@@ -3391,6 +3391,12 @@ PAGE_HTML = r"""<!doctype html>
     <button id="montage_lancer">Assembler le film</button>
     <p class="note" id="montage_etat"></p>
   </details>
+  <div id="films_hd_bloc" hidden>
+    <b>Films en haute définition</b>
+    <span class="note">les films finalisés et les clips agrandis (4K, 1080p) de ce Studio.</span>
+    <div id="films_hd_liste"></div>
+    <video id="films_hd_lecteur" controls hidden style="width:100%"></video>
+  </div>
 </div>
 
 <div class="bloc section" id="musique_bloc">
@@ -4614,6 +4620,7 @@ async function chargerClips(){
     .concat(avant.map(id => d.clips.find(c => c.id === id)).filter(Boolean));
   COCHES = new Set([...COCHES].filter(id => CLIPS.some(c => c.id === id)));
   dessinerClips();
+  dessinerFilmsHd(d.films_hd || []);
   for (const [idSel, vide] of [["scenario_chanson", "Aucune (musique décrite au clip)"], ["musique_chanson", ""]]){
     const sc = document.getElementById(idSel);
     const gardeSc = sc.value;
@@ -4658,6 +4665,31 @@ document.getElementById("musique_poser").addEventListener("click", async () => {
   document.getElementById("musique_telecharger").href = lien.video_url + "&telecharger=1&nom=film-h3";
   chargerClips();
 });
+
+function dessinerFilmsHd(films){
+  document.getElementById("films_hd_bloc").hidden = !films.length;
+  const liste = document.getElementById("films_hd_liste");
+  liste.innerHTML = "";
+  for (const f of films){
+    const ligne = document.createElement("div");
+    const texte = document.createElement("span");
+    texte.textContent = quandLocal(f.cree_a) + " · " + (f.echelle || "").toUpperCase() + " · "
+      + fr(f.secondes || 0, 1) + " s · " + (f.titre || "").slice(0, 80) + " ";
+    const voir = document.createElement("button");
+    voir.textContent = "Voir";
+    voir.addEventListener("click", () => {
+      const l = document.getElementById("films_hd_lecteur");
+      l.hidden = false;
+      l.src = f.video_url;
+      l.play();
+    });
+    const tele = document.createElement("a");
+    tele.textContent = "Télécharger";
+    tele.href = f.video_url + "&telecharger=1&nom=film-" + (f.echelle || "hd");
+    ligne.append(texte, voir, " ", tele);
+    liste.appendChild(ligne);
+  }
+}
 
 function dessinerClips(){
   const liste = document.getElementById("clips_liste");
