@@ -3983,6 +3983,7 @@ def video_h3_etat(authorization: Optional[str] = Header(default=None)):
         "poids": video_h3.poids_etat(),
         "modal_configure": modal_configured(),
         "prolonger": {"par_troncon": video_h3.motion_context_actif(), "plans_max": video_h3.PLANS_MAX},
+        "scenario": {"plans_max": video_h3.SCENARIO_PLANS_MAX},
     }
 
 
@@ -4736,7 +4737,25 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
     if relecture.get("corrige") and continuite.get("ok") is False:
         plans, continuite, second = await _relire_et_corriger(plans, continuite, scenario)
         relecture["second_tour"] = second
-    return {"plans": plans, "continuite": continuite, "relecture": relecture, "histoire_anglais": scenario}
+    plans, marques = await _marquer_repliques(plans)
+    return {"plans": plans, "continuite": continuite, "relecture": relecture, "histoire_anglais": scenario,
+            "marques": marques}
+
+
+async def _marquer_repliques(plans: list) -> tuple:
+    """La langue et l'émotion de chaque réplique (30/09) : sans marque, une réplique part
+    dans la langue de son personnage. Un échec ici ne perd pas le découpage : il est dit."""
+    consigne = video_h3.consigne_marquer(plans)
+    if not consigne:
+        return plans, {"demandees": 0}
+    try:
+        marques = video_h3.poser_marques(plans, await _chat_du_studio(consigne, "les marques des répliques"))
+    except HTTPException as exc:
+        return plans, {"erreur": str(exc.detail)}
+    except ValueError as exc:
+        return plans, {"erreur": str(exc)}
+    return marques, {"demandees": len(video_h3._repliques_a_marquer(plans)),
+                     "sans_langue_ou_emotion": len(video_h3._repliques_a_marquer(marques))}
 
 
 async def _histoire_en_anglais(histoire: str) -> str:

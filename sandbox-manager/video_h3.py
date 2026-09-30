@@ -224,6 +224,7 @@ EMOTIONS = {
     "tendresse": ("tendresse", "tenderly and softly"),
     "enthousiasme": ("enthousiasme", "enthusiastically, full of energy"),
     "ironie": ("ironie", "with an amused, ironic cadence"),
+    "amusement": ("amusement", "amused, a playful smile in the voice"),
     "gene": ("gêne", "awkwardly, hesitating"),
     "fatigue": ("fatigue", "wearily, tired"),
     "rire": ("rire", "laughing while speaking"),
@@ -246,9 +247,11 @@ _EMOTION_SYNONYMES = {
     # Les noms anglais que MARQUES apprend au chat du Studio.
     "tenderness": "tendresse", "enthusiasm": "enthousiasme", "irony": "ironie", "awkwardness": "gene",
     "tiredness": "fatigue",
+    "amuse": "amusement", "amusee": "amusement", "amused": "amusement", "playful": "amusement",
+    "taquin": "amusement", "taquine": "amusement", "teasing": "amusement",
 }
 EMOTIONS_ANGLAIS = ("joy", "sadness", "anger", "fear", "surprise", "calm", "tenderness", "enthusiasm",
-                    "irony", "awkwardness", "tiredness", "laughing", "whisper", "shouting")
+                    "irony", "amusement", "awkwardness", "tiredness", "laughing", "whisper", "shouting")
 
 # Ce que le chat du Studio sait de la marque (découpage, correction, traduction de
 # l'histoire). Demande du propriétaire, 30/09 : « le LLM qui crée le script connaît
@@ -320,6 +323,100 @@ def marques_inconnues(texte: str) -> list:
         if tete and not _lire_marque(tete.group(1)) and len(tete.group(1)) <= 40:
             fautes.append(tete.group(1).strip())
     return fautes
+
+
+def marques_du_chat(texte: str, permises=()) -> str:
+    """Découpage réel du 30/09 : le chat a écrit « [English, amused] », hors de la liste ;
+    tout le découpage était refusé comme réplique inventée. Une marque qu'il ajoute est
+    ramenée à ce qui se lit — la langue, une émotion connue — et le reste tombe : un mot
+    entre crochets ne doit jamais être DIT. `permises` : les répliques du scénario
+    (normées) ; une réplique écrite telle quelle par l'auteur n'est pas touchée."""
+    def nettoie(m):
+        dite = next(g for g in m.groups() if g)
+        tete = _MARQUE.match(dite)
+        if not tete or _lire_marque(tete.group(1)) or len(tete.group(1)) > 40 \
+                or _norme_replique(dite) in permises:
+            return m.group(0)
+        langue = emotion = None
+        for morceau in re.split(r"[,;/|+]", tete.group(1)):
+            mot = morceau.strip().lower()
+            if mot in _NOM_DE_LANGUE and langue is None:
+                langue = _NOM_DE_LANGUE[mot]
+            elif emotion_connue(mot) and emotion is None:
+                emotion = EMOTIONS[emotion_connue(mot)][0]
+        garde = ", ".join(x for x in (langue, emotion) if x)
+        reste = tete.group(2).strip()
+        return m.group(0).replace(dite, ("[%s] %s" % (garde, reste)) if garde else reste)
+    return _PAROLES.sub(nettoie, str(texte or ""))
+
+
+# Découpage réel du 30/09 : malgré MARQUES, le chat n'a posé aucune marque manquante ;
+# « I made the team! » de Leila partait en français, avec sa voix française. Une étape à
+# part lui demande, réplique par réplique, la langue et l'émotion ; le Studio écrit les
+# marques lui-même, et une marque de l'auteur l'emporte toujours.
+def _repliques_a_marquer(plans: list) -> list:
+    """[(plan, champ, réplique telle qu'écrite, contexte)] des répliques sans marque complète."""
+    a_marquer = []
+    for i, p in enumerate(plans):
+        for champ in ("image_paroles", "ambiance"):
+            texte, fin_precedente = str(p.get(champ) or ""), 0
+            for m in _PAROLES.finditer(texte):
+                dite = next(g for g in m.groups() if g)
+                tete = _MARQUE.match(dite)
+                lue = _lire_marque(tete.group(1)) if tete else None
+                # La phrase commence après la réplique d'avant : son « ! » ne coupe pas.
+                coupure = max(texte.rfind(c, fin_precedente, m.start()) for c in ".!?;\n")
+                debut = max(fin_precedente, coupure + 1)
+                fin_precedente = m.end()
+                if lue and lue[0] and lue[1]:
+                    continue
+                a_marquer.append((i, champ, dite, texte[debut:m.end()].strip()))
+    return a_marquer
+
+
+def consigne_marquer(plans: list) -> str:
+    """La question au chat, ou "" s'il n'y a rien à marquer."""
+    lignes = _repliques_a_marquer(plans)
+    if not lignes:
+        return ""
+    return ("For each numbered line of dialogue below (the sentence around it is given for context), say the "
+            "language its words are in, and one emotion only if the context says or clearly shows how it is "
+            "said (otherwise null). Languages: " + ", ".join(LANGUES_PAROLES) + ". Emotions: "
+            + ", ".join(EMOTIONS_ANGLAIS) + ". Answer with a JSON array only, one object per line, in order: "
+            '[{"n": 1, "language": "English", "emotion": "joy"}, …].\n\n'
+            + "\n".join("%d. %s" % (n + 1, contexte) for n, (_i, _c, _d, contexte) in enumerate(lignes)))
+
+
+def poser_marques(plans: list, reponse: str) -> list:
+    """Les plans, chaque réplique marquée d'après la réponse du chat. Une marque déjà
+    écrite l'emporte ; une valeur illisible est ignorée (la réplique garde alors la langue
+    de son personnage). ValueError si la réponse ne se lit pas."""
+    lignes = _repliques_a_marquer(plans)
+    t = str(reponse or "")
+    debut, fin = t.find("["), t.rfind("]")
+    try:
+        lues = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        lues = None
+    if not isinstance(lues, list):
+        raise ValueError("La réponse du chat sur les marques ne se lit pas.")
+    par_n = {}
+    for k, x in enumerate(lues):
+        if isinstance(x, dict):
+            n = x.get("n") if isinstance(x.get("n"), int) else k + 1
+            par_n.setdefault(n, x)
+    plans = [dict(p) for p in plans]
+    for n, (i, champ, dite, _contexte) in enumerate(lignes, start=1):
+        x = par_n.get(n) or {}
+        tete = _MARQUE.match(dite)
+        lue = _lire_marque(tete.group(1)) if tete else None
+        reste = tete.group(2).strip() if lue else dite
+        langue = (lue or (None, None))[0] or _NOM_DE_LANGUE.get(str(x.get("language") or "").strip().lower())
+        cle = (lue or (None, None))[1] or emotion_connue(str(x.get("emotion") or ""))
+        garde = ", ".join(v for v in (langue, EMOTIONS[cle][0] if cle else None) if v)
+        if garde:
+            plans[i][champ] = plans[i][champ].replace(dite, "[%s] %s" % (garde, reste), 1)
+    return plans
 
 
 def _ton(emotion) -> str:
@@ -1336,7 +1433,10 @@ def lire_ordre(reponse: str, permis) -> list:
 # propriétaire les relit, puis le Studio les tourne l'un après l'autre et recolle
 # chacun au film déjà tourné.
 
-SCENARIO_PLANS_MAX = PLANS_MAX
+# 5 plans depuis le 30/09 (décision du propriétaire, film campus) : une histoire à six
+# répliques perdait sa fin en 4 plans (découpage réel du jour). La limite mesurée des
+# raccords reste : PLANS_MAX plans au plus d'affilée sans « coupe » (verifier_plans).
+SCENARIO_PLANS_MAX = 5
 ENCHAINEMENTS = {
     "coupe": "Nouveau plan (la fiche garde le personnage)",
     "suite": "Suite directe (repart de la dernière image du plan précédent)",
@@ -1565,8 +1665,9 @@ def consigne_decoupage(scenario: str) -> str:
             "\"image_paroles\" (what we see, "
             "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
             "\"coupe\" for a new camera shot or place, \"suite\" when it continues the previous shot "
-            "without a cut. The first shot is \"coupe\". Answer with the JSON array only.\n\n%s"
-            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, scenario))
+            "without a cut. The first shot is \"coupe\"; never more than %d shots in a row without a "
+            "\"coupe\". Answer with the JSON array only.\n\n%s"
+            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, PLANS_MAX, scenario))
 
 
 def verifier_plans(plans) -> list:
@@ -1599,6 +1700,10 @@ def verifier_plans(plans) -> list:
                 raise ValueError(f"Plan {i + 1} : description de l'image trop longue.")
             propre.update(image_depart=str(p["image_depart"]), description_depart=description)
         propres.append(propre)
+        chaine = len(propres) - max(k for k, x in enumerate(propres) if x["enchainement"] == "coupe")
+        if chaine > PLANS_MAX:
+            raise ValueError(f"Plan {i + 1} : {PLANS_MAX} plans au plus d'affilée sans « coupe » "
+                             "(au-delà, l'image se dégrade) : faites-en une coupe.")
     return propres
 
 
@@ -1627,6 +1732,9 @@ def lire_decoupage(reponse: str, scenario: str) -> list:
     # changé, ajouté ou perdu reste refusé, et le message le cite.
     originales = repliques(scenario)
     permises = [_norme_replique(r) for r in originales]
+    for p in plans:
+        for k in ("image_paroles", "ambiance"):
+            p[k] = marques_du_chat(p[k], permises)
     morceaux: dict = {}
     for i, p in enumerate(plans):
         for r in repliques(p["image_paroles"] + " " + p["ambiance"]):
@@ -4464,7 +4572,7 @@ function dessinerPlans(){
     if (p.enchainement === "coupe") bloc.appendChild(blocDepart(p));
     liste.appendChild(bloc);
   });
-  const max = ETAT ? ETAT.prolonger.plans_max : 4;
+  const max = ETAT && ETAT.scenario ? ETAT.scenario.plans_max : 5;
   document.getElementById("plan_ajouter").hidden = !PLANS.length || PLANS.length >= max;
   // Un scénario repris se rejoue (plans changés seulement), il ne se retourne pas en entier.
   document.getElementById("scenario_tourner").hidden = !PLANS.length || !!SCENARIO_TOURNE;
@@ -4502,9 +4610,12 @@ document.getElementById("scenario_decouper").addEventListener("click", async () 
   // Les détails (regard, main, place exacte) : montrés, jamais réécrits (29/09).
   const det = d.continuite && (d.continuite.details || []).length
     ? " Détails, sans correction : " + texteContinuite({problemes: d.continuite.details}) + "." : "";
+  // Les marques [langue, émotion] posées par le chat (30/09) : un échec est dit.
+  const mq = d.marques && d.marques.erreur
+    ? " Langue et émotion des répliques non posées (" + d.marques.erreur + ") : ajoutez-les à la main." : "";
   if (d.continuite && d.continuite.ok === false)
-    scenarioEtat(vu + vu2 + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite) + "." + det, true);
-  else scenarioEtat(vu + vu2 + "Relisez les plans, puis tournez." + det);
+    scenarioEtat(vu + vu2 + "Reste à revoir avant de tourner : " + texteContinuite(d.continuite) + "." + det + mq, true);
+  else scenarioEtat(vu + vu2 + "Relisez les plans, puis tournez." + det + mq, !!mq);
 });
 
 function texteContinuite(c){

@@ -1353,7 +1353,18 @@ Le dernier point a été trouvé en vérifiant P0-1. Depuis le commit `ed3e71d`,
             - le plan emporte une voix par personnage **et par langue parlée**, 3 au plus. La règle 4 accepte la voix clonée ;
             - la consigne `MARQUES` est donnée au découpage, à la correction et à la traduction de l'histoire ;
             - menu « Langue et émotion d'une réplique » sous les paroles et sous le scénario ;
-            - tests : suite complète 1623 verts. **Pas encore vérifié dans le Studio réel.**
+            - tests : suite complète 1623 verts.
+          - **Vérifié dans le Studio réel le 30/09, rien de tourné :**
+            - **Voix clonées par la route, sur Modal L4** (51 s de location chacune) :
+              - Leila, français → anglais : le Whisper du Studio entend 100 % de la phrase ;
+              - Tyler, fiche neuve (images du Studio, voix Piper anglaise) → français : il entend 87 % de la phrase (« comme sur ma fiche » entendu « Kamser Mafiche », c'est l'accent).
+            - **Découpage réel d'un scénario FR/EN avec émotions : trois défauts trouvés, puis corrigés.**
+              - Le chat a inventé l'émotion « amused » et tout le découpage était refusé. Correction : « amusement » devient une émotion, et `marques_du_chat` ramène une marque inventée à ce qui se lit.
+              - Le chat n'a posé **aucune** marque manquante malgré `MARQUES` : « I made the team! » de Leila serait parti en français, avec sa voix française. Correction : une étape à part (`consigne_marquer`, `poser_marques`) demande langue et émotion réplique par réplique ; le Studio écrit les marques et celles de l'auteur l'emportent.
+              - En 4 plans, la fin de l'histoire était perdue ; le relecteur l'a vu, sa correction a échoué. Correction : `SCENARIO_PLANS_MAX` passe à 5 (décision du propriétaire), et `PLANS_MAX` = 4 reste la limite des plans d'affilée sans « coupe ».
+            - **Après les corrections :** 5 plans, les 6 répliques gardées, toutes marquées, continuité OK.
+            - **Préparation à blanc :** règle 4 verte sur les 5 plans. Chaque réplique part avec la voix de sa langue (tailles des fichiers contrôlées).
+            - **Reste :** plan 5, deux règles hors voix (tableau d'affichage absent du texte ; deux répliques dans le même plan). Le ton est parfois redit (« says, amused: amused, a playful smile… ») : lisible, non mesuré sur H3. Aucun clip tourné.
 
 20. **Deux Studios proches : administrateur et client — proposé par le propriétaire le 27/09/2026, inscrit à sa demande** (« je suggère d'avoir deux studio assez proche, celui administrateur où on fait les mises au point et celui client qui intègre les solutions validées » ; puis « ok inscris-le au plan »). **Rien n'est construit.**
     - **20.0 La forme retenue : un seul code, deux réglages.** Pas deux copies du dépôt, qui dériveraient. Le Studio **administrateur** (le poste du propriétaire) suit `main` et ajoute ses outils de mise au point ; le Studio **client** suit une version **validée**. L'administrateur est le mainteneur des deux dépôts (18.8).

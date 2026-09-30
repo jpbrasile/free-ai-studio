@@ -1064,11 +1064,15 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
          "enchainement": "suite"}], ensure_ascii=False)
     vus = []
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
-        [decoupe, probleme, corrige, '{"etats": [], "problemes": []}'], vus))
+        [decoupe, probleme, corrige, '{"etats": [], "problemes": []}',
+         '[{"n": 1, "language": "French", "emotion": null}]'], vus))
     r = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["plans"][0]["image_paroles"] == "À gauche, Léa seule à une table vide."
+    # 30/09 : la réplique reçoit sa marque de langue, posée par le Studio.
+    assert d["plans"][1]["image_paroles"].endswith("« [French] Tiens. »")
+    assert d["marques"] == {"demandees": 1, "sans_langue_ou_emotion": 1}
     assert d["relecture"] == {"trouves": [{"plan": 1, "quoi": "Le livre est là avant que Tom le pose."}],
                               "corrige": True}
     assert d["continuite"]["ok"] is True
@@ -2931,7 +2935,10 @@ def _faux_chat(monkeypatch, h3, reponses: dict, vus: list):
     """Le chat du Studio rend la réponse de `reponses[quoi]` (une liste se dépile)."""
     async def chat(consigne, quoi="la traduction en anglais", images=None, modele="free-ai-auto"):
         vus.append((quoi, consigne, modele, len(images or [])))
-        r = reponses[quoi]
+        # Les marques des répliques (30/09) : sans réponse prévue, aucune.
+        r = reponses.get(quoi, "[]" if quoi == "les marques des répliques" else None)
+        if r is None:
+            raise KeyError(quoi)
         return r.pop(0) if isinstance(r, list) else r
     monkeypatch.setattr(h3, "_chat_du_studio", chat)
 
@@ -3541,3 +3548,76 @@ def test_la_page_explique_la_marque_et_cree_la_voix_dans_l_autre_langue(h3):
     assert fiche["voix_langues"]["English"]["son"].startswith("data:audio/wav;base64,")
     r = client(h3).delete(f"/video-h3/fiches/{fid}/voix/langue/English", headers=CLE)
     assert r.status_code == 200 and r.json()["voix_langues"] == {}
+
+
+def test_une_marque_inventee_par_le_chat_est_ramenee_a_ce_qui_se_lit(h3):
+    """Découpage réel du 30/09 : « [English, amused] Hey, are you lost? » faisait refuser
+    tout le découpage comme réplique inventée."""
+    v = h3.video_h3
+    scenario = "Tyler dit, amusé : « Hey, are you lost? » Léa soupire : « [soupir] Enfin. »"
+    reponse = json.dumps([
+        {"image_paroles": "Tyler says « [English, amused] Hey, are you lost? »", "ambiance": "", "enchainement": "coupe",
+         "elements": []},
+        {"image_paroles": "Léa says « [French, sarcastic] [soupir] Enfin. »", "ambiance": "", "enchainement": "suite",
+         "elements": []}], ensure_ascii=False)
+    plans = v.lire_decoupage(reponse, scenario)
+    assert "« [English, amused] Hey, are you lost? »" in plans[0]["image_paroles"]   # « amused » se lit
+    assert v.marque_de_replique("[English, amused] Hey!", "French") == ("English", "amusement", "Hey!")
+    plans = v.lire_decoupage(reponse.replace("amused", "smug"), scenario)
+    assert "« [English] Hey, are you lost? »" in plans[0]["image_paroles"]
+    # Le mot inconnu tombe ; ce que l'auteur a écrit entre crochets reste à lui.
+    assert "« [French] [soupir] Enfin. »" in plans[1]["image_paroles"]
+    assert v.marque_de_replique("[English, amusement] Hey!", "French") == ("English", "amusement", "Hey!")
+    with pytest.raises(ValueError, match="inventé ou changé"):
+        v.lire_decoupage(reponse.replace("Hey, are you lost?", "Hi, lost?"), scenario)
+
+
+def test_le_studio_marque_les_repliques_d_apres_le_chat(h3, monkeypatch):
+    """Découpage réel du 30/09 : le chat n'a posé aucune marque manquante ; « I made the
+    team! » de Leila serait parti en français, avec sa voix française."""
+    v = h3.video_h3
+    plans = [
+        {"image_paroles": "Tyler says, amused: « Hey, are you lost? » Leila replies: « [English] Yes! »",
+         "ambiance": "", "enchainement": "coupe"},
+        {"image_paroles": "Tyler, embarrassed: « Je… parle un peu français. » Leila: « [French, laughing] Trop "
+                          "mignon ! » Wild with joy, Leila shouts: « I made the team! »",
+         "ambiance": "", "enchainement": "suite"}]
+    consigne = v.consigne_marquer(plans)
+    # Les répliques sans marque complète, chacune avec sa phrase ; la marque entière n'est pas redemandée.
+    assert "1. Tyler says, amused: « Hey, are you lost? »" in consigne
+    assert "2. Leila replies: « [English] Yes! »" in consigne and "Trop mignon" not in consigne
+    assert "4. Wild with joy, Leila shouts: « I made the team! »" in consigne
+    reponse = ('Voici : [{"n": 1, "language": "English", "emotion": "amusement"}, '
+               '{"n": 2, "language": "French", "emotion": "joy"}, '
+               '{"n": 3, "language": "French", "emotion": "awkwardness"}, '
+               '{"n": 4, "language": "English", "emotion": "joy"}]')
+    marques = v.poser_marques(plans, reponse)
+    assert "« [English, amusement] Hey, are you lost? »" in marques[0]["image_paroles"]
+    assert "« [English, joie] Yes! »" in marques[0]["image_paroles"]   # la langue de l'auteur l'emporte
+    assert "« [French, gêne] Je… parle un peu français. »" in marques[1]["image_paroles"]
+    assert "« [French, laughing] Trop mignon ! »" in marques[1]["image_paroles"]
+    assert "« [English, joie] I made the team! »" in marques[1]["image_paroles"]
+    assert plans[1]["image_paroles"].endswith("« I made the team! »")   # l'original n'est pas touché
+    assert v._repliques_a_marquer(marques) == []
+    # Une valeur illisible est ignorée ; une réponse illisible est dite.
+    assert "« [English] Hey" in v.poser_marques(plans, '[{"n": 1, "language": "English", "emotion": "smug"}]')[0][
+        "image_paroles"]
+    with pytest.raises(ValueError, match="ne se lit pas"):
+        v.poser_marques(plans, "Je ne sais pas.")
+    assert v.consigne_marquer([{"image_paroles": "« [English, joy] Hi! »", "ambiance": ""}]) == ""
+    # Par la route : un chat qui ne répond pas ne perd pas le découpage.
+    _faux_chat(monkeypatch, h3, {"les marques des répliques": "rien"}, [])
+    assert asyncio.run(h3._marquer_repliques(plans)) == (plans, {"erreur": "La réponse du chat sur les marques "
+                                                                          "ne se lit pas."})
+
+
+def test_un_scenario_a_cinq_plans_mais_pas_cinq_raccords_d_affilee(h3):
+    """30/09 : 5 plans (décision du propriétaire) ; la limite mesurée des raccords reste."""
+    v = h3.video_h3
+    assert v.SCENARIO_PLANS_MAX == 5 and v.PLANS_MAX == 4
+    plan = lambda e: {"image_paroles": "x", "ambiance": "", "enchainement": e}
+    assert len(v.verifier_plans([plan("coupe")] + [plan("suite")] * 3 + [plan("coupe")])) == 5
+    with pytest.raises(ValueError, match="4 plans au plus d'affilée sans « coupe »"):
+        v.verifier_plans([plan("coupe")] + [plan("suite")] * 4)
+    assert "never more than 4 shots in a row" in v.consigne_decoupage("Un film.")
+    assert client(h3).get("/video-h3/etat", headers=CLE).json()["scenario"] == {"plans_max": 5}
