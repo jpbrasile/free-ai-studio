@@ -2757,6 +2757,17 @@ function sansParoles(t){
     .replace(/\s+/g, " ").replace(/\s+([,.])/g, "$1").replace(/[\s,;:]+$/, "").trim();
 }
 
+// L'image de départ est l'instant 0 du plan : le cadre, puis l'état « debut » de chaque
+// élément du tableau. Mesuré le 30/09 (deux films, 28 images) : depuis le texte entier du
+// plan, 6 images sur 14 montraient deux fois une personne ou un objet (l'action entière
+// dessinée d'un coup) ; depuis l'état « debut », 0 sur 14.
+function texteDepart(p){
+  const presents = (p.elements || []).filter(e => e && e.nom && e.debut && !/off-frame|hors champ/i.test(e.debut));
+  if (!presents.length) return PREFIXE.premiere + sansParoles(p.image_paroles);
+  const cadre = sansParoles(p.image_paroles).split(".")[0];
+  return PREFIXE.premiere + cadre + ". " + presents.map(e => e.nom + " : " + e.debut + ".").join(" ");
+}
+
 function majInvitesImages(){
   const base = sansParoles(document.getElementById("image_paroles").value);
   for (const nom of ["premiere", "derniere"]){
@@ -3746,7 +3757,7 @@ function blocDepart(p){
     ? "Image de départ : le plan part de cette image (mode « Première image »). Vérifiez-la avant de tourner."
     : "Sans image de départ, le plan part des photos des fiches (mode « Références »).";
   const texte = document.createElement("textarea");
-  texte.value = p.texte_depart || (PREFIXE.premiere + sansParoles(p.image_paroles));
+  texte.value = p.texte_depart || texteDepart(p);
   texte.addEventListener("input", () => { p.texte_depart = texte.value; });
   const apercu = document.createElement("img");
   apercu.className = "apercu";

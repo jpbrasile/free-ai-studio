@@ -2806,3 +2806,26 @@ def test_la_page_propose_d_agrandir_clips_et_films(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     assert 'id="clip_agrandir"' in page and 'id="montage_agrandir"' in page
     assert "/video-h3/agrandir/prix?job=" in page and "au pire" in page
+
+
+def test_l_image_de_depart_part_de_l_etat_debut_des_elements(sandbox, tmp_path):
+    """30/09 : depuis le texte entier du plan, 6 images de départ sur 14 dessinaient deux
+    fois une personne ou un objet ; depuis l'état « debut » du tableau, 0 sur 14."""
+    if not shutil.which("node"):
+        pytest.skip("node absent")
+    page = sandbox.video_h3.PAGE_HTML
+    morceaux = [page[page.index("const PREFIXE = {"):page.index("function majInvitesImages(){")]]
+    programme = "\n".join(morceaux) + """
+const p = {image_paroles: "Medium shot. Léa enters and puts the red book down. Léa says : « Bonjour. »",
+  elements: [{nom: "James", debut: "background, right, holding a book"},
+             {nom: "Léa", debut: "off-frame"}, {nom: "le livre rouge", debut: "off-frame"}]};
+console.log(JSON.stringify([texteDepart(p), texteDepart({image_paroles: p.image_paroles})]));
+"""
+    f = tmp_path / "t.js"
+    f.write_text(programme, encoding="utf-8")
+    avec, sans = json.loads(subprocess.run(["node", str(f)], capture_output=True, text=True, check=True,
+                                           encoding="utf-8").stdout)
+    assert avec.endswith("Medium shot. James : background, right, holding a book.")
+    assert "Léa" not in avec and "enters" not in avec
+    # Sans tableau : le texte du plan, répliques retirées, comme avant.
+    assert "enters" in sans and "Bonjour" not in sans
