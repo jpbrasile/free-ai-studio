@@ -80,6 +80,7 @@ def client(sandbox):
     ("post", "/video-h3/visage/comparer"), ("post", "/video-h3/fiches/" + "a" * 12 + "/planche"),
     ("delete", "/video-h3/fiches/" + "a" * 12 + "/planche"),
     ("get", "/video-h3/agrandir/prix?job=" + "a" * 32), ("post", "/video-h3/agrandir"),
+    ("get", "/video-h3/visages/prix?job=" + "a" * 32), ("post", "/video-h3/visages"),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -3157,3 +3158,140 @@ def test_trop_de_photos_avec_l_image_de_depart_garde_les_visages_et_les_voix(h3)
     fiches = [{"id": i, "nom": n, "genre": "personne", "voix": {"langue": "French"}} for i, n in zip(ids, "ABC")]
     assert h3._voix_envoyees({"enchainement": "coupe", "image_depart": "x",
                               "image_paroles": "A dit « Un. » B dit « Deux. » C dit « Trois. »"}, fiches) == set(ids)
+
+
+# --- Visages (FaceRefine, 30/09) : le graphe, le script, la route. ---------------
+
+def _demande_de(code):
+    return json.loads(base64.b64decode(re.search(r'b64decode\("([^"]+)"\)', code).group(1)))
+
+
+def test_visages_le_graphe_suit_les_sorties_des_noeuds(sandbox):
+    vi = sandbox.visages
+    g = vi.graphe([("left_most", 2), ("right_most", 1)])
+    assert {n["class_type"] for n in g.values()} <= set(vi.CLASSES)
+    for b, choix in ((100, "left_most"), (200, "right_most")):
+        k = lambda i: str(b + i)  # noqa: E731
+        assert g[k(1)]["inputs"]["select"] == choix and g[k(1)]["inputs"]["identity_track"] is False
+        ref = g[k(2)]["inputs"]
+        # Taille et longueur du recadrage, sorties 4, 5, 6 du suiveur.
+        assert (ref["width"], ref["height"], ref["length"]) == ([k(1), 4], [k(1), 5], [k(1), 6])
+        # Le modèle patché par PerFrameDenoise (sortie 2), pas celui du chargeur.
+        assert g[k(5)]["inputs"]["model"] == g[k(6)]["inputs"]["model"] == [k(4), 2]
+        assert g[k(6)]["inputs"]["steps"] == 4 and g[k(6)]["inputs"]["denoise"] == vi.DEBRUITAGE
+    # Photos numérotées de suite : 2 pour le premier, 1 pour le second.
+    assert [g[i]["inputs"]["image"] for i in ("110", "111", "210")] == ["ref_0.png", "ref_1.png", "ref_2.png"]
+    assert "<Picture 1>" in g["102"]["inputs"]["prompt"] and "<Picture 2>" in g["102"]["inputs"]["prompt"]
+    # La passe 2 part de la passe 1 ; la sortie porte le son d'origine.
+    assert g["201"]["inputs"]["images"] == ["109", 0] and g["209"]["inputs"]["base_images"] == ["109", 0]
+    assert g["90"]["inputs"]["images"] == ["209", 0] and g["90"]["inputs"]["audio"] == ["2", 1]
+
+
+def test_visages_epingle_ses_sources_et_n_installe_ni_insightface_ni_audiolock(sandbox):
+    vi = sandbox.visages
+    commandes = " ".join(vi.COMMANDES)
+    assert vi.FR_COMMIT in commandes and "ultralytics==" in commandes
+    assert "insightface" not in commandes.lower() and "AudioLock" not in commandes
+    assert len(vi.FR_COMMIT) == 40 and len(vi.DETECTEUR_REVISION) == 40
+
+
+def test_visages_le_devis_refuse_le_trop_long_et_le_trop_nombreux(sandbox):
+    vi = sandbox.visages
+    d = vi.prix(123, 2)
+    assert 0 < d["estime_usd"] < d["pire_usd"] and d["delai_s"] <= vi.DUREE_MAX_S
+    assert d["mesure"] is True and d["secondes_estimees"] < 300
+    for images, sujets in ((0, 1), (123, 0), (123, 3), (2000, 2)):
+        with pytest.raises(ValueError):
+            vi.prix(images, sujets)
+
+
+def test_visages_le_script_prend_les_photos_des_fiches_et_le_delai_de_la_location(h3):
+    v, vi = h3.video_h3, h3.visages
+    lea, marc = v.fiche_creer("Léa", "femme")["id"], v.fiche_creer("Marc", "homme")["id"]
+    ballon = v.fiche_creer("ballon", "ballon orange", genre="objet")["id"]
+    for f in (lea, marc, ballon):
+        v.fiche_poser_image(f, "face", PNG)
+    code = vi.construire_script(b"mp4", [(lea, "left_most"), (marc, "right_most")], 124, 247)
+    importes = {n.names[0].name.split(".")[0] for n in ast.walk(ast.parse(code)) if isinstance(n, ast.Import)}
+    assert not importes & {"comfy", "nodes", "folder_paths", "ultralytics"}
+    d = _demande_de(code)
+    assert (d["de"], d["a"]) == (124, 247) and sorted(d["images"]) == ["ref_0.png", "ref_1.png"]
+    assert d["delai_s"] == vi.delai_s(123, 2) and d["detecteur"]["revision"] == vi.DETECTEUR_REVISION
+    with pytest.raises(ValueError, match="objet"):
+        vi.demande(b"mp4", [(ballon, "left_most")], 0, 10)
+    with pytest.raises(ValueError, match="Place"):
+        vi.demande(b"mp4", [(lea, "au_milieu")], 0, 10)
+    assert "nœuds" in vi.phrase_d_echec("NOEUD_ABSENT ['H3FaceTrackCrop']")
+    assert vi.phrase_d_echec("rien") == ""
+
+
+def _source_visages(h3, monkeypatch, tmp_path):
+    _source_agrandir(h3, monkeypatch, tmp_path, images=370)
+    lance = []
+    monkeypatch.setattr(h3, "run_visages", lambda *a: lance.append(a))
+    v = h3.video_h3
+    fid = v.fiche_creer("Léa", "femme")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    monkeypatch.setattr(v, "scenario_lire", lambda sid: {"fins_images": [124, 247, 370]})
+    _autoriser(h3)
+    return lance, fid
+
+
+def test_visages_traite_le_plan_demande_du_scenario(h3, monkeypatch, tmp_path):
+    lance, fid = _source_visages(h3, monkeypatch, tmp_path)
+    d = client(h3).get("/video-h3/visages/prix?job=" + "b" * 32 + "&scenario=" + "d" * 32 + "&plan=3",
+                       headers=CLE).json()
+    assert (d["de"], d["a"]) == (247, 370) and d["devis"]["images"] == 123
+    r = client(h3).post("/video-h3/visages", headers=CLE, json={
+        "job": "b" * 32, "scenario": "d" * 32, "plan": 2, "sujets": [{"fiche": fid, "choix": "left_most"}]})
+    assert r.status_code == 200, r.text
+    jid, code, delai = lance[0]
+    assert (_demande_de(code)["de"], _demande_de(code)["a"]) == (124, 247) and delai == h3.visages.delai_s(123, 1)
+    v = h3.read_job(jid)["video"]
+    assert not v["moteur"].startswith("MiniMax H3") and v["source"] == "b" * 32
+    assert h3.read_job(jid)["titre"] == "Le parc — visages refaits"
+    # Sans scénario : tout le clip.
+    client(h3).post("/video-h3/visages", headers=CLE, json={"job": "b" * 32, "sujets": [{"fiche": fid}]})
+    assert (_demande_de(lance[1][1])["de"], _demande_de(lance[1][1])["a"]) == (0, 370)
+
+
+def test_visages_refuse_avant_de_louer(h3, monkeypatch, tmp_path):
+    lance, fid = _source_visages(h3, monkeypatch, tmp_path)
+    corps = {"job": "b" * 32, "sujets": [{"fiche": fid}]}
+    assert client(h3).post("/video-h3/visages", headers=CLE, json={**corps, "scenario": "d" * 32,
+                                                                     "plan": 4}).status_code == 400
+    assert client(h3).post("/video-h3/visages", headers=CLE, json={**corps, "de": 300, "a": 400}).status_code == 400
+    assert client(h3).post("/video-h3/visages", headers=CLE, json={**corps, "sujets": []}).status_code == 422
+    assert client(h3).post("/video-h3/visages", headers=CLE, json={**corps, "sujets": ["x"]}).status_code == 400
+
+    def refus(*a, **k):
+        raise h3.budget_modal.BudgetDepasse("Budget Modal du mois atteint.")
+
+    monkeypatch.setattr(h3.budget_modal, "verifier", refus)
+    r = client(h3).post("/video-h3/visages", headers=CLE, json=corps)
+    assert r.status_code == 429 and "Budget" in r.json()["detail"]
+    monkeypatch.setattr(h3, "modal_configured", lambda: False)
+    assert client(h3).post("/video-h3/visages", headers=CLE, json=corps).status_code == 503
+    assert lance == []
+    # Sans la copie d'autorisation H3 : rien.
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(h3.video_h3, "FICHE_AUTORISATION", tmp_path / "absente.json")
+    assert client(h3).post("/video-h3/visages", headers=CLE, json=corps).status_code == 403
+
+
+def test_visages_encaisse_la_location_meme_en_echec(h3, monkeypatch):
+    jid = "f" * 32
+    h3.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: {"exit_code": 4})
+
+    def fini(j, ou, resultat):
+        job = h3.read_job(j)
+        job.update({"status": "failed", "stderr": "NOEUD_ABSENT ['H3FaceStitch']"})
+        h3.write_job(j, job)
+
+    monkeypatch.setattr(h3, "finish_execution", fini)
+    vus = []
+    monkeypatch.setattr(h3.budget_modal, "consommer", lambda *a, **k: vus.append(a) or {"usd": 1})
+    h3.run_visages(jid, "code", 600)
+    assert vus and vus[0][:2] == ("video", h3.visages.GPU)
+    assert "nœuds" in h3.read_job(jid)["error"]

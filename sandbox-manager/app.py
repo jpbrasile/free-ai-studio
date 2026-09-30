@@ -70,6 +70,7 @@ import ou_calculer
 import poids_video
 import video
 import video_h3
+import visages
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("sandbox-manager")
@@ -4397,6 +4398,113 @@ async def video_h3_agrandir(request: Request, authorization: Optional[str] = Hea
         "titre": ((origine.get("titre") or "Vidéo H3") + " — " + devis["titre"])[:200],
     })
     threading.Thread(target=run_agrandir, args=(jid, code, devis["delai_s"]), daemon=True).start()
+    return read_job(jid)
+
+
+# --- Refaire les visages petits d'un clip H3 (FaceRefine, visages.py) ----------------
+
+def _visages_bornes(images: int, de, a, sid: str = "", plan=None) -> tuple:
+    """Les images [de, a) à traiter : un plan du scénario quand il est donné (le clip
+    d'une « suite » contient aussi les plans d'avant), sinon celles demandées, sinon tout."""
+    if sid and plan is not None:
+        try:
+            fins = _fins_images(video_h3.scenario_lire(sid))
+            k = int(plan)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, "Plan ou scénario illisible.") from exc
+        if not 1 <= k <= len(fins):
+            raise HTTPException(400, "Ce scénario n'a pas de plan %d." % k)
+        de, a = (fins[k - 2] if k > 1 else 0), fins[k - 1]
+    try:
+        de, a = int(de or 0), int(a or images)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "Bornes illisibles.") from exc
+    if not 0 <= de < a <= images:
+        raise HTTPException(400, "Ce passage n'est pas dans la vidéo (%d images)." % images)
+    return de, a
+
+
+@app.get("/video-h3/visages/prix")
+def video_h3_visages_prix(job: str = Query(...), sujets: int = Query(1), de: Optional[int] = Query(None),
+                          a: Optional[int] = Query(None), scenario: str = Query(""),
+                          plan: Optional[int] = Query(None), authorization: Optional[str] = Header(default=None)):
+    """Ce que coûterait de refaire les visages, affiché AVANT de louer."""
+    _h3_ou_404()
+    auth(authorization)
+    _, images = _agrandir_source(job)
+    de, a = _visages_bornes(images, de, a, scenario, plan)
+    try:
+        devis = visages.prix(a - de, sujets)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"de": de, "a": a, "devis": devis, "choix": list(visages.CHOIX), "budget": budget_modal.vue("video")}
+
+
+def run_visages(jid: str, code: str, delai: int):
+    """Les visages chez Modal ; le temps de location est encaissé même en échec."""
+    debut = time.time()
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
+    write_job(jid, job)
+    try:
+        finish_execution(jid, "modal", modal_execute(
+            jid, code, True, True, gpu_type=visages.GPU, timeout_s=delai, memory_mb=visages.MEMOIRE_MB,
+            coeurs=visages.COEURS, paquets=visages.PAQUETS, apt=video_h3.APT, commandes=visages.COMMANDES,
+            volume=video_h3.VOLUME, point_de_montage=video_h3.POINT_DE_MONTAGE,
+            usage=None))   # compté juste en dessous, sur l'usage « video »
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        etat = budget_modal.consommer("video", visages.GPU, time.time() - debut, visages.MEMOIRE_MB,
+                                      coeurs=visages.COEURS)
+        job = read_job(jid)
+        job["budget"] = etat
+        if job.get("status") == "failed" and not job.get("error"):
+            phrase = visages.phrase_d_echec(job.get("stderr", ""))
+            if phrase:
+                job["error"] = phrase
+        write_job(jid, job)
+
+
+@app.post("/video-h3/visages")
+async def video_h3_visages(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{job, sujets: [{fiche, choix}], scenario?, plan? | de?, a?} : un travail neuf, dont
+    la vidéo est le passage avec les visages refaits. Le clip d'origine n'est pas touché.
+    Rien n'est loué si le prix au pire dépasse ce qui reste."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    corps = await request.json()
+    source = str(corps.get("job") or "")
+    chemin, images = _agrandir_source(source)
+    de, a = _visages_bornes(images, corps.get("de"), corps.get("a"), str(corps.get("scenario") or ""),
+                            corps.get("plan"))
+    try:
+        sujets = [(str(s["fiche"]), str(s.get("choix") or "largest_face")) for s in corps.get("sujets") or []]
+        devis = visages.prix(a - de, len(sujets))
+        code = visages.construire_script(chemin.read_bytes(), sujets, de, a)
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, "Personnages illisibles : [{fiche, choix}].") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _modal_ou_refus()
+    try:
+        budget_modal.verifier("video", visages.GPU, devis["delai_s"], visages.MEMOIRE_MB,
+                              quoi="Refaire les visages", coeurs=visages.COEURS)
+    except budget_modal.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+    jid = uuid.uuid4().hex
+    origine = read_job(source)
+    write_job(jid, {
+        "id": jid, "provider": "modal", "title": "Free AI Studio visages", "gpu": True,
+        "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+        # Pas « MiniMax H3 » : ce n'est pas un clip tourné, il n'entre pas dans les montages.
+        "video": {"moteur": "H3 FaceRefine (visages)", "source": source, "de": de, "a": a,
+                  "sujets": [{"fiche": f, "choix": c} for f, c in sujets], "devis": devis,
+                  "secondes": round((a - de) / video_h3.IMAGES_PAR_SECONDE, 2)},
+        "titre": ((origine.get("titre") or "Vidéo H3") + " — visages refaits")[:200],
+    })
+    threading.Thread(target=run_visages, args=(jid, code, devis["delai_s"]), daemon=True).start()
     return read_job(jid)
 
 
