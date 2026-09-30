@@ -238,6 +238,9 @@ def _motif_nom(nom: str) -> str:
     return r"(?<!\w)" + "".join(morceaux) + r"(?!\w)"
 
 
+_SANS_ARTICLE = re.compile(r"\b(?:the|a|an)\s+(<Subject \d+>)", re.I)
+
+
 def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, objets=()) -> str:
     """Plusieurs personnages (guide de MiniMax, ref-en.txt, 5.4) : `sujets` est la
     liste des (nom, langue) dans l'ordre des <Subject N>.
@@ -297,6 +300,18 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, obj
             sortie.append(f"{qui}<d>[{sa_langue}] {dite}</d>")
     sortie.append(texte[pos:])
     return "".join(sortie)
+
+
+_LOCUTEUR = re.compile(r"<Subject (\d+)> \(S\d+\)")
+
+
+def rangs_qui_parlent(textes, sujets: list, objets=()) -> set:
+    """Les rangs (0…) des personnages qui ont une réplique dans ces textes, attribuées
+    comme attribuer_repliques les attribue. Film du parc, 30/09 : la voix de Leila
+    partait avec un plan sans réplique, et H3 lui a fait dire du français inventé
+    (« Bien. Jaffer, vous étiez… », entendu par le Whisper du Studio)."""
+    return {int(m.group(1)) - 1 for t in textes
+            for m in _LOCUTEUR.finditer(attribuer_repliques(t, sujets, objets=objets))}
 
 
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
@@ -797,6 +812,22 @@ def lire_ressemblance(reponse: str) -> dict:
     if niveau not in ("forte", "moyenne", "faible"):
         return {"ressemblance": None, "ecarts": "L'avis sur la ressemblance n'a pas pu être lu."}
     return {"ressemblance": niveau, "ecarts": " ".join(str(d.get("ecarts") or "").split())}
+
+
+def photos_avec_depart(ids: list):
+    """Parti d'une image de départ, combien de photos des fiches l'accompagnent, et
+    lesquelles : toutes si elles tiennent avec l'image (9 images au plus), sinon le
+    portrait de face de chaque personne (les objets gardent les leurs). Rend
+    (nombre, visages_seuls) ; nombre 0 ou trop grand : l'image part seule, sans fiche
+    ni voix. Film parc2, 30/09 : trois fiches, 4 + 4 + 1 photos, la voix de Leila ne
+    partait pas avec son plan « coupe »."""
+    fiches = [fiche_lire(f) for f in ids]
+    toutes = sum(len(f.get("images") or {}) for f in fiches)
+    if 0 < toutes < MODES["references"]["images_max"]:
+        return toutes, False
+    faces = sum(len(f.get("images") or {}) if fiche_est_objet(f) or ANGLE_DEPART not in (f.get("images") or {})
+                else 1 for f in fiches)
+    return faces, True
 
 
 def fiche_images(fid, visage_seul: bool = False) -> list:
@@ -1594,13 +1625,22 @@ def segments_parles(segments: list) -> tuple:
     return " ".join(gardes), ecartes
 
 
-def comparer_paroles(texte: str, entendu: str) -> dict:
+def comparer_paroles(texte: str, entendu: str, sur: bool = True) -> dict:
     """Les répliques du texte (entre guillemets) comparées à ce que le Whisper du
     Studio a entendu. Le 28/09, un clip dont l'invite était juste (réplique
     balisée [English]) disait du français inventé : le juge, qui ne voit que les
-    images, ne pouvait pas l'entendre. `ok` vaut None quand rien n'est attendu,
-    et aussi quand la réplique est entendue à moitié (`doute` : à l'oreille)."""
+    images, ne pouvait pas l'entendre. `ok` vaut None quand la réplique est
+    entendue à moitié (`doute` : à l'oreille).
+
+    Sans réplique écrite, `ok` vaut None si le clip se tait, False s'il parle
+    (`inattendu`, 30/09 : « Bien. Jaffer, vous étiez… » dans un plan muet) ; `sur`
+    faux (Whisper sans segments, mots inventés non écartés) en fait un doute."""
     attendues = repliques(texte)
+    if not attendues:
+        entendu = " ".join(str(entendu or "").split())
+        parle = bool(_mots(entendu))
+        return {"attendu": [], "entendu": entendu, "part": None,
+                "ok": False if parle and sur else None, "doute": parle and not sur, "inattendu": parle}
     mots, entendus = _mots(" ".join(attendues)), set(_mots(entendu))
     part = (sum(m in entendus for m in mots) / len(mots)) if mots else None
     # Réplique par réplique : une réplique perdue en entier sur deux (4 mots sur 7)
@@ -1617,6 +1657,8 @@ def defaut_de_paroles(paroles: dict, t_s: float):
     """Un défaut du jugement quand la réplique manque ; None sinon."""
     if paroles.get("ok") is not False:
         return None
+    if not paroles.get("attendu"):
+        return {"t_s": round(t_s, 1), "quoi": "Aucune réplique écrite ; le clip dit : « %s »." % paroles["entendu"]}
     return {"t_s": round(t_s, 1), "quoi": "Réplique attendue « %s » ; le clip dit : « %s »."
             % (" / ".join(paroles["attendu"]), paroles["entendu"] or "rien")}
 
@@ -1988,6 +2030,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         raise ValueError("Tenues illisibles.")
     fiches, de_la_fiche, nombres, avec_tenue, ecrites_k = [], [], [], set(), {}
     voix_k, sons = {}, []   # le profil voix de chaque personnage qui en a un (29/09)
+    candidates = []   # (rang, voix) ; seuls ceux qui parlent dans ce plan la gardent (30/09)
     objets = {}   # rang de la fiche -> "objet" ou "pose"
     for fid in ids:
         if mode not in ("references", "premiere", "premiere_derniere"):
@@ -2007,7 +2050,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             continue
         # Une autre tenue : le visage de la fiche et la photo de la tenue, sans les photos
         # qui montrent l'ancienne (deux tenues à la fois, H3 choisissait au hasard).
-        images_fiche = fiche_images(fiche["id"], visage_seul=bool(tenues.get(fiche["id"])))
+        images_fiche = fiche_images(fiche["id"], visage_seul=bool(tenues.get(fiche["id"]))
+                                    or payload.get("visages_seuls") is True)
         if not images_fiche:
             raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
         if tenues.get(fiche["id"]):
@@ -2016,16 +2060,25 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         if " ".join(str(ecrites.get(fiche["id"]) or "").split()):
             ecrites_k[len(nombres)] = " ".join(ecrites[fiche["id"]].split())
         son = fiche_voix(fiche["id"])
-        if son and len(sons) < VOIX_PAR_PLAN:
-            sons.append(base64.b64encode(son).decode())
-            voix_k[len(nombres)] = len(sons)
+        if son:
+            candidates.append((len(nombres), son))
         de_la_fiche += images_fiche
         nombres.append(len(images_fiche))
     image_paroles, ambiance = payload.get("image_paroles", ""), payload.get("ambiance", "")
     if fiches:
         sujets = [(f["nom"], langues.get(f["id"], langue)) for f in fiches]
+        # Une voix ne part qu'avec qui parle dans ce plan : envoyée à un personnage muet,
+        # H3 le faisait parler quand même (film du parc, 30/09, plan 3).
+        parlent = rangs_qui_parlent((image_paroles, ambiance), sujets, objets)
+        for k, son in candidates:
+            if k in parlent and len(sons) < VOIX_PAR_PLAN:
+                sons.append(base64.b64encode(son).decode())
+                voix_k[k] = len(sons)
         image_paroles = attribuer_repliques(image_paroles, sujets, garder_noms=not refs, objets=objets)
         ambiance = attribuer_repliques(ambiance, sujets, garder_noms=not refs, objets=objets)
+        # « holding the <Subject 3> » : la balise est le nom, sans article (guide MiniMax ;
+        # remarque du propriétaire, 30/09).
+        image_paroles, ambiance = (_SANS_ARTICLE.sub(r"\1", t) for t in (image_paroles, ambiance))
     texte = invite(image_paroles, ambiance, payload.get("musique", ""), langue, "(S1)",
                    # Rubriques du mode références, dans l'ordre de la consigne de MiniMax
                    # (skills/h3-prompt-writing/SKILL.md) ; `summary` n'est pas écrit.
@@ -2162,7 +2215,19 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
     else:
         if not derniere_b64:
             raise ValueError("La dernière image du clip est illisible.")
-        plan = preparer(dict(base, mode="premiere", images=[derniere_b64]), graine_hasard)
+        # La suite garde ses fiches (30/09, question du propriétaire : « you do not
+        # respect h3 rules to express character and dedicated object ? ») : mode
+        # Références, la dernière image en « <Picture N> is the first frame », chaque
+        # personne par son visage de face au moins, chaque objet par ses photos, les voix.
+        # Sans fiche, ou trop de photos même réduites : la dernière image seule, comme avant.
+        ids = base.get("fiches") or ([base["fiche"]] if base.get("fiche") else [])
+        nb, visages_seuls = photos_avec_depart(ids) if ids else (0, False)
+        if 0 < nb < MODES["references"]["images_max"]:
+            plan = preparer(dict(base, mode="references", images=[], depart_reference=derniere_b64,
+                                 visages_seuls=visages_seuls), graine_hasard)
+        else:
+            plan = preparer(dict(base, mode="premiere", images=[derniere_b64], fiche=None, fiches=None,
+                                 langues=None), graine_hasard)
     plan["demande"]["mode"] = "prolonger"
     plan["resume_public"].update({
         "mode": "prolonger",

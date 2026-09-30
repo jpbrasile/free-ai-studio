@@ -4709,10 +4709,11 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
             image_b64 = base64.b64encode(image).decode()
             # Avec les photos des fiches quand elles tiennent (9 images au plus) : un
             # départ d'image seule réinventait le visage (29/09). Sinon, l'image seule.
-            nb_photos = sum(len(video_h3.fiche_lire(f).get("images") or {})
-                            for f in (commun["fiches"] or [commun["fiche"]]))
+            # Trop de photos pour tenir avec l'image : le visage de face de chaque
+            # personne seulement (30/09), plutôt que perdre fiches et voix.
+            nb_photos, visages_seuls = video_h3.photos_avec_depart(commun["fiches"] or [commun["fiche"]])
             if 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
-                payload.update(mode="references", depart_reference=image_b64)
+                payload.update(mode="references", depart_reference=image_b64, visages_seuls=visages_seuls)
             else:
                 payload.update(mode="premiere", images=[image_b64],
                                description_premiere=p.get("description_depart", ""))
@@ -4721,10 +4722,18 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
             payload["mode"] = "references"
             video_h3.preparer(payload)
         else:
-            # La suite part de la dernière image, sans fiche ; ses cases sont
-            # contrôlées ici, son image n'existera qu'au tournage.
-            payload.update(mode="premiere", fiche=None, fiches=None, langues=None)
-            video_h3.preparer(dict(payload, mode="texte"))
+            # La suite part de la dernière image, qui n'existera qu'au tournage. Elle
+            # garde ses fiches (30/09) : contrôlée ici en mode Références avec une photo
+            # de fiche à la place de l'image ; sans place pour elles, l'image seule.
+            ids = commun["fiches"] or ([commun["fiche"]] if commun["fiche"] else [])
+            nb_photos, visages_seuls = video_h3.photos_avec_depart(ids)
+            if 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
+                payload.update(mode="references", visages_seuls=visages_seuls)
+                essai = video_h3.fiche_images(ids[0], visage_seul=True)[0]
+                video_h3.preparer(dict(payload, depart_reference=essai))
+            else:
+                payload.update(mode="premiere", fiche=None, fiches=None, langues=None)
+                video_h3.preparer(dict(payload, mode="texte"))
         a_tourner.append({"enchainement": p["enchainement"], "payload": payload, "numero": len(a_tourner) + 1})
     return commun, musique, a_tourner
 
@@ -4752,22 +4761,22 @@ def _fiches_du_scenario(commun: dict) -> list:
 
 def _voix_envoyees(plan: dict, fiches: list) -> set:
     """Les fiches dont la voix part VRAIMENT avec ce plan, comme _scenario_prepare et
-    video_h3.preparer les choisissent : aucune pour une suite ni pour un départ d'image
-    seule (mode « première image ») ; sinon les VOIX_PAR_PLAN premières personnes à
-    voix, dans l'ordre des fiches. Revue du 30/09 : la règle 4 disait « suivie » pour
-    une voix qui ne partait pas."""
-    if plan.get("enchainement") == "suite":
-        return set()
-    if plan.get("image_depart"):
-        nb_photos = 0
-        for f in fiches:
-            try:
-                nb_photos += len(video_h3.fiche_lire(f["id"]).get("images") or {})
-            except ValueError:
-                pass
+    video_h3.preparer les choisissent : aucune quand les photos ne tiennent pas avec l'image
+    (de départ ou dernière du plan d'avant) ; sinon les VOIX_PAR_PLAN premières personnes à
+    voix QUI PARLENT dans ce plan, dans l'ordre des fiches. Revue du 30/09 : la règle 4
+    disait « suivie » pour une voix qui ne partait pas."""
+    # Une suite part de sa dernière image comme une coupe de son image de départ (30/09).
+    if plan.get("image_depart") or plan.get("enchainement") == "suite":
+        try:
+            nb_photos, _ = video_h3.photos_avec_depart([f["id"] for f in fiches])
+        except ValueError:
+            nb_photos = 0
         if not 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
             return set()
-    avec_voix = [f["id"] for f in fiches if f.get("genre", "personne") == "personne" and f.get("voix")]
+    objets = {k: f.get("genre") for k, f in enumerate(fiches) if f.get("genre", "personne") != "personne"}
+    parlent = video_h3.rangs_qui_parlent((plan.get("image_paroles", ""), plan.get("ambiance", "")),
+                                         [(f["nom"], "English") for f in fiches], objets)
+    avec_voix = [f["id"] for k, f in enumerate(fiches) if k not in objets and f.get("voix") and k in parlent]
     return set(avec_voix[:video_h3.VOIX_PAR_PLAN])
 
 
@@ -5155,12 +5164,15 @@ async def _ecouter(video: bytes, texte: str) -> dict:
     """Ce que dit le clip (Whisper du Studio, par le routeur), comparé aux répliques
     du texte. Le 28/09, le juge a dit « ok » à des images justes quand la réplique
     anglaise avait disparu (remarque du propriétaire) : il ne voit que les images."""
-    if not video_h3.repliques(texte):
-        return video_h3.comparer_paroles(texte, "")
+    # Un plan sans réplique est écouté aussi : le 30/09 (film du parc, plan 3), H3 y a
+    # fait dire du français inventé, et le juge, qui n'écoutait pas, l'a laissé passer.
+    muet = not video_h3.repliques(texte)
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
+        if muet:
+            return video_h3.comparer_paroles(texte, "")
         return {"erreur": "L'écoute n'est pas joignable d'ici (clé interne du routeur absente)."}
-    ecartes = []
+    ecartes, sans_segments = [], []
 
     async def transcrire(client, nom, octets, type_mime):
         # Les segments et leur probabilité de silence : un passage sans voix devenait
@@ -5179,7 +5191,22 @@ async def _ecouter(video: bytes, texte: str) -> dict:
         if isinstance(d.get("segments"), list) and d["segments"]:
             t, sans = video_h3.segments_parles(d["segments"])
             ecartes.extend(sans)
+        else:
+            sans_segments.append(nom)
         return t
+
+    if muet:
+        # Le clip entier suffit : on cherche une voix, pas une réplique à retrouver.
+        async with httpx.AsyncClient(timeout=300) as client:
+            entendu = await transcrire(client, "clip.mp4", video, "video/mp4")
+        if entendu is None:
+            return {"erreur": "L'écoute du clip a échoué (transcription du routeur)."}
+        # Sans segments (repli local), les mots inventés sur un souffle ne sont pas
+        # écartés : on ne condamne pas sur un tel texte, on le montre à vérifier.
+        resultat = video_h3.comparer_paroles(texte, entendu, sur=not sans_segments)
+        if ecartes:
+            resultat["ecartes"] = ecartes
+        return resultat
 
     # Le clip entier, puis chaque passage parlé à part : sur le clip entier,
     # Whisper garde une seule langue (essai du 28/09 : une réplique perdue).

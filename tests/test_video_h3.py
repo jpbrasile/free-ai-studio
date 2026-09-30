@@ -589,6 +589,29 @@ def test_sans_l_option_on_prolonge_par_la_derniere_image(h3, monkeypatch):
     assert v.garder_latent(d, "c" * 32) is d and "latent_vers" not in d
 
 
+def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3, monkeypatch):
+    """30/09 : une suite partait de la dernière image seule, en texte brut ; Marc y était
+    réinventé, sa voix aussi. Elle garde maintenant ses fiches quand elles tiennent."""
+    v = h3.video_h3
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_image(james, "face", PNG)
+    d = demande(mode="references", fiches=[lea, james], langues={lea: "French", james: "English"},
+                image_paroles="Léa regarde the James et dit « Oui. »")
+    plan = v.preparer_prolonger(d, _clip_reussi(h3), PNG)
+    invite = plan["resume_public"]["invite"]
+    assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>. "
+                             "<Subject 2> is the person in <Picture 2>. ")
+    assert "detailed_description: <Picture 3> is the first frame of [Shot 1]. " in invite
+    assert "<Subject 1> (S1) regarde <Subject 2> et dit <d>[French] Oui.</d>" in invite
+    assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
+    assert plan["resume_public"]["voie"] == "image"
+    # Sans fiche, rien ne change : la dernière image seule.
+    seule = v.preparer_prolonger(demande(), _clip_reussi(h3, "d" * 32), PNG)
+    assert list(seule["demande"]["images"]) == ["premiere.png"]
+
+
 def test_avec_l_option_on_prolonge_par_troncon(h3, monkeypatch):
     v = h3.video_h3
     monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
@@ -1165,7 +1188,7 @@ def test_une_fiche_objet_devient_un_sujet_unique_qui_ne_parle_pas(h3):
     inv = d["resume_public"]["invite"]
     assert "<Subject 2> is the object in <Picture 2>." in inv
     assert "there is exactly one of it in every frame" in inv
-    assert "<Subject 2> lies on the floor" in inv and "picks up the <Subject 2>" in inv
+    assert "<Subject 2> lies on the floor" in inv and "picks up <Subject 2>" in inv
     assert "<Subject 2> wears" not in inv and "<Subject 1> wears a red coat" in inv
     # La réplique va à Léa, jamais à l'objet nommé dans la même phrase.
     assert "<Subject 2> (S1)" not in inv and "(S1)" in inv
@@ -1181,7 +1204,7 @@ def test_les_mains_une_pose_de_reference_une_regle_et_le_juge(h3):
     inv = v.preparer({"mode": "references", "fiches": [lea, prise], "longueur": 124,
                       "image_paroles": "Léa holds the ball in the shooting grip and says « Go. »"})["resume_public"]["invite"]
     assert "<Subject 2> is the hand pose in <Picture 2>." in inv and "it adds no person" in inv
-    assert "in the <Subject 2>" in inv and "<Subject 2> (S1)" not in inv
+    assert "in <Subject 2>" in inv and "the <Subject 2>" not in inv and "<Subject 2> (S1)" not in inv
     assert "what each hand and its fingers do" in v.consigne_decoupage("x")
     assert "concrete gesture" in v.consigne_continuite([{"image_paroles": "x", "enchainement": "coupe"}], "x")
     assert "Look at the hands" in v.consigne_jugement(["Léa"], "x")
@@ -1503,6 +1526,10 @@ def test_le_profil_voix_part_avec_les_photos_en_audio_de_reference(h3, sans_regl
     assert g["10"]["inputs"]["ref_audios.ref_audio_0"] == ["70", 0]
     # Le script de la machine pose les sons à côté des images.
     assert '**(D.get("sons") or {})' in v._SCRIPT
+    # Parc, 30/09 : un plan où James se tait part sans sa voix (H3 le faisait parler).
+    for muet in ("James regarde Léa.", "Léa dit « Oui. » James sourit."):
+        plan = v.preparer(dict(d, image_paroles=muet))
+        assert plan["demande"]["sons"] == {} and "<Audio" not in plan["resume_public"]["invite"]
     # Sans voix, rien ne change.
     v.fiche_retirer_voix(james)
     plan = v.preparer(d)
@@ -1701,6 +1728,29 @@ def test_l_ecoute_ecarte_les_mots_inventes_sur_un_passage_sans_voix(h3, monkeypa
     monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [])
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille("", ["Bye. Désolé."], [], {}))
     assert asyncio.run(h3._ecouter(b"CLIP", "« Désolé. »"))["entendu"] == "Bye. Désolé."
+
+
+def test_un_plan_sans_replique_est_ecoute_et_une_voix_y_est_une_faute(h3, monkeypatch):
+    """Parc, 30/09, plan 3 : aucune réplique écrite, et H3 fait dire « Bien. Jaffer,
+    vous étiez… » ; le juge n'écoutait pas les plans sans réplique."""
+    import asyncio
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    monkeypatch.setattr(h3.montage, "passages_parles", lambda video: [])
+    parle = {"text": "Bien. Jaffer, vous étiez", "no_speech_prob": 0.26}
+    souffle = {"text": "Bye.", "no_speech_prob": 0.74}
+    for reponse, ok, doute in (({"text": parle["text"], "segments": [parle]}, False, False),
+                               ({"text": "Bye.", "segments": [souffle]}, None, False),
+                               ({"text": " ... ", "segments": [{"text": " ... ", "no_speech_prob": 0.1}]}, None, False),
+                               ("Bien. Jaffer", None, True)):   # repli local, sans segments
+        monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurOreille("", [reponse], [], {}))
+        r = asyncio.run(h3._ecouter(b"CLIP", "Leila recule en déroulant la ficelle."))
+        assert (r["ok"], r["doute"]) == (ok, doute), reponse
+    r = h3.video_h3.comparer_paroles("Leila recule.", "Bien. Jaffer, vous étiez")
+    assert h3.video_h3.defaut_de_paroles(r, 10.3)["quoi"] == (
+        "Aucune réplique écrite ; le clip dit : « Bien. Jaffer, vous étiez »."
+    )
+    assert h3.regles.regle_paroles(r)["ok"] is False
+    assert h3.regles.regle_paroles(h3.video_h3.comparer_paroles("Leila recule.", ""))["ok"] is None
 
 
 def test_une_replique_entendue_a_moitie_est_a_verifier_pas_un_defaut():
@@ -2252,8 +2302,10 @@ def test_3_l_ecoute_compare_les_repliques_attendues():
     moitie = v.comparer_paroles("« Is this seat taken? »", "Is this")
     assert moitie["ok"] is None and moitie["doute"] is True and v.defaut_de_paroles(moitie, 0) is None
     assert v.comparer_paroles("« Is this seat taken? »", "Is")["ok"] is False
-    rien = v.comparer_paroles("Ils marchent", "de la musique")
+    rien = v.comparer_paroles("Ils marchent", "")
     assert rien["ok"] is None and v.defaut_de_paroles(rien, 0) is None
+    # Depuis le 30/09, un plan sans réplique qui parle est un défaut (parc, plan 3).
+    assert v.comparer_paroles("Ils marchent", "de la musique")["ok"] is False
     manque = v.comparer_paroles("« Non. »", "")
     assert v.defaut_de_paroles(manque, 5.17) == {"t_s": 5.2, "quoi": "Réplique attendue « Non. » ; le clip dit : « rien »."}
 
@@ -3071,7 +3123,28 @@ def test_la_regle_4_sait_quelles_voix_partent(h3):
     v = h3.video_h3
     ids = [v.fiche_creer(n, "x")["id"] for n in ("A", "B", "C", "D")]
     fiches = [{"id": i, "nom": n, "genre": "personne", "voix": {"langue": "French"}} for i, n in zip(ids, "ABCD")]
-    assert h3._voix_envoyees({"enchainement": "suite"}, fiches) == set()
-    assert h3._voix_envoyees({"enchainement": "coupe"}, fiches) == set(ids[:3])
+    tous = "A dit « Un. » B dit « Deux. » C dit « Trois. » D dit « Quatre. »"
+    assert h3._voix_envoyees({"enchainement": "suite", "image_paroles": tous}, fiches) == set()
+    assert h3._voix_envoyees({"enchainement": "coupe", "image_paroles": tous}, fiches) == set(ids[:3])
     # Parti d'une image sans photo de fiche : mode « première image », aucune voix.
-    assert h3._voix_envoyees({"enchainement": "coupe", "image_depart": "x"}, fiches) == set()
+    assert h3._voix_envoyees({"enchainement": "coupe", "image_depart": "x", "image_paroles": tous}, fiches) == set()
+    # Parc, 30/09 : seuls ceux qui parlent dans le plan emportent leur voix.
+    assert h3._voix_envoyees({"enchainement": "coupe", "image_paroles": "D dit « Oui. » A sourit."},
+                             fiches) == {ids[3]}
+    assert h3._voix_envoyees({"enchainement": "coupe", "image_paroles": "A et B marchent."}, fiches) == set()
+
+
+def test_trop_de_photos_avec_l_image_de_depart_garde_les_visages_et_les_voix(h3):
+    """Film parc2, 30/09 : 4 + 4 + 1 photos et l'image de départ dépassaient 9 images ;
+    le plan partait en « première image », sans fiche ni voix. Le visage de face de
+    chaque personne suffit alors, et la voix part."""
+    v = h3.video_h3
+    ids = [v.fiche_creer(n, "x")["id"] for n in ("A", "B", "C")]
+    for fid in ids:
+        for angle in ("face", "profil", "trois_quarts", "pied"):
+            v.fiche_poser_image(fid, angle, PNG)
+    assert v.photos_avec_depart(ids[:1]) == (4, False)
+    assert v.photos_avec_depart(ids) == (3, True)
+    fiches = [{"id": i, "nom": n, "genre": "personne", "voix": {"langue": "French"}} for i, n in zip(ids, "ABC")]
+    assert h3._voix_envoyees({"enchainement": "coupe", "image_depart": "x",
+                              "image_paroles": "A dit « Un. » B dit « Deux. » C dit « Trois. »"}, fiches) == set(ids)

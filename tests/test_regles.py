@@ -100,12 +100,15 @@ def test_regle_4_chaque_locuteur_a_sa_voix_dans_sa_langue(r):
     assert regle([LEILA])["ok"] is None
 
 
-def test_regle_4_une_suite_part_sans_voix(r):
-    """Parc, plan 3 : « Ils volent ! » dans une suite, dit d'un timbre inventé."""
+def test_regle_4_une_suite_sans_fiche_part_sans_voix(r):
+    """Parc, plan 3 : « Ils volent ! » dans une suite, dit d'un timbre inventé. Depuis le
+    30/09, une suite garde ses fiches et ses voix quand elles tiennent avec la dernière
+    image ; sinon (envoyees vide) la faute reste."""
     marc = dict(MARC, voix={"source": "generee", "duree_s": 5.0, "langue": "French"})
     plan = {"image_paroles": "Marc says : « Il vole ! »", "ambiance": "", "enchainement": "suite", "elements": []}
-    x = r.regle_voix(plan, [marc], {}, "French")
-    assert x["ok"] is False and "plan « suite »" in x["pourquoi"]
+    x = r.regle_voix(plan, [marc], {}, "French", envoyees=set())
+    assert x["ok"] is False and "ne part pas avec ce plan (plan « suite »" in x["pourquoi"]
+    assert r.regle_voix(plan, [marc], {}, "French", envoyees={"m1"})["ok"] is True
 
 
 def test_qui_parle_suit_la_regle_d_attribution(r):
@@ -144,6 +147,16 @@ def test_regle_5_les_entrees_que_la_revue_a_trouvees(r, texte):
             "elements": [el("Léa", "in the foreground, left"), el("James", "background, right")]}
     x = r.regle_deux_fois([plan], 1)
     assert x["ok"] is False and ("Léa" in x["pourquoi"] or "James" in x["pourquoi"])
+
+
+def test_regle_5_revenir_dans_le_cadre_n_est_pas_entrer(r):
+    """Film parc2, 30/09 : « walks back to the middle ground » est un déplacement."""
+    plan = {"image_paroles": "Marc picks up the kite, walks back to the middle ground, centre, and stops.",
+            "ambiance": "", "enchainement": "suite",
+            "elements": [el("Marc", "background, right"), el("the kite", "on the grass")]}
+    assert r.regle_deux_fois([plan], 1)["ok"] is True
+    plan["image_paroles"] = "Marc walks back into the shop."
+    assert r.regle_deux_fois([plan], 1)["ok"] is False
 
 
 def test_regle_5_un_second_exemplaire_et_une_entree_sans_nom(r):

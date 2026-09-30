@@ -165,7 +165,7 @@ def regle_voix(plan: dict, fiches: list, langues: dict, langue: str, envoyees=No
     if not dites:
         return resultat(None, "Pas de réplique dans ce plan.")
     if envoyees is None:
-        envoyees = set() if plan.get("enchainement") == "suite" else {f["id"] for f in fiches}
+        envoyees = {f["id"] for f in fiches}
     fautes, locuteurs = [], []
     for replique, k, sans_fiche in dites:
         court = "« %s »" % (replique[:40] + ("…" if len(replique) > 40 else ""))
@@ -186,16 +186,16 @@ def regle_voix(plan: dict, fiches: list, langues: dict, langue: str, envoyees=No
             fautes.append(court + " : %s parle %s, sa voix est en %s" % (
                 f["nom"], video_h3.LANGUES_PAROLES.get(voulue, voulue),
                 video_h3.LANGUES_PAROLES.get(voix["langue"], voix["langue"])))
-        elif f["id"] not in envoyees and plan.get("enchainement") != "suite":
-            fautes.append(court + " : la voix de %s ne part pas avec ce plan" % f["nom"])
+        elif f["id"] not in envoyees:
+            fautes.append(court + " : la voix de %s ne part pas avec ce plan%s" % (
+                f["nom"], " (plan « suite » parti de la dernière image seule)"
+                if plan.get("enchainement") == "suite" else ""))
         if f["id"] not in locuteurs:
             locuteurs.append(f["id"])
-    # Un plan « suite » part de la dernière image, sans fiche : aucune voix ne part avec
-    # lui (audit du 30/09 : « Ils volent ! » dit par un Marc inventé, d'un timbre inconnu).
-    if plan.get("enchainement") == "suite":
-        fautes.append("plan « suite » : il part sans fiche, donc sans voix ; faites-en une coupe "
-                      "ou déplacez la réplique")
-    elif len(locuteurs) > video_h3.VOIX_PAR_PLAN:
+    # Audit du 30/09 : « Ils volent ! » dit par un Marc inventé, d'un timbre inconnu, dans
+    # une suite partie sans fiche. Depuis, une suite garde ses fiches quand elles tiennent
+    # avec la dernière image ; l'appelant dit lesquelles partent (`envoyees`).
+    if len(locuteurs) > video_h3.VOIX_PAR_PLAN:
         fautes.append("%d personnages parlent, %d voix au plus partent avec un plan" % (
             len(locuteurs), video_h3.VOIX_PAR_PLAN))
     return resultat(not fautes, " ; ".join(fautes) + ("." if fautes else ""))
@@ -208,10 +208,13 @@ def regle_voix(plan: dict, fiches: list, langues: dict, langue: str, envoyees=No
 # première image la montrait déjà ; deux Léa sur l'image de départ). La revue du 30/09
 # a trouvé « walks into the room », « comes back », « reappears », « runs in », « is
 # back », et le sujet dit par un pronom (« She enters »).
+# « back » seul ne compte qu'après come : « walks back to the centre » est un déplacement
+# dans le cadre (film parc2, 30/09 : faux « Marc est déjà à l'image et le plan le fait entrer »).
 _ENTREE = re.compile(
     r"\b(?:enters?|entering|entered|re-?enters?|(?:walks?|walking|walked|runs?|running|ran|rushes|rushing|"
     r"rushed|hurries|hurrying|hurried|steps?|stepping|stepped|comes?|coming|came|bursts?|slips?|strolls?|"
-    r"wanders?|marches|marching|dashes|dashing|skips?|skipping|jogs?|jogging) (?:in|into|back)\b|"
+    r"wanders?|marches|marching|dashes|dashing|skips?|skipping|jogs?|jogging) (?:back )?(?:in|into)\b|"
+    r"(?:comes?|coming|came) back\b|"
     r"(?:re)?appears?|(?:re)?appearing|(?:re)?appeared|returns?|returning|returned|is back|are back|"
     r"comes? into (?:view|frame|the frame|shot)|into (?:view|frame|the frame|shot)|pops? up|popping up|"
     r"emerges?|emerging|emerged|arrives? (?:in|into) (?:the )?(?:frame|shot|view|scene|room|shop|park))",
@@ -485,6 +488,11 @@ def regle_paroles(paroles) -> dict:
     if not isinstance(paroles, dict) or paroles.get("erreur"):
         return resultat(None, "L'écoute n'a pas pu se faire.")
     if not paroles.get("attendu"):
+        # 30/09 : un plan sans réplique où le clip parle quand même est une faute.
+        if paroles.get("ok") is False:
+            return resultat(False, "Aucune réplique écrite, et le clip parle : « %s »." % paroles.get("entendu", ""))
+        if paroles.get("doute"):
+            return resultat(None, "Aucune réplique écrite ; voix possible : à vérifier à l'oreille.")
         return resultat(None, "Pas de réplique dans ce plan.")
     if paroles.get("ok") is None:
         return resultat(None, "Écoute douteuse : à vérifier à l'oreille.")
