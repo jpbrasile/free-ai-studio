@@ -55,6 +55,7 @@ def client(sandbox):
     ("post", "/video-h3/scenario/" + "a" * 32 + "/rejouer"), ("post", "/video-h3/depart/" + "a" * 24 + "/comparer"),
     ("post", "/video-h3/visage/comparer"), ("post", "/video-h3/fiches/" + "a" * 12 + "/planche"),
     ("delete", "/video-h3/fiches/" + "a" * 12 + "/planche"),
+    ("get", "/video-h3/agrandir/prix?job=" + "a" * 32), ("post", "/video-h3/agrandir"),
 ])
 def test_sans_le_reglage_h3_n_existe_pas(h3, monkeypatch, methode, chemin):
     monkeypatch.delenv("VIDEO_H3_ACTIF")
@@ -2665,3 +2666,143 @@ def test_l_image_de_depart_prend_la_tenue_de_son_plan(h3, monkeypatch):
     refs = demandes[0]["image_reference"]
     assert refs == ["data:image/png;base64," + PNG, "data:image/png;base64," + ROBE]
     assert "vêtue exactement comme sur l'image jointe 2" in demandes[0]["prompt"]
+
+
+# --- Agrandir (SeedVR2, 30/09) : le devis, les coupes, le script, la route. ------
+
+def test_agrandir_coupe_aux_fins_de_plans_puis_en_parts_egales(sandbox):
+    a = sandbox.agrandir
+    assert a.bornes(493, [124, 247, 370, 493]) == [0, 124, 247, 370, 493]
+    assert a.bornes(300) == [0, 100, 200, 300]
+    # Une fin hors du film est ignorée ; un plan trop long est partagé.
+    assert a.bornes(130, [124, 999]) == [0, 124, 130]
+    assert a.bornes(400, [124]) == [0, 124, 216, 308, 400]
+    assert all(y - x <= a.MORCEAU_MAX for x, y in zip(a.bornes(1000), a.bornes(1000)[1:]))
+
+
+def test_agrandir_le_devis_vient_de_la_mesure_et_refuse_le_trop_long(sandbox):
+    a = sandbox.agrandir
+    d = a.prix(121, "4k")
+    assert d["secondes_estimees"] == round(a.DEMARRAGE_S + 578.9)
+    assert 0 < d["estime_usd"] < d["pire_usd"]
+    assert d["delai_s"] <= a.DUREE_MAX_S
+    assert a.prix(121, "x2")["estime_usd"] < d["estime_usd"]
+    with pytest.raises(ValueError, match="choisissez ×2"):
+        a.prix(800, "4k")
+    with pytest.raises(ValueError):
+        a.prix(121, "8k")
+
+
+def test_agrandir_le_graphe_est_celui_du_modele_officiel(sandbox):
+    a = sandbox.agrandir
+    for e, decoupe in (("x2", False), ("4k", True)):
+        g = a.graphe("morceau_0.mp4", e, "agrandi/m00")
+        classes = {n["class_type"] for n in g.values()}
+        assert classes <= set(a.CLASSES)
+        assert ("SeedVR2TemporalChunk" in classes) is decoupe
+        assert g["13"]["inputs"]["color_correction_method"] == "lab"
+        assert g["14"]["inputs"]["audio"] == ["2", 1]
+
+
+def test_agrandir_le_script_est_du_python_et_n_importe_rien_de_comfyui(sandbox):
+    a = sandbox.agrandir
+    code = a.construire_script(b"mp4", "4k", [0, 124, 248])
+    arbre = ast.parse(code)
+    importes = {n.names[0].name.split(".")[0] for n in ast.walk(arbre) if isinstance(n, ast.Import)}
+    assert not importes & {"comfy", "nodes", "folder_paths"}
+    d = json.loads(base64.b64decode(re.search(r'b64decode\("([^"]+)"\)', code).group(1)))
+    assert len(d["graphes"]) == 2 and d["coupes"] == [0, 124, 248]
+    assert d["revision"] == a.HF_REVISION and d["base_poids"].startswith(sandbox.video_h3.POINT_DE_MONTAGE)
+    with pytest.raises(ValueError):
+        a.demande(b"0" * (a.VIDEO_MAX_OCTETS + 1), "x2", [0, 10])
+
+
+def test_agrandir_phrase_d_echec(sandbox):
+    a = sandbox.agrandir
+    assert "délai" in a.phrase_d_echec("DELAI au morceau 2")
+    assert "nœuds" in a.phrase_d_echec("NOEUD_ABSENT ['SeedVR2Preprocess']")
+    assert a.phrase_d_echec("rien de connu") == ""
+
+
+def _source_agrandir(h3, monkeypatch, tmp_path, images=248):
+    video = tmp_path / "film.mp4"
+    video.write_bytes(b"mp4")
+    h3.write_job("b" * 32, {"id": "b" * 32, "status": "succeeded", "titre": "Le parc"})
+    monkeypatch.setattr(h3, "_clips_h3", lambda: [{"id": "b" * 32}])
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: images)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    lance = []
+    monkeypatch.setattr(h3, "run_agrandir", lambda *a: lance.append(a))
+    return lance
+
+
+def test_agrandir_le_prix_avant_la_location(h3, monkeypatch, tmp_path):
+    _source_agrandir(h3, monkeypatch, tmp_path)
+    assert client(h3).get("/video-h3/agrandir/prix?job=" + "c" * 32, headers=CLE).status_code == 404
+    d = client(h3).get("/video-h3/agrandir/prix?job=" + "b" * 32, headers=CLE).json()
+    assert d["images"] == 248 and [e["echelle"] for e in d["echelles"]] == ["x2", "4k"]
+    assert all("estime_usd" in e for e in d["echelles"])
+
+
+def test_agrandir_lance_un_travail_neuf_coupe_aux_plans_du_scenario(h3, monkeypatch, tmp_path):
+    lance = _source_agrandir(h3, monkeypatch, tmp_path)
+    monkeypatch.setattr(h3.video_h3, "scenario_lire", lambda sid: {"fins_images": [124, 248]})
+    r = client(h3).post("/video-h3/agrandir", headers=CLE,
+                        json={"job": "b" * 32, "echelle": "4k", "scenario": "d" * 32})
+    assert r.status_code == 200, r.text
+    jid, code, delai = lance[0]
+    assert jid != "b" * 32 and delai == h3.agrandir.prix(248, "4k")["delai_s"]
+    d = json.loads(base64.b64decode(re.search(r'b64decode\("([^"]+)"\)', code).group(1)))
+    assert d["coupes"] == [0, 124, 248]
+    v = h3.read_job(jid)["video"]
+    # Hors des clips H3 : une vidéo agrandie n'entre pas dans un montage 480p.
+    assert not v["moteur"].startswith("MiniMax H3") and v["source"] == "b" * 32
+    assert h3.read_job(jid)["titre"] == "Le parc — 4K (2160p)"
+    # Un scénario qui ne décrit pas ce film : parts égales.
+    monkeypatch.setattr(h3.video_h3, "scenario_lire", lambda sid: {"fins_images": [124, 300]})
+    client(h3).post("/video-h3/agrandir", headers=CLE, json={"job": "b" * 32, "echelle": "x2", "scenario": "d" * 32})
+    d = json.loads(base64.b64decode(re.search(r'b64decode\("([^"]+)"\)', lance[1][1]).group(1)))
+    assert d["coupes"] == [0, 124, 248]  # 248 = 2 morceaux égaux
+
+
+def test_agrandir_refuse_avant_de_louer(h3, monkeypatch, tmp_path):
+    lance = _source_agrandir(h3, monkeypatch, tmp_path)
+    assert client(h3).post("/video-h3/agrandir", headers=CLE,
+                           json={"job": "b" * 32, "echelle": "8k"}).status_code == 422
+
+    def refus(*a, **k):
+        raise h3.budget_modal.BudgetDepasse("Budget Modal du mois atteint.")
+
+    monkeypatch.setattr(h3.budget_modal, "verifier", refus)
+    r = client(h3).post("/video-h3/agrandir", headers=CLE, json={"job": "b" * 32, "echelle": "x2"})
+    assert r.status_code == 429 and "Budget" in r.json()["detail"]
+    monkeypatch.setattr(h3, "modal_configured", lambda: False)
+    assert client(h3).post("/video-h3/agrandir", headers=CLE,
+                           json={"job": "b" * 32, "echelle": "x2"}).status_code == 503
+    assert lance == []
+
+
+def test_agrandir_encaisse_la_location_meme_en_echec(h3, monkeypatch):
+    jid = "e" * 32
+    h3.write_job(jid, {"id": jid, "status": "queued", "artifacts": []})
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: {"exit_code": 8})
+
+    def fini(j, ou, resultat):
+        job = h3.read_job(j)
+        job.update({"status": "failed", "stderr": "DELAI au morceau 1"})
+        h3.write_job(j, job)
+
+    monkeypatch.setattr(h3, "finish_execution", fini)
+    vus = []
+    monkeypatch.setattr(h3.budget_modal, "consommer", lambda *a, **k: vus.append(a) or {"usd": 1})
+    h3.run_agrandir(jid, "code", 600)
+    job = h3.read_job(jid)
+    assert vus and vus[0][:2] == ("video", h3.agrandir.GPU)
+    assert "délai" in job["error"]
+
+
+def test_la_page_propose_d_agrandir_clips_et_films(h3):
+    page = client(h3).get("/video-h3", headers=CLE).text
+    assert 'id="clip_agrandir"' in page and 'id="montage_agrandir"' in page
+    assert "/video-h3/agrandir/prix?job=" in page and "au pire" in page

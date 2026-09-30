@@ -2604,6 +2604,7 @@ PAGE_HTML = r"""<!doctype html>
   <div id="resultat" hidden>
     <video id="lecteur" controls playsinline></video>
     <p><a id="telecharger" href="#">Enregistrer le clip</a></p>
+    <div id="clip_agrandir" class="agrandir"></div>
     <p class="note" id="fiche"></p>
     <button id="juger_clip">Faire juger ce clip (gratuit : images et répliques)</button>
     <p class="note" id="jugement_clip"></p>
@@ -2623,6 +2624,7 @@ PAGE_HTML = r"""<!doctype html>
     <b>🎬 Le film</b>
     <video id="montage_lecteur" controls playsinline></video>
     <p><a id="montage_telecharger" href="#">Enregistrer le film</a></p>
+    <div id="montage_agrandir" class="agrandir"></div>
   </div>
   <details class="plie" open><summary>Tourner un scénario neuf</summary>
     <span class="note">le scénario, découpé en plans par le chat du Studio, puis tourné plan par plan
@@ -2973,6 +2975,72 @@ function rafraichir(){
   });
 }
 
+// Agrandir un clip ou un film, visages compris (SeedVR2, 30/09) : le prix d'abord,
+// puis la location sur un clic. La vidéo d'origine reste telle quelle.
+async function blocAgrandir(ou, jid, sid){
+  const b = document.getElementById(ou);
+  b.textContent = "";
+  const r = await fetch("/video-h3/agrandir/prix?job=" + jid, {headers: H});
+  if (!r.ok) return;
+  const d = await r.json();
+  const titre = document.createElement("b");
+  titre.textContent = "Agrandir (visages et détails plus nets)";
+  b.appendChild(titre);
+  const etat = document.createElement("p");
+  etat.className = "note";
+  for (const e of d.echelles){
+    const k = document.createElement("button");
+    if (e.refus){
+      k.disabled = true;
+      k.title = e.refus;
+      k.textContent = e.titre + " : trop long";
+    } else {
+      k.textContent = e.titre + " — ≈ " + fr(e.estime_usd, 2) + " $ (au pire " + fr(e.pire_usd, 2)
+        + " $), ≈ " + fr(e.secondes_estimees / 60, 0) + " min";
+      k.addEventListener("click", () => lancerAgrandir(b, etat, jid, sid, e.echelle));
+    }
+    b.appendChild(k);
+  }
+  b.appendChild(etat);
+}
+
+async function lancerAgrandir(b, etat, jid, sid, echelle){
+  b.querySelectorAll("button").forEach(k => k.disabled = true);
+  etat.textContent = "Location de la machine…";
+  const r = await fetch("/video-h3/agrandir", {method: "POST", headers: H,
+    body: JSON.stringify({job: jid, echelle: echelle, scenario: sid})});
+  const d = await r.json();
+  if (!r.ok){
+    etat.textContent = typeof d.detail === "string" ? d.detail : "Refusé.";
+    b.querySelectorAll("button").forEach(k => k.disabled = !!k.title);
+    return;
+  }
+  const debut = Date.now();
+  const suivreAgrandi = async () => {
+    const j = await (await fetch("/video/jobs/" + d.id, {headers: H})).json();
+    if (j.status === "succeeded" && j.video_url){
+      etat.textContent = "Agrandi en " + fr((Date.now() - debut) / 60000, 0) + " min. ";
+      const a = document.createElement("a");
+      a.href = j.video_url + "&telecharger=1&nom=agrandi-" + echelle;
+      a.textContent = "Enregistrer la vidéo agrandie";
+      etat.appendChild(a);
+      const v = document.createElement("a");
+      v.href = j.video_url;
+      v.target = "_blank";
+      v.textContent = " (la voir)";
+      etat.appendChild(v);
+      return;
+    }
+    if (j.status === "failed" || j.status === "cancelled"){
+      etat.textContent = "Échec : " + (j.message || "voir le journal du travail " + d.id);
+      return;
+    }
+    etat.textContent = "Agrandissement en cours… " + fr((Date.now() - debut) / 60000, 0) + " min écoulées.";
+    setTimeout(suivreAgrandi, 15000);
+  };
+  suivreAgrandi();
+}
+
 function suivre(jid){
   fetch("/video/jobs/" + jid, {headers: H}).then(r => r.json()).then(j => {
     const st = document.getElementById("statut");
@@ -2981,6 +3049,7 @@ function suivre(jid){
       document.getElementById("resultat").hidden = false;
       document.getElementById("lecteur").src = j.video_url;
       document.getElementById("telecharger").href = j.video_url + "&telecharger=1&nom=clip-h3";
+      if (CLIP_COURANT !== jid) blocAgrandir("clip_agrandir", jid, "");
       const r = j.resume || {};
       const v = j.video || {};
       document.getElementById("fiche").textContent = "Graine " + r.graine + " ; " + fr(r.calcul_s, 0)
@@ -3625,6 +3694,7 @@ document.getElementById("montage_lancer").addEventListener("click", async () => 
   document.getElementById("montage_resultat").hidden = false;
   document.getElementById("montage_lecteur").src = j.video_url;
   document.getElementById("montage_telecharger").href = j.video_url + "&telecharger=1&nom=film-h3";
+  blocAgrandir("montage_agrandir", d.id, "");
   chargerClips();
 });
 
@@ -3928,6 +3998,8 @@ async function ouvrirScenario(sid){
     document.getElementById("montage_resultat").hidden = false;
     document.getElementById("montage_lecteur").src = sc.video_url;
     document.getElementById("montage_telecharger").href = sc.video_url + "&telecharger=1&nom=film-h3";
+    const m = /\/video\/jobs\/([0-9a-f]{32})\//.exec(sc.video_url);
+    if (m) blocAgrandir("montage_agrandir", m[1], sid);
   }
 }
 

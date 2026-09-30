@@ -22,6 +22,7 @@ from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Upload
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+import agrandir
 import budget_modal
 import chanson
 import chanson_maison
@@ -4279,6 +4280,122 @@ def video_h3_clips(authorization: Optional[str] = Header(default=None)):
     _h3_ou_404()
     auth(authorization)
     return {"clips": _clips_h3(), "clips_max": video_h3.MONTAGE_CLIPS_MAX, "chansons": _chansons_pretes()}
+
+
+# --- Agrandir un clip ou un film H3, visages compris (SeedVR2, agrandir.py) --------
+
+def _agrandir_source(jid: str) -> tuple:
+    """Le fichier et le nombre d'images d'un clip ou d'un film H3 de ce Studio."""
+    if jid not in {c["id"] for c in _clips_h3()}:
+        raise HTTPException(404, "Clip ou film H3 introuvable.")
+    chemin = _video_h3_octets(jid)
+    try:
+        images = montage.images(chemin)
+    except montage.MontageImpossible as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return chemin, images
+
+
+def _agrandir_coupes(images: int, sid: str) -> list:
+    """Aux fins de plans du scénario quand il est donné et qu'il décrit bien ce film ;
+    sinon en parts égales. Un raccord coupé au milieu d'un plan se verrait."""
+    fins = []
+    if sid:
+        try:
+            fins = _fins_images(video_h3.scenario_lire(sid))
+        except ValueError:
+            fins = []
+        if not fins or abs(fins[-1] - images) > 2:
+            fins = []
+    return agrandir.bornes(images, fins)
+
+
+@app.get("/video-h3/agrandir/prix")
+def video_h3_agrandir_prix(job: str = Query(...), authorization: Optional[str] = Header(default=None)):
+    """Ce que coûterait chaque agrandissement, affiché AVANT de louer."""
+    _h3_ou_404()
+    auth(authorization)
+    _, images = _agrandir_source(job)
+    echelles = []
+    for e in agrandir.ECHELLES:
+        try:
+            echelles.append(agrandir.prix(images, e))
+        except ValueError as exc:
+            echelles.append({"echelle": e, "titre": agrandir.ECHELLES[e]["titre"], "refus": str(exc)})
+    return {"images": images, "echelles": echelles, "budget": budget_modal.vue("video")}
+
+
+def run_agrandir(jid: str, code: str, delai: int):
+    """L'agrandissement chez Modal ; le temps de location est encaissé même en échec."""
+    debut = time.time()
+    job = read_job(jid)
+    job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
+    write_job(jid, job)
+    try:
+        finish_execution(jid, "modal", modal_execute(
+            jid, code, True, True,
+            gpu_type=agrandir.GPU,
+            timeout_s=delai,
+            memory_mb=agrandir.MEMOIRE_MB,
+            coeurs=agrandir.COEURS,
+            paquets=agrandir.PAQUETS,
+            apt=video_h3.APT,
+            commandes=video_h3.COMMANDES,
+            volume=video_h3.VOLUME,
+            point_de_montage=video_h3.POINT_DE_MONTAGE,
+            # Compté juste en dessous, sur l'usage « video » : pas deux fois.
+            usage=None,
+        ))
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        etat = budget_modal.consommer("video", agrandir.GPU, time.time() - debut,
+                                      agrandir.MEMOIRE_MB, coeurs=agrandir.COEURS)
+        job = read_job(jid)
+        job["budget"] = etat
+        if job.get("status") == "failed" and not job.get("error"):
+            phrase = agrandir.phrase_d_echec(job.get("stderr", ""))
+            if phrase:
+                job["error"] = phrase
+        write_job(jid, job)
+
+
+@app.post("/video-h3/agrandir")
+async def video_h3_agrandir(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{job, echelle ("x2" ou "4k"), scenario?} : un travail neuf, dont la vidéo est
+    l'agrandie. Le clip d'origine n'est pas touché. Rien n'est loué si le prix au
+    pire dépasse ce qui reste."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    source = str(corps.get("job") or "")
+    echelle = str(corps.get("echelle") or "")
+    chemin, images = _agrandir_source(source)
+    try:
+        devis = agrandir.prix(images, echelle)
+        coupes = _agrandir_coupes(images, str(corps.get("scenario") or ""))
+        code = agrandir.construire_script(chemin.read_bytes(), echelle, coupes)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _modal_ou_refus()
+    try:
+        budget_modal.verifier("video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
+                              quoi="L'agrandissement", coeurs=agrandir.COEURS)
+    except budget_modal.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+    jid = uuid.uuid4().hex
+    origine = read_job(source)
+    write_job(jid, {
+        "id": jid, "provider": "modal", "title": "Free AI Studio agrandissement", "gpu": True,
+        "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+        # Pas « MiniMax H3 » : une vidéo agrandie n'entre pas dans un montage de clips 480p.
+        "video": {"moteur": "SeedVR2 (agrandissement)", "source": source, "echelle": echelle,
+                  "morceaux": len(coupes) - 1, "devis": devis,
+                  "secondes": round(images / video_h3.IMAGES_PAR_SECONDE, 2)},
+        "titre": ((origine.get("titre") or "Vidéo H3") + " — " + devis["titre"])[:200],
+    })
+    threading.Thread(target=run_agrandir, args=(jid, code, devis["delai_s"]), daemon=True).start()
+    return read_job(jid)
 
 
 @app.post("/video-h3/scenario/ordonner")
