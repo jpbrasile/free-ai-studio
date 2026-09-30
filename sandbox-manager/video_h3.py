@@ -4631,7 +4631,8 @@ async function chargerClips(){
     for (const c of (d.chansons || [])){
       const o = document.createElement("option");
       o.value = c.id;
-      o.textContent = c.titre + " (" + quandLocal(c.cree_a) + ")";
+      o.textContent = c.titre + " (" + quandLocal(c.cree_a) + ")"
+        + (c.voix_des_s != null ? " — voix possible dès " + c.voix_des_s + " s" : "");
       sc.appendChild(o);
     }
     if ((d.chansons || []).some(c => c.id === gardeSc)) sc.value = gardeSc;

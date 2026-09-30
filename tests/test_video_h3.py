@@ -2017,6 +2017,14 @@ def test_un_film_4k_se_sous_titre_en_francais_puis_prend_sa_musique(h3, monkeypa
     r = c.post("/video-h3/musique", headers=CLE, json={"film": st["id"], "chanson": "c" * 32, "sous_paroles": True})
     assert r.status_code == 200, r.text
     assert r.json()["video"]["moteur"] == "SeedVR2 (agrandissement)" and r.json()["video"]["echelle"] == "4k"
+    # Une voix entendue dans le morceau dès 27 s (30/09) : posé dès 0 s, il irait à
+    # 30,2 s -- refusé, avec le début qui passe ; posé à 3,5 s, accepté.
+    monkeypatch.setattr(h3, "_chansons_pretes",
+                        lambda: [{"id": "c" * 32, "titre": "Campus", "cree_a": 0, "voix_des_s": 27.0}])
+    r = c.post("/video-h3/musique", headers=CLE, json={"film": st["id"], "chanson": "c" * 32})
+    assert r.status_code == 400 and "27.0 s" in r.json()["detail"] and "3.2 s" in r.json()["detail"]
+    r = c.post("/video-h3/musique", headers=CLE, json={"film": st["id"], "chanson": "c" * 32, "debut_s": 3.5})
+    assert r.status_code == 200, r.text
     # L'écoute absente : refus avant tout travail.
     monkeypatch.delenv("FREE_TIER_MANAGER_KEY")
     assert c.post("/video-h3/sous-titres", headers=CLE, json={"film": hd}).status_code == 503
@@ -4114,3 +4122,49 @@ def test_la_page_propose_de_finaliser_le_film(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     assert 'id="montage_finaliser"' in page and 'blocFinaliser("montage_finaliser"' in page
     assert "/video-h3/finaliser/prix" in page and "/reprendre" in page and "au pire" in page
+
+
+def _video_grise(chemin, images, n=48, l=112, h=64):
+    """Une vidéo dont chaque image est `images(i)` (octets gris l x h)."""
+    brut = b"".join(images(i) for i in range(n))
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "gray", "-s", "%dx%d" % (l, h),
+                    "-r", "24", "-i", "-", "-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv420p", str(chemin)],
+                   input=brut, check=True)
+    return chemin.read_bytes()
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg absent")
+def test_un_visage_refait_qui_saute_est_signale(h3, tmp_path):
+    """Film campus, 30/09 : des visages refaits changeaient d'un coup en fin de passage.
+    Un carré qui glisse d'un pixel par image (le visage refait) passe ; le même qui
+    bondit de 30 pixels à l'image 40 est signalé, là et seulement là."""
+    fond = bytes((x * 2) % 256 for x in range(112)) * 64
+
+    def avec_carre(position):
+        def image(i):
+            ligne = bytearray(fond)
+            x0 = position(i)
+            for y in range(20, 40):
+                ligne[y * 112 + x0:y * 112 + x0 + 20] = b"\xff" * 20
+            return bytes(ligne)
+        return image
+
+    m = h3.montage
+    origine = _video_grise(tmp_path / "o.mp4", lambda i: fond)
+    doux = _video_grise(tmp_path / "d.mp4", avec_carre(lambda i: 10 + i))
+    saute = _video_grise(tmp_path / "s.mp4", avec_carre(lambda i: 10 + i + (30 if i >= 40 else 0)))
+    assert m.sauts_de_visages(origine, doux, [(0, 24), (24, 48)]) == []
+    trouves = m.sauts_de_visages(origine, saute, [(0, 24), (24, 48)])
+    assert [(t["de"], t["a"], t["image"]) for t in trouves] == [(24, 48, 40)]
+    assert trouves[0]["fois"] > m.SAUT_VISAGE_FOIS
+
+
+def test_un_film_trop_lourd_pour_la_reserve_finit_en_echec(h3, monkeypatch):
+    """Film campus 4K sous-titré, 30/09 : 147 Mo, mis de côté sans fichier, et « réussi »."""
+    monkeypatch.setattr(h3, "MAX_UPLOAD", 3)
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 24)
+    with pytest.raises(h3.montage.MontageImpossible, match="réserve"):
+        h3._film_h3(b"FILM-TROP-LOURD", {"mode": "musique", "mode_titre": "Film et musique"}, "Film trop lourd 30-09")
+    fiches = [json.loads(p.read_text(encoding="utf-8")) for p in h3.JOBS.glob("*/job.json")]
+    rates = [j for j in fiches if j.get("titre") == "Film trop lourd 30-09"]
+    assert rates and all(j["status"] == "failed" and "réserve" in j["error"] for j in rates)

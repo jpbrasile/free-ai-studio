@@ -634,10 +634,36 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
             # Deux licences quand la LoRA est fusionnee : celle du modele et la
             # sienne. La fiche du travail doit porter les deux, pas la premiere.
             "instrumental": lora,
-            "lora": (LORA["hf"] + " — " + LORA["licence"] + ", " + LORA["restriction"]
+            # Rien à chanter (LoRA, ou paroles faites de balises seules) : le Studio
+            # écoute le morceau fini et dit si une voix s'y entend (30/09/2026).
+            "sans_voix": lora or not re.sub(r"\[[^\]]*\]", "", paroles).strip(),
+            "lora":(LORA["hf"] + " — " + LORA["licence"] + ", " + LORA["restriction"]
                      + " ; révision non épinglée") if lora else None,
         },
     }
+
+
+# --- Une voix dans un morceau qui n'en veut pas (30/09/2026) ------------------
+# Film campus : deux morceaux Kaggle demandés sans voix (« [Instrumental] »).
+# Le premier chante dès 18 s, le second dit peut-être « a little bit » à 27 s.
+# Mesure du même soir : dans une chanson, la probabilité « sans parole » de
+# Whisper ne sépare RIEN -- le vrai chant du premier est à 0,52-0,60, le doute
+# du second à 0,59. Tout mot entendu compte donc, avec l'instant où il commence :
+# c'est jusque-là que le morceau peut servir sans voix.
+
+SECONDES_ECOUTE_MAX = 400   # au-delà des trois minutes d'une chanson : tout le morceau
+
+
+def premiere_voix(segments: list):
+    """(début en s, texte) du premier segment qui contient un mot, ou None."""
+    for s in segments or []:
+        texte = " ".join(str(s.get("text") or "").split())
+        if re.search(r"[^\W\d_]", texte):
+            try:
+                return round(float(s.get("start") or 0.0), 2), texte[:200]
+            except (TypeError, ValueError):
+                return 0.0, texte[:200]
+    return None
 
 
 def carnet_colab(demande: dict) -> dict:
@@ -1109,6 +1135,11 @@ function afficherChanson(j){
   if(r.coupee && r.coupee.son) notes.push("La chanson a atteint la durée choisie : elle s’arrête là, sans fin composée.");
   if(r.chemin && r.chemin.indexOf("officiel") !== 0) notes.push("Calculée par le chemin non officiel (" + echapper(r.chemin) + ").");
   (r.avertissements || []).forEach(a => notes.push(echapper(a)));
+  const e = j.ecoute;
+  if(e && e.voix_des_s != null) notes.push("<b>Une voix s’entend peut-être dès " + e.voix_des_s
+    + " s</b> (« " + echapper(e.entendu || "") + " ») : sous un film, n’en prenez que ce qui précède.");
+  else if(e && e.non_ecoutee) notes.push("Le Studio n’a pas pu écouter ce morceau : l’absence de voix n’est pas vérifiée.");
+  else if(e) notes.push("Écouté par le Studio : aucune voix entendue.");
   if(j.chanson && j.chanson.balise_ajoutee) notes.push("Vos paroles n’avaient aucune section : elles ont été chantées comme un seul couplet.");
   if(notes.length) html += '<p class="avert">' + notes.join("<br>") + "</p>";
   if(j.partition){
@@ -1306,6 +1337,11 @@ function suivre(id){
           etat.innerHTML = "⏳ En cours depuis " + t + " s. La première chanson est la plus "
             + "longue : le modèle se télécharge.";
           montrerArret(id, j.fournisseur);
+          return;
+        }
+        // Un morceau sans voix est écouté après coup (30/09) : on attend ce verdict.
+        if(j.status === "succeeded" && j.chanson && j.chanson.sans_voix && !j.ecoute){
+          etat.innerHTML = "⏳ Chanson prête : le Studio l’écoute pour vérifier qu’aucune voix ne s’y entend.";
           return;
         }
         clearInterval(minuteur); minuteur = null;

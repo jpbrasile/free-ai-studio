@@ -428,9 +428,15 @@ def incruster_sous_titres(film: bytes, texte_srt: str) -> bytes:
         s.write_text(texte_srt, encoding="utf-8")
         style = ("FontName=DejaVu Sans,FontSize=16,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,"
                  "BorderStyle=1,Outline=1.2,Shadow=0,MarginV=18")
+        # Qualité fixe, mais jamais plus lourd que la source (30/09, film campus 4K :
+        # 95 Mo réencodés en 147 Mo au crf 17, au-delà de la réserve du Studio).
+        debit = debit_video(a)
+        plafond = (["-maxrate", "%dk" % (debit * 1.05 // 1000), "-bufsize", "%dk" % (debit * 2 // 1000)]
+                   if debit else [])
         fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-vf",
                                "subtitles=sous.srt:charenc=UTF-8:force_style='%s'" % style,
-                               "-map", "0:v", "-map", "0:a?", "-c:v", "libx264", "-crf", "17", "-preset", "medium",
+                               "-map", "0:v", "-map", "0:a?", "-c:v", "libx264", "-crf", "17", *plafond,
+                               "-preset", "medium",
                                "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
                               capture_output=True, text=True, timeout=DELAI_INCRUSTATION_S, cwd=dossier)
         if fini.returncode != 0:
@@ -440,6 +446,58 @@ def incruster_sous_titres(film: bytes, texte_srt: str) -> bytes:
             raise MontageImpossible("L'incrustation des sous-titres a changé le nombre d'images : "
                                     "le film n'est pas rendu.")
         return sortie.read_bytes()
+
+
+# --- Un visage refait qui saute (30/09/2026) ------------------------------------
+# Le fond du film aux visages refaits est celui de l'origine : l'écart entre les
+# deux vient des visages collés, et il varie doucement d'une image à l'autre. Un
+# visage qui change d'un coup (les « trucs bizarres » du film campus, hors de la
+# grille 17k+5) le fait bondir. Calibrage du 30/09 sur ce film, vignettes grises
+# 112x64 : film abîmé, plus grand saut de trois passages à 2,7, 3,4 et 3,5 fois
+# leur médiane (et 1,7 pour un quatrième) ; film corrigé, 1,4 au plus.
+SAUT_VISAGE_FOIS = 1.6
+VIGNETTE_L, VIGNETTE_H = 112, 64
+
+
+def _vignettes(video: bytes) -> list:
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "v.mp4")
+        a.write_bytes(video)
+        fini = subprocess.run([_ffmpeg(), "-v", "error", "-i", str(a), "-vf",
+                               "scale=%d:%d" % (VIGNETTE_L, VIGNETTE_H), "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                              capture_output=True, timeout=DELAI_S)
+    if fini.returncode != 0:
+        raise MontageImpossible("La lecture des images pour le contrôle des visages a échoué.")
+    n = VIGNETTE_L * VIGNETTE_H
+    return [fini.stdout[i:i + n] for i in range(0, len(fini.stdout) - n + 1, n)]
+
+
+def sauts_de_visages(origine: bytes, retouche: bytes, passages: list) -> list:
+    """Les passages [de, a) (en images) où un visage refait saute : [{de, a, image, fois}]."""
+    a, b = _vignettes(origine), _vignettes(retouche)
+    n = VIGNETTE_L * VIGNETTE_H
+    ecarts = [bytes(abs(x - y) for x, y in zip(fa, fb)) for fa, fb in zip(a, b)]
+    trouves = []
+    for de, fin in passages:
+        fin = min(fin, len(ecarts))
+        sauts = [sum(abs(x - y) for x, y in zip(ecarts[i + 1], ecarts[i])) / n for i in range(de, fin - 1)]
+        if len(sauts) < 3:
+            continue
+        mediane = sorted(sauts)[len(sauts) // 2]
+        haut = max(sauts)
+        if mediane > 0 and haut > SAUT_VISAGE_FOIS * mediane:
+            trouves.append({"de": de, "a": fin, "image": de + 1 + sauts.index(haut),
+                            "fois": round(haut / mediane, 1)})
+    return trouves
+
+
+def debit_video(chemin: Path):
+    """Le débit (bits/s) de la première piste vidéo, ou None s'il est illisible."""
+    try:
+        debit = int(_sonde(chemin, "bit_rate"))
+    except (MontageImpossible, ValueError):
+        return None
+    return debit if debit > 0 else None
 
 
 def son_du_passage(video: bytes, debut_s: float, fin_s: float) -> bytes:

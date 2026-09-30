@@ -675,3 +675,37 @@ def test_la_page_transmet_le_choix_du_modele(sandbox, ch):
         "La page construit sa requete sans « lora » : le choix instrumental "
         "s'affiche, mais rien ne l'envoie au serveur."
     )
+
+
+def test_un_morceau_sans_voix_est_ecoute_et_sa_voix_datee(sandbox, ch, monkeypatch, tmp_path):
+    """Film campus, 30/09 : deux morceaux Kaggle « [Instrumental] » ; le premier chante
+    dès 18 s. Le Studio écoute tout morceau qui ne devait pas chanter, et dit dès quand."""
+    assert ch.preparer({"style": "piano", "paroles": "[Instrumental]"})["resume_public"]["sans_voix"] is True
+    assert ch.preparer({"style": "pop", "paroles": PAROLES})["resume_public"]["sans_voix"] is False
+    # Segments réels du premier morceau (Whisper du routeur) : la note seule n'est pas une voix.
+    premier = [{"start": 0, "end": 18, "no_speech_prob": 0.6, "text": " 🎵"},
+               {"start": 18, "end": 23.54, "no_speech_prob": 0.6, "text": " Even in December, children's season's new"}]
+    assert ch.premiere_voix(premier) == (18.0, "Even in December, children's season's new")
+    assert ch.premiere_voix(premier[:1]) is None
+
+    son = tmp_path / "chanson.flac"
+    son.write_bytes(b"FLAC")
+    monkeypatch.setattr(sandbox, "chanson_fichiers", lambda jid: {"son": {"path": str(son), "id": "a"}})
+    monkeypatch.setattr(sandbox.montage, "son_du_passage", lambda octets, de, a: b"MP3")
+    entendu = {"segments": premier}
+    monkeypatch.setattr(sandbox, "_transcrire", lambda octets: entendu)
+    for jid, sans_voix in (("a" * 32, True), ("b" * 32, False)):
+        sandbox.write_job(jid, {"id": jid, "status": "succeeded", "created_at": time.time(), "artifacts": [],
+                                "chanson": {"sans_voix": sans_voix}})
+        sandbox._ecouter_chanson(jid)
+    assert sandbox.read_job("a" * 32)["ecoute"] == {"voix_des_s": 18.0,
+                                                   "entendu": "Even in December, children's season's new"}
+    assert "ecoute" not in sandbox.read_job("b" * 32)   # elle chante : rien à vérifier
+    c = TestClient(sandbox.app, base_url=LOCAL)
+    assert c.get("/chanson/jobs/" + "a" * 32, headers=CLE).json()["ecoute"]["voix_des_s"] == 18.0
+    assert {x["id"]: x["voix_des_s"] for x in sandbox._chansons_pretes()} == {"a" * 32: 18.0, "b" * 32: None}
+    # L'écoute manque : dit, jamais pris pour un silence.
+    entendu = None
+    monkeypatch.setattr(sandbox, "_transcrire", lambda octets: entendu)
+    sandbox._ecouter_chanson("a" * 32)
+    assert sandbox.read_job("a" * 32)["ecoute"] == {"non_ecoutee": True}

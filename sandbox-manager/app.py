@@ -4919,6 +4919,20 @@ def run_finaliser(fid: str):
             _finaliser_noter(fid, film_visages=_film_h3(
                 recolle, {"mode": "finalisation", "mode_titre": "Visages refaits", "source": source,
                           "finalisation": fid}, titre_film + " — visages refaits"))
+            # Un visage qui saute se voit ici, avant de payer la 4K (30/09) : dit, pas bloqué.
+            # Le contrôle raté n'arrête pas un film déjà payé : il est dit « non fait ».
+            ips = video_h3.IMAGES_PAR_SECONDE
+            try:
+                sauts = montage.sauts_de_visages(film, recolle, [(p["de"], p["a"]) for p in plans if p["sujets"]])
+                dits = ["Un visage refait saute peut-être à %.1f s (écart %.1f fois l'ordinaire du passage "
+                        "%.1f–%.1f s) : regardez-le dans le film aux visages refaits."
+                        % (s["image"] / ips, s["fois"], s["de"] / ips, s["a"] / ips) for s in sauts]
+            except montage.MontageImpossible:
+                sauts, dits = None, ["Le contrôle des visages refaits n'a pas pu lire les images : non fait."]
+            job = read_job(fid)
+            job["visages_sauts"] = sauts
+            job["avertissements"] = (job.get("avertissements") or []) + dits
+            write_job(fid, job)
 
         # 3. L'agrandissement : SeedVR2 traite déjà plusieurs morceaux en une location.
         if echelle:
@@ -5029,18 +5043,33 @@ async def video_h3_montage(request: Request, authorization: Optional[str] = Head
                                     "clips": ordre, "plans": len(ordre)}, scenario[:60] or "Montage H3"))
 
 
+def _artefact_du_film(jid: str, chemin: Path) -> dict:
+    """L'artefact d'un film fait ici ; MontageImpossible s'il n'a pas été gardé.
+
+    Le 30/09, le film campus 4K sous-titré (147 Mo) a dépassé la réserve des
+    artefacts : mis de côté, sans fichier, et le travail disait « réussi »."""
+    art = add_artifact(jid, chemin, "montage")
+    if art.get("skipped"):
+        message = ("Le film fait %d Mo, au-delà de la réserve du Studio (%d Mo) : il n'est pas gardé."
+                   % (art.get("size", 0) // 2**20, MAX_UPLOAD // 2**20)
+                   if art.get("reason") == "artifact_too_large" else "Le film n'a pas été gardé.")
+        terminer_en_echec(jid, message)
+        raise montage.MontageImpossible(message)
+    return art
+
+
 def _film_h3(film: bytes, video: dict, titre: str, moteur: str = "MiniMax H3 (montage)") -> str:
     """Un film fait ici (montage, musique) devient un travail réussi de plus :
     jouable, téléchargeable, prolongeable. Rend son numéro."""
     jid = uuid.uuid4().hex
     write_job(jid, {"id": jid, "provider": "local", "title": "Free AI Studio montage H3",
                     "gpu": False, "internet": False, "status": "queued", "created_at": time.time(),
-                    "artifacts": []})
+                    "artifacts": [], "titre": titre})
     chemin = JOBS / jid / "video.mp4"   # provisoire : l'artefact en est une copie
     chemin.write_bytes(film)
     try:
         secondes = round(montage.images(chemin) / video_h3.IMAGES_PAR_SECONDE, 2)
-        art = add_artifact(jid, chemin, "montage")
+        art = _artefact_du_film(jid, chemin)
     finally:
         chemin.unlink(missing_ok=True)
     write_job(jid, {
@@ -5066,7 +5095,8 @@ def _chansons_pretes() -> list:
         try:
             if chanson_fichiers(job["id"]).get("son"):
                 pretes.append({"id": job["id"], "titre": job.get("titre") or "Chanson",
-                               "cree_a": job.get("created_at")})
+                               "cree_a": job.get("created_at"),
+                               "voix_des_s": (job.get("ecoute") or {}).get("voix_des_s")})
         except HTTPException:
             continue
     return pretes
@@ -5078,9 +5108,21 @@ def _mettre_musique(film_jid: str, chanson_jid: str, debut_s: float, volume: flo
     film = _video_h3_octets(film_jid)
     if not film or film_jid not in _films_du_studio():
         raise ValueError("Ce film n'est plus sur ce Studio.")
-    if chanson_jid not in {c["id"] for c in _chansons_pretes()}:
+    pretes = {c["id"]: c for c in _chansons_pretes()}
+    if chanson_jid not in pretes:
         raise ValueError("Cette musique n'est plus sur ce Studio.")
     son = ART / chanson_fichiers(chanson_jid)["son"]["path"]
+    # Une voix entendue dans un morceau voulu sans voix (30/09) : prendre le morceau
+    # au-delà la ferait entendre sous le film. Refusé, avec le réglage qui passe.
+    voix = pretes[chanson_jid].get("voix_des_s")
+    if voix is not None:
+        duree_s = montage.images(film) / video_h3.IMAGES_PAR_SECONDE
+        jusqua = depart_chanson_s + duree_s - debut_s
+        if jusqua > voix:
+            assez = -(-(depart_chanson_s + duree_s - voix) * 10 // 1) / 10   # arrondi au dixième supérieur
+            raise montage.MontageImpossible(
+                "Une voix s'entend peut-être dans ce morceau dès %.1f s ; posé ainsi, il irait jusqu'à %.1f s. "
+                "Faites commencer la musique au moins à %.1f s dans le film." % (voix, jusqua, assez))
     avec = montage.poser_musique(film.read_bytes(), son.read_bytes(), debut_s, volume,
                                  depart_chanson_s, fondu_s, sous_paroles)
     avant = read_job(film_jid).get("video") or {}
@@ -5118,9 +5160,9 @@ SOUS_TITRES_CONSIGNE = (
     "corrigées) ; une autre langue est traduite naturellement, courte, sans guillemets. Rien d'autre.\n\n")
 
 
-def _ecouter_replique(octets: bytes) -> str | None:
-    """Ce que dit un passage (Whisper du Studio, par le routeur), les segments sans
-    parole écartés ; None si l'écoute manque."""
+def _transcrire(octets: bytes) -> dict | None:
+    """La transcription d'un MP3 (Whisper du Studio, par le routeur), avec ses
+    segments ; None si l'écoute manque."""
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
         return None
@@ -5129,10 +5171,16 @@ def _ecouter_replique(octets: bytes) -> str | None:
                        headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
                        files={"file": ("passage.mp3", octets, "audio/mpeg")},
                        data={"model": "whisper-1", "details": "segments"}, timeout=300)
-        d = r.json() if r.status_code < 400 else {}
+        d = r.json() if r.status_code < 400 else None
     except (httpx.HTTPError, ValueError):
         return None
-    t = d.get("text") if isinstance(d, dict) else None
+    return d if isinstance(d, dict) else None
+
+
+def _ecouter_replique(octets: bytes) -> str | None:
+    """Ce que dit un passage, les segments sans parole écartés ; None si l'écoute manque."""
+    d = _transcrire(octets) or {}
+    t = d.get("text")
     if not isinstance(t, str):
         return None
     if isinstance(d.get("segments"), list) and d["segments"]:
@@ -5177,7 +5225,7 @@ def run_sous_titres(jid: str, film_jid: str):
         chemin = JOBS / jid / "video.mp4"
         chemin.write_bytes(film)
         try:
-            art = add_artifact(jid, chemin, "montage")
+            art = _artefact_du_film(jid, chemin)
         finally:
             chemin.unlink(missing_ok=True)
         job = read_job(jid)
@@ -6801,6 +6849,33 @@ def chanson_fichiers(jid: str) -> dict:
 
 
 def run_chanson(jid: str, code: str, ou: str):
+    """Compose la chanson ; si elle devait se taire, l'écoute ensuite."""
+    _composer_chanson(jid, code, ou)
+    _ecouter_chanson(jid)
+
+
+def _ecouter_chanson(jid: str) -> None:
+    """Une chanson réussie qui ne devait pas chanter est écoutée (Whisper du routeur,
+    gratuit) ; sa fiche dit à partir de quand une voix s'y entend (`chanson.premiere_voix`)."""
+    job = read_job(jid)
+    if job.get("status") != "succeeded" or not (job.get("chanson") or {}).get("sans_voix"):
+        return
+    ecoute = {"non_ecoutee": True}
+    try:
+        son = ART / chanson_fichiers(jid)["son"]["path"]
+        d = _transcrire(montage.son_du_passage(son.read_bytes(), 0.0, chanson.SECONDES_ECOUTE_MAX))
+        if d is not None:
+            voix = chanson.premiere_voix(d.get("segments") or ([{"start": 0, "text": d.get("text")}]
+                                                                if d.get("text") else []))
+            ecoute = {"voix_des_s": voix[0], "entendu": voix[1]} if voix else {"voix_des_s": None}
+    except (KeyError, OSError, HTTPException, montage.MontageImpossible):
+        pass
+    job = read_job(jid)
+    job["ecoute"] = ecoute
+    write_job(jid, job)
+
+
+def _composer_chanson(jid: str, code: str, ou: str):
     """Lance la chanson, puis encaisse le temps Modal reellement consomme, echec compris."""
     debut = time.time()
     job = read_job(jid)
@@ -6964,6 +7039,7 @@ def chanson_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "message": job.get("error") or "",
         "arret_detail": job.get("arret_detail") or "",
         "chanson": job.get("chanson"),
+        "ecoute": job.get("ecoute"),
         # Le bouton d'arret change selon le fournisseur : Kaggle n'a pas
         # d'annulation, la page ne doit pas promettre un arret (23/09/2026).
         "fournisseur": job.get("provider_effective") or job.get("provider") or "",
