@@ -88,14 +88,18 @@ def main(argv):
     fds, arrete, rc = None, False, None
     try:
         fds, res["attente_repos_s"] = attendre_repos(url, port)
+        conteneur = "studio-maison-%d" % os.getpid()
         if serveur.ecouteurs(port):
+            # 0xC000013A (01/10) : ce lanceur est mort deux fois sans son `finally`. La garde détachée relance
+            # llama quand le conteneur est parti, que je sois encore là ou non (scripts/pont_carte.py).
+            import pont_carte
+            res["garde"] = pont_carte.lancer_garde(os.getpid(), profil, conteneur)
             ok, texte, _ = serveur.arreter(port, url)
             res["arret_llama"] = texte
             if not ok:
                 raise RuntimeError(texte)
             arrete = True
         res["vram_avant_mio"] = serveur.vram()
-        conteneur = "studio-maison-%d" % os.getpid()
         cmd = ["docker", "run", "--rm", "--name", conteneur, "--gpus", "all",
                "-v", "%s:/poids:ro" % POIDS, "-v", "%s:/out" % sortie, "-v", "%s:/s.py:ro" % script,
                "-v", "%s:/tmp" % os.path.join(sortie, "tmp"),  # garde comfy.log : dechargements, temps par etape
