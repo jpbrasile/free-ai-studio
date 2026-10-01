@@ -1559,6 +1559,14 @@ CADRAGE = ("Framing: a close-up shows one character only; when two or more chara
            "When a character moves (walks, approaches, arrives, leaves), say how the movement ends: the "
            "posture they hold once arrived (standing, sitting…) and what they do until the end of the shot, "
            "as the story wants it at that moment. "
+           # 01/10, plan 1 du film campus sur la 4090 : « walks in from off-frame at the left,
+           # stops at the right » ; pour passer de gauche à droite, Tyler a traversé devant
+           # Leila de dos, puis tourné sur lui-même. Le propriétaire : « simply say the start
+           # and the end pose and leave H3 free to execute ». Règle 13 de regles.py.
+           "A character who changes place: write only where they start and where they stop (place in the "
+           "frame, posture, which way they face once arrived), never the route between: not the side they "
+           "come in from, not passing in front of, behind or past someone, not crossing the frame. The video "
+           "model chooses the path. "
            # Le 28/09, au plan 2, des clients au premier plan (journal, tasse) ont disparu
            # dans le clip : les modèles vidéo perdent ce qui est proche et à moitié caché
            # (défaut connu, sans correctif dans H3). La mise en scène l'évite.
@@ -1601,7 +1609,8 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            "when the shot starts (place in the frame, which way it faces, standing or sitting, what it holds "
            "and how: which hand, which end of the object is up), "
            "\"mouvement\": what it does during the shot, step by step, each contact with a named surface, or "
-           "\"none\", \"fin\": where it is when the shot ends}. Use the same name for an element in every shot. "
+           "\"none\" (a character who changes place: the action only, \"walks in and stops\", never the "
+           "route), \"fin\": where it is when the shot ends}. Use the same name for an element in every shot. "
            "In a \"suite\" shot, each element's \"debut\" copies WORD FOR WORD its \"fin\" in the previous shot. "
            # 29/09, quai de gare rejoué : « tenant un parapluie fermé dans la main droite »
            # à la fin du plan 1, sans dire quel bout en haut ; le modèle l'a tenu crosse
@@ -1615,7 +1624,7 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            # départ surgissaient sur la table ou dans une main au plan 3 ou 4.
            "\"debut\" is never \"none\" or empty: an element not yet in the frame when the shot starts has "
            "\"debut\": \"off-frame\" (these exact English words, whatever the language) and its \"mouvement\" "
-           "shows how it comes in (walks in through the door, is handed over); an object a character will take, "
+           "says only that it comes in (walks in, is handed over), never from which side; an object a character will take, "
            "fill or use is already in the table, at its place, in the first shot of that place; so is every place "
            # 29/09, quai de gare : le train, but de la marche finale, placé 1 fois sur 3.
            "or thing a character walks, runs, drives or looks toward (a train, a car, a door), even if it is "

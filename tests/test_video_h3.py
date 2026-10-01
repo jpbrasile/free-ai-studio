@@ -3326,7 +3326,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     assert r.status_code == 409 and not fils
     d = r.json()["detail"]
     assert "plan 1, règle 2 : deux actions à la fois" in d["message"] and d["passe_droit"] is True
-    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9))
+    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9)) + [13]
     # « Tourner quand même » : parti, et le scénario garde le rapport et le passe-droit.
     r = c.post("/video-h3/scenario/tourner", headers=CLE,
                json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": True})

@@ -22,9 +22,39 @@ KITE = {"id": "k1", "nom": "yellow kite", "genre": "objet", "description": "kite
 
 
 def test_les_regles_sont_numerotees_par_etape(r):
-    assert [n for n, _, _ in r.REGLES] == list(range(13))
-    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5], "depart": [6, 7, 8], "clip": [9, 10, 11, 12]}
-    assert r.AVANT_TOURNAGE == list(range(9))
+    assert [n for n, _, _ in r.REGLES] == list(range(14))
+    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13], "depart": [6, 7, 8], "clip": [9, 10, 11, 12]}
+    assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 6, 7, 8]
+
+
+@pytest.mark.parametrize("texte", [
+    # Campus, plan 1, 01/10 : la phrase même qui a fait traverser puis tourner Tyler.
+    "Tyler walks in from off-frame at the left, stops in the foreground at the right, facing left.",
+    "Tyler comes in from the right and stops beside Leila.",
+    "Marc walks past Leila and stops at the left.",
+    "Lea passes in front of James, then sits down.",
+    "Marc crosses the frame and stops at the bench.",
+])
+def test_regle_13_le_trajet_d_un_personnage_n_est_pas_ecrit(r, texte):
+    """Propriétaire, 01/10 : « simply say the start and the end pose and leave H3 free to execute »."""
+    plan = {"image_paroles": texte, "ambiance": "", "enchainement": "coupe", "elements": []}
+    x = r.regles_texte([plan], {"ok": True, "problemes": []}, [LEILA, MARC])[0]
+    assert x[13]["ok"] is False and "Trajet" in x[13]["pourquoi"]
+
+
+def test_regle_13_le_depart_et_l_arrivee_seuls_passent(r):
+    """Le départ et l'arrivée, sans chemin ; le trajet d'un objet (PHYSIQUE l'exige) et
+    une réplique qui dit « left » ne comptent pas. Le trajet dans le tableau, si."""
+    plan = {"image_paroles": "Tyler walks in and stops in the foreground at the right, facing left towards "
+                             "Leila. The only ball rolls from the left and stops against the wall. "
+                             "Leila says: « I came from the left side of campus. »",
+            "ambiance": "", "enchainement": "coupe",
+            "elements": [el("Tyler", "off-frame", "foreground, right, facing left", "walks in and stops")]}
+    x = r.regles_texte([plan], {"ok": True, "problemes": []}, [LEILA, MARC])[0]
+    assert x[13]["ok"] is True, x[13]
+    plan["elements"] = [el("Tyler", "off-frame", "foreground, right", "walks in from the left, stops")]
+    x = r.regles_texte([plan], {"ok": True, "problemes": []}, [LEILA, MARC])[0]
+    assert x[13]["ok"] is False and "from the left" in x[13]["pourquoi"]
 
 
 def test_regle_1_un_present_absent_du_texte(r):

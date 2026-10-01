@@ -35,6 +35,10 @@ REGLES = (
     (10, "clip", "Aucun personnage ni objet n'apparaît en double dans le plan tourné."),
     (11, "clip", "Les personnages restent ceux de leurs fiches pendant tout le plan."),
     (12, "clip", "La fin du plan montre ce que le tableau des éléments annonce en « fin »."),
+    # 01/10, propriétaire : « simply say the start and the end pose and leave H3 free to execute ».
+    (13, "texte", "Un personnage qui change de place : le texte dit d'où il part et où il s'arrête, jamais le "
+                  "trajet (côté par où il entre, passage devant, derrière ou à côté de quelqu'un, traversée "
+                  "du cadre) ; le modèle vidéo choisit le chemin."),
 )
 NUMEROS = {etape: [n for n, e, _ in REGLES if e == etape] for etape in ("texte", "depart", "clip")}
 # Les règles qui arrêtent le tournage (avant tout sou) : texte et image de départ.
@@ -328,9 +332,31 @@ def regle_deux_fois(plans: list, k: int) -> dict:
     return resultat(not fautes, " ; ".join(fautes) + ("." if fautes else ""))
 
 
+# Règle 13. Les verbes de marche seulement : un objet (« the ball rolls from the left »)
+# garde son trajet, que PHYSIQUE exige.
+_MARCHE = (r"(?:walks?|walking|walked|runs?|running|ran|steps?|stepping|stepped|strolls?|strolling|comes?|"
+           r"coming|came|enters?|entering|entered|jogs?|jogging|hurries|hurrying|hurried|rushes|rushing|"
+           r"rushed|approaches|approaching|approached|moves?|moving|moved)")
+_TRAJET = re.compile(
+    r"\b%s\b[^.;]*?\bfrom\b[^.;]{0,30}?\b(?:left|right)\b|"
+    r"\b(?:pass(?:es|ing|ed)?|%s|cross(?:es|ing|ed)?|cuts?|cutting)\s+(?:right\s+|just\s+|slowly\s+)?"
+    r"(?:in front of|behind|past|across)\b|"
+    r"\bcross(?:es|ing|ed)?\s+(?:the\s+)?(?:frame|shot|screen)\b" % (_MARCHE, _MARCHE), re.I)
+
+
+def regle_trajet(plan: dict) -> dict:
+    """Règle 13 : le trajet d'un personnage n'est pas écrit, ni dans le texte du plan
+    (répliques retirées), ni dans les mouvements du tableau."""
+    sources = _phrases(plan.get("image_paroles", "")) + [
+        str(e.get("mouvement", "")) for e in plan.get("elements") or [] if isinstance(e, dict)]
+    trouves = list(dict.fromkeys(m.group(0).strip() for s in sources for m in _TRAJET.finditer(s)))
+    return resultat(not trouves, ("Trajet écrit : « %s ». Dites seulement d'où le personnage part et où il "
+                                  "s'arrête." % "», « ".join(trouves)) if trouves else "")
+
+
 def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, langue=video_h3.LANGUE_PAROLES,
                  envoyees=None) -> list:
-    """Règles 0 à 5, par le code seul. `fiches` : les fiches du scénario (id, nom, genre, voix) ;
+    """Règles 0 à 5 et 13, par le code seul. `fiches` : les fiches du scénario (id, nom, genre, voix) ;
     `envoyees` : pour chaque plan, les fiches dont la voix part avec lui (None : toutes)."""
     personnes = {_cle(f["nom"]) for f in fiches or [] if f.get("genre", "personne") == "personne"}
     problemes = {}
@@ -366,6 +392,7 @@ def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, lang
             r[3] = resultat(not ensemble, " ; ".join(" et ".join(n) + " partent du même endroit" for n in ensemble))
         r[4] = regle_voix(plan, fiches or [], langues or {}, langue, (envoyees or [None] * len(plans))[k - 1])
         r[5] = regle_deux_fois(plans, k)
+        r[13] = regle_trajet(plan)
         rapport.append(r)
     return rapport
 
