@@ -205,7 +205,8 @@ def test_le_compose_et_le_script_visent_le_meme_dossier_de_poids():
     # notre module : sans lui, il ecrit dans `/root/.cache/huggingface`, qui
     # n'est pas monte et disparait au redemarrage (mesure du 20/09 : 0 octet
     # arrive la ou le Studio regarde).
-    assert compose.count("HF_HOME: /cache/huggingface") == 2
+    # Un par service qui monte le cache (01/10 : la machine de la chanson en est un).
+    assert compose.count("HF_HOME: /cache/huggingface") == compose.count(":/cache/huggingface") >= 2
 
     assert "$env:GPU_MODELES_DIR" in script
     assert r'".cache\huggingface"' in script

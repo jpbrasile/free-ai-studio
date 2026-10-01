@@ -50,14 +50,26 @@ DEMARRAGE_S = 150
 MORCEAU_MAX = 125
 VIDEO_MAX_OCTETS = 60 * 1024 * 1024
 
+# Ici, sur la carte de cet ordinateur (01/10, mesuré sur la 4090, WSL à 48 Go) : un plan
+# 768p de 124 images d'un seul morceau a tué ComfyUI au décodage (46 438 Mio de mémoire
+# vive sur 47 Go) ; en 4 morceaux de 31 images, 28 180 Mio au plus, 15 365 Mio de carte,
+# 796,4 s de calcul. Le gestionnaire coupe donc en morceaux de 32 images au plus.
+MORCEAU_MAX_MAISON = 32
+S_PAR_IMAGE_MAISON = 796.4 / 124
+# SeedVR2 perd des images d'un morceau qui n'en a pas un multiple de 4 (01/10 : 31 images
+# rendues 30, et le film recollé passé à 24,8 images par seconde) ; 124 et 724 ont été
+# rendues entières. Le script complète chaque morceau jusqu'au multiple de 4 en répétant
+# sa dernière image, puis retire ces images du rendu.
+MULTIPLE = 4
 
-def bornes(total: int, fins=None) -> list:
+
+def bornes(total: int, fins=None, morceau_max: int = MORCEAU_MAX) -> list:
     """Les coupes du film, en images : aux fins de plans données, puis chaque
     morceau trop long partagé en parts égales. [0, …, total]."""
     points = sorted({int(f) for f in (fins or []) if 0 < int(f) < total}) + [total]
     sortie, debut = [0], 0
     for fin in points:
-        n = -(-(fin - debut) // MORCEAU_MAX)
+        n = -(-(fin - debut) // morceau_max)
         sortie += [debut + round((fin - debut) * k / n) for k in range(1, n + 1)]
         debut = fin
     return sortie
@@ -65,6 +77,11 @@ def bornes(total: int, fins=None) -> list:
 
 def estimation_s(images: int, echelle: str) -> float:
     return DEMARRAGE_S + images * ECHELLES[echelle]["s_par_image"]
+
+
+def estimation_maison_s(images: int) -> float:
+    """La 4K sur la carte d'ici : poids déjà sur le disque, ComfyUI démarré en ~15 s."""
+    return 30 + images * S_PAR_IMAGE_MAISON
 
 
 def delai_s(images: int, echelle: str) -> int:
@@ -133,20 +150,29 @@ CLASSES = ("LoadVideo", "GetVideoComponents", "ResizeImageMaskNode", "SeedVR2Pre
            "SeedVR2TemporalMerge", "VAEDecodeTiled", "SeedVR2PostProcessing", "CreateVideo", "SaveVideo")
 
 
-def demande(video: bytes, echelle: str, coupes: list) -> dict:
+def demande(video: bytes, echelle: str, coupes: list, delai_s: int = DUREE_MAX_S) -> dict:
     if len(video) > VIDEO_MAX_OCTETS:
         raise ValueError("Vidéo trop lourde pour être agrandie ici.")
     n = len(coupes) - 1
     return {"video": base64.b64encode(video).decode(), "coupes": coupes,
-            "images_par_seconde": video_h3.IMAGES_PAR_SECONDE,
+            "images_par_seconde": video_h3.IMAGES_PAR_SECONDE, "multiple": MULTIPLE,
             "graphes": [graphe(f"morceau_{k}.mp4", echelle, f"agrandi/m{k:02d}") for k in range(n)],
             "classes": list(CLASSES), "comfy": video_h3.DOSSIER_COMFY, "base_poids": DOSSIER_POIDS,
             "depot": HF, "revision": HF_REVISION, "fichiers": list(FICHIERS),
-            "delai_s": DUREE_MAX_S, "echelle": echelle}
+            "delai_s": delai_s, "echelle": echelle}
 
 
-def construire_script(video: bytes, echelle: str, coupes: list) -> str:
-    return video_h3._emballer(_SCRIPT, demande(video, echelle, coupes))
+def construire_script(video: bytes, echelle: str, coupes: list, delai_s: int = DUREE_MAX_S) -> str:
+    return video_h3._emballer(_SCRIPT, demande(video, echelle, coupes, delai_s))
+
+
+# Les poids lus par la carte d'ici : le même dossier que le disque Modal (/poids/seedvr2).
+FICHIERS_MAISON = tuple("seedvr2/" + f for f in FICHIERS)
+
+
+def tient_maison(images: int) -> bool:
+    """Une location d'ici tient dans le plafond de la machine de la carte, avec une marge."""
+    return estimation_maison_s(images) <= video_h3.MAISON_DUREE_MAX_S * 0.8
 
 
 def phrase_d_echec(stderr: str) -> str:
@@ -199,9 +225,12 @@ film = Path("/tmp/film.mp4")
 film.write_bytes(base64.b64decode(D["video"]))
 ips, c = D["images_par_seconde"], D["coupes"]
 for k in range(len(c) - 1):
-    # Coupe exacte à l'image, son compris (le graphe le garde ; le film le reprend à la fin).
+    # Coupe exacte à l'image, son compris (le graphe le garde ; le film le reprend à la fin),
+    # complétée jusqu'au multiple de 4 par sa dernière image répétée (retirée au recollage).
+    plus = -(c[k + 1] - c[k]) % D["multiple"]
     r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(film), "-vf",
-                        "select='between(n\\,%d\\,%d)',setpts=N/FRAME_RATE/TB" % (c[k], c[k + 1] - 1),
+                        "select='between(n\\,%d\\,%d)',setpts=N/FRAME_RATE/TB,tpad=stop_mode=clone:stop=%d"
+                        % (c[k], c[k + 1] - 1, plus),
                         "-af", "aselect='between(t\\,%.4f\\,%.4f)',asetpts=N/SR/TB" % (c[k] / ips, c[k + 1] / ips),
                         "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", "-c:a", "aac",
                         str(entree / ("morceau_%d.mp4" % k))], capture_output=True, text=True)
@@ -289,7 +318,14 @@ for k in range(len(D["graphes"])):
     trouves = sorted(Path("/tmp/sortie/agrandi").glob("m%02d*" % k))
     if not trouves:
         echouer(6, "CALCUL_ECHOUE", "morceau %d sans fichier" % (k + 1))
-    morceaux.append(trouves[-1])
+    # Les images ajoutées au découpage retirées : le morceau rendu a ses images d'origine.
+    juste = Path("/tmp/juste_%02d.mp4" % k)
+    r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(trouves[-1]), "-map", "0:v",
+                        "-frames:v", str(c[k + 1] - c[k]), "-c", "copy", str(juste)], capture_output=True, text=True)
+    if r.returncode:
+        print("MONTAGE_ECHOUE morceau %d : %s" % (k + 1, r.stderr[-1500:]), file=sys.stderr)
+        sys.exit(9)
+    morceaux.append(juste)
 Path("/tmp/liste.txt").write_text("".join("file '%s'\n" % m for m in morceaux))
 r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "/tmp/liste.txt",
                     "-i", str(film), "-map", "0:v", "-map", "1:a?", "-c:v", "copy", "-c:a", "copy", "-shortest",

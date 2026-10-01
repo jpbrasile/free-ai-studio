@@ -627,6 +627,20 @@ _CAMERA_SANS_REGLAGE = ("fixe", "auto", "tremble")
 CAMERA_DEFAUT = {"mouvement": "fixe", "amplitude": "", "vitesse": ""}
 
 
+def lire_longueur_plan(longueur) -> Optional[int]:
+    """La durée propre d'un plan (01/10, « mets 10 s pour le plan 6 ») ; absente, le
+    plan prend celle du scénario. ValueError hors de la grille du modèle."""
+    if longueur in (None, "", 0):
+        return None
+    try:
+        n = int(longueur)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Durée illisible.") from exc
+    if n not in LONGUEURS:
+        raise ValueError("Durée hors de la grille du modèle.")
+    return n
+
+
 def lire_camera(camera) -> dict:
     """Le choix du menu, contrôlé ; absent, la caméra est fixe."""
     if camera in (None, "", {}):
@@ -1926,6 +1940,8 @@ def verifier_plans(plans) -> list:
             propre["elements"] = lire_tableau(p["elements"])
         try:
             propre["camera"] = lire_camera(p.get("camera"))
+            if lire_longueur_plan(p.get("longueur")):
+                propre["longueur"] = lire_longueur_plan(p.get("longueur"))
         except ValueError as exc:
             raise ValueError(f"Plan {i + 1} : {exc}") from exc
         # Un plan « coupe » peut partir d'une image de départ validée (28/09).
@@ -2418,9 +2434,9 @@ def lire_correction(reponse: str, plans: list) -> list:
     for i, (n, p) in enumerate(zip(nouveaux, plans)):
         if repliques(n["image_paroles"] + " " + n["ambiance"]) != repliques(p["image_paroles"] + " " + p["ambiance"]):
             raise ValueError(f"La correction a déplacé ou retiré une réplique (plan {i + 1}) : réessayez.")
-    # La caméra est le choix du propriétaire (menu) : la correction ne la touche pas.
+    # La caméra et la durée sont des choix du propriétaire (menus) : la correction n'y touche pas.
     return [dict(n, enchainement=p["enchainement"], camera=lire_camera(p.get("camera")),
-                 **{k: p[k] for k in ("image_depart", "description_depart") if k in p})
+                 **{k: p[k] for k in ("image_depart", "description_depart", "longueur") if k in p})
             for n, p in zip(nouveaux, plans)]
 
 
@@ -2464,9 +2480,10 @@ def lire_scission(reponse: str, plan: dict) -> list:
         if len(dites) != 1 or _norme_replique(dites[0]) != _norme_replique(attendues[k]):
             raise ValueError("La découpe a déplacé ou perdu une réplique (morceau %d)." % (k + 1))
     camera = lire_camera(plan.get("camera"))
-    premier = dict(morceaux[0], enchainement=plan["enchainement"], camera=camera,
+    duree = {"longueur": plan["longueur"]} if plan.get("longueur") else {}
+    premier = dict(morceaux[0], enchainement=plan["enchainement"], camera=camera, **duree,
                    **{c: plan[c] for c in ("image_depart", "description_depart") if c in plan})
-    return [premier] + [dict(m, enchainement="suite", camera=camera) for m in morceaux[1:]]
+    return [premier] + [dict(m, enchainement="suite", camera=camera, **duree) for m in morceaux[1:]]
 
 
 def scinder(plans: list, i: int, morceaux: list) -> list:
@@ -2482,7 +2499,7 @@ def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:
     repris = []
     for i, p in enumerate(nouveaux):
         pareil = i < len(anciens) and all(p.get(k) == anciens[i].get(k) for k in (
-            "image_paroles", "ambiance", "enchainement", "image_depart", "description_depart")) and (
+            "image_paroles", "ambiance", "enchainement", "image_depart", "description_depart", "longueur")) and (
             lire_camera(p.get("camera")) == lire_camera(anciens[i].get("camera")))
         if pareil and (i + 1) not in retourner and (p["enchainement"] == "coupe" or (i - 1) in repris):
             repris.append(i)
@@ -4144,14 +4161,30 @@ function dessinerFinaliser(b, jid, d){
   etat.className = "note";
   const le = document.createElement("div");
   le.append("Agrandissement : ", echelle);
-  b.append(le, k, etat);
-  const corps = () => ({job: jid, echelle: echelle.value, plans: lignes.map(l => ({de: l.de, a: l.a,
+  // Où (01/10) : la 4K seule peut se faire sur la carte d'ici, gratuitement, sans urgence.
+  const ou = document.createElement("select");
+  ou.add(new Option("chez Modal (payant, tout de suite)", "modal"));
+  const ici = new Option("ici, sans urgence (4K seulement, sans visages, gratuit)", "maison");
+  ici.disabled = !(d.ici && d.ici.possible);
+  if (ici.disabled && d.ici) ici.textContent += " — " + d.ici.motif;
+  ou.add(ici);
+  const lou = document.createElement("div");
+  lou.append("Où : ", ou);
+  b.append(le, lou, k, etat);
+  const corps = () => ({job: jid, echelle: echelle.value, ou: ou.value, plans: lignes.map(l => ({de: l.de, a: l.a,
     sujets: l.sujets.filter(s => s.c.checked).map(s => ({fiche: s.fiche, choix: s.place.value}))}))});
   async function majPrixFinal(){
     k.disabled = true;
     const p = await (await fetch("/video-h3/finaliser/prix", {method: "POST", headers: H,
       body: JSON.stringify(corps())})).json();
     if (p.devis.refus){ k.textContent = "Finaliser le film"; etat.textContent = p.devis.refus; return; }
+    if (p.devis.ici){
+      etat.textContent = "Sur la carte de cet ordinateur, en " + p.devis.locations + " fois, environ "
+        + fr(p.devis.secondes_estimees / 60, 0) + " min de calcul quand la carte est libre.";
+      k.disabled = false;
+      k.textContent = "Finaliser le film ici — 0 $";
+      return;
+    }
     etat.textContent = "Il reste " + fr(p.budget.reste_usd, 2) + " $ ce mois-ci ; ce qui ne tient pas "
       + "attend le mois suivant, sans rien perdre de ce qui est fait.";
     k.disabled = false;
@@ -4159,6 +4192,7 @@ function dessinerFinaliser(b, jid, d){
       + fr(p.devis.pire_usd, 2) + " $)";
   }
   echelle.addEventListener("change", majPrixFinal);
+  ou.addEventListener("change", majPrixFinal);
   k.addEventListener("click", async () => {
     b.querySelectorAll("button, input, select").forEach(x => x.disabled = true);
     const r = await fetch("/video-h3/finaliser", {method: "POST", headers: H, body: JSON.stringify(corps())});
@@ -5258,7 +5292,18 @@ function dessinerPlans(){
     });
     const cam = document.createElement("label");
     cam.append("Caméra ", menuCamera(p.camera || CAMERA.defaut, c => { p.camera = c; }));
-    bloc.append(t, vue, son, ecart, ench, cam, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
+    // La durée du plan (01/10) : celle du scénario par défaut, ou la sienne.
+    const duree = document.createElement("label");
+    const sd = document.createElement("select");
+    sd.add(new Option("comme le scénario", ""));
+    for (const x of (ETAT ? ETAT.durees : [])) sd.add(new Option(fr(x.secondes, 1) + " s", x.images));
+    sd.value = p.longueur ? String(p.longueur) : "";
+    sd.addEventListener("change", () => {
+      if (sd.value) p.longueur = Number(sd.value); else delete p.longueur;
+      dessinerPlans();
+    });
+    duree.append(" Durée ", sd);
+    bloc.append(t, vue, son, ecart, ench, cam, duree, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
     if ((p.elements || []).length) bloc.appendChild(tableauElements(p.elements));
     if (SCENARIO_TOURNE){
       const coche = document.createElement("input");
@@ -5281,10 +5326,13 @@ function dessinerPlans(){
   document.getElementById("scenario_scinder").hidden = !PLANS.some(p =>
     ((p.image_paroles || "") + " " + (p.ambiance || "")).split("«").length > 2);
   document.getElementById("scenario_forcer").hidden = true;
-  const opt = document.getElementById("longueur").selectedOptions[0];
-  const prix = opt && ETAT ? (ETAT.durees.find(x => String(x.images) === opt.value) || {}).prix_estime_usd : null;
+  // Le prix plan par plan : chacun a sa durée, ou celle du scénario (01/10).
+  const sl = document.getElementById("longueur").value;
+  const prixDe = n => ETAT ? (ETAT.durees.find(x => String(x.images) === String(n)) || {}).prix_estime_usd : null;
+  const prix = PLANS.map(p => prixDe(p.longueur || sl));
+  const total = prix.every(x => x) ? prix.reduce((a, b) => a + b, 0) : null;
   document.getElementById("scenario_prix").textContent = PLANS.length
-    ? PLANS.length + " plan(s) à tourner" + (prix ? ", environ " + fr(prix * PLANS.length, 2) + " $ en tout." : ".")
+    ? PLANS.length + " plan(s) à tourner" + (total ? ", environ " + fr(total, 2) + " $ en tout." : ".")
     : "";
 }
 

@@ -3074,6 +3074,32 @@ def test_la_camera_du_plan_suit_le_plan(h3):
     assert v.plans_a_reprendre(ancien, plans) == []
 
 
+def test_la_duree_du_plan_suit_le_plan(h3):
+    """01/10, « mets 10 s pour le plan 6 » : une durée par plan, dans la grille du modèle,
+    gardée par la correction et la découpe ; changée, le plan se retourne ; absente, celle du scénario."""
+    v = h3.video_h3
+    plans = v.verifier_plans([{"image_paroles": "Leila waves.", "ambiance": "", "longueur": 243}])
+    assert plans[0]["longueur"] == 243
+    assert "longueur" not in v.verifier_plans([{"image_paroles": "Leila waves.", "ambiance": ""}])[0]
+    for mauvais in (240, "dix"):
+        with pytest.raises(ValueError, match="Plan 1"):
+            v.verifier_plans([{"image_paroles": "x", "ambiance": "", "longueur": mauvais}])
+    assert v.lire_correction('[{"image_paroles": "Leila waves goodbye.", "ambiance": ""}]', plans)[0]["longueur"] == 243
+    ancien = [{"image_paroles": "Leila waves.", "ambiance": "", "enchainement": "coupe"}]
+    assert v.plans_a_reprendre(ancien, plans) == []
+    assert v.plans_a_reprendre(plans, plans) == [0]
+
+
+def test_le_scenario_tourne_chaque_plan_a_sa_duree(sandbox):
+    app = sandbox
+    lea = app.video_h3.fiche_creer("Léa", "x")["id"]
+    app.video_h3.fiche_poser_image(lea, "face", PNG)
+    plans = app.video_h3.verifier_plans([{"image_paroles": "Léa marche.", "ambiance": ""},
+                                         {"image_paroles": "Léa salue.", "ambiance": "", "longueur": 243}])
+    _, _, a_tourner = app._scenario_prepare({"fiche": lea, "longueur": 124}, plans)
+    assert [t["payload"]["longueur"] for t in a_tourner] == [124, 243]
+
+
 def test_le_mode_references_charge_ref2va_et_sa_lora(h3):
     # 01/10 : le modèle Comfy-Org r2v charge ref2va ; sur fl2va, même graine, une seconde Leila.
     v = h3.video_h3
@@ -4128,6 +4154,71 @@ def test_finaliser_fait_les_visages_puis_la_4k_en_une_location_chacun(h3, monkey
     assert not {p["agrandi"] for p in f["plans"]} & {x["id"] for x in hd}
     assert not job["video"]["moteur"].startswith("MiniMax H3")
     assert job["video"]["devis"]["pire_usd"] > job["video"]["devis"]["estime_usd"] > 0
+
+
+def test_finaliser_la_4k_ici_en_morceaux_courts_sans_rien_louer(h3, monkeypatch, tmp_path):
+    """01/10, « 4k compressé en local » : la 4K sur la carte d'ici, mesurée sur la 4090.
+    Morceaux de 32 images au plus (mémoire vive), une fois par plafond de la machine,
+    ni Modal ni budget."""
+    loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
+    plans = [dict(p, sujets=[]) for p in plans]
+    _ici(h3, monkeypatch, fichiers={f: 1 for f in h3.agrandir.FICHIERS_MAISON})
+    monkeypatch.setattr(h3, "modal_configured", lambda: False)
+    monkeypatch.setattr(h3.budget_modal, "verifier", lambda *a, **k: pytest.fail("budget demandé"))
+    ici = []
+
+    def run(jid, code):
+        ici.append((jid, _demande_de(code)))
+        job = h3.read_job(jid)
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "run_agrandir_maison", run)
+    monkeypatch.setattr(h3.montage, "coller_sans_reencoder", lambda videos: b"".join(videos))
+    monkeypatch.setattr(h3, "_extrait", lambda jid, p: b"x")
+    monkeypatch.setattr(h3, "_film_h3", lambda *a, **k: "f" * 32)
+    p = client(h3).post("/video-h3/finaliser/prix", headers=CLE,
+                        json={"job": "b" * 32, "plans": plans, "echelle": "4k", "ou": "maison"}).json()
+    assert p["ici"]["possible"] and p["devis"]["ici"] and p["devis"]["locations"] == 3 and p["devis"]["pire_usd"] == 0
+    r = client(h3).post("/video-h3/finaliser", headers=CLE,
+                        json={"job": "b" * 32, "plans": plans, "echelle": "4k", "ou": "maison"})
+    assert r.status_code == 200, r.text
+    job = h3.read_job(r.json()["id"])
+    assert job["status"] == "succeeded", job.get("error")
+    assert loues == [] and job["video"]["devis"]["pire_usd"] == 0 and job["video"]["ou"] == "maison"
+    # ~6,4 s l'image : deux plans de 124 images dépassent les 1 440 s permises (1 800 s moins
+    # un cinquième) ; un passage par fois.
+    assert [d["coupes"][-1] for _, d in ici] == [124, 123, 123]
+    for jid, d in ici:
+        c = d["coupes"]
+        assert max(b - a for a, b in zip(c, c[1:])) <= h3.agrandir.MORCEAU_MAX_MAISON
+        assert d["delai_s"] == h3.video_h3.MAISON_DUREE_MAX_S and d["multiple"] == 4
+        etape = h3.read_job(jid)
+        assert etape["provider"] == "maison" and etape["machine"] == "comfy"
+
+
+def test_finaliser_ici_refuse_les_visages_le_x2_et_les_poids_absents(h3, monkeypatch, tmp_path):
+    loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
+    _ici(h3, monkeypatch, fichiers={f: 1 for f in h3.agrandir.FICHIERS_MAISON})
+    c = client(h3)
+    r = c.post("/video-h3/finaliser", headers=CLE, json={"job": "b" * 32, "plans": plans, "echelle": "4k", "ou": "maison"})
+    assert r.status_code == 422 and "chez Modal" in r.json()["detail"]
+    sans = [dict(p, sujets=[]) for p in plans]
+    r = c.post("/video-h3/finaliser", headers=CLE, json={"job": "b" * 32, "plans": sans, "echelle": "x2", "ou": "maison"})
+    assert r.status_code == 422
+    _ici(h3, monkeypatch)   # les poids de H3, pas ceux de SeedVR2
+    r = c.post("/video-h3/finaliser", headers=CLE, json={"job": "b" * 32, "plans": sans, "echelle": "4k", "ou": "maison"})
+    assert r.status_code == 409 and "SeedVR2" in r.json()["detail"]
+    assert loues == []
+
+
+def test_agrandir_complete_chaque_morceau_au_multiple_de_4_puis_le_retire(sandbox):
+    """01/10 : 31 images rendues 30 par SeedVR2, et le film passé à 24,8 images/s."""
+    s = sandbox.agrandir.construire_script(b"v", "4k", [0, 31, 62])
+    assert "tpad=stop_mode=clone:stop=%d" in s and '-(c[k + 1] - c[k]) % D["multiple"]' in s
+    assert '"-frames:v", str(c[k + 1] - c[k])' in s
+    assert sandbox.agrandir.bornes(124, None, 32) == [0, 31, 62, 93, 124]
+    assert sandbox.agrandir.tient_maison(124) and not sandbox.agrandir.tient_maison(400)
 
 
 def test_finaliser_attend_le_budget_puis_reprend_sans_relouer(h3, monkeypatch, tmp_path):

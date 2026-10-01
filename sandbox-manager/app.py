@@ -4585,6 +4585,31 @@ def run_agrandir(jid: str, code: str, delai: int):
         write_job(jid, job)
 
 
+def run_agrandir_maison(jid: str, code: str):
+    """L'agrandissement sur la carte d'ici (01/10) : la file de la carte, puis la machine
+    H3 d'ici (même ComfyUI, mêmes nœuds SeedVR2). Rien à encaisser."""
+    if not attendre_la_carte(jid):
+        return
+    try:
+        job = read_job(jid)
+        job.update({"status": "running", "started_at": time.time(), "provider_effective": "maison",
+                    "attente_carte": False, "file_position": None})
+        write_job(jid, job)
+        try:
+            finish_execution(jid, "maison", maison_execute(jid, code, secondes=video_h3.MAISON_DUREE_MAX_S,
+                                                           url=WORKER_COMFY_URL))
+        except BackendUnavailable as exc:
+            terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        file_carte.rendre(jid)
+    job = read_job(jid)
+    if job.get("status") == "failed" and not job.get("error"):
+        phrase = agrandir.phrase_d_echec(job.get("stderr", ""))
+        if phrase:
+            job["error"] = phrase
+        write_job(jid, job)
+
+
 @app.post("/video-h3/agrandir")
 async def video_h3_agrandir(request: Request, authorization: Optional[str] = Header(default=None)):
     """{job, echelle ("x2" ou "4k"), scenario?} : un travail neuf, dont la vidéo est
@@ -4852,6 +4877,27 @@ def _finaliser_devis(plans: list, echelle: str) -> dict:
     return {"estime_usd": round(estime, 2), "pire_usd": round(pire, 2), "locations": locations}
 
 
+def _finaliser_devis_maison(plans: list, echelle: str) -> dict:
+    """La 4K sur la carte d'ici (01/10) : rien à payer ; ValueError pour ce qu'elle ne fait
+    pas (les visages, ×2 jamais mesuré ici) ou pour un passage trop long seul."""
+    if any(p["sujets"] for p in plans):
+        raise ValueError("Les visages ne se refont que chez Modal : finalisez-les là-bas, "
+                         "ou agrandissez seulement ici.")
+    if echelle != "4k":
+        raise ValueError("Ici, seule la 4K a été mesurée sur la carte de cet ordinateur.")
+    tous = [(k, p["a"] - p["de"], 0) for k, p in enumerate(plans)]
+    if not all(agrandir.tient_maison(n) for _, n, _ in tous):
+        raise ValueError("Un passage est trop long pour la carte d'ici en une fois : redécoupez le film.")
+    groupes = _groupes(tous, _tient_4k_maison)
+    return {"estime_usd": 0.0, "pire_usd": 0.0, "locations": len(groupes), "ici": True,
+            "secondes_estimees": round(sum(agrandir.estimation_maison_s(sum(n for _, n, _ in g))
+                                           for g in groupes))}
+
+
+def _tient_4k_maison(g) -> bool:
+    return agrandir.tient_maison(sum(n for _, n, _ in g))
+
+
 @app.post("/video-h3/finaliser")
 async def video_h3_finaliser(request: Request, authorization: Optional[str] = Header(default=None)):
     """{job, plans: [{de, a, sujets: [{fiche, choix}]}], echelle ("4k", "x2" ou "")} :
@@ -4868,12 +4914,19 @@ async def video_h3_finaliser(request: Request, authorization: Optional[str] = He
             raise ValueError("Agrandissement non proposé.")
         if not echelle and not any(p["sujets"] for p in plans):
             raise ValueError("Rien à faire : ni visages ni agrandissement.")
-        devis = _finaliser_devis(plans, echelle)
+        ou = _ou_h3(corps)
+        devis = _finaliser_devis_maison(plans, echelle) if ou == "maison" else _finaliser_devis(plans, echelle)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if any(p["sujets"] for p in plans):
         _garde_licence_h3()
-    _modal_ou_refus()
+    if ou == "maison":
+        ici = h3_ici({"fichiers": list(agrandir.FICHIERS_MAISON)})
+        if not ici["possible"]:
+            raise HTTPException(409, ici["motif"].replace("de H3", "de SeedVR2") + " Rien n'est parti ; "
+                                     "choisissez Modal pour l'agrandir tout de suite (payant).")
+    else:
+        _modal_ou_refus()
     fid = uuid.uuid4().hex
     origine = read_job(source)
     write_job(fid, {
@@ -4881,7 +4934,7 @@ async def video_h3_finaliser(request: Request, authorization: Optional[str] = He
         "internet": False, "status": "queued", "created_at": time.time(), "artifacts": [],
         # Pas « MiniMax H3 » : la finalisation n'entre pas dans un montage de clips 480p.
         "video": {"moteur": "Finalisation (visages, agrandissement)", "source": source, "echelle": echelle,
-                  "devis": devis, "secondes": round(images / video_h3.IMAGES_PAR_SECONDE, 2)},
+                  "devis": devis, "ou": ou, "secondes": round(images / video_h3.IMAGES_PAR_SECONDE, 2)},
         "finalisation": {"plans": plans, "film_visages": None, "film": None, "etape": ""},
         "titre": ((origine.get("titre") or "Vidéo H3") + " — finalisée")[:200],
     })
@@ -4907,7 +4960,8 @@ def video_h3_finaliser_reprendre(fid: str, authorization: Optional[str] = Header
     etapes = [p.get(e) for p in job["finalisation"]["plans"] for e in ("visages", "agrandi")]
     if any(j and read_job(j).get("status") in ("queued", "running") for j in etapes):
         raise HTTPException(409, "Une étape de cette finalisation tourne encore : attendez sa fin.")
-    _modal_ou_refus()
+    if job["video"].get("ou") != "maison":
+        _modal_ou_refus()
     job.update({"status": "queued", "error": ""})
     write_job(fid, job)
     _finaliser_lancer(fid)
@@ -4968,7 +5022,9 @@ async def video_h3_finaliser_prix(request: Request, authorization: Optional[str]
     video = read_job(source).get("video") or {}
     sortie = {"images": images, "fiches": _visages_fiches(video), "choix": list(visages.CHOIX),
               "echelles": [{"echelle": e, "titre": v["titre"]} for e, v in agrandir.ECHELLES.items()],
-              "budget": budget_modal.vue("video")}
+              "budget": budget_modal.vue("video"),
+              # La 4K sur la carte d'ici (01/10) : offerte, ou pourquoi pas.
+              "ici": h3_ici({"fichiers": list(agrandir.FICHIERS_MAISON)})}
     if corps.get("plans") is None:
         film = chemin.read_bytes()
         try:
@@ -4986,7 +5042,8 @@ async def video_h3_finaliser_prix(request: Request, authorization: Optional[str]
         plans = _finaliser_plans(images, corps.get("plans"))
         if echelle and echelle not in agrandir.ECHELLES:
             raise ValueError("Agrandissement non proposé.")
-        sortie["devis"] = _finaliser_devis(plans, echelle)
+        sortie["devis"] = (_finaliser_devis_maison(plans, echelle) if corps.get("ou") == "maison"
+                           else _finaliser_devis(plans, echelle))
     except ValueError as exc:
         sortie["devis"] = {"refus": str(exc)}
     return sortie
@@ -5110,36 +5167,51 @@ def run_finaliser(fid: str):
 
         # 3. L'agrandissement : SeedVR2 traite déjà plusieurs morceaux en une location.
         if echelle:
+            ici = job["video"].get("ou") == "maison"
             a_faire = [(k, p["a"] - p["de"], 0) for k, p in enumerate(plans) if not _reussi(p["agrandi"])]
-            groupes = _groupes(a_faire, _tient_4k(echelle))
+            groupes = _groupes(a_faire, _tient_4k_maison if ici else _tient_4k(echelle))
             for g, groupe in enumerate(groupes):
                 ks = [k for k, _, _ in groupe]
-                _finaliser_noter(fid, etape="%s : %d passage(s) en une location (%d sur %d)"
-                                            % (agrandir.ECHELLES[echelle]["titre"], len(ks), g + 1, len(groupes)))
+                _finaliser_noter(fid, etape="%s : %d passage(s) en une %s (%d sur %d)"
+                                            % (agrandir.ECHELLES[echelle]["titre"], len(ks),
+                                               "fois sur la carte d'ici" if ici else "location", g + 1, len(groupes)))
                 n = sum(x for _, x, _ in groupe)
-                devis = agrandir.prix(n, echelle)
                 fins, somme = [], 0
                 for _, x, _ in groupe:
                     somme += x
                     fins.append(somme)
                 video = _recoller_tous([morceau(plans[k]) for k in ks])
-                code = agrandir.construire_script(video, echelle, agrandir.bornes(n, fins))
+                if ici:
+                    # La carte d'ici : morceaux courts (mémoire vive), rien à payer, le plafond de sa machine.
+                    devis = {"titre": agrandir.ECHELLES[echelle]["titre"], "estime_usd": 0.0, "pire_usd": 0.0,
+                             "secondes_estimees": round(agrandir.estimation_maison_s(n)),
+                             "delai_s": video_h3.MAISON_DUREE_MAX_S}
+                    coupes = agrandir.bornes(n, fins, agrandir.MORCEAU_MAX_MAISON)
+                    code = agrandir.construire_script(video, echelle, coupes, video_h3.MAISON_DUREE_MAX_S)
+                else:
+                    devis = agrandir.prix(n, echelle)
+                    coupes = agrandir.bornes(n, fins)
+                    code = agrandir.construire_script(video, echelle, coupes)
+                    budget_modal.verifier("video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
+                                          quoi="L'agrandissement", coeurs=agrandir.COEURS)
                 jid = uuid.uuid4().hex
-                budget_modal.verifier("video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
-                                      quoi="L'agrandissement", coeurs=agrandir.COEURS)
                 write_job(jid, {
-                    "id": jid, "provider": "modal", "title": "Free AI Studio agrandissement", "gpu": True,
-                    "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+                    "id": jid, "provider": "maison" if ici else "modal", "title": "Free AI Studio agrandissement",
+                    "gpu": True, "internet": not ici, "status": "queued", "created_at": time.time(),
+                    "artifacts": [], **({"machine": "comfy", "attente_carte": True} if ici else {}),
                     "video": {"moteur": "SeedVR2 (agrandissement)", "source": source, "echelle": echelle,
                               "passages": [[plans[k]["de"], plans[k]["a"]] for k in ks],
-                              "morceaux": len(agrandir.bornes(n, fins)) - 1, "devis": devis, "finalisation": fid,
+                              "morceaux": len(coupes) - 1, "devis": devis, "finalisation": fid,
                               "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},
                     "titre": "%s — %d passage(s), %s" % (titre_film, len(ks), devis["titre"]),
                 })
                 for k in ks:
                     plans[k]["agrandi"] = jid
                 _finaliser_noter(fid, plans=plans)
-                run_agrandir(jid, code, devis["delai_s"])
+                if ici:
+                    run_agrandir_maison(jid, code)
+                else:
+                    run_agrandir(jid, code, devis["delai_s"])
                 if not _reussi(jid):
                     raise montage.MontageImpossible("L'agrandissement a échoué : %s"
                                                     % (read_job(jid).get("error") or "voir le travail " + jid))
@@ -5811,7 +5883,8 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
     for p in plans:
         payload = dict(commun, image_paroles=p["image_paroles"], ambiance=p["ambiance"], coupe_s=0, images=[],
                        elements=p.get("elements") or [],   # qui l'image de départ montre (01/10)
-                       camera=p.get("camera"))             # le menu « Caméra » du plan (01/10)
+                       camera=p.get("camera"),             # le menu « Caméra » du plan (01/10)
+                       longueur=p.get("longueur") or commun.get("longueur"))   # sa « Durée », sinon celle du scénario
         if p["enchainement"] == "coupe" and p.get("image_depart"):
             # Parti de son image validée : H3 la suit à coup sûr ; les fiches ne
             # donnent plus que les voix, et la description de l'image passe à H3.
