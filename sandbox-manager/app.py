@@ -6840,7 +6840,11 @@ def run_scenario_h3(sid: str, a_tourner: list):
                         retirer = video_h3.images_a_retirer(plan)
                     else:
                         plan, retirer = video_h3.preparer(payload), 0
-                    plan["resume_public"].update({"plans": i + 1, "scenario": sid,
+                    # `plans` dit ici le rang dans le film ; `chaine`, les plans depuis la
+                    # dernière coupe, que la limite de PLANS_MAX compte (01/10 : plan 6
+                    # refusé, « déjà 4 plans », juste après la coupe du plan 5).
+                    plan["resume_public"].update({"chaine": plan["resume_public"].get("plans") or 1,
+                                                  "plans": i + 1, "scenario": sid,
                                                   "traduit_en_anglais": p.get("traduit", False)})
                     jid, args = _travail_h3(plan, precedent, retirer, ou)
                 except HTTPException as exc:

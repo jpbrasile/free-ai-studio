@@ -583,6 +583,19 @@ def _clip_reussi(h3, jid="b" * 32, **video):
     return job
 
 
+def test_la_limite_de_la_chaine_compte_depuis_la_derniere_coupe(h3, monkeypatch):
+    """01/10, « Leila et un martien » : plan 6 refusé (« déjà 4 plans ») juste après la
+    coupe du plan 5 ; le scénario avait écrit le rang dans le film à la place de la chaîne."""
+    v = h3.video_h3
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    plan = v.preparer_prolonger(demande(), _clip_reussi(h3, plans=5, chaine=1), PNG)
+    assert plan["resume_public"]["plans"] == 2
+    with pytest.raises(ValueError, match="déjà %d plans" % v.PLANS_MAX):
+        v.preparer_prolonger(demande(), _clip_reussi(h3, plans=5, chaine=v.PLANS_MAX), PNG)
+    with pytest.raises(ValueError, match="déjà"):   # hors scénario, `plans` compte toujours
+        v.preparer_prolonger(demande(), _clip_reussi(h3, plans=v.PLANS_MAX), PNG)
+
+
 def test_sans_l_option_rien_de_tiers_n_entre_dans_la_machine(h3, monkeypatch):
     v = h3.video_h3
     monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
@@ -1506,6 +1519,7 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     # Suite avec fiche : le raccord natif (30/09), 22 images reprises puis retirées au recollage.
     assert (p2, r2) == (j1, 22) and v2["mode"] == "prolonger" and v2["plans"] == 2
     assert v2["voie"] == "raccord" and v2["images"] == 141
+    assert (v1["chaine"], v2["chaine"]) == (1, 2)
     assert "(S1) <d>[French] Bonjour.</d>" in v2["invite"]
     assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
 

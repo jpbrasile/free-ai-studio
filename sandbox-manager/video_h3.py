@@ -3029,7 +3029,7 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
         raise ValueError("Seul un clip H3 se prolonge ici.")
     if precedent.get("status") != "succeeded":
         raise ValueError("Ce clip n'est pas réussi : rien à prolonger.")
-    plans = int(v.get("plans") or 1)
+    plans = int(v.get("chaine") or v.get("plans") or 1)   # `chaine` : un plan de scénario (01/10)
     if plans >= PLANS_MAX:
         raise ValueError(f"Cette chaîne a déjà {PLANS_MAX} plans : au-delà, l'image se dégrade. "
                          "Repartez d'une image.")
