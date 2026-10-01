@@ -1545,6 +1545,75 @@ def test_un_plan_en_echec_arrete_le_scenario(h3, monkeypatch):
     assert client(h3).get("/video-h3/scenario/" + sid, headers=CLE).json()["etat"] == "interrompu"
 
 
+def _tournage_juge(h3, monkeypatch, tmp_path, ou, fautifs):
+    """Deux plans tournés par le fil ; `fautifs` : les prises (1, 2…) où le juge voit un double."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(h3, "_h3_peut", lambda ou, demande=None: None)
+    fid = v.fiche_creer("Zib", "x")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    tournes, juges = [], []
+
+    def tourner(jid, code, precedent, retirer, lieu):
+        tournes.append((jid, precedent, h3.read_job(jid)["video"]["graine"]))
+        job = h3.read_job(jid)
+        job.update(status="succeeded")
+        job["video"]["secondes"] = 5.17 * (2 if precedent else 1)   # la chaîne recollée
+        h3.write_job(jid, job)
+
+    async def regles_clip(film, debut, duree, noms, refs, plan):
+        juges.append((round(debut * 24), round(duree * 24), plan["image_paroles"]))
+        double = len(juges) in fautifs
+        return {10: h3.regles.resultat(not double, "deux Zib" if double else "")}
+
+    async def ecouter(video, texte):
+        return {"attendu": [], "ok": True}
+    film = tmp_path / "film.mp4"
+    film.write_bytes(b"MP4")
+    monkeypatch.setattr(h3, "run_video_h3", tourner)
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: film)
+    monkeypatch.setattr(h3.montage, "extraire", lambda f, de, a: b"PLAN")
+    monkeypatch.setattr(h3, "_regles_clip", regles_clip)
+    monkeypatch.setattr(h3, "_ecouter", ecouter)
+    sid = "f" * 32
+    plans = [{"image_paroles": "Zib atterrit"}, {"image_paroles": "Zib salue"}]
+    v.scenario_ecrire({"id": sid, "etat": "en cours", "erreur": "", "plans": plans, "travaux": [], "film": None,
+                       "fiches": [fid], "ou": ou})
+    p = {"mode": "references", "fiche": fid, "image_paroles": "Zib", "longueur": 124, "images": [], "graine": 7}
+    h3.run_scenario_h3(sid, [{"enchainement": "coupe", "payload": p}, {"enchainement": "coupe", "payload": p}])
+    return v.scenario_lire(sid), tournes, juges
+
+
+def test_ici_un_plan_fautif_est_repris_avant_le_plan_suivant(h3, monkeypatch, tmp_path):
+    """01/10 : le double fantôme de Zib (plan 2) n'a été vu qu'après les six plans ;
+    « le rerun plan2 aurait dû être fait avant plan 3 par studio »."""
+    sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "maison", fautifs={1})
+    (a, pa, ga), (b, pb, gb), (c, pc, gc) = tournes
+    # La reprise part du même départ, avec une autre graine, AVANT le plan 2, qui part d'elle.
+    assert pa is None and pb is None and pc == b
+    assert ga == 7 and gb != 7 and gc == 7
+    # Chaque prise est jugée seule : le plan 2 commence où la prise gardée finit.
+    assert juges == [(0, 124, "Zib atterrit"), (0, 124, "Zib atterrit"), (124, 124, "Zib salue")]
+    assert sc["etat"] == "réussi" and sc["travaux"] == [b, c] and sc["film"] == c
+    assert sc["reprises_auto"] == [{"plan": 1, "prises": [a, b], "garde": b}]
+    assert [x["fautes"] for x in sc["controles_plans"]] == [["règle 10 : deux Zib"], [], []]
+
+
+def test_ici_une_seule_reprise_et_la_moins_fautive_reste(h3, monkeypatch, tmp_path):
+    sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "maison", fautifs={1, 2})
+    (a, _, _), (b, _, _), (c, pc, _) = tournes
+    # À égalité, la première prise reste, et le plan 2 part d'elle.
+    assert len(tournes) == 3 and pc == a and sc["travaux"] == [a, c]
+    assert sc["reprises_auto"] == [{"plan": 1, "prises": [a, b], "garde": a}]
+
+
+def test_chez_modal_aucune_reprise_payee_sans_accord(h3, monkeypatch, tmp_path):
+    sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "modal", fautifs={1})
+    assert len(tournes) == 2 and juges == [] and "reprises_auto" not in sc and sc["etat"] == "réussi"
+
+
 # --- 10. Deux personnages, deux langues, une musique posée après coup (28/09) ---
 
 def test_chaque_replique_va_au_personnage_nomme_dans_sa_phrase(h3):

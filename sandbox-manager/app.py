@@ -6627,6 +6627,49 @@ def _controle_derniere_image(sid: str, i: int, image: bytes):
     return None
 
 
+# 01/10, « Leila et un martien » : le juge a vu un double fantôme de Zib dans le plan 2
+# après le tournage des six plans ; le plan 3 était déjà parti de cette image-là.
+# Remarque du propriétaire : « le rerun plan2 aurait dû être fait avant plan 3 par
+# studio ». Ici, une prise ne coûte que du temps : une reprise, pas plus.
+REPRISES_AUTO_MAX = 1
+
+
+def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
+    """Règles 9 (ce qui est dit) et 10 (rien en double) sur le plan i seul, juste
+    après sa prise. Seules ces deux-là se rejouent par une autre graine sans toucher
+    au texte ; la 11 compare à la photo de la fiche, pas à la tenue du scénario (faux
+    défauts sur les six plans du 01/10) : notée, elle ne fait pas reprendre."""
+    note = {"plan": i + 1, "travail": jid, "fautes": []}
+    sc = video_h3.scenario_lire(sid)
+    chemin = _video_h3_octets(jid)
+    if not chemin:
+        return dict(note, erreur="vidéo du plan introuvable : non jugé.")
+    ips = video_h3.IMAGES_PAR_SECONDE
+    fin = round(float((read_job(jid).get("video") or {}).get("secondes") or 0) * ips)
+    initiaux = sc.get("plans_initiaux") or sc["plans"]
+    plan = (initiaux if len(initiaux) == len(sc["plans"]) else sc["plans"])[i]
+    noms, refs = _photos_des_fiches(sc.get("fiches") or [sc.get("fiche")])
+    film = chemin.read_bytes()
+
+    async def juger():
+        r = await _regles_clip(film, premiere / ips, (fin - premiere) / ips, noms, refs, plan)
+        try:
+            morceau = await asyncio.to_thread(montage.extraire, film, premiere, fin)
+            paroles = await _ecouter(morceau, plan["image_paroles"])
+        except montage.MontageImpossible as exc:
+            paroles = {"erreur": str(exc)}
+        return r, paroles
+    try:
+        r, paroles = asyncio.run(juger())
+    except HTTPException as exc:
+        return dict(note, erreur=str(exc.detail))
+    r[9] = regles.regle_paroles(paroles)
+    note["regles"] = regles.en_liste(r)
+    note["fautes"] = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in (9, 10)
+                      if (r.get(n) or {}).get("ok") is False]
+    return note
+
+
 def run_scenario_h3(sid: str, a_tourner: list):
     """Chaque plan attend le précédent ; chacun est recollé au film déjà tourné.
     Un plan repris est découpé dans l'ancien film, sans rien louer."""
@@ -6660,6 +6703,7 @@ def run_scenario_h3(sid: str, a_tourner: list):
                     continue
                 if en_attente is not None:
                     precedent, en_attente = poser_en_attente(i), None
+                derniere = fin = None
                 if p["enchainement"] == "suite":
                     chemin = _video_h3_octets(precedent)
                     if not chemin:
@@ -6669,27 +6713,58 @@ def run_scenario_h3(sid: str, a_tourner: list):
                     if arret:
                         raise ValueError(arret)
                     derniere, fin = _derniere_et_raccord(chemin.read_bytes(), fin_vue)
-                    plan = video_h3.preparer_prolonger(p["payload"], read_job(precedent), derniere,
-                                                       fin_b64=fin)
-                    retirer = video_h3.images_a_retirer(plan)
-                else:
-                    plan, retirer = video_h3.preparer(p["payload"]), 0
-                plan["resume_public"].update({"plans": i + 1, "scenario": sid,
-                                              "traduit_en_anglais": p.get("traduit", False)})
-                jid, args = _travail_h3(plan, precedent, retirer, ou)
             except HTTPException as exc:
                 video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc.detail}")
                 return
             except (ValueError, montage.MontageImpossible) as exc:
                 video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc}")
                 return
-            video_h3.scenario_noter(sid, travaux=video_h3.scenario_lire(sid)["travaux"] + [jid])
-            run_video_h3(*args)
+            premiere = fins[-1] if fins else 0
+            prises = []
+            for essai in range(1 + (REPRISES_AUTO_MAX if ou == "maison" else 0)):
+                # Une reprise : même départ, même texte, autre graine.
+                payload = p["payload"] if not essai else dict(p["payload"], graine=None)
+                try:
+                    if p["enchainement"] == "suite":
+                        plan = video_h3.preparer_prolonger(payload, read_job(precedent), derniere, fin_b64=fin)
+                        retirer = video_h3.images_a_retirer(plan)
+                    else:
+                        plan, retirer = video_h3.preparer(payload), 0
+                    plan["resume_public"].update({"plans": i + 1, "scenario": sid,
+                                                  "traduit_en_anglais": p.get("traduit", False)})
+                    jid, args = _travail_h3(plan, precedent, retirer, ou)
+                except HTTPException as exc:
+                    video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc.detail}")
+                    return
+                except (ValueError, montage.MontageImpossible) as exc:
+                    video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc}")
+                    return
+                travaux = video_h3.scenario_lire(sid)["travaux"]
+                video_h3.scenario_noter(sid, travaux=(travaux[:-1] if essai else travaux) + [jid])
+                run_video_h3(*args)
+                job = read_job(jid)
+                if job.get("status") != "succeeded":
+                    if prises:
+                        break  # la première prise reste : une reprise ratée n'arrête pas le film
+                    video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : "
+                                            + (job.get("error") or "échec, voir son journal."))
+                    return
+                prises.append(_juger_plan_tourne(sid, i, jid, premiere) if ou == "maison" else
+                              {"plan": i + 1, "travail": jid, "fautes": []})
+                if not prises[-1]["fautes"] or video_h3.scenario_lire(sid).get("arret_demande"):
+                    break
+            # La prise gardée : la moins fautive ; à égalité, la première.
+            garde = min(prises, key=lambda x: len(x["fautes"]))
+            jid = garde["travail"]
+            sc = video_h3.scenario_lire(sid)
+            maj = {"travaux": sc["travaux"][:-1] + [jid]}
+            if ou == "maison":
+                maj["controles_plans"] = (sc.get("controles_plans") or []) + prises
+            if len(prises) > 1:
+                maj["reprises_auto"] = (sc.get("reprises_auto") or []) + [
+                    {"plan": i + 1, "prises": [x["travail"] for x in prises], "garde": jid}]
+            video_h3.scenario_noter(sid, **maj)
             job = read_job(jid)
-            if job.get("status") != "succeeded":
-                video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : "
-                                        + (job.get("error") or "échec, voir son journal."))
-                return
             precedent = jid
             fins.append(round(float((job.get("video") or {}).get("secondes") or 0) * ips))
             video_h3.scenario_noter(sid, fins_images=fins)
