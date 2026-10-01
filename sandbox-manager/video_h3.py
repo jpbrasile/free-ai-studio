@@ -581,6 +581,88 @@ def rangs_qui_parlent(textes, sujets: list, objets=()) -> set:
             for m in _LOCUTEUR.finditer(attribuer_repliques(t, sujets, objets=objets))}
 
 
+# --- La caméra (01/10) ---------------------------------------------------------------
+# Plan 1 du film campus rejoué chez Modal : « In a medium shot », sans phrase de caméra,
+# et la caméra a reculé pendant tout le plan. Le guide de MiniMax
+# (docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md, 4.3) écrit la caméra en type + amplitude
+# + vitesse, en phrase anglaise dans le plan (« The camera holds a static shot as… »).
+# Demande du propriétaire : un menu déroulant ; fixe par défaut.
+CAMERA_MOUVEMENTS = {
+    "fixe": ("Fixe", "holds a static shot"),
+    "auto": ("Au choix du modèle (rien n'est écrit)", ""),
+    "avance": ("Avance vers les personnages", "pushes in"),
+    "recule": ("Recule", "pulls out"),
+    "zoom_avant": ("Zoom avant", "zooms in"),
+    "zoom_arriere": ("Zoom arrière", "zooms out"),
+    "pano_gauche": ("Panoramique vers la gauche", "pans left"),
+    "pano_droite": ("Panoramique vers la droite", "pans right"),
+    "travelling_gauche": ("Glisse vers la gauche", "trucks left"),
+    "travelling_droite": ("Glisse vers la droite", "trucks right"),
+    "bascule_haut": ("Bascule vers le haut", "tilts up"),
+    "bascule_bas": ("Bascule vers le bas", "tilts down"),
+    "monte": ("Monte", "pedestals up"),
+    "descend": ("Descend", "pedestals down"),
+    "arc": ("Tourne autour des personnages", "moves in an arc shot around the subjects"),
+    "suit": ("Suit le personnage qui bouge", "follows the moving subject in a tracking shot"),
+    "tremble": ("Tremble un peu (caméra à l'épaule)", "shakes slightly"),
+}
+CAMERA_AMPLITUDES = {"": "Normale", "petite": "Petite", "grande": "Grande"}
+CAMERA_VITESSES = {"": "Normale", "lente": "Lente", "rapide": "Rapide"}
+_CAMERA_SANS_REGLAGE = ("fixe", "auto", "tremble")
+CAMERA_DEFAUT = {"mouvement": "fixe", "amplitude": "", "vitesse": ""}
+
+
+def lire_camera(camera) -> dict:
+    """Le choix du menu, contrôlé ; absent, la caméra est fixe."""
+    if camera in (None, "", {}):
+        return dict(CAMERA_DEFAUT)
+    if not isinstance(camera, dict):
+        raise ValueError("Caméra illisible.")
+    c = {"mouvement": str(camera.get("mouvement") or "fixe"), "amplitude": str(camera.get("amplitude") or ""),
+         "vitesse": str(camera.get("vitesse") or "")}
+    if c["mouvement"] not in CAMERA_MOUVEMENTS:
+        raise ValueError("Mouvement de caméra inconnu.")
+    if c["amplitude"] not in CAMERA_AMPLITUDES or c["vitesse"] not in CAMERA_VITESSES:
+        raise ValueError("Amplitude ou vitesse de caméra inconnue.")
+    if c["mouvement"] in _CAMERA_SANS_REGLAGE:
+        c.update(amplitude="", vitesse="")
+    return c
+
+
+def phrase_camera(camera) -> str:
+    """La phrase du guide : « The camera pushes in with small amplitude at slow speed. »"""
+    c = lire_camera(camera)
+    verbe = CAMERA_MOUVEMENTS[c["mouvement"]][1]
+    if not verbe:
+        return ""
+    if c["mouvement"] == "fixe":
+        return "The camera holds a static shot throughout."
+    return ("The camera " + verbe
+            + {"petite": " with small amplitude", "grande": " with large amplitude"}.get(c["amplitude"], "")
+            + {"lente": " at slow speed", "rapide": " at fast speed"}.get(c["vitesse"], "") + ".")
+
+
+def avec_camera(texte: str, phrase: str) -> str:
+    """La phrase de caméra après la première phrase du plan (le cadre et les places), hors
+    réplique ; le guide la veut dans le plan, pas en étiquette à la fin. Sans phrase finie
+    hors réplique (« James demande « … » Léa répond « … » »), elle passe en tête."""
+    if not phrase:
+        return texte
+    t = str(texte or "").strip()
+    dedans = 0
+    guillemet = False
+    for i, ch in enumerate(t):
+        if ch == "«":
+            dedans += 1
+        elif ch == "»":
+            dedans = max(0, dedans - 1)
+        elif ch in "\"“”":
+            guillemet = not guillemet
+        elif ch in ".!?" and not dedans and not guillemet and (i + 1 == len(t) or t[i + 1] == " "):
+            return (t[:i + 1] + " " + phrase + " " + t[i + 1:].lstrip()).strip()
+    return (phrase + (" " if t else "") + t).strip()
+
+
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
            langue: str = LANGUE_PAROLES, locuteur: str = "(S1)", son: str = "Sound: ") -> str:
     """Une seule invite pour le modèle, à partir des trois cases de la page.
@@ -1567,6 +1649,9 @@ CADRAGE = ("Framing: a close-up shows one character only; when two or more chara
            "frame, posture, which way they face once arrived), never the route between: not the side they "
            "come in from, not passing in front of, behind or past someone, not crossing the frame. The video "
            "model chooses the path. "
+           # 01/10 : la caméra a son menu ; une caméra écrite dans le texte le contredirait.
+           "Never write a camera movement in the text (zoom, pan, push in, the camera follows or moves "
+           "back): the camera is set apart, by the Studio. "
            # Le 28/09, au plan 2, des clients au premier plan (journal, tasse) ont disparu
            # dans le clip : les modèles vidéo perdent ce qui est proche et à moitié caché
            # (défaut connu, sans correctif dans H3). La mise en scène l'évite.
@@ -1782,8 +1867,9 @@ def consigne_decoupage(scenario: str) -> str:
             "character's new place. "
             # Même essai : la caméra s'est approchée de plan en plan, jusqu'à
             # redessiner le visage du personnage.
-            "Say the framing of each shot; the camera stays at that framing (no zoom, no move) unless the "
-            "script asks for a camera movement. %s"
+            "Say the framing of each shot in its first sentence (close-up, medium shot, wide shot); never "
+            "write a camera movement (zoom, pan, push in, the camera follows): the camera is set apart, "
+            "by the Studio. %s"
             "Write in the language of the script. Dialogue must be copied EXACTLY from the script, "
             "between « »; never invent dialogue. %s"
             "For each shot give \"elements\" (the table), "
@@ -1816,6 +1902,10 @@ def verifier_plans(plans) -> list:
                   "enchainement": "coupe" if i == 0 else enchainement}
         if lire_tableau(p.get("elements")):
             propre["elements"] = lire_tableau(p["elements"])
+        try:
+            propre["camera"] = lire_camera(p.get("camera"))
+        except ValueError as exc:
+            raise ValueError(f"Plan {i + 1} : {exc}") from exc
         # Un plan « coupe » peut partir d'une image de départ validée (28/09).
         if p.get("image_depart") and propre["enchainement"] == "coupe":
             if not _ID_DEPART.fullmatch(str(p["image_depart"])):
@@ -2306,7 +2396,8 @@ def lire_correction(reponse: str, plans: list) -> list:
     for i, (n, p) in enumerate(zip(nouveaux, plans)):
         if repliques(n["image_paroles"] + " " + n["ambiance"]) != repliques(p["image_paroles"] + " " + p["ambiance"]):
             raise ValueError(f"La correction a déplacé ou retiré une réplique (plan {i + 1}) : réessayez.")
-    return [dict(n, enchainement=p["enchainement"],
+    # La caméra est le choix du propriétaire (menu) : la correction ne la touche pas.
+    return [dict(n, enchainement=p["enchainement"], camera=lire_camera(p.get("camera")),
                  **{k: p[k] for k in ("image_depart", "description_depart") if k in p})
             for n, p in zip(nouveaux, plans)]
 
@@ -2350,9 +2441,10 @@ def lire_scission(reponse: str, plan: dict) -> list:
         dites = repliques(m["image_paroles"] + " " + m["ambiance"])
         if len(dites) != 1 or _norme_replique(dites[0]) != _norme_replique(attendues[k]):
             raise ValueError("La découpe a déplacé ou perdu une réplique (morceau %d)." % (k + 1))
-    premier = dict(morceaux[0], enchainement=plan["enchainement"],
+    camera = lire_camera(plan.get("camera"))
+    premier = dict(morceaux[0], enchainement=plan["enchainement"], camera=camera,
                    **{c: plan[c] for c in ("image_depart", "description_depart") if c in plan})
-    return [premier] + [dict(m, enchainement="suite") for m in morceaux[1:]]
+    return [premier] + [dict(m, enchainement="suite", camera=camera) for m in morceaux[1:]]
 
 
 def scinder(plans: list, i: int, morceaux: list) -> list:
@@ -2368,7 +2460,8 @@ def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:
     repris = []
     for i, p in enumerate(nouveaux):
         pareil = i < len(anciens) and all(p.get(k) == anciens[i].get(k) for k in (
-            "image_paroles", "ambiance", "enchainement", "image_depart", "description_depart"))
+            "image_paroles", "ambiance", "enchainement", "image_depart", "description_depart")) and (
+            lire_camera(p.get("camera")) == lire_camera(anciens[i].get("camera")))
         if pareil and (i + 1) not in retourner and (p["enchainement"] == "coupe" or (i - 1) in repris):
             repris.append(i)
     return repris
@@ -2642,6 +2735,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if inconnues:
         raise ValueError("Marque de réplique inconnue : « [%s] ». Une marque donne la langue et/ou "
                          "l'émotion (menu « Langue et émotion d'une réplique »)." % inconnues[0])
+    image_paroles = avec_camera(image_paroles, phrase_camera(payload.get("camera")))
     if fiches:
         sujets = [(f["nom"], langues.get(f["id"], langue)) for f in fiches]
         # Une voix ne part qu'avec qui parle dans ce plan : envoyée à un personnage muet,
@@ -3291,6 +3385,8 @@ PAGE_HTML = r"""<!doctype html>
   <p class="note">Case musique vide, le Studio demande au modèle
   de n'en mettre aucune : sinon il en ajoute une de lui-même.</p>
   </details>
+  <label>Caméra</label>
+  <div id="camera_clip"></div>
 
   <div class="image_bord" id="bord_premiere" hidden>
     <b>Première image</b>
@@ -4204,6 +4300,7 @@ document.getElementById("prolonger").addEventListener("click", async () => {
     langue: document.getElementById("langue").value,
     longueur: Number(document.getElementById("longueur").value),
     definition: document.getElementById("definition").value,
+    camera: CAMERA_CLIP,
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
   if (!r.ok){ alerteTexte(typeof d.detail === "string" ? d.detail : "Refusé."); return; }
@@ -4252,6 +4349,7 @@ document.getElementById("lancer").addEventListener("click", async () => {
     longueur: Number(document.getElementById("longueur").value),
     definition: document.getElementById("definition").value,
     coupe_s: Number(document.getElementById("coupe").value),
+    camera: CAMERA_CLIP,
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
   if (!r.ok){ alerteTexte(typeof d.detail === "string" ? d.detail : "Refusé."); return; }
@@ -4879,6 +4977,40 @@ document.getElementById("montage_lancer").addEventListener("click", async () => 
 
 // Tourner un scénario neuf : le chat découpe, le propriétaire relit, le Studio tourne.
 let PLANS = [], ENCHAINEMENTS = __ENCHAINEMENTS__, SCENARIO = null;
+// Le menu « Caméra » (01/10) : mouvement, puis amplitude et vitesse quand elles ont un sens
+// (format du guide de MiniMax : type + amplitude + vitesse). Fixe par défaut.
+const CAMERA = __CAMERA__;
+function menuCamera(cam, change){
+  const zone = document.createElement("span");
+  zone.className = "menu_camera";
+  const choix = (valeurs, valeur, titre) => {
+    const s = document.createElement("select");
+    s.title = titre;
+    for (const [cle, nom] of Object.entries(valeurs)){
+      const o = document.createElement("option");
+      o.value = cle;
+      o.textContent = (cle === "" ? titre + " : " : "") + nom;
+      s.appendChild(o);
+    }
+    s.value = valeur || "";
+    return s;
+  };
+  const m = choix(CAMERA.mouvements, cam.mouvement || CAMERA.defaut.mouvement, "Mouvement");
+  const a = choix(CAMERA.amplitudes, cam.amplitude, "Amplitude");
+  const v = choix(CAMERA.vitesses, cam.vitesse, "Vitesse");
+  const maj = () => {
+    const sans = CAMERA.sans_reglage.includes(m.value);
+    a.hidden = v.hidden = sans;
+    if (sans){ a.value = ""; v.value = ""; }
+    change({mouvement: m.value, amplitude: a.value, vitesse: v.value});
+  };
+  for (const s of [m, a, v]) s.addEventListener("change", maj);
+  zone.append(m, a, v);
+  maj();
+  return zone;
+}
+let CAMERA_CLIP = Object.assign({}, CAMERA.defaut);
+document.getElementById("camera_clip").appendChild(menuCamera(CAMERA_CLIP, c => { CAMERA_CLIP = c; }));
 // Un scénario déjà tourné, repris : ses plans initiaux (pour le gras) et les plans à retourner.
 let PLANS_INITIAUX = null, SCENARIO_TOURNE = null, RETOURNER = new Set();
 
@@ -5053,7 +5185,9 @@ function dessinerPlans(){
       if (p.enchainement !== "coupe"){ delete p.image_depart; delete p.description_depart; }
       dessinerPlans();
     });
-    bloc.append(t, vue, son, ecart, ench, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
+    const cam = document.createElement("label");
+    cam.append("Caméra ", menuCamera(p.camera || CAMERA.defaut, c => { p.camera = c; }));
+    bloc.append(t, vue, son, ecart, ench, cam, bouton("Retirer ce plan", () => { PLANS.splice(i, 1); dessinerPlans(); }));
     if ((p.elements || []).length) bloc.appendChild(tableauElements(p.elements));
     if (SCENARIO_TOURNE){
       const coche = document.createElement("input");
@@ -5604,4 +5738,8 @@ rafraichir().then(majInvitesImages).then(() => chargerFiches("")).then(chargerCl
     f'<option value="{code}"{" selected" if code == LANGUE_PAROLES else ""}>{nom}</option>'
     for code, nom in LANGUES_PAROLES.items())).replace("__HORS_CHAMP__", json.dumps(
     sorted({_norme_replique(h) for h in HORS_CHAMP + _HORS_CHAMP_DEDANS}))).replace("__ENCHAINEMENTS__", json.dumps(ENCHAINEMENTS,
-                                                                                      ensure_ascii=False))
+                                                                                      ensure_ascii=False)).replace(
+    "__CAMERA__", json.dumps({"mouvements": {k: v[0] for k, v in CAMERA_MOUVEMENTS.items()},
+                              "amplitudes": CAMERA_AMPLITUDES, "vitesses": CAMERA_VITESSES,
+                              "sans_reglage": list(_CAMERA_SANS_REGLAGE), "defaut": CAMERA_DEFAUT},
+                             ensure_ascii=False))

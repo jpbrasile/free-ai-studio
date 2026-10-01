@@ -949,7 +949,7 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
                              "<Subject 1>. retention_analysis: <Subject 1> (appears in [Shot 1]): "
                              "fully_preserved - the face, hair and clothing "
                              "of the person in <Picture 1>, <Picture 2> are retained, as one single person. "
-                             "detailed_description: [Shot 1] Elle sourit")
+                             "detailed_description: [Shot 1] The camera holds a static shot throughout. Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
     assert "manteau rouge" not in invite and "Léa" not in invite
@@ -1022,7 +1022,7 @@ def test_en_mode_references_le_clip_part_traduit(h3, monkeypatch):
     assert r.status_code == 200, r.text
     assert vu["url"].endswith("/v1/chat/completions")
     v = r.json()["video"]
-    assert v["invite"].startswith("In a café she says (S1) <d>[French] Bonjour.</d> Sound: Café chatter.")
+    assert v["invite"].startswith("The camera holds a static shot throughout. In a café she says (S1) <d>[French] Bonjour.</d> Sound: Café chatter.")
     assert v["traduit_en_anglais"] is True
     # Un refus du chat : rien ne part.
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(503, {}, {}))
@@ -1569,7 +1569,7 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
         v.consigne_decoupage("Un film.")
     # Essai du 29/09 : geste étalé sur trois plans, élément du lieu absent au départ, caméra qui avance.
     for regle in ("never spread one gesture over several shots", "already visible from the start",
-                  "the camera stays at that framing", "fix the STAGING of each place",
+                  "never write a camera movement", "fix the STAGING of each place",
                   "every shot's text states the position of each key element", "what moves the object",
                   "walking to it first", "plain sentences. When", "never tells again an action that ended",
                   "An object still moving when a shot starts",
@@ -1608,7 +1608,9 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
         "person. <Subject 2> (appears in [Shot 1]): fully_preserved - the face, hair and clothing of the "
         "person in <Picture 3> are retained, as one single person. "
         # Chaque personnage n'est placé qu'une fois, par la description elle-même.
-        "detailed_description: [Shot 1] <Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
+        # La caméra en tête quand aucune phrase n'est finie hors réplique (01/10).
+        "detailed_description: [Shot 1] The camera holds a static shot throughout. "
+        "<Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
         "<Subject 1> (S2) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
@@ -3026,6 +3028,49 @@ def test_l_image_de_depart_nomme_qui_elle_montre_et_pas_le_hors_champ(h3):
     d.pop("elements")
     invite = v.preparer(d)["resume_public"]["invite"]
     assert "<Picture 3> is the first frame of [Shot 1], showing <Subject 1> and <Subject 2>. " in invite
+
+
+def test_la_camera_au_format_du_guide_fixe_par_defaut(h3):
+    """01/10 : sans phrase de caméra, H3 a reculé pendant tout le plan 1 (Modal). Le guide
+    de MiniMax (4.3) : type + amplitude + vitesse, en phrase dans le plan."""
+    v = h3.video_h3
+    assert v.phrase_camera(None) == "The camera holds a static shot throughout."
+    assert v.phrase_camera({"mouvement": "avance", "amplitude": "petite", "vitesse": "lente"}) == \
+        "The camera pushes in with small amplitude at slow speed."
+    assert v.phrase_camera({"mouvement": "pano_droite", "vitesse": "rapide"}) == "The camera pans right at fast speed."
+    assert v.phrase_camera({"mouvement": "auto"}) == ""
+    # Fixe : ni amplitude ni vitesse, même envoyées.
+    assert v.lire_camera({"mouvement": "fixe", "amplitude": "grande"}) == v.CAMERA_DEFAUT
+    for mauvais in ({"mouvement": "vol"}, {"mouvement": "avance", "vitesse": "folle"}, "fixe"):
+        with pytest.raises(ValueError):
+            v.lire_camera(mauvais)
+    # Après la première phrase finie hors réplique ; en tête s'il n'y en a pas.
+    assert v.avec_camera("In a medium shot, Leila stands. Tyler says « Hi. Lost? » and smiles.", "C.") == \
+        "In a medium shot, Leila stands. C. Tyler says « Hi. Lost? » and smiles."
+    assert v.avec_camera("Tyler says « Hi. »", "C.") == "C. Tyler says « Hi. »"
+    d = demande(image_paroles="In a medium shot, Leila reads a map. She smiles.",
+                camera={"mouvement": "recule", "amplitude": "petite"})
+    assert "Leila reads a map. The camera pulls out with small amplitude. She smiles." in \
+        v.preparer(d)["resume_public"]["invite"]
+    assert "camera" not in v.preparer(dict(d, camera={"mouvement": "auto"}))["resume_public"]["invite"]
+
+
+def test_la_camera_du_plan_suit_le_plan(h3):
+    """Le menu de chaque plan : gardé par verifier_plans, la correction et la découpe ;
+    changé, le plan se retourne ; absent (ancien scénario), il vaut « fixe »."""
+    v = h3.video_h3
+    avance = {"mouvement": "avance", "amplitude": "", "vitesse": "lente"}
+    plans = v.verifier_plans([{"image_paroles": "Leila reads.", "ambiance": "", "enchainement": "coupe",
+                               "camera": avance}])
+    assert plans[0]["camera"] == avance
+    assert v.verifier_plans([{"image_paroles": "Leila reads.", "ambiance": ""}])[0]["camera"] == v.CAMERA_DEFAUT
+    with pytest.raises(ValueError, match="Plan 1"):
+        v.verifier_plans([{"image_paroles": "x", "ambiance": "", "camera": {"mouvement": "vol"}}])
+    corrige = v.lire_correction('[{"image_paroles": "Leila reads the map.", "ambiance": ""}]', plans)
+    assert corrige[0]["camera"] == avance
+    ancien = [{"image_paroles": "Leila reads.", "ambiance": "", "enchainement": "coupe"}]
+    assert v.plans_a_reprendre(ancien, [dict(ancien[0], camera=v.CAMERA_DEFAUT)]) == [0]
+    assert v.plans_a_reprendre(ancien, plans) == []
 
 
 def test_le_mode_references_charge_ref2va_et_sa_lora(h3):
