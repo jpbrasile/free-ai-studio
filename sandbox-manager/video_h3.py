@@ -1280,7 +1280,7 @@ def photos_avec_depart(ids: list):
     ni voix. Film parc2, 30/09 : trois fiches, 4 + 4 + 1 photos, la voix de Leila ne
     partait pas avec son plan « coupe »."""
     fiches = [fiche_lire(f) for f in ids]
-    toutes = sum(len(f.get("images") or {}) for f in fiches)
+    toutes = sum(_nombre_images_h3(f) for f in fiches)
     if 0 < toutes < MODES["references"]["images_max"]:
         return toutes, False
     faces = sum(len(f.get("images") or {}) if fiche_est_objet(f) or ANGLE_DEPART not in (f.get("images") or {})
@@ -1297,6 +1297,28 @@ def fiche_images(fid, visage_seul: bool = False) -> list:
     if visage_seul and ANGLE_DEPART in angles:
         angles = [ANGLE_DEPART]
     return [fiche_image_data_url(fid, a).split(",", 1)[1] for a in angles]
+
+
+def fiche_images_h3(fid, visage_seul: bool = False) -> list:
+    """Les images d'une personne pour H3 : son portrait de face et sa planche, quand
+    elle en a une ; sinon `fiche_images`. 01/10, « Leila et un martien » : de profil
+    dans les six plans, et H3 ne recevait que ses quatre photos, dont aucun vrai
+    profil et quatre tenues ; le visage dérivait. La planche, la même personne sous
+    tous les angles, n'allait qu'aux images du Studio (« la multi vue aurait dû être
+    envoyée », le propriétaire). Une autre tenue jouée garde l'ancien envoi : la
+    planche montre l'ancienne."""
+    fiche = fiche_lire(fid)
+    planche = None if visage_seul else fiche_planche_data_url(fid)
+    if not planche:
+        return fiche_images(fid, visage_seul)
+    face = [fiche_image_data_url(fid, ANGLE_DEPART).split(",", 1)[1]] if ANGLE_DEPART in fiche["images"] else []
+    return face + [planche.split(",", 1)[1]]
+
+
+def _nombre_images_h3(fiche: dict) -> int:
+    if fiche_est_objet(fiche) or not fiche.get("planche"):
+        return len(fiche.get("images") or {})
+    return (ANGLE_DEPART in (fiche.get("images") or {})) + 1
 
 
 # --- Les tenues d'un personnage : des variantes gardées sur sa fiche (29/09) ------
@@ -1391,7 +1413,8 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
-                      presents=None, depart=None, parleurs=None, suite=False, au_depart=None) -> str:
+                      presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
+                      planches=()) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -1429,7 +1452,11 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
             garde.append(f"{ou}: fully_preserved - the shape, colour and size of the object in "
                          f"{images} are retained; there is exactly one of it in every frame where it appears.")
             continue
-        definitions.append(f"<Subject {k + 1}> is the person in {images}.")
+        definitions.append(f"<Subject {k + 1}> is the person in {images}"
+                           # Ce que chaque image apporte (guide de MiniMax, ref-en, 2.1) : la planche
+                           # est sa dernière image (fiche_images_h3, 01/10).
+                           + (f"; <Picture {premiere - 1}> shows this same person from every angle: front, "
+                              "three-quarter, profile and back." if k in planches else "."))
         j = (voix or {}).get(k)
         if isinstance(j, dict) and len(j) == 1:
             j = next(iter(j.values()))
@@ -2793,7 +2820,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if not isinstance(tenues, dict) or not isinstance(ecrites, dict) or not all(
             isinstance(t, str) and len(t) <= 300 for t in ecrites.values()):
         raise ValueError("Tenues illisibles.")
-    fiches, de_la_fiche, nombres, avec_tenue, ecrites_k = [], [], [], set(), {}
+    fiches, de_la_fiche, nombres, avec_tenue, ecrites_k, avec_planche = [], [], [], set(), {}, set()
     voix_k, sons = {}, []   # le profil voix de chaque personnage qui en a un (29/09)
     candidates = []   # (rang, voix) ; seuls ceux qui parlent dans ce plan la gardent (30/09)
     objets = {}   # rang de la fiche -> "objet" ou "pose"
@@ -2815,8 +2842,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             continue
         # Une autre tenue : le visage de la fiche et la photo de la tenue, sans les photos
         # qui montrent l'ancienne (deux tenues à la fois, H3 choisissait au hasard).
-        images_fiche = fiche_images(fiche["id"], visage_seul=bool(tenues.get(fiche["id"]))
-                                    or payload.get("visages_seuls") is True)
+        visage_seul = bool(tenues.get(fiche["id"])) or payload.get("visages_seuls") is True
+        images_fiche = fiche_images_h3(fiche["id"], visage_seul=visage_seul)
+        if not visage_seul and fiche.get("planche"):
+            avec_planche.add(len(nombres))
         if not images_fiche:
             raise ValueError(f"La fiche « {fiche['nom']} » n'a encore aucune image : créez-les d'abord.")
         if tenues.get(fiche["id"]):
@@ -2887,7 +2916,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                    if isinstance(e, dict) and hors_champ(e.get("debut"))}
         au_depart = {k for k in presents if _norme_replique(fiches[k]["nom"]) not in absents}
         texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs,
-                                   suite, au_depart)
+                                   suite, au_depart, avec_planche)
                  + " detailed_description: [Shot 1] "
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)

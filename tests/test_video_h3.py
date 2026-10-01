@@ -976,6 +976,28 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
         v.preparer(demande(mode="references", fiche="0123456789ab"))
 
 
+def test_la_planche_part_avec_chaque_plan_tourne_par_h3(h3):
+    """01/10, « Leila et un martien » : de profil dans six plans, H3 n'avait que quatre
+    photos sans profil ; « la multi vue aurait dû être envoyée » (le propriétaire)."""
+    v = h3.video_h3
+    fid = v.fiche_creer("Léa", "une femme")["id"]
+    for angle, image in (("face", PNG), ("trois_quarts", JPG), ("profil", PNG), ("pied", JPG)):
+        v.fiche_poser_image(fid, angle, image)
+    v.fiche_poser_planche(fid, JPG)
+    assert v.fiche_images_h3(fid) == [PNG, JPG] and len(v.fiche_images(fid)) == 4
+    plan = v.preparer(demande(mode="references", fiche=fid, image_paroles="Elle sourit."))
+    invite = plan["resume_public"]["invite"]
+    assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>, <Picture 2>; "
+                             "<Picture 2> shows this same person from every angle: front, three-quarter, "
+                             "profile and back. ")
+    assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png"]
+    assert v.photos_avec_depart([fid]) == (2, False)
+    # Une autre tenue jouée : le portrait seul, la planche montre l'ancienne.
+    assert v.fiche_images_h3(fid, visage_seul=True) == [PNG]
+    plan = v.preparer(demande(mode="references", fiche=fid, image_paroles="Elle sourit.", visages_seuls=True))
+    assert "every angle" not in plan["resume_public"]["invite"]
+
+
 def test_la_page_propose_les_fiches(h3):
     html = client(h3).get("/video-h3").text
     for morceau in ('id="fiche_choix"', 'id="fiche_ref"', "/video-h3/fiches/", "Rejouer", "Supprimer",
