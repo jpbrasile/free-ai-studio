@@ -157,16 +157,28 @@ def test_les_trois_cases_font_une_seule_invite(h3):
     assert v.invite("Elle dit : \"Enfin.\"", "pluie", "") == \
         "Elle dit : (S1) <d>[French] Enfin.</d> Sound: pluie. non_diegetic_music: N/A"
     assert v.invite("  un phare  ", "", "piano doux") == \
-        "un phare. non_diegetic_music: piano doux."
+        "un phare. " + v.SILENCE_IMAGE + " Sound: " + v.SILENCE_SON + " non_diegetic_music: piano doux."
     assert v.invite("", "", "") == ""
 
 
 def test_sans_musique_demandee_la_musique_est_refusee(h3):
     # Sans rien dire, H3 ajoute une musique : le champ du guide MiniMax vaut N/A.
     v = h3.video_h3
-    assert v.invite("un phare", "vent", "  ").endswith("Sound: vent. non_diegetic_music: N/A")
+    assert v.invite("un phare", "vent", "  ").endswith("Sound: vent. " + v.SILENCE_SON + " non_diegetic_music: N/A")
     assert "N/A" not in v.invite("un phare", "", "violoncelle lent")
     assert v.invite("", "", "") == ""
+
+
+def test_sans_replique_ecrite_le_silence_se_dit(h3):
+    """01/10, plan 4 de « Leila et un martien » : aucune réplique, et les deux prises
+    ont parlé ; chaque voie de parole se ferme (guides de dialogue H3)."""
+    v = h3.video_h3
+    assert v.invite("Zib prend le biscuit", "grillons", "") == (
+        "Zib prend le biscuit. Nobody speaks: every person keeps their lips closed. "
+        "Sound: grillons. No dialogue, no voiceover, no singing, no individual voices. non_diegetic_music: N/A")
+    # Une réplique écrite : rien de tel.
+    parle = v.invite("Elle dit « Bonjour. »", "grillons", "")
+    assert v.SILENCE_IMAGE not in parle and v.SILENCE_SON not in parle
 
 
 def test_les_paroles_sont_balisees_au_format_du_modele(h3):
@@ -2563,6 +2575,60 @@ def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeyp
     assert sc["fins_images"] == [124, 248, 372]
     assert poses and poses[0][1:] == ("c" * 32, pytest.approx(124 / 24), 0.3)
     assert sc["film"] == "d" * 32
+
+
+def test_un_scenario_echoue_en_route_se_reprend_sans_retourner_ses_plans_faits(h3, monkeypatch, tmp_path,
+                                                                               sans_regles):
+    """01/10, « Leila et un martien » : arrêt au plan 6 (suite d'une coupe), cinq plans
+    tournés que seul un scénario réussi savait reprendre. Le plan 6 part seul, recollé
+    aux cinq, et sa chaîne compte depuis la coupe du plan 5."""
+    v = h3.video_h3
+    sid, _ = _scenario_tourne(h3, monkeypatch, tmp_path)
+    sc = v.scenario_lire(sid)
+    plans = [{"image_paroles": "Plan %d" % (k + 1), "ambiance": "", "enchainement": e}
+             for k, e in enumerate(["coupe", "suite", "suite", "suite", "coupe", "suite"])]
+    v.scenario_ecrire(dict(sc, etat="échoué", erreur="Plan 6 : déjà 4 plans", plans=plans, film=None,
+                           film_sans_musique=None, musique=None, travaux=[str(k) * 32 for k in range(1, 6)],
+                           fins_images=[124, 248, 372, 496, 620]))
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    extraits = []
+    monkeypatch.setattr(h3.montage, "extraire", lambda f, a, b: extraits.append((a, b)) or b"X")
+    monkeypatch.setattr(h3.montage, "recoller_son", lambda a, b, retirer: a + b)
+    monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG))
+    monkeypatch.setattr(h3.montage, "fin", lambda octets, n: b"raccord")
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 620)
+    monkeypatch.setattr(h3, "_controle_derniere_image", lambda *a: None)
+    tournes = []
+
+    def tourner(jid, code, precedent, retirer, ou="modal"):
+        job = h3.read_job(jid)
+        tournes.append((precedent, job["video"]))
+        job["video"]["secondes"] = round(744 / 24, 2)
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+
+    monkeypatch.setattr(h3, "run_video_h3", tourner)
+    fils, vrai = [], h3.run_scenario_h3
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    r = client(h3).post(f"/video-h3/scenario/{sid}/rejouer", headers=CLE, json={"plans": plans})
+    assert r.status_code == 200, r.text
+    assert r.json()["repris"] == [1, 2, 3, 4, 5]
+    vrai(*fils[0])
+    nouveau = v.scenario_lire(r.json()["id"])
+    assert nouveau["etat"] == "réussi", nouveau["erreur"]
+    # Les cinq plans découpés dans le travail du plan 5, qui porte tout le film d'avant.
+    assert extraits == [(0, 124), (124, 248), (248, 372), (372, 496), (496, 620)]
+    (precedent, video), = tournes
+    pose = h3.read_job(precedent)["video"]
+    assert pose["mode"] == "reprise" and pose["chaine"] == 1
+    assert video["mode"] == "prolonger" and video["chaine"] == 2 and video["plans"] == 6
+    # Un scénario en cours ou sans aucun plan fait ne se reprend pas.
+    v.scenario_ecrire(dict(v.scenario_lire(sid), etat="en cours"))
+    assert client(h3).post(f"/video-h3/scenario/{sid}/rejouer", headers=CLE,
+                           json={"plans": plans}).status_code == 409
 
 
 def test_un_seul_rejeu_a_la_fois_par_scenario(h3, monkeypatch, tmp_path):

@@ -697,6 +697,10 @@ def avec_camera(texte: str, phrase: str) -> str:
     return (phrase + (" " if t else "") + t).strip()
 
 
+SILENCE_IMAGE = "Nobody speaks: every person keeps their lips closed."
+SILENCE_SON = "No dialogue, no voiceover, no singing, no individual voices."
+
+
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
            langue: str = LANGUE_PAROLES, locuteur: str = "(S1)", son: str = "Sound: ") -> str:
     """Une seule invite pour le modèle, à partir des trois cases de la page.
@@ -711,9 +715,18 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     sans rien dire, H3 ajoute une musique (entendue le 27/09, PLAN 18.9).
     """
     morceaux = []
-    for texte, prefixe in ((balises_paroles(image_paroles, langue, locuteur), ""), (ambiance, son),
-                           (musique, "non_diegetic_music: ")):
+    image_paroles = balises_paroles(image_paroles, langue, locuteur)
+    # Aucune réplique écrite : le silence se dit, chaque voie de parole fermée. 01/10,
+    # « Leila et un martien », plan 4 : sans réplique, les deux prises ont parlé
+    # (« You come, fakie… », « Anna come on peace »), en écho de la fin du plan 3
+    # reprise par le raccord. « silent » seul ne suffit pas (guides de dialogue H3).
+    muet = bool(" ".join(str(image_paroles or "").split())) and "<d>" not in image_paroles
+    for texte, prefixe in ((image_paroles, ""), (ambiance, son), (musique, "non_diegetic_music: ")):
         t = " ".join(str(texte or "").split())
+        if muet and prefixe == "" and t:
+            t = (t if t[-1] in ".!?\"»>" else t + ".") + " " + SILENCE_IMAGE
+        if muet and prefixe == son:
+            t = (t if not t or t[-1] in ".!?\"»>" else t + ".") + (" " if t else "") + SILENCE_SON
         if t:
             if t[-1] not in ".!?\"»>":
                 t += "."

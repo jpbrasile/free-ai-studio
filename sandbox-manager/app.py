@@ -6344,14 +6344,28 @@ def _fins_images(sc: dict) -> list:
             for j in sc.get("travaux") or []]
 
 
-def _scenario_tourne(sid: str) -> dict:
+def _film_du_scenario(sc: dict):
+    """Le film tourné jusqu'ici : le film fini, sinon (scénario échoué ou arrêté) le
+    travail du dernier plan réussi, qui porte tous les plans d'avant recollés."""
+    if sc.get("film_sans_musique") or sc.get("film"):
+        return sc.get("film_sans_musique") or sc.get("film")
+    faits = len(_fins_images(sc))
+    travaux = sc.get("travaux") or []
+    return travaux[faits - 1] if 0 < faits <= len(travaux) else None
+
+
+def _scenario_tourne(sid: str, partiel: bool = False) -> dict:
+    """`partiel` : un scénario échoué ou arrêté en route se reprend aussi, ses plans
+    réussis repris, les autres tournés (01/10 : arrêt au plan 6 de « Leila et un
+    martien », cinq plans tournés que rien ne savait reprendre)."""
     try:
         sc = video_h3.scenario_lire(sid)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     fins = _fins_images(sc)
-    if sc.get("etat") != "réussi" or len(fins) != len(sc["plans"]) or not _video_h3_octets(
-            sc.get("film_sans_musique") or sc.get("film")):
+    entier = sc.get("etat") == "réussi" and len(fins) == len(sc["plans"])
+    en_route = partiel and sc.get("etat") in ("échoué", "arrêté") and 0 < len(fins) < len(sc["plans"])
+    if not (entier or en_route) or not _video_h3_octets(_film_du_scenario(sc)):
         raise HTTPException(409, "Ce scénario n'est pas tourné en entier sur ce Studio.")
     return sc
 
@@ -6646,7 +6660,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     _h3_ou_404()
     auth(authorization)
     _garde_licence_h3()
-    parent = _scenario_tourne(sid)
+    parent = _scenario_tourne(sid, partiel=True)
     # Un seul rejeu à la fois par scénario : le 28/09, sans signe que le premier
     # tournait, un second clic a payé une seconde fois le même plan.
     for vivant in list(_SCENARIOS_VIVANTS):
@@ -6669,10 +6683,11 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
         commun, musique, a_tourner = _scenario_prepare(commun_corps, plans)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    repris = video_h3.plans_a_reprendre(parent["plans"], plans, retourner)
+    fins, source = _fins_images(parent), _film_du_scenario(parent)
+    # Un scénario arrêté en route : seuls ses plans tournés se reprennent.
+    repris = [i for i in video_h3.plans_a_reprendre(parent["plans"], plans, retourner) if i < len(fins)]
     if len(repris) == len(plans):
         raise HTTPException(400, "Aucun plan n'a changé : modifiez un plan, ou cochez ceux à retourner.")
-    fins, source = _fins_images(parent), parent.get("film_sans_musique") or parent.get("film")
     for i in repris:
         a_tourner[i]["reprise"] = {"film": source, "de": fins[i - 1] if i else 0, "a": fins[i]}
     for i, p in enumerate(a_tourner):
@@ -6784,6 +6799,7 @@ def run_scenario_h3(sid: str, a_tourner: list):
     """Chaque plan attend le précédent ; chacun est recollé au film déjà tourné.
     Un plan repris est découpé dans l'ancien film, sans rien louer."""
     precedent, en_attente, fins = None, None, []
+    chaine_reprise = 0   # les plans repris depuis la dernière coupe (01/10)
     ips = video_h3.IMAGES_PAR_SECONDE
     # Les scénarios d'avant le 01/10 n'ont pas de lieu : ils étaient tous chez Modal.
     ou = video_h3.scenario_lire(sid).get("ou") or "modal"
@@ -6791,7 +6807,8 @@ def run_scenario_h3(sid: str, a_tourner: list):
     def poser_en_attente(n):
         # Les plans repris deviennent un film, pour que le plan suivant s'y recolle.
         return _film_h3(en_attente, {"mode": "reprise", "mode_titre": "Plans repris", "invite": "",
-                                     "plans": n, "scenario": sid}, "Scénario : plans repris")
+                                     "plans": n, "chaine": chaine_reprise, "scenario": sid},
+                        "Scénario : plans repris")
     try:
         for i, p in enumerate(a_tourner):
             if video_h3.scenario_lire(sid).get("arret_demande"):
@@ -6808,6 +6825,7 @@ def run_scenario_h3(sid: str, a_tourner: list):
                         en_attente = _video_h3_octets(precedent).read_bytes()
                     en_attente = morceau if en_attente is None else montage.recoller_son(en_attente, morceau, 0)
                     precedent = None
+                    chaine_reprise = 1 if p["enchainement"] == "coupe" else chaine_reprise + 1
                     fins.append((fins[-1] if fins else 0) + r["a"] - r["de"])
                     video_h3.scenario_noter(sid, fins_images=fins)
                     continue
