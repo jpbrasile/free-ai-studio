@@ -5169,11 +5169,17 @@ def _moteur_du_film(video: dict) -> str:
 # puis « tout en français ». Rien n'est loué : l'écoute (Whisper) et la traduction passent
 # par le routeur gratuit, l'incrustation par ffmpeg sur ce PC.
 
+# Numérotées (01/10) : avec le contexte, le chat rendait 4 répliques sur 6 deux fois
+# sur trois, comme s'il les rangeait par plan du scénario. Il rend les mêmes numéros,
+# et l'on redemande, SOUS_TITRES_ESSAIS fois au plus, si un numéro manque.
 SOUS_TITRES_CONSIGNE = (
-    "Voici les répliques d'un film, transcrites à l'oreille, dans l'ordre, en JSON. Rends UNIQUEMENT une "
-    "liste JSON de chaînes, de même longueur, dans le même ordre : chaque réplique en sous-titre français. "
+    "Voici les répliques d'un film, transcrites à l'oreille, numérotées dans l'ordre, en JSON. Rends "
+    "UNIQUEMENT un objet JSON avec exactement les mêmes numéros : chaque réplique en sous-titre français, "
+    "une par numéro, même quand une phrase est coupée entre deux répliques. "
     "Une réplique déjà en français est recopiée (seules les fautes évidentes de transcription sont "
-    "corrigées) ; une autre langue est traduite naturellement, courte, sans guillemets. Rien d'autre.\n\n")
+    "corrigées) ; une autre langue est traduite naturellement, courte, sans guillemets. TOUTES les "
+    "répliques sortent en français, quelle que soit la langue indiquée dans le contexte. Rien d'autre.\n\n")
+SOUS_TITRES_ESSAIS = 3
 
 # Le 30/09, « Hey, are you lost? » adressé à Leila (15 ans) est devenu « Hé, tu es
 # perdu ? » : le traducteur ne voyait que les répliques. Le Studio sait qui joue et qui
@@ -5199,7 +5205,9 @@ def _contexte_du_film(film_jid: str) -> str:
             v = read_job(jid).get("video") or {}
         except HTTPException:
             continue
-        a_voir += [x for x in [v.get("source"), v.get("finalisation"), *(v.get("clips") or [])] if x]
+        # `precedent` : le clip qu'une prolongation continue (le plan 5 du film campus).
+        a_voir += [x for x in [v.get("source"), v.get("finalisation"), v.get("precedent"),
+                               *(v.get("clips") or [])] if x]
         for f in v.get("fiches") or []:
             if isinstance(f, dict) and f.get("id"):
                 fiches.setdefault(f["id"], f.get("nom") or "")
@@ -5212,13 +5220,18 @@ def _contexte_du_film(film_jid: str) -> str:
         except ValueError:
             d = {}
         lignes.append("- %s : %s" % (d.get("nom") or nom or "?", " ".join(str(d.get("description") or "").split())))
+    numero = 0
     for sid in scenarios:
         try:
             plans = video_h3.scenario_lire(sid).get("plans") or []
         except (ValueError, OSError):
             continue
-        lignes += ["Plan %d : %s" % (k + 1, " ".join(str(p.get("image_paroles") or "").split())[:CONTEXTE_PLAN_CAR])
-                   for k, p in enumerate(plans) if isinstance(p, dict)]
+        # Numérotés à la suite : un film fait de deux scénarios ne recommence pas au plan 1.
+        for p in plans:
+            if isinstance(p, dict):
+                numero += 1
+                lignes.append("Plan %d : %s" % (numero, " ".join(str(p.get("image_paroles") or "").split())
+                                                [:CONTEXTE_PLAN_CAR]))
     return "\n".join(lignes)[:CONTEXTE_CAR]
 
 
@@ -5251,9 +5264,23 @@ def _ecouter_replique(octets: bytes) -> str | None:
 
 
 def lire_liste_json(reponse: str, n: int) -> list:
-    """La liste de `n` chaînes rendue par le chat ; ValueError sinon."""
-    m = re.search(r"\[.*\]", reponse or "", re.S)
-    liste = json.loads(m.group(0)) if m else None
+    """Les `n` chaînes rendues par le chat, en objet numéroté {"1": ...} ou en liste ;
+    ValueError sinon."""
+    liste = None
+    m = re.search(r"\{.*\}", reponse or "", re.S)
+    if m:
+        try:
+            objet = json.loads(m.group(0))
+        except ValueError:
+            objet = None
+        if isinstance(objet, dict) and set(objet) == {str(k) for k in range(1, n + 1)}:
+            liste = [objet[str(k)] for k in range(1, n + 1)]
+    m = None if liste is not None else re.search(r"\[.*\]", reponse or "", re.S)
+    if m:
+        try:
+            liste = json.loads(m.group(0))
+        except ValueError:
+            liste = None
     if not isinstance(liste, list) or len(liste) != n or not all(isinstance(x, str) and x.strip() for x in liste):
         raise ValueError("La traduction n'a pas rendu %d répliques." % n)
     return [" ".join(x.split()) for x in liste]
@@ -5274,14 +5301,17 @@ def run_sous_titres(jid: str, film_jid: str):
         _job_noter(jid, etape="Traduction en français")
         contexte = _contexte_du_film(film_jid)
         consigne = (SOUS_TITRES_CONSIGNE + (SOUS_TITRES_CONTEXTE % contexte if contexte else "")
-                    + json.dumps([t for _, _, t in repliques], ensure_ascii=False))
-        try:
-            francais = lire_liste_json(_dans_un_fil(_chat_du_studio(consigne, "la traduction des sous-titres")),
-                                       len(repliques))
-        except HTTPException as exc:
-            raise montage.MontageImpossible(str(exc.detail)) from exc
-        except ValueError as exc:
-            raise montage.MontageImpossible(str(exc)) from exc
+                    + json.dumps({str(k + 1): t for k, (_, _, t) in enumerate(repliques)}, ensure_ascii=False))
+        for essai in range(SOUS_TITRES_ESSAIS):
+            try:
+                francais = lire_liste_json(_dans_un_fil(_chat_du_studio(consigne, "la traduction des sous-titres")),
+                                           len(repliques))
+                break
+            except HTTPException as exc:
+                raise montage.MontageImpossible(str(exc.detail)) from exc
+            except ValueError as exc:
+                if essai == SOUS_TITRES_ESSAIS - 1:
+                    raise montage.MontageImpossible("%s (%d essais)" % (exc, SOUS_TITRES_ESSAIS)) from exc
         cales = montage.calage([(de, a, f) for (de, a, _), f in zip(repliques, francais)])
         texte_srt = montage.srt(cales)
         _job_noter(jid, etape="Incrustation dans l'image")

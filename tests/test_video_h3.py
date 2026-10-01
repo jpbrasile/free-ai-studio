@@ -4223,17 +4223,63 @@ def test_le_traducteur_des_sous_titres_sait_qui_parle_a_qui(h3, monkeypatch):
     v = h3.video_h3
     leila = v.fiche_creer("Leila", "adolescente de 15 ans, veste violette")["id"]
     tyler = v.fiche_creer("Tyler", "adolescent américain de 16 ans")["id"]
-    sid = "5" * 32
-    monkeypatch.setattr(v, "scenario_lire", lambda s: {"plans": [
-        {"image_paroles": "Tyler arrive et demande à Leila « Hey, are you lost? »"},
-        {"image_paroles": "Leila répond « Yes! »"}]} if s == sid else (_ for _ in ()).throw(ValueError("Scénario inconnu.")))
-    clip, montage_, film = "1" * 32, "2" * 32, "3" * 32
-    for jid, video in ((clip, {"fiches": [{"id": leila, "nom": "Leila"}, {"id": tyler, "nom": "Tyler"}], "scenario": sid}),
-                       (montage_, {"clips": [clip, "9" * 32]}),
+    sid, sid2 = "5" * 32, "6" * 32
+    scenarios = {sid: {"plans": [{"image_paroles": "Tyler arrive et demande à Leila « Hey, are you lost? »"},
+                                 {"image_paroles": "Leila répond « Yes! »"}]},
+                 sid2: {"plans": [{"image_paroles": "Leila crie « I made the team! »"}]}}
+
+    def lire(s):
+        if s not in scenarios:
+            raise ValueError("Scénario inconnu.")
+        return scenarios[s]
+    monkeypatch.setattr(v, "scenario_lire", lire)
+    clip, montage_, film, avant = "1" * 32, "2" * 32, "3" * 32, "7" * 32
+    fiches = [{"id": leila, "nom": "Leila"}, {"id": tyler, "nom": "Tyler"}]
+    # Le second clip est une prolongation : son scénario n'est connu que par `precedent` (01/10).
+    for jid, video in ((avant, {"fiches": fiches, "scenario": sid2}),
+                       (clip, {"fiches": fiches, "scenario": sid}),
+                       ("8" * 32, {"precedent": avant}),
+                       (montage_, {"clips": [clip, "8" * 32, "9" * 32]}),
                        (film, {"source": montage_, "moteur": "SeedVR2 (agrandissement)"})):
         h3.write_job(jid, {"id": jid, "status": "succeeded", "created_at": time.time(), "artifacts": [], "video": video})
     contexte = h3._contexte_du_film(film)
     assert "- Leila : adolescente de 15 ans, veste violette" in contexte
     assert "- Tyler : adolescent américain de 16 ans" in contexte
     assert "Plan 1 : Tyler arrive et demande à Leila « Hey, are you lost? »" in contexte
+    assert "Plan 3 : Leila crie « I made the team! »" in contexte   # numérotés à la suite
     assert h3._contexte_du_film("4" * 32) == ""   # rien de connu : la consigne reste sans contexte
+    # Réponse numérotée ; un numéro manquant est refusé (le Studio redemande).
+    assert h3.lire_liste_json('{"1": "Hé, tu es perdue ?", "2": "Oui !"}', 2) == ["Hé, tu es perdue ?", "Oui !"]
+    with pytest.raises(ValueError):
+        h3.lire_liste_json('{"1": "Hé, tu es perdue ?"}', 2)
+
+
+def test_une_traduction_incomplete_est_redemandee(h3, monkeypatch, tmp_path):
+    """01/10, avec le contexte : 4 répliques rendues sur 6, deux fois sur trois."""
+    fichiers = _deux_clips(h3, monkeypatch, tmp_path)
+    hd = "e" * 32
+    _clip_reussi(h3, hd, moteur="SeedVR2 (agrandissement)")
+    fichiers[hd] = tmp_path / "hd.mp4"
+    fichiers[hd].write_bytes(b"FILM4K")
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "k")
+    monkeypatch.setattr(h3.montage, "passages_de_voix", lambda v: [(1.0, 2.0, [(1.0, 2.0)]), (3.0, 4.0, [(3.0, 4.0)])])
+    monkeypatch.setattr(h3.montage, "son_du_passage", lambda v, de, a: b"%.1f" % de)
+    monkeypatch.setattr(h3, "_ecouter_replique", lambda son: {b"0.8": "Hey, are you lost?", b"2.8": "Yes!"}[son])
+    reponses = ['{"1": "Hé, tu es perdue ?"}', '{"1": "Hé, tu es perdue ?", "2": "Oui !"}']
+    consignes = []
+
+    async def chat(consigne, quoi="", **_):
+        consignes.append(consigne)
+        return reponses[len(consignes) - 1]
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    monkeypatch.setattr(h3.montage, "incruster_sous_titres", lambda f, s: f + b"+ST")
+    monkeypatch.setattr(h3, "_compacter_hd", lambda f, m: (f, None))
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 120)
+    jid = "f" * 32
+    h3.write_job(jid, {"id": jid, "status": "queued", "created_at": time.time(), "artifacts": [],
+                       "video": {"moteur": "SeedVR2 (agrandissement)"}})
+    h3.run_sous_titres(jid, hd)
+    job = h3.read_job(jid)
+    assert job["status"] == "succeeded", job.get("error")
+    assert len(consignes) == 2 and '{"1": "Hey, are you lost?", "2": "Yes!"}' in consignes[0]
+    assert [x["texte"] for x in job["video"]["sous_titres"]] == ["Hé, tu es perdue ?", "Oui !"]
