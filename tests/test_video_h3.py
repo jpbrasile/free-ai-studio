@@ -4564,6 +4564,9 @@ def test_ici_part_sans_modal_ni_poids_modal_et_attend_la_carte(h3, monkeypatch):
     assert len(lance) == 1 and lance[0][0] == jid and lance[0][4] == "maison"
     j = client(h3).get("/video/jobs/" + jid, headers=CLE).json()
     assert j["status"] == "queued" and j["attente_carte"] is True and j["fournisseur"] == "maison"
+    # Vu le 01/10 : la fiche d'un plan fait ici disait « A100 » et 0,955 $ au pire.
+    v = h3.read_job(jid)["video"]
+    assert v["carte"] == "ici" and v["cout_max_usd"] == 0 and v["prix_estime_usd"] == 0
     d = h3.video_h3
     code = lance[0][1]
     assert "__DEMANDE_B64__" not in code

@@ -1878,6 +1878,11 @@ def consigne_decoupage(scenario: str) -> str:
             "The camera stays on the same side of the scene in all its shots. "
             "Then every shot's text states the position of each key element it shows, with the same words "
             "as the staging, even when it did not change. "
+            # 01/10, « Leila et un martien » : « at night under a starry sky » au plan 1
+            # seulement ; le plan 2, lu seul par H3, est sorti en plein jour.
+            "Every shot's text also says where and when it happens: the place and the time of day with "
+            "its light (at night under a starry sky, in the morning sun…), with the same words in every "
+            "shot of that place, even when it did not change. "
             # Remesure du 29/09 : un livre déjà sur la table avant d'y être posé, un
             # personnage « seul » alors que l'autre est arrivé.
             "These positions describe the START of the shot: a character or object appears in them only "
@@ -2381,7 +2386,9 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "moment; an action already completed in an earlier shot that happens again (something falls, "
             "enters or is picked up a second time) without the story asking for it; a character or object "
             "that starts a shot in a state other than the one it ended the previous shot in, with nothing "
-            "shown to change it. \"detail\" = a precision the video model usually gets right on its own or that barely "
+            "shown to change it; a shot whose text does not say the time of day and its light (night, "
+            "day, sunset…) or says another one than the previous shot of the same place, the story "
+            "not having moved on. \"detail\" = a precision the video model usually gets right on its own or that barely "
             "shows: which way someone faces, looks or turns the head (always a detail), which hand, the exact "
             "side or depth in the frame, naming a target earlier, wording. When unsure, \"detail\". "
             "Answer in French, JSON only: {\"etats\": [{\"plan\": number, "

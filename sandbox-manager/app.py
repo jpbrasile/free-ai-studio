@@ -4303,6 +4303,8 @@ def _travail_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0, o
         "titre": (resume["invite"][:60] or "Vidéo H3"),
     }
     if ou == "maison":
+        # Le résumé vient de `preparer`, écrit pour Modal : ici, ni carte louée ni prix.
+        resume.update(carte="ici", cout_max_usd=0.0, prix_estime_usd=0.0)
         fiche.update(machine="comfy", attente_carte=True, provider_effective="maison",
                      attente_motif="En file pour la carte de cet ordinateur.")
     write_job(jid, fiche)
