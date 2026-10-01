@@ -699,7 +699,7 @@ def test_un_morceau_sans_voix_est_ecoute_et_sa_voix_datee(sandbox, ch, monkeypat
         sandbox.write_job(jid, {"id": jid, "status": "succeeded", "created_at": time.time(), "artifacts": [],
                                 "chanson": {"sans_voix": sans_voix}})
         sandbox._ecouter_chanson(jid)
-    assert sandbox.read_job("a" * 32)["ecoute"] == {"voix_des_s": 18.0,
+    assert sandbox.read_job("a" * 32)["ecoute"] == {"voix_des_s": 18.0, "ecoutes": 2,
                                                    "entendu": "Even in December, children's season's new"}
     assert "ecoute" not in sandbox.read_job("b" * 32)   # elle chante : rien à vérifier
     c = TestClient(sandbox.app, base_url=LOCAL)
@@ -710,3 +710,36 @@ def test_un_morceau_sans_voix_est_ecoute_et_sa_voix_datee(sandbox, ch, monkeypat
     monkeypatch.setattr(sandbox, "_transcrire", lambda octets: entendu)
     sandbox._ecouter_chanson("a" * 32)
     assert sandbox.read_job("a" * 32)["ecoute"] == {"non_ecoutee": True}
+
+
+def test_une_voix_ne_compte_que_si_elle_revient_d_une_ecoute_a_l_autre(ch):
+    """01/10/2026, deux morceaux sans voix faits sur la 4090, écoutés plusieurs fois par le
+    Whisper du routeur (segments relevés tels quels). Les mots inventés changent, les
+    phrases toutes faites de Whisper sont écartées, une vraie voix revient."""
+    # L'instrumentale (LoRA) : rien ne doit rester.
+    e1 = [{"start": 13, "end": 16, "no_speech_prob": 0.76, "text": " kemahirangan"},
+          {"start": 16, "end": 19, "no_speech_prob": 0.76, "text": " di sehari"},
+          {"start": 27, "end": 57, "no_speech_prob": 0.70, "text": " Terima kasih telah menonton!"},
+          {"start": 57, "end": 60, "no_speech_prob": 0.84, "text": " Terima kasih."}]
+    e2 = [{"start": 0, "end": 22, "no_speech_prob": 0.76, "text": " Muzik"},
+          {"start": 30, "end": 60, "no_speech_prob": 0.64, "text": " Terima kasih telah menonton!"}]
+    e3 = [{"start": 0, "end": 24, "no_speech_prob": 0.76, "text": " Muzik"},
+          {"start": 24, "end": 54, "no_speech_prob": 0.66, "text": " Terima kasih telah menonton!"}]
+    for a, b in ((e1, e2), (e2, e3), (e1, e3)):
+        assert ch.voix_confirmee([a, b]) is None
+    # Avant : la première écoute suffisait, et le morceau était refusé sous le film.
+    assert ch.premiere_voix(e1) == (13.0, "kemahirangan")
+    # La première chanson (sans LoRA, « no vocals ») : 0–30 s inventé, mots changeants ;
+    # « Hmmmm » (no_speech 0,33) et « Hori sayai hou yo thren » reviennent : un fredonnement
+    # compte comme une voix, dès 30 s (prudence : sous un film, on l'entendrait).
+    p1 = [{"start": 0, "end": 30, "text": " I'm not sure if this is the right way to end this video."},
+          {"start": 30, "end": 54, "text": " Hmmmm"},
+          {"start": 54, "end": 60, "text": " Hori sayai hou yo thren"}]
+    p2 = [{"start": 0, "end": 30, "text": " The"},
+          {"start": 30, "end": 54, "text": " Hmmmm"},
+          {"start": 54.4, "end": 60, "text": " Hori sayai hou yo thren"}]
+    assert ch.voix_confirmee([p1, p2]) == (30.0, "Hmmmm")
+    # Une seule écoute (la seconde a manqué) : prudence, comme avant, phrases toutes faites à part.
+    assert ch.voix_confirmee([e2]) is None
+    assert ch.voix_confirmee([p1]) == (0.0, "I'm not sure if this is the right way to end this video.")
+    assert ch.voix_confirmee([]) is None

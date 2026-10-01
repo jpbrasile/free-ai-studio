@@ -280,6 +280,11 @@ _EMOTION_SYNONYMES = {
     "tiredness": "fatigue",
     # Les mots du chat pour ces émotions (film campus, 30/09).
     "overjoyed": "joie", "ravi": "joie", "ravie": "joie", "embarrassed": "gene", "embarrasse": "gene",
+    # 01/10, « shouts, joyfully: » : l'adverbe n'était pas reconnu, le ton s'ajoutait
+    # derrière les deux-points et H3 l'a prononcé (« Leila et un martien », plan 6).
+    "joyfully": "joie", "happily": "joie", "cheerfully": "joie", "gleefully": "joie", "joyously": "joie",
+    "joyeusement": "joie", "tristement": "tristesse", "kindly": "tendresse",
+    "gently": "calme", "excitedly": "enthousiasme", "ironically": "ironie", "wearily": "fatigue",
     "embarrassee": "gene",
     "amuse": "amusement", "amusee": "amusement", "amused": "amusement", "playful": "amusement",
     "taquin": "amusement", "taquine": "amusement", "teasing": "amusement",
@@ -2227,15 +2232,36 @@ def comparer_paroles(texte: str, entendu: str, sur: bool = True) -> dict:
     parts = [sum(m in entendus for m in w) / len(w) for w in map(_mots, attendues) if w]
     manque = any(p < PAROLES_SEUIL_DEFAUT for p in parts)
     doute = not manque and any(p < PAROLES_SEUIL for p in parts)
+    dits = tons_dits(entendu, attendues)
     return {"attendu": attendues, "entendu": " ".join(str(entendu or "").split()),
             "part": None if part is None else round(part, 2),
-            "ok": None if part is None or doute else not manque, "doute": doute}
+            "ok": False if dits else (None if part is None or doute else not manque), "doute": doute,
+            **({"ton_dit": dits} if dits else {})}
+
+
+def tons_dits(entendu: str, attendues=()) -> list:
+    """Les tons de EMOTIONS que le clip PRONONCE. 01/10, « Leila et un martien », plan 6 :
+    « shouts, joyfully: overjoyed, bursting with happiness, <d>… » ; H3 a dit « …overjoyed,
+    bursting with happiness, reviens quand tu veux », et l'écoute disait « ok » (la
+    réplique y était). Deux mots pleins du ton suffisent (Whisper a entendu « Brusting »),
+    pourvu qu'ils ne soient pas dans la réplique elle-même."""
+    entendus = set(_mots(entendu))
+    dans_replique = set(_mots(" ".join(attendues)))
+    dits = []
+    for _nom, ton in EMOTIONS.values():
+        pleins = [m for m in _mots(ton) if m not in _MOTS_VIDES_DU_TON and m not in dans_replique]
+        if len(pleins) >= 2 and sum(m in entendus for m in pleins) >= 2:
+            dits.append(ton)
+    return dits
 
 
 def defaut_de_paroles(paroles: dict, t_s: float):
     """Un défaut du jugement quand la réplique manque ; None sinon."""
     if paroles.get("ok") is not False:
         return None
+    if paroles.get("ton_dit"):
+        return {"t_s": round(t_s, 1), "quoi": "Le clip prononce le ton écrit pour H3 (« %s ») ; il dit : « %s »."
+                % (" / ".join(paroles["ton_dit"]), paroles["entendu"])}
     if not paroles.get("attendu"):
         return {"t_s": round(t_s, 1), "quoi": "Aucune réplique écrite ; le clip dit : « %s »." % paroles["entendu"]}
     return {"t_s": round(t_s, 1), "quoi": "Réplique attendue « %s » ; le clip dit : « %s »."

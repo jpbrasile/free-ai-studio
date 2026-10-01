@@ -7217,11 +7217,19 @@ def _ecouter_chanson(jid: str) -> None:
     ecoute = {"non_ecoutee": True}
     try:
         son = ART / chanson_fichiers(jid)["son"]["path"]
-        d = _transcrire(montage.son_du_passage(son.read_bytes(), 0.0, chanson.SECONDES_ECOUTE_MAX))
-        if d is not None:
-            voix = chanson.premiere_voix(d.get("segments") or ([{"start": 0, "text": d.get("text")}]
-                                                                if d.get("text") else []))
+        passage = montage.son_du_passage(son.read_bytes(), 0.0, chanson.SECONDES_ECOUTE_MAX)
+        # Deux écoutes : les mots que Whisper invente sur la musique changent de l'une à
+        # l'autre, une vraie voix revient (01/10/2026, `chanson.voix_confirmee`).
+        ecoutes = []
+        for _ in range(2):
+            d = _transcrire(passage)
+            if d is not None:
+                ecoutes.append(d.get("segments") or ([{"start": 0, "text": d.get("text")}]
+                                                     if d.get("text") else []))
+        if ecoutes:
+            voix = chanson.voix_confirmee(ecoutes)
             ecoute = {"voix_des_s": voix[0], "entendu": voix[1]} if voix else {"voix_des_s": None}
+            ecoute["ecoutes"] = len(ecoutes)
     except (KeyError, OSError, HTTPException, montage.MontageImpossible):
         pass
     job = read_job(jid)

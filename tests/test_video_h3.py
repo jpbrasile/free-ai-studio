@@ -2537,6 +2537,24 @@ def test_3_l_ecoute_compare_les_repliques_attendues():
     assert v.defaut_de_paroles(manque, 5.17) == {"t_s": 5.2, "quoi": "Réplique attendue « Non. » ; le clip dit : « rien »."}
 
 
+def test_le_ton_prononce_par_h3_est_un_defaut_et_l_adverbe_le_dit_deja():
+    """01/10, « Leila et un martien », plan 6, tourné ici : « shouts, joyfully: overjoyed,
+    bursting with happiness, <d>[French] Reviens quand tu veux !</d> » ; H3 a prononcé le
+    ton, et l'écoute disait « ok » (segments du routeur, tels quels)."""
+    import importlib
+    v = importlib.import_module("video_h3")
+    entendu = "Les 47 nœuds bannances, Overjoyed, Brusting with Happiness, reviens quand tu veux."
+    p = v.comparer_paroles("Leila shouts, joyfully: « [French, joy] Reviens quand tu veux ! »", entendu)
+    assert p["ok"] is False and p["ton_dit"] == ["overjoyed, bursting with happiness"]
+    assert "overjoyed" in v.defaut_de_paroles(p, 25.8)["quoi"]
+    # La réplique seule, ou un mot du ton qui est DANS la réplique : pas de défaut.
+    assert v.comparer_paroles("« Reviens quand tu veux ! »", "Reviens quand tu veux !")["ok"] is True
+    assert v.comparer_paroles("« I am bursting with happiness! »", "I am bursting with happiness!")["ok"] is True
+    # Et à la source : l'adverbe dit déjà l'émotion, le ton ne s'ajoute plus.
+    assert v._ton("joie", "waves her right arm and shouts, joyfully:") == ""
+    assert v._ton("joie", "waves her right arm and shouts:") == ", overjoyed, bursting with happiness,"
+
+
 def test_4_l_image_de_depart_se_garde_sur_le_studio(h3, monkeypatch):
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     lea, james = _deux_fiches(h3.video_h3)

@@ -29,6 +29,7 @@ import json
 import os
 import re
 import secrets
+import unicodedata
 
 import budget_modal
 
@@ -477,10 +478,11 @@ if D.get("lora"):
                  "norme_avant": round(norme_avant, 4), "norme_apres": round(norme_apres, 4)}
     print("LoRA fusionnee : %d couples, norme %.4f -> %.4f, en %.0f s"
           % (fusionnes, norme_avant, norme_apres, TEMPS["lora"]), flush=True)
-    AVERTISSEMENTS.append(
-        "Version instrumentale : la LoRA " + L["hf"] + " a ete fusionnee dans les poids. "
-        "Sa revision n'est PAS epinglee, contrairement au modele de base : si le depot "
-        "change, ce rendu n'est pas reproductible a l'identique.")
+    if not L.get("revision"):
+        AVERTISSEMENTS.append(
+            "Version instrumentale : la LoRA " + L["hf"] + " a ete fusionnee dans les poids. "
+            "Sa revision n'est PAS epinglee, contrairement au modele de base : si le depot "
+            "change, ce rendu n'est pas reproductible a l'identique.")
 
 # Sur Turing, la partition est plafonnee comme dans le carnet (1 200 jetons) :
 # sans plafond, elle a ete vue partir jusqu'a 3 800 jetons, et tout le reste
@@ -659,6 +661,68 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
 # c'est jusque-là que le morceau peut servir sans voix.
 
 SECONDES_ECOUTE_MAX = 400   # au-delà des trois minutes d'une chanson : tout le morceau
+
+
+# Ce que Whisper « entend » sur de la musique sans voix, d'une écoute à l'autre. Relevé
+# le 01/10/2026 sur l'instrumentale de « Leila et un martien » (LoRA, 4090), trois écoutes
+# du routeur : « Muzik », « Terima kasih telah menonton! » (« merci d'avoir regardé », en
+# malais) aux trois ; les autres sont les phrases de fin de vidéo bien connues de Whisper.
+HALLUCINATIONS_WHISPER = (
+    "terima kasih telah menonton", "terima kasih", "muzik", "music", "musique", "musik",
+    "thanks for watching", "thank you for watching", "thank you", "merci d avoir regarde",
+    "merci", "sous titres realises par la communaute d amara org", "sous titrage st 501",
+    "untertitel der amara org community", "subtitles by the amara org community",
+)
+
+
+def _mots_sans_hallucination(texte: str) -> list:
+    t = unicodedata.normalize("NFD", str(texte or "").lower())
+    t = " ".join(re.findall(r"[^\W\d_]+", "".join(c for c in t if unicodedata.category(c) != "Mn")))
+    for phrase in sorted(HALLUCINATIONS_WHISPER, key=len, reverse=True):
+        t = re.sub(r"\b%s\b" % re.escape(phrase), " ", t)
+    return t.split()
+
+
+# Des mots qu'on retrouve dans deux inventions différentes sans que rien ne chante : le
+# 01/10, « The » d'une écoute rencontrait « …the right way… » de l'autre.
+_MOTS_OUTILS = {"this", "that", "with", "your", "from", "have", "just", "what", "there", "they",
+                "will", "pour", "dans", "avec", "vous", "nous", "mais", "elle", "sont", "cette"}
+
+
+def voix_confirmee(ecoutes: list):
+    """(début en s, texte) de la première voix qui RESTE d'une écoute à l'autre, ou None.
+
+    `ecoutes` : les segments de deux écoutes (ou d'une seule, si la seconde a manqué).
+    Le 01/10/2026, deux morceaux sans voix : Whisper invente des mots sur la musique, et
+    ils CHANGENT à chaque écoute (« I'm not sure if this is the right way… », puis
+    « The » ; « kemahirangan di sehari », puis rien), quand une vraie voix revient
+    (« Hori sayai hou yo thren », trois écoutes sur trois). Aucun seuil ne les sépare : la
+    vraie voix du film campus était à no_speech 0,6, les mots inventés de 0,63 à 0,84.
+    D'où : les phrases que Whisper invente toujours sont écartées, puis un segment ne
+    compte que si l'autre écoute a, au même moment (à 1 s près), un mot plein de 4 lettres
+    ou plus en commun avec lui."""
+    def candidats(segments):
+        vus = []
+        for s in segments or []:
+            mots = _mots_sans_hallucination(s.get("text"))
+            if not mots:
+                continue
+            try:
+                debut = float(s.get("start") or 0.0)
+                fin = float(s.get("end") if s.get("end") is not None else debut + 30.0)
+            except (TypeError, ValueError):
+                debut, fin = 0.0, 30.0
+            vus.append((debut, fin, {m for m in mots if len(m) >= 4 and m not in _MOTS_OUTILS},
+                        " ".join(str(s.get("text") or "").split())[:200]))
+        return sorted(vus, key=lambda c: c[0])
+    listes = [candidats(e) for e in ecoutes or []]
+    if not listes:
+        return None
+    for debut, fin, mots, texte in listes[0]:
+        if all(any(d2 < fin + 1 and debut < f2 + 1 and mots & m2 for d2, f2, m2, _ in autre)
+               for autre in listes[1:]):
+            return round(debut, 2), texte
+    return None
 
 
 def premiere_voix(segments: list):
