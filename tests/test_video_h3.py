@@ -2973,6 +2973,32 @@ def test_l_image_de_depart_prend_la_tenue_de_son_plan(h3, monkeypatch):
     assert "vêtue exactement comme sur l'image jointe 2" in demandes[0]["prompt"]
 
 
+def test_un_personnage_hors_champ_au_debut_n_est_pas_joint_a_l_image(h3, monkeypatch):
+    # Film campus, 01/10 : Tyler entre au plan 1 ; joint à l'image, il y était dessiné.
+    v = h3.video_h3
+    leila = v.fiche_creer("Leila", "x")["id"]
+    tyler = v.fiche_creer("Tyler", "y")["id"]
+    for fid in (leila, tyler):
+        v.fiche_poser_image(fid, "face", PNG)
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + PNG
+
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    elements = [{"nom": "Leila", "debut": "In the foreground at the centre"},
+                {"nom": "Tyler", "debut": "off-frame", "mouvement": "walks in from the left"}]
+    r = client(h3).post("/video-h3/depart", headers=CLE, json={
+        "texte": "Leila lit une carte", "fiches": [leila, tyler], "elements": elements})
+    assert r.status_code == 200, r.text
+    assert "Leila est la personne" in demandes[0]["prompt"] and "Tyler" not in demandes[0]["prompt"]
+    assert len(demandes[0]["image_reference"]) == 1
+    # Sans tableau, rien ne change : les deux fiches partent.
+    assert v.fiches_au_depart([leila, tyler], None) == [leila, tyler]
+    assert v.fiches_au_depart([leila, tyler], [{"nom": "tyler", "debut": "Out of frame"}]) == [leila]
+
+
 # --- Agrandir (SeedVR2, 30/09) : le devis, les coupes, le script, la route. ------
 
 def test_agrandir_coupe_aux_fins_de_plans_puis_en_parts_egales(sandbox):

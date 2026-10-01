@@ -1633,6 +1633,24 @@ def hors_champ(etat: str) -> bool:
     return any(f" {_norme_replique(h)} " in t for h in HORS_CHAMP + _HORS_CHAMP_DEDANS)
 
 
+def fiches_au_depart(fiches: list, elements) -> list:
+    """Les fiches à joindre à l'image de départ : sans celles que le tableau du plan met
+    hors champ au début. Film campus, 01/10 : Tyler, qui entre au plan 1, était joint et
+    dessiné à côté de Leila (règle 6 : « doit être hors champ »). Une fiche illisible reste :
+    demande_image dira pourquoi."""
+    absents = {_norme_replique(str(e.get("nom") or "")) for e in (elements or [])
+               if isinstance(e, dict) and hors_champ(e.get("debut"))}
+    gardees = []
+    for fid in fiches:
+        try:
+            nom = fiche_lire(fid)["nom"]
+        except ValueError:
+            nom = None
+        if nom is None or _norme_replique(nom) not in absents:
+            gardees.append(fid)
+    return gardees
+
+
 _SANS_DEPART = ("", "none", "aucun", "aucune", "rien", "n/a", "-", "null")
 TABLEAU_MAX, TABLEAU_CHAMPS = 8, ("nom", "debut", "mouvement", "fin")
 
@@ -4867,7 +4885,7 @@ function blocDepart(p){
     const avant = PLANS.slice(0, PLANS.indexOf(p)).reverse().find(q => q.image_depart);
     const r = await fetch("/video-h3/depart", {method: "POST", headers: H, body: JSON.stringify({
       texte: texte.value, ameliorations: ameliorations, fiches: fichesDuScenario(),
-      decor: avant ? avant.image_depart : null,
+      decor: avant ? avant.image_depart : null, elements: p.elements || [],
       // La tenue de ce plan, relevée sur tout le film (29/09) : la même que dans le plan tourné.
       plans: PLANS.map(q => q.image_paroles), plan: PLANS.indexOf(p) + 1})});
     const d = await r.json();
