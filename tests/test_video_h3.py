@@ -63,6 +63,15 @@ def sans_regles(h3, monkeypatch):
     monkeypatch.setattr(h3, "_regles_clip", aucune_regle_clip)
 
 
+@pytest.fixture
+def sans_depart_auto(h3, monkeypatch):
+    """Les tests du tournage écrits avant l'image de départ automatique du plan 1 (01/10) :
+    le plan 1 part comme écrit ; elle a ses propres tests."""
+    async def rien(plans, commun):
+        return False
+    monkeypatch.setattr(h3, "_departs_des_coupes", rien)
+
+
 def client(sandbox):
     return TestClient(sandbox.app, base_url="http://127.0.0.1:8020")
 
@@ -1415,7 +1424,7 @@ def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3
     assert d["relecture"]["corrige"] is False and "rien changé" in d["relecture"]["erreur"]
 
 
-def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path, sans_regles):
+def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path, sans_regles, sans_depart_auto):
     v = h3.video_h3
     _autoriser(h3)
     v.poids_noter(True)
@@ -1471,7 +1480,60 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     assert sc["film"] == j2 and sc["travaux"] == [j1, j2] and "video_url" in sc
 
 
-def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch, sans_regles):
+def test_chaque_coupe_part_d_une_image_que_le_studio_cree_sinon_rien_ne_part(h3, monkeypatch, sans_regles):
+    """01/10, propriétaire : « le premier clip doit démarrer à partir d'une image », puis
+    « une coupure démarre par une image créée par un text to image »."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    fid = v.fiche_creer("Zib", "un martien")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+
+    async def tenues(commun, plans, a_tourner):
+        return []
+    monkeypatch.setattr(h3, "_scenario_tenues", tenues)
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: image)
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    fils = []
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    plans = [{"image_paroles": "Zib atterrit dans le jardin", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Zib salue", "ambiance": "", "enchainement": "suite"},
+             {"image_paroles": "Le lendemain, Zib repart", "ambiance": "", "enchainement": "coupe"}]
+    vus = []
+    vraie = h3._creer_depart
+
+    async def creer(corps):
+        vus.append(dict(corps))
+        return await vraie(corps)
+    monkeypatch.setattr(h3, "_creer_depart", creer)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 200, r.text
+    sc = r.json()
+    # Une image par « coupe » (plans 1 et 3), pas pour la suite, qui part du plan d'avant.
+    assert len(demandes) == 2 and "Zib atterrit" in json.dumps(demandes[0], ensure_ascii=False)
+    assert sc["plans"][0]["image_depart"] and "image_depart" not in sc["plans"][1] and sc["plans"][2]["image_depart"]
+    # Comme la page : l'image de la coupe d'avant est jointe (même lieu, même lumière).
+    assert [x["decor"] for x in vus] == [None, sc["plans"][0]["image_depart"]] and vus[1]["plan"] == 3
+    for k in (0, 2):
+        p = fils[0][1][k]["payload"]
+        assert p.get("depart_reference") or p["mode"] == "premiere"
+    # L'image du Studio en panne : rien ne part, et on le dit.
+
+    async def panne(demande):
+        raise h3.HTTPException(502, "L'image du Studio n'a rendu aucune image.")
+    monkeypatch.setattr(h3, "_image_du_studio", panne)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 502 and len(fils) == 1
+
+
+def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch, sans_regles, sans_depart_auto):
     """29/09 : « si on change les vêtements on le fait pour tous les plans et on rajoute
     une photo de référence pour la consistance »."""
     v = h3.video_h3
@@ -1650,6 +1712,9 @@ def test_cadrage_generique_et_personnages_places_une_seule_fois(h3):
     # Règle 2, dans le découpage comme dans la correction ; aucun nom de personnage dans la règle.
     assert v.CADRAGE in v.consigne_decoupage("Un film.") and "at most %d shots" % v.SCENARIO_PLANS_MAX in \
         v.consigne_decoupage("Un film.")
+    # 01/10 : « raccord par défaut sauf si le scénario veut un coupé ».
+    assert "\"suite\" BY DEFAULT" in v.consigne_decoupage("Un film.")
+    assert "not a reason for a cut" in v.consigne_decoupage("Un film.")
     # Essai du 29/09 : geste étalé sur trois plans, élément du lieu absent au départ, caméra qui avance.
     for regle in ("never spread one gesture over several shots", "already visible from the start",
                   "never write a camera movement", "fix the STAGING of each place",
@@ -2119,7 +2184,7 @@ def test_un_film_4k_se_sous_titre_en_francais_puis_prend_sa_musique(h3, monkeypa
     assert c.post("/video-h3/sous-titres", headers=CLE, json={"film": "z" * 32}).status_code == 404
 
 
-def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch, sans_regles):
+def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch, sans_regles, sans_depart_auto):
     v = h3.video_h3
     _autoriser(h3)
     v.poids_noter(True)
@@ -2993,7 +3058,7 @@ def v_lire(h3):
     return lambda rep: h3.video_h3.lire_jugement(rep, 0.0, 12)
 
 
-def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, monkeypatch, sans_regles):
+def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, monkeypatch, sans_regles, sans_depart_auto):
     """29/09 : « le profil dérive de la fiche de base, avec des attributs qui changent »."""
     v = h3.video_h3
     _autoriser(h3)
@@ -3483,7 +3548,7 @@ def _tourner_sans_louer(h3, monkeypatch):
     return fils
 
 
-def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch):
+def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch, sans_depart_auto):
     """L'audit du 30/09 : une remarque bloquante vue, puis tournée quand même (parc, plan 2)."""
     fid = _scenario_pret(h3, avec_voix=True)
     fils = _tourner_sans_louer(h3, monkeypatch)
@@ -3509,7 +3574,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     assert r.status_code == 200 and r.json()["non_suivies"] == [[1, 2, "deux actions à la fois"]]
 
 
-def test_la_voix_du_locuteur_n_a_pas_de_passe_droit(h3, monkeypatch):
+def test_la_voix_du_locuteur_n_a_pas_de_passe_droit(h3, monkeypatch, sans_depart_auto):
     """Décision du 30/09 : la voix de chaque locuteur, « to be hard coded in studio »."""
     fid = _scenario_pret(h3, avec_voix=False)
     fils = _tourner_sans_louer(h3, monkeypatch)
@@ -4297,6 +4362,19 @@ def test_finaliser_la_4k_ici_en_morceaux_courts_sans_rien_louer(h3, monkeypatch,
         assert etape["provider"] == "maison" and etape["machine"] == "comfy"
 
 
+def test_ici_un_plan_trop_long_est_partage_au_lieu_d_etre_refuse(h3):
+    """01/10 : le plan 6 (243 images) faisait refuser la 4K ici ; coupé à la main."""
+    assert not h3.agrandir.tient_maison(243)
+    plans = [{"de": 0, "a": 124, "sujets": []}, {"de": 124, "a": 367, "sujets": []}]
+    coupes = h3._couper_pour_ici(plans)
+    assert coupes[0] == plans[0] and coupes[1]["de"] == 124 and coupes[-1]["a"] == 367
+    assert all(x["a"] == y["de"] for x, y in zip(coupes, coupes[1:]))
+    assert all(h3.agrandir.tient_maison(p["a"] - p["de"]) for p in coupes)
+    # Un plan avec visages n'est pas touché (ici, il est refusé plus loin, avec sa phrase).
+    avec = [{"de": 0, "a": 243, "sujets": [{"fiche": "x", "choix": "largest_face"}]}]
+    assert h3._couper_pour_ici(avec) == avec
+
+
 def test_finaliser_ici_refuse_les_visages_le_x2_et_les_poids_absents(h3, monkeypatch, tmp_path):
     loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
     _ici(h3, monkeypatch, fichiers={f: 1 for f in h3.agrandir.FICHIERS_MAISON})
@@ -4434,6 +4512,9 @@ def test_la_page_propose_de_finaliser_le_film(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     assert 'id="montage_finaliser"' in page and 'blocFinaliser("montage_finaliser"' in page
     assert "/video-h3/finaliser/prix" in page and "/reprendre" in page and "au pire" in page
+    # 01/10 : « la remise en état des visages est inutile en mode automatique » : rien coché d'office.
+    bloc = page.split("function dessinerFinaliser")[1].split("function ")[0]
+    assert "c.checked = false;" in bloc and "c.checked = j <" not in bloc
 
 
 def _video_grise(chemin, images, n=48, l=112, h=64):

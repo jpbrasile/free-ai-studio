@@ -1921,9 +1921,13 @@ def consigne_decoupage(scenario: str) -> str:
             "For each shot give \"elements\" (the table), "
             "\"image_paroles\" (what we see, "
             "then the line if any), \"ambiance\" (the sounds, a few words) and \"enchainement\": "
-            "\"coupe\" for a new camera shot or place, \"suite\" when it continues the previous shot "
-            "without a cut. The first shot is \"coupe\"; never more than %d shots in a row without a "
-            "\"coupe\". Answer with the JSON array only.\n\n%s"
+            # 01/10, propriétaire : « raccord par défaut sauf si le scénario veut un coupé ».
+            # « Leila et un martien » : six « coupe » (une par mouvement de caméra), aucun raccord.
+            "\"suite\" BY DEFAULT: the shot continues the previous one without a cut, and the Studio joins "
+            "them smoothly; a new framing or camera movement is not a reason for a cut. \"coupe\" only "
+            "when the script wants a cut: another place, a jump in time, a new scene. The first shot is "
+            "\"coupe\"; never more than %d shots in a row without a \"coupe\" (put it where the story "
+            "allows a cut best). Answer with the JSON array only.\n\n%s"
             % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, PLANS_MAX, scenario))
 
 
@@ -4155,8 +4159,8 @@ async function blocFinaliser(ou, jid, sid){
 function dessinerFinaliser(b, jid, d){
   const aide = document.createElement("p");
   aide.className = "note";
-  aide.textContent = "Une machine louée pour les visages, une pour la 4K (deux si le film est long) : les modèles se chargent une fois, les passages passent l'un après l'autre. Cochez les "
-    + "personnages dont le VISAGE se voit dans le passage (pas de dos), deux au plus : un visage absent "
+  aide.textContent = "Par défaut, la 4K seule. Les visages ne se refont que si vous cochez un personnage "
+    + "(machine louée chez Modal) : cochez ceux dont le VISAGE se voit dans le passage (pas de dos), deux au plus : un visage absent "
     + "serait pris sur quelqu'un d'autre. « Fondu » : le Studio a vu un changement de scène à cet endroit.";
   b.appendChild(aide);
   const lignes = d.plans.map((p, i) => {
@@ -4172,7 +4176,9 @@ function dessinerFinaliser(b, jid, d){
     const sujets = d.fiches.map((f, j) => {
       const c = document.createElement("input");
       c.type = "checkbox";
-      c.checked = j < 2;
+      // 01/10, propriétaire : « la remise en état des visages est inutile en mode automatique ».
+      // Cochés d'office, ils partaient chez Modal et fermaient « ici » : rien n'est coché.
+      c.checked = false;
       const place = document.createElement("select");
       for (const x of d.choix) place.add(new Option(PLACES[x] || x, x));
       place.value = j === 0 ? "largest_face" : "largest_face_2";

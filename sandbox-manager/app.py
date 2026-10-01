@@ -4380,7 +4380,11 @@ async def video_h3_depart(request: Request, authorization: Optional[str] = Heade
     utilisée dans le scénario : c'est pas normal »."""
     _h3_ou_404()
     auth(authorization)
-    corps = await request.json()
+    return await _creer_depart(await request.json())
+
+
+async def _creer_depart(corps: dict) -> dict:
+    """La route ci-dessus, aussi appelée par le tournage pour le plan 1 (01/10)."""
     # Un personnage hors champ au début du plan n'est pas joint à l'image (01/10).
     if isinstance(corps.get("fiches"), list) and isinstance(corps.get("elements"), list):
         corps["fiches"] = video_h3.fiches_au_depart([str(f) for f in corps["fiches"]], corps["elements"])
@@ -4896,6 +4900,24 @@ def _finaliser_devis_maison(plans: list, echelle: str) -> dict:
                                            for g in groupes))}
 
 
+def _couper_pour_ici(plans: list) -> list:
+    """01/10 : le plan 6 de « Leila et un martien » (243 images) faisait refuser la 4K
+    ici (« redécoupez le film ») ; il a fallu le couper à la main. Un plan sans visage
+    trop long pour une fois est partagé en parts égales qui tiennent."""
+    sortie = []
+    for p in plans:
+        n = p["a"] - p["de"]
+        if p["sujets"] or agrandir.tient_maison(n):
+            sortie.append(p)
+            continue
+        parts = 2
+        while parts < n and not agrandir.tient_maison(-(-n // parts)):
+            parts += 1
+        bornes = [p["de"] + round(k * n / parts) for k in range(parts + 1)]
+        sortie += [dict(p, de=x, a=y) for x, y in zip(bornes, bornes[1:])]
+    return sortie
+
+
 def _tient_4k_maison(g) -> bool:
     return agrandir.tient_maison(sum(n for _, n, _ in g))
 
@@ -4917,6 +4939,8 @@ async def video_h3_finaliser(request: Request, authorization: Optional[str] = He
         if not echelle and not any(p["sujets"] for p in plans):
             raise ValueError("Rien à faire : ni visages ni agrandissement.")
         ou = _ou_h3(corps)
+        if ou == "maison":
+            plans = _couper_pour_ici(plans)
         devis = _finaliser_devis_maison(plans, echelle) if ou == "maison" else _finaliser_devis(plans, echelle)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -5044,7 +5068,7 @@ async def video_h3_finaliser_prix(request: Request, authorization: Optional[str]
         plans = _finaliser_plans(images, corps.get("plans"))
         if echelle and echelle not in agrandir.ECHELLES:
             raise ValueError("Agrandissement non proposé.")
-        sortie["devis"] = (_finaliser_devis_maison(plans, echelle) if corps.get("ou") == "maison"
+        sortie["devis"] = (_finaliser_devis_maison(_couper_pour_ici(plans), echelle) if corps.get("ou") == "maison"
                            else _finaliser_devis(plans, echelle))
     except ValueError as exc:
         sortie["devis"] = {"refus": str(exc)}
@@ -6206,6 +6230,29 @@ def _scenario_lancer(plans: list, commun: dict, musique, a_tourner: list, **autr
     return sc
 
 
+async def _departs_des_coupes(plans: list, commun: dict) -> bool:
+    """01/10, propriétaire : « le premier clip doit démarrer à partir d'une image », puis
+    « une coupure démarre par une image créée par un text to image ». Elle ne se faisait
+    qu'au bouton de la page ; « Leila et un martien », lancé trois fois par la route, est
+    parti des seules fiches. Le Studio crée l'image de chaque « coupe » qui n'en a pas,
+    comme la page (l'image de la coupe d'avant jointe : même lieu, même lumière) ; True
+    s'il en a posé une. Une image en échec : l'HTTPException remonte, rien ne part."""
+    ids = [f for f in (commun.get("fiches") or [commun.get("fiche")]) if f]
+    if not ids:
+        return False
+    textes, pose, decor = [p["image_paroles"] for p in plans], False, None
+    for k, p in enumerate(plans):
+        if p["enchainement"] != "coupe":
+            continue
+        if not p.get("image_depart"):
+            d = await _creer_depart({"texte": p["image_paroles"], "fiches": ids, "decor": decor,
+                                     "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
+            p.update(image_depart=d["id"], description_depart=d["texte"])
+            pose = True
+        decor = p["image_depart"]
+    return pose
+
+
 @app.post("/video-h3/scenario/tourner")
 async def video_h3_scenario_tourner(request: Request, authorization: Optional[str] = Header(default=None)):
     """Tous les plans sont contrôlés et traduits AVANT le premier sou ; puis un
@@ -6221,6 +6268,11 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
         raise HTTPException(400, str(exc)) from exc
     ou = _ou_h3(corps)
     _h3_peut(ou)
+    if await _departs_des_coupes(plans, commun):
+        try:
+            commun, musique, a_tourner = _scenario_prepare(corps, plans)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     # Les règles 0 à 8 AVANT le premier sou (30/09) : l'audit a montré des remarques
     # bloquantes vues, puis tournées quand même.
     forcer = corps.get("forcer") is True
