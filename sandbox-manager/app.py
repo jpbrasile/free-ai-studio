@@ -6101,19 +6101,55 @@ async def video_h3_scenario_verifier(request: Request, authorization: Optional[s
     return {"rapport": rapport, "non_suivies": regles.non_suivies(rapport, regles.AVANT_TOURNAGE)}
 
 
-async def _garde_des_regles(plans: list, commun: dict, forcer: bool, tournes=None) -> list:
+async def _garde_des_regles(plans: list, commun: dict, forcer: bool, tournes=None, rapport=None,
+                            refus=None) -> list:
     """Refuse le tournage (409) si une règle d'avant tournage n'est pas suivie, sauf
     « tourner quand même » ; la règle de la voix n'a jamais de passe-droit.
-    `tournes` : les numéros des plans vraiment tournés (un rejeu reprend les autres)."""
-    rapport = await _verifier_scenario(plans, commun)
+    `tournes` : les numéros des plans vraiment tournés (un rejeu reprend les autres).
+    `rapport` : déjà fait (la correction d'avant tournage vient de le refaire) ;
+    `refus` : ajouté tel quel au refus (les plans corrigés, pour la page)."""
+    if rapport is None:
+        rapport = await _verifier_scenario(plans, commun)
     fautes = [f for f in regles.non_suivies(rapport, regles.AVANT_TOURNAGE) if tournes is None or f[0] in tournes]
     bloquent = [f for f in fautes if f[1] in REGLES_SANS_PASSE_DROIT] if forcer else fautes
     if bloquent:
-        raise HTTPException(409, {"message": "Règles non suivies : "
-                                  + " ; ".join("plan %d, règle %d : %s" % f for f in bloquent),
-                                  "regles": rapport, "passe_droit": not any(
-                                      f[1] in REGLES_SANS_PASSE_DROIT for f in bloquent)})
+        raise HTTPException(409, dict({"message": "Règles non suivies : "
+                                       + " ; ".join("plan %d, règle %d : %s" % f for f in bloquent),
+                                       "regles": rapport, "passe_droit": not any(
+                                           f[1] in REGLES_SANS_PASSE_DROIT for f in bloquent)}, **(refus or {})))
     return rapport
+
+
+async def _corriger_avant_tournage(plans: list, commun: dict, rapport: list) -> tuple:
+    """Les règles de TEXTE non suivies au moment de tourner, passées une fois au
+    correcteur du découpage. « Leila et un martien », 01/10 : sept remarques (télescope
+    et soucoupe qui disparaissent, réaction non écrite) après deux relectures ; la page
+    ne disait que « corrigez les plans, ou tournez quand même », et il a fallu trois
+    corrections à la main. La correction n'est gardée que si elle laisse MOINS de
+    règles non suivies ; répliques, caméras, durées et images de départ intouchées
+    (`lire_correction`). Rend (plans, rapport, note)."""
+    fautes = [f for f in regles.non_suivies(rapport, regles.NUMEROS["texte"])
+              if f[1] not in REGLES_SANS_PASSE_DROIT]
+    if not fautes:
+        return plans, rapport, None
+    note = {"trouvees": len(fautes), "corrige": False}
+    retours = ("Review of the text BEFORE shooting (nothing is filmed yet): "
+               + " ; ".join("shot %d, rule %d: %s" % f for f in fautes))
+    consigne = video_h3.consigne_correction(plans, retours, _histoire(plans))
+    try:
+        corriges = video_h3.verifier_plans(video_h3.lire_correction(await _chat_du_studio(
+            consigne, "la correction avant le tournage", modele=MODELE_CORRECTION), plans))
+    except HTTPException as exc:
+        return plans, rapport, dict(note, erreur=str(exc.detail))
+    except ValueError as exc:
+        return plans, rapport, dict(note, erreur=str(exc))
+    apres = await _verifier_scenario(corriges, commun)
+    avant_n = len(regles.non_suivies(rapport, regles.AVANT_TOURNAGE))
+    apres_n = len(regles.non_suivies(apres, regles.AVANT_TOURNAGE))
+    if apres_n >= avant_n:
+        return plans, rapport, dict(note, erreur="La correction n'a pas fait mieux (%d règle(s) non suivie(s) "
+                                                 "au lieu de %d) : le texte d'origine est gardé." % (apres_n, avant_n))
+    return corriges, apres, dict(note, corrige=True, restent=apres_n)
 
 
 async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
@@ -6277,13 +6313,26 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     # Les règles 0 à 8 AVANT le premier sou (30/09) : l'audit a montré des remarques
     # bloquantes vues, puis tournées quand même.
     forcer = corps.get("forcer") is True
-    rapport = await _garde_des_regles(plans, commun, forcer)
+    rapport, refus = None, {}
+    if not forcer:
+        # Une correction gratuite AVANT de refuser (01/10) ; « tourner quand même » n'en fait pas.
+        rapport = await _verifier_scenario(plans, commun)
+        plans, rapport, correction = await _corriger_avant_tournage(plans, commun, rapport)
+        if correction:
+            refus = {"correction": correction, "plans": plans}
+        if correction and correction["corrige"]:
+            try:
+                commun, musique, a_tourner = _scenario_prepare(corps, plans)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+    rapport = await _garde_des_regles(plans, commun, forcer, rapport=rapport, refus=refus)
     try:
         tenues = await _scenario_tenues(commun, plans, a_tourner)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
-    return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer, ou=ou)
+    return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer, ou=ou,
+                            correction=refus.get("correction"))
 
 
 def _fins_images(sc: dict) -> list:

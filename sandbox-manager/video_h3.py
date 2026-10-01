@@ -5838,11 +5838,19 @@ async function tournerScenario(forcer){
   const r = await fetch("/video-h3/scenario/tourner", {method: "POST", headers: H,
                                                        body: JSON.stringify(Object.assign(corpsScenario(), {forcer: !!forcer, ou: OU}))});
   const d = await r.json();
+  // La correction d'avant tournage (01/10) : les plans corrigés reviennent à la page,
+  // refusés ou partis, pour que ce qui se voit soit ce qui se tourne.
+  const corr = (d.detail && d.detail.correction) || d.correction;
+  const corriges = (d.detail && d.detail.plans) || (corr && corr.corrige && d.plans);
+  if (corr && corr.corrige && corriges){ PLANS = corriges; dessinerPlans(); }
+  const dit = corr ? (corr.corrige ? "Le Studio a corrigé " + corr.trouvees + " remarque(s) avant de tourner. "
+                                   : "Correction avant le tournage non gardée" + (corr.erreur ? " : " + corr.erreur : "") + ". ") : "";
   if (!r.ok){
     // Une règle non suivie : « Tourner quand même » est offert, sauf pour la voix (règle 4).
     document.getElementById("scenario_forcer").hidden = !(d.detail && d.detail.passe_droit);
-    throw new Error(messageDeRefus(d));
+    throw new Error(dit + messageDeRefus(d));
   }
+  if (dit) scenarioEtat(dit);
   document.getElementById("scenario_forcer").hidden = true;
   if (d.regles) dessinerRegles(d.regles, "Avant le tournage");
   await suivreScenario(d.id);

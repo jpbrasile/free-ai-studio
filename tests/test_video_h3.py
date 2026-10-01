@@ -53,12 +53,16 @@ def sans_traduction(h3, monkeypatch):
 def sans_regles(h3, monkeypatch):
     """Les tests du tournage et du juge écrits avant les règles numérotées (30/09) :
     ni garde, ni contrôle de la dernière image, ni règles 10 à 12 ; elles ont leurs tests."""
-    async def aucune_garde(plans, commun, forcer, tournes=None):
+    async def aucune_garde(plans, commun, forcer, tournes=None, rapport=None, refus=None):
         return []
 
     async def aucune_regle_clip(*a, **k):
         return {}
+
+    async def aucun_rapport(*a, **k):
+        return []
     monkeypatch.setattr(h3, "_garde_des_regles", aucune_garde)
+    monkeypatch.setattr(h3, "_verifier_scenario", aucun_rapport)
     monkeypatch.setattr(h3, "_controle_derniere_image", lambda sid, i, image: None)
     monkeypatch.setattr(h3, "_regles_clip", aucune_regle_clip)
 
@@ -3582,6 +3586,46 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     # La route de vérification dit la même chose, sans rien lancer.
     r = c.post("/video-h3/scenario/verifier", headers=CLE, json={"plans": plans, "fiche": fid})
     assert r.status_code == 200 and r.json()["non_suivies"] == [[1, 2, "deux actions à la fois"]]
+
+
+def test_avant_de_refuser_le_studio_corrige_une_fois_le_texte(h3, monkeypatch, sans_depart_auto):
+    """« Leila et un martien », 01/10 : sept règles de texte non suivies au moment de
+    tourner, corrigées à la main en trois passages. Le correcteur du découpage les reçoit
+    une fois ; gardé s'il fait mieux, la réplique intacte ; sinon le texte d'origine."""
+    fid = _scenario_pret(h3, avec_voix=True)
+    fils = _tourner_sans_louer(h3, monkeypatch)
+
+    async def continuite(plans, histoire):
+        if "telescope" in plans[0]["image_paroles"]:
+            return {"ok": True, "problemes": []}
+        return {"ok": False, "problemes": [{"plan": 1, "quoi": "le télescope disparaît", "gravite": "bloquant"}]}
+    monkeypatch.setattr(h3, "_continuite", continuite)
+    plans = [{"image_paroles": "Léa says « Bonjour. »", "ambiance": "", "enchainement": "coupe",
+              "camera": {"mouvement": "arc", "amplitude": "petite", "vitesse": "lente"}}]
+    corrige = '[{"image_paroles": "The telescope stands left. Léa says « Bonjour. »", "ambiance": ""}]'
+    vus = []
+    _faux_chat(monkeypatch, h3, {"la correction avant le tournage": [corrige]}, vus)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["correction"] == {"trouvees": 1, "corrige": True, "restent": 0} and len(fils) == 1
+    assert d["plans"][0]["image_paroles"].startswith("The telescope") and d["plans"][0]["camera"]["mouvement"] == "arc"
+    assert "BEFORE shooting" in vus[0][1] and "rule 2: le télescope disparaît" in vus[0][1]
+    # Une correction qui ne fait pas mieux : le texte d'origine, et le refus le dit.
+    _faux_chat(monkeypatch, h3, {"la correction avant le tournage": ['[{"image_paroles": "Léa says « Bonjour. »", '
+                                                                     '"ambiance": "wind"}]']}, vus)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 409 and len(fils) == 1
+    d = r.json()["detail"]
+    assert d["correction"]["corrige"] is False and "pas fait mieux" in d["correction"]["erreur"]
+    assert d["plans"][0]["image_paroles"] == "Léa says « Bonjour. »" and d["passe_droit"] is True
+    # « Tourner quand même » ne demande aucune correction.
+    n = len(vus)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE,
+                        json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": True})
+    assert r.status_code == 200 and len(vus) == n and "correction" not in r.json() or r.json()["correction"] is None
+    page = h3.video_h3.PAGE_HTML
+    assert "Le Studio a corrigé" in page and "d.detail.plans" in page
 
 
 def test_la_voix_du_locuteur_n_a_pas_de_passe_droit(h3, monkeypatch, sans_depart_auto):
