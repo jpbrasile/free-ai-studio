@@ -1931,6 +1931,21 @@ def consigne_decoupage(scenario: str) -> str:
             % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, PLANS_MAX, scenario))
 
 
+def borner_les_suites(plans):
+    """01/10 : avec « suite » par défaut, le chat a enchaîné cinq « suite » et tout le
+    découpage a été refusé (« 4 plans au plus d'affilée sans coupe »). Le Studio met
+    lui-même la « coupe » là où la chaîne dépasse ; cette coupe partira de son image."""
+    if not isinstance(plans, list) or not all(isinstance(p, dict) for p in plans):
+        return plans
+    derniere = 0
+    for i, p in enumerate(plans):
+        if p.get("enchainement") == "suite" and (i == 0 or i - derniere + 1 > PLANS_MAX):
+            p["enchainement"] = "coupe"
+        if p.get("enchainement") != "suite":
+            derniere = i
+    return plans
+
+
 def verifier_plans(plans) -> list:
     """Les plans relus par le propriétaire : de 1 à SCENARIO_PLANS_MAX, le premier
     en « coupe » (il n'a pas de plan avant lui)."""
@@ -1983,7 +1998,7 @@ def lire_decoupage(reponse: str, scenario: str) -> list:
     except ValueError:
         plans = None
     try:
-        plans = verifier_plans(plans)
+        plans = verifier_plans(borner_les_suites(plans))
     except ValueError as exc:
         raise ValueError("Le découpage du chat n'a pas pu être lu (" + str(exc) + ") : réessayez.") from exc
     # 29/09 : un plan commençait par « image_paroles: », le nom du champ recopié dans son texte.
@@ -2526,7 +2541,7 @@ def lire_scission(reponse: str, plan: dict) -> list:
 def scinder(plans: list, i: int, morceaux: list) -> list:
     """Les plans, le plan i remplacé par ses morceaux ; ValueError si les limites ne tiennent pas
     (SCENARIO_PLANS_MAX, PLANS_MAX d'affilée sans coupe)."""
-    return verifier_plans(plans[:i] + morceaux + plans[i + 1:])
+    return verifier_plans(borner_les_suites(plans[:i] + morceaux + plans[i + 1:]))
 
 
 def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:

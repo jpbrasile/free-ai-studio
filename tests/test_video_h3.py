@@ -1158,6 +1158,10 @@ def test_le_decoupage_est_controle(h3):
     assert v.lire_decoupage(vide, "Elle sourit.")[0]["image_paroles"] == "Elle sourit ."
     with pytest.raises(ValueError, match="pas pu être lu"):
         v.lire_decoupage("[]", scenario)
+    # 01/10 : « suite » par défaut, le chat en a enchaîné cinq ; le Studio met la coupe lui-même.
+    six = json.dumps([{"image_paroles": "Plan %d." % k, "ambiance": "", "enchainement": "suite"} for k in range(6)])
+    chaine = [p["enchainement"] for p in v.lire_decoupage(six, "Un film.")]
+    assert chaine == ["coupe"] + ["suite"] * (v.PLANS_MAX - 1) + ["coupe", "suite"]
     trop = [{"image_paroles": "x", "ambiance": "", "enchainement": "coupe"}] * (v.SCENARIO_PLANS_MAX + 1)
     for mauvais, message in ((trop, "au plus"), ([{"image_paroles": " "}], "décrivez"),
                              ([{"image_paroles": "x", "enchainement": "fondu"}], "inconnu")):
