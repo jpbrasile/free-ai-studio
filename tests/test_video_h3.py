@@ -4215,3 +4215,25 @@ def test_seuls_les_films_hd_sont_compresses_et_un_echec_les_laisse_tels_quels(h3
     monkeypatch.setattr(h3.montage, "compacter_av1", casse)
     assert h3._compacter_hd(b"HD", "SeedVR2 (agrandissement)") == (
         b"HD", {"raison": "La mesure de qualité (PSNR) a échoué."})
+
+
+def test_le_traducteur_des_sous_titres_sait_qui_parle_a_qui(h3, monkeypatch):
+    """30/09 : « Hey, are you lost? », dit à Leila (15 ans), était devenu « tu es perdu ».
+    Le contexte vient de la filiation du film : film 4K -> montage -> clip -> scénario et fiches."""
+    v = h3.video_h3
+    leila = v.fiche_creer("Leila", "adolescente de 15 ans, veste violette")["id"]
+    tyler = v.fiche_creer("Tyler", "adolescent américain de 16 ans")["id"]
+    sid = "5" * 32
+    monkeypatch.setattr(v, "scenario_lire", lambda s: {"plans": [
+        {"image_paroles": "Tyler arrive et demande à Leila « Hey, are you lost? »"},
+        {"image_paroles": "Leila répond « Yes! »"}]} if s == sid else (_ for _ in ()).throw(ValueError("Scénario inconnu.")))
+    clip, montage_, film = "1" * 32, "2" * 32, "3" * 32
+    for jid, video in ((clip, {"fiches": [{"id": leila, "nom": "Leila"}, {"id": tyler, "nom": "Tyler"}], "scenario": sid}),
+                       (montage_, {"clips": [clip, "9" * 32]}),
+                       (film, {"source": montage_, "moteur": "SeedVR2 (agrandissement)"})):
+        h3.write_job(jid, {"id": jid, "status": "succeeded", "created_at": time.time(), "artifacts": [], "video": video})
+    contexte = h3._contexte_du_film(film)
+    assert "- Leila : adolescente de 15 ans, veste violette" in contexte
+    assert "- Tyler : adolescent américain de 16 ans" in contexte
+    assert "Plan 1 : Tyler arrive et demande à Leila « Hey, are you lost? »" in contexte
+    assert h3._contexte_du_film("4" * 32) == ""   # rien de connu : la consigne reste sans contexte

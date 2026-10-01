@@ -5175,6 +5175,52 @@ SOUS_TITRES_CONSIGNE = (
     "Une réplique déjà en français est recopiée (seules les fautes évidentes de transcription sont "
     "corrigées) ; une autre langue est traduite naturellement, courte, sans guillemets. Rien d'autre.\n\n")
 
+# Le 30/09, « Hey, are you lost? » adressé à Leila (15 ans) est devenu « Hé, tu es
+# perdu ? » : le traducteur ne voyait que les répliques. Le Studio sait qui joue et qui
+# parle à qui (fiches des personnages, scénario plan par plan) : il le lui donne.
+SOUS_TITRES_CONTEXTE = (
+    "Contexte du film, pour accorder genre, nombre et tutoiement selon qui parle à qui "
+    "(ne pas le traduire, ne pas le rendre) :\n%s\n\n")
+CONTEXTE_TRAVAUX_MAX = 60     # fiches lues en remontant la filiation d'un film
+CONTEXTE_PLAN_CAR = 600       # un plan de scénario, au plus
+CONTEXTE_CAR = 6000           # tout le contexte, au plus
+
+
+def _contexte_du_film(film_jid: str) -> str:
+    """Personnages et scénario d'un film, trouvés en remontant sa filiation (film
+    source, clips, finalisation) ; chaîne vide si le Studio n'en sait rien."""
+    a_voir, vus, fiches, scenarios = [film_jid], set(), {}, []
+    while a_voir and len(vus) < CONTEXTE_TRAVAUX_MAX:
+        jid = a_voir.pop(0)
+        if jid in vus or not re.fullmatch(r"[0-9a-f]{32}", str(jid)):
+            continue
+        vus.add(jid)
+        try:
+            v = read_job(jid).get("video") or {}
+        except HTTPException:
+            continue
+        a_voir += [x for x in [v.get("source"), v.get("finalisation"), *(v.get("clips") or [])] if x]
+        for f in v.get("fiches") or []:
+            if isinstance(f, dict) and f.get("id"):
+                fiches.setdefault(f["id"], f.get("nom") or "")
+        if v.get("scenario") and v["scenario"] not in scenarios:
+            scenarios.append(v["scenario"])
+    lignes = []
+    for fid, nom in fiches.items():
+        try:
+            d = video_h3.fiche_lire(fid)
+        except ValueError:
+            d = {}
+        lignes.append("- %s : %s" % (d.get("nom") or nom or "?", " ".join(str(d.get("description") or "").split())))
+    for sid in scenarios:
+        try:
+            plans = video_h3.scenario_lire(sid).get("plans") or []
+        except (ValueError, OSError):
+            continue
+        lignes += ["Plan %d : %s" % (k + 1, " ".join(str(p.get("image_paroles") or "").split())[:CONTEXTE_PLAN_CAR])
+                   for k, p in enumerate(plans) if isinstance(p, dict)]
+    return "\n".join(lignes)[:CONTEXTE_CAR]
+
 
 def _transcrire(octets: bytes) -> dict | None:
     """La transcription d'un MP3 (Whisper du Studio, par le routeur), avec ses
@@ -5226,7 +5272,9 @@ def run_sous_titres(jid: str, film_jid: str):
         if not repliques:
             raise montage.MontageImpossible("Aucune réplique entendue dans ce film.")
         _job_noter(jid, etape="Traduction en français")
-        consigne = SOUS_TITRES_CONSIGNE + json.dumps([t for _, _, t in repliques], ensure_ascii=False)
+        contexte = _contexte_du_film(film_jid)
+        consigne = (SOUS_TITRES_CONSIGNE + (SOUS_TITRES_CONTEXTE % contexte if contexte else "")
+                    + json.dumps([t for _, _, t in repliques], ensure_ascii=False))
         try:
             francais = lire_liste_json(_dans_un_fil(_chat_du_studio(consigne, "la traduction des sous-titres")),
                                        len(repliques))
