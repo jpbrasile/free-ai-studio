@@ -25,6 +25,8 @@ services:
       SANDBOX_WORKER_GPU_URL: http://sandbox-worker-gpu:8000
       # La machine H3 de la carte (01/10/2026), service plus bas.
       SANDBOX_WORKER_COMFY_URL: http://sandbox-worker-comfy:8000
+      # La machine de la chanson (YuE2) de la carte (01/10/2026), service plus bas.
+      SANDBOX_WORKER_CHANSON_URL: http://sandbox-worker-chanson:8000
       # Le decideur telecharge lui-meme les 34 Go quand un clip les demande
       # (regle du 20/09 : vider une ressource ne doit pas fermer une porte,
       # l'usage suivant la redescend). C'est LUI et pas le bac a sable parce
@@ -172,6 +174,44 @@ services:
       - sandbox-data:/workspace
       # Les poids H3, en lecture seule, au meme chemin que le disque Modal.
       - ${H3_POIDS_MAISON_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/free-ai-studio/poids}:/poids:ro
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # La chanson (YuE2) sur la carte d'ici, 01/10/2026. Image a part : la roue
+  # de YuE2 veut un autre torch que la machine video (sandbox-worker-chanson/).
+  sandbox-worker-chanson:
+    build:
+      context: .
+      dockerfile: sandbox-worker-chanson/Dockerfile
+    image: free-ai-studio-sandbox-worker-chanson
+    container_name: free-ai-studio-sandbox-worker-chanson
+    restart: unless-stopped
+    environment:
+      SANDBOX_WORKER_KEY: ${SANDBOX_WORKER_KEY}
+      SANDBOX_TIMEOUT_SECONDS: ${CHANSON_TIMEOUT_SECONDS:-2400}
+      SANDBOX_MAX_CODE_BYTES: ${SANDBOX_MAX_CODE_BYTES:-500000}
+      SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-200000}
+      SANDBOX_ENV_PASSTHROUGH: "LD_LIBRARY_PATH,NVIDIA_VISIBLE_DEVICES,NVIDIA_DRIVER_CAPABILITIES,CUDA_VISIBLE_DEVICES,HF_HOME,HF_HUB_DISABLE_XET,HF_HUB_OFFLINE"
+      HF_HOME: /cache/huggingface
+      # Reseau clos, comme les autres bacs a sable : les poids sont lus dans le
+      # cache, jamais demandes a Hugging Face.
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_XET: "1"
+    networks:
+      - sandbox-internal
+    volumes:
+      - sandbox-data:/workspace
+      - ${GPU_MODELES_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/huggingface}:/cache/huggingface:ro
     cap_drop:
       - ALL
     security_opt:

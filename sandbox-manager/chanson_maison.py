@@ -81,6 +81,18 @@ def poids_presents(dossier: Path | None = None) -> tuple[bool, str]:
     return True, ""
 
 
+def pas_ici(duree: str, lora: bool, prete) -> str:
+    """« Ici, sans urgence » (01/10/2026) : pourquoi la chanson ne peut PAS attendre la
+    carte d'ici ; "" si elle le peut. La carte n'est pas sondée : la file l'attendra."""
+    if lora:
+        return ("La version instrumentale n'est vérifiée que sur la carte L4 de Modal ; "
+                "sur la carte d'ici, ni sa mémoire ni son résultat n'ont été mesurés.")
+    if duree not in BESOIN_MO:
+        return "Cette durée n'a pas été mesurée sur la carte d'ici."
+    ok, motif = prete()
+    return "" if ok else (motif.rstrip() or "La carte d'ici n'est pas prête.")
+
+
 def decider(duree: str, lora: bool, reglage: str, prete,
             sonde, loueur: str = "Modal") -> dict:
     """Ou faire cette chanson : ici ou chez le loueur. Jamais de question.

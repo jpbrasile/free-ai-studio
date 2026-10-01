@@ -805,6 +805,7 @@ reconnues à l’écoute (style décrit en anglais pour cet essai).</p>
     <select id="ou">
       <option value="modal" selected>Modal — machine louée (carte bancaire exigée)</option>
       <option value="kaggle">Kaggle — gratuit, plus lent</option>
+      <option value="ici">Ici, sans urgence — gratuit, quand la carte de cet ordinateur est libre</option>
     </select>
   </label>
   <button id="lancer" class="primaire">Chanter</button>
@@ -838,7 +839,9 @@ function majOu(){
       + "le prix réel dépend de la durée du calcul.",
     kaggle: "Carte T4 gratuite, sur votre compte Kaggle. Le pipeline officiel refuse cette carte : "
       + "le Studio applique des correctifs non officiels, essayés avec succès le 15/09. Tout se "
-      + "retélécharge à chaque chanson (environ 7 Go)."
+      + "retélécharge à chaque chanson (environ 7 Go).",
+    ici: "Sur la carte de cet ordinateur, 0 $. La chanson attend son tour, avec les plans vidéo, "
+      + "que la carte soit libre : rien de ce qui l’occupe n’est arrêté."
   }[ou];
   document.getElementById("ou-texte").textContent = texte || "";
   majBouton();
@@ -1071,6 +1074,12 @@ function rafraichir(){
         const k = document.querySelector('#ou option[value="kaggle"]');
         k.disabled = true;
         k.textContent = "Kaggle — coupé ici : Studio partagé";
+      }
+      const ici = document.querySelector('#ou option[value="ici"]');
+      ici.disabled = !d.ici_possible;
+      if(!d.ici_possible){
+        ici.textContent = "Ici — pas possible : " + (d.ici_motif || "carte non prête");
+        if(document.getElementById("ou").value === "ici") document.getElementById("ou").value = "modal";
       }
       majOu();
       majModele();

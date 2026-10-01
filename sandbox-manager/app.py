@@ -114,6 +114,14 @@ WORKER_GPU_URL = os.getenv("SANDBOX_WORKER_GPU_URL", "").rstrip("/")
 # La machine H3 de la carte (comfy-maison/, 01/10/2026), meme surcouche. Vide =
 # H3 part chez Modal, seul choix offert.
 WORKER_COMFY_URL = os.getenv("SANDBOX_WORKER_COMFY_URL", "").rstrip("/")
+# La machine de la chanson (YuE2) de la carte (sandbox-worker-chanson/, 01/10/2026) :
+# la roue de YuE2 veut un autre torch que la machine video. Vide = la machine video,
+# comme avant (elle dit elle-meme dans son /health qu'elle n'a pas YuE2).
+WORKER_CHANSON_URL = os.getenv("SANDBOX_WORKER_CHANSON_URL", "").rstrip("/")
+
+
+def url_chanson() -> str:
+    return WORKER_CHANSON_URL or WORKER_GPU_URL
 # /workspace dans le conteneur ; configurable pour charger le service hors
 # conteneur (CI : scripts/verifier-imports.py, tests/).
 ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace"))
@@ -3213,7 +3221,8 @@ def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
         constat = {"arretees": 0,
                    "detail": "Le calcul attendait la carte de cet ordinateur : il ne partira pas."}
     elif fournisseur == "maison":
-        constat = arreter_maison(jid, WORKER_COMFY_URL if job.get("machine") == "comfy" else None)
+        constat = arreter_maison(jid, {"comfy": WORKER_COMFY_URL,
+                                       "chanson": url_chanson()}.get(job.get("machine") or ""))
     elif fournisseur == "colab":
         # Le fil du travail relit cette marque a chaque suivi (toutes les
         # colab_pont.SUIVI_S secondes) et tue le calcul dans le carnet.
@@ -3486,13 +3495,13 @@ def chanson_maison_prete() -> tuple[bool, str]:
     branchee, un bac a sable qui repond ET qui a les bibliotheques de YuE2,
     les poids epingles deja dans le cache. Tout << non >> envoie la chanson
     chez le loueur, avec la raison ecrite dans sa fiche (26/09/2026)."""
-    if not WORKER_GPU_URL:
+    if not url_chanson():
         if carte_debranchee():
             return False, PHRASE_CARTE_DEBRANCHEE
         return False, "Cet ordinateur n'a pas de carte branchée au Studio."
     try:
         with httpx.Client(timeout=2.0) as c:
-            etat = c.get(WORKER_GPU_URL + "/health").json()
+            etat = c.get(url_chanson() + "/health").json()
     except Exception as exc:
         return False, "Le bac à sable de la carte ne répond pas (%s)." % type(exc).__name__
     if etat.get("yue2") is not True:
@@ -3919,9 +3928,9 @@ def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: 
         recoller_h3(jid, precedent, retirer)
 
 
-def run_video_h3_maison(jid: str, code: str, precedent: Optional[str] = None, retirer: int = 0):
-    """Le meme plan sur la carte de cet ordinateur : il attend son tour et une
-    carte libre (file_carte), puis part a la machine H3 d'ici. Rien a encaisser."""
+def attendre_la_carte(jid: str) -> bool:
+    """Le travail attend son tour dans la file de la carte d'ici (H3, chanson) ; sa
+    fiche dit sa place et pourquoi. False : annulé pendant l'attente."""
     def annule() -> bool:
         return read_job(jid).get("status") == "cancelled"
 
@@ -3932,7 +3941,13 @@ def run_video_h3_maison(jid: str, code: str, precedent: Optional[str] = None, re
         job.update({"attente_carte": True, "file_position": rang, "attente_motif": motif})
         write_job(jid, job)
 
-    if not file_carte.attendre_son_tour(jid, annule, noter):
+    return file_carte.attendre_son_tour(jid, annule, noter)
+
+
+def run_video_h3_maison(jid: str, code: str, precedent: Optional[str] = None, retirer: int = 0):
+    """Le meme plan sur la carte de cet ordinateur : il attend son tour et une
+    carte libre (file_carte), puis part a la machine H3 d'ici. Rien a encaisser."""
+    if not attendre_la_carte(jid):
         return
     try:
         job = read_job(jid)
@@ -7141,16 +7156,27 @@ def _ecouter_chanson(jid: str) -> None:
 
 def _composer_chanson(jid: str, code: str, ou: str):
     """Lance la chanson, puis encaisse le temps Modal reellement consomme, echec compris."""
+    # « Ici, sans urgence » (01/10) : la chanson attend son tour dans la file de
+    # la carte, fiche « en attente », avant d'être dite « en cours ».
+    en_file = ou == "maison" and read_job(jid).get("attente_carte")
+    if en_file and not attendre_la_carte(jid):
+        return
     debut = time.time()
     job = read_job(jid)
-    job.update({"status": "running", "started_at": debut, "provider_effective": ou})
+    job.update({"status": "running", "started_at": debut, "provider_effective": ou,
+                "attente_carte": False, "file_position": None})
     write_job(jid, job)
     try:
         if ou == "maison":
             # La carte d'ici (26/09/2026) : rien a encaisser, le `finally` ne
             # compte que Modal. Meme delai que chez Modal ; la duree reelle
             # sur la 4090 n'a pas ete chronometree.
-            finish_execution(jid, "maison", maison_execute(jid, code, chanson.DUREE_MAX_S))
+            try:
+                finish_execution(jid, "maison", maison_execute(jid, code, chanson.DUREE_MAX_S,
+                                                               url=url_chanson()))
+            finally:
+                if en_file:
+                    file_carte.rendre(jid)
             job = read_job(jid)
             if job.get("status") == "failed":
                 job["voisins_a_l_echec"] = gpu_local.voisins()
@@ -7209,6 +7235,8 @@ def chanson_etat(request: Request, authorization: Optional[str] = Header(default
         "kaggle_configure": kaggle_configured(),
         "kaggle_permis": raison is None,
         "kaggle_raison": raison,
+        # « Ici, sans urgence » (01/10) : la machine de la chanson d'ici, ses poids.
+        **dict(zip(("ici_possible", "ici_motif"), chanson_maison_prete())),
     }
 
 
@@ -7217,17 +7245,27 @@ async def chanson_creer(request: Request, authorization: Optional[str] = Header(
     auth(authorization)
     payload = await corps_json(request)
     ou = str(payload.get("ou") or "modal")
-    if ou not in ("modal", "kaggle"):
-        ou = "modal"
-    # La carte d'ici d'abord, si elle est prete et libre A CETTE SECONDE ;
-    # sinon le loueur choisi, comme avant (26/09/2026, chanson_maison.py).
     duree = str(payload.get("duree") or "1")
-    placement = chanson_maison.decider(
-        duree if duree in chanson.DUREES else "1", bool(payload.get("lora")),
-        ou_calculer.reglage_lu(), chanson_maison_prete, gpu_local.utilisable,
-        loueur=ou.capitalize())
-    if placement["ou"] == chanson_maison.MAISON:
+    attente = ou == "ici"
+    if attente:
+        # « Ici, sans urgence » (01/10/2026) : la carte d'ici, quand elle sera
+        # libre, dans la même file que les plans H3. Jamais chez le loueur.
+        pas_ici = chanson_maison.pas_ici(duree, bool(payload.get("lora")), chanson_maison_prete)
+        if pas_ici:
+            raise HTTPException(409, pas_ici + " Choisissez Modal pour la faire tout de suite.")
         ou = "maison"
+        placement = {"pourquoi": "Faite ici, gratuitement, quand la carte de cet ordinateur sera libre."}
+    else:
+        if ou not in ("modal", "kaggle"):
+            ou = "modal"
+        # La carte d'ici d'abord, si elle est prete et libre A CETTE SECONDE ;
+        # sinon le loueur choisi, comme avant (26/09/2026, chanson_maison.py).
+        placement = chanson_maison.decider(
+            duree if duree in chanson.DUREES else "1", bool(payload.get("lora")),
+            ou_calculer.reglage_lu(), chanson_maison_prete, gpu_local.utilisable,
+            loueur=ou.capitalize())
+        if placement["ou"] == chanson_maison.MAISON:
+            ou = "maison"
     if ou == "kaggle":
         raison = contexte_partage(request)
         if raison:
@@ -7265,6 +7303,8 @@ async def chanson_creer(request: Request, authorization: Optional[str] = Header(
         "artifacts": [],
         "chanson": plan["resume_public"],
         "titre": derniers.titre(payload, "chanson"),
+        **({"machine": "chanson"} if ou == "maison" else {}),
+        **({"attente_carte": True} if attente else {}),
     })
     threading.Thread(target=run_chanson, args=(jid, code, ou), daemon=True).start()
     return read_job(jid)

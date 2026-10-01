@@ -278,13 +278,55 @@ def test_une_chanson_faite_ici_ne_touche_pas_au_compteur_modal(sandbox, monkeypa
     monkeypatch.setattr(sandbox.budget_modal, "FICHIER", tmp_path / "modal-budget.json")
     appels = []
     monkeypatch.setattr(sandbox, "maison_execute",
-                        lambda jid, code, secondes=None: appels.append(secondes) or {"ok": True})
+                        lambda jid, code, secondes=None, url=None: appels.append(secondes) or {"ok": True})
     monkeypatch.setattr(sandbox, "finish_execution", lambda *a: None)
     monkeypatch.setattr(sandbox.chanson, "budget_consommer", jamais)
     jid = "c0ffee"
     sandbox.write_job(jid, {"id": jid, "status": "queued"})
     sandbox.run_chanson(jid, "print(1)", "maison")
     assert appels == [sandbox.chanson.DUREE_MAX_S]
+
+
+# --- « Ici, sans urgence » (01/10/2026) : la file de la carte, la machine de la chanson ---
+
+def test_ici_refuse_sans_machine_de_chanson_prete(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "chanson_maison_prete", lambda: (False, "Pas de YuE2 ici."))
+    r = TestClient(sandbox.app).post("/chanson/creer", headers=CLE,
+                                     json={"ou": "ici", "paroles": "la la", "style": "pop", "duree": "1"})
+    assert r.status_code == 409 and "Pas de YuE2 ici." in r.json()["detail"] and "Modal" in r.json()["detail"]
+
+
+def test_ici_refuse_la_version_instrumentale_et_les_durees_non_mesurees():
+    import chanson_maison as cm
+    pret = lambda: (True, "")  # noqa: E731
+    assert "L4" in cm.pas_ici("1", True, pret)
+    assert "mesurée" in cm.pas_ici("9", False, pret)
+    assert cm.pas_ici("3", False, pret) == ""
+
+
+def test_ici_attend_la_file_puis_part_sur_la_machine_de_la_chanson(sandbox, monkeypatch):
+    monkeypatch.setattr(sandbox, "WORKER_CHANSON_URL", "http://sandbox-worker-chanson:8000")
+    monkeypatch.setattr(sandbox.chanson, "budget_verifier", jamais)
+    vu, ordre = {}, []
+    monkeypatch.setattr(sandbox, "attendre_la_carte", lambda jid: ordre.append("file") or True)
+    monkeypatch.setattr(sandbox.file_carte, "rendre", lambda jid: ordre.append("rendue"))
+
+    def execute(jid, code, secondes=None, url=None):
+        vu.update(url=url, statut=sandbox.read_job(jid)["status"])
+        ordre.append("calcul")
+        return {"ok": True}
+    monkeypatch.setattr(sandbox, "maison_execute", execute)
+    monkeypatch.setattr(sandbox, "finish_execution", lambda *a: None)
+    monkeypatch.setattr(sandbox, "chanson_maison_prete", lambda: (True, ""))
+    monkeypatch.setattr(sandbox.threading, "Thread",
+                        lambda target, args, daemon: type("T", (), {"start": lambda s: target(*args)})())
+    r = TestClient(sandbox.app).post("/chanson/creer", headers=CLE,
+                                     json={"ou": "ici", "paroles": "la la", "style": "pop", "duree": "1"})
+    assert r.status_code == 200, r.text
+    job = sandbox.read_job(r.json()["id"])
+    assert job["provider"] == "maison" and job["machine"] == "chanson"
+    assert ordre == ["file", "calcul", "rendue"]
+    assert vu == {"url": "http://sandbox-worker-chanson:8000", "statut": "running"}
 
 
 def test_le_bac_a_sable_dit_s_il_a_yue2(monkeypatch):
