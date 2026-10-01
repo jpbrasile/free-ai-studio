@@ -1793,20 +1793,28 @@ def hors_champ(etat: str) -> bool:
     return any(f" {_norme_replique(h)} " in t for h in HORS_CHAMP + _HORS_CHAMP_DEDANS)
 
 
-def fiches_au_depart(fiches: list, elements) -> list:
+def fiches_au_depart(fiches: list, elements, texte: str = "") -> list:
     """Les fiches à joindre à l'image de départ : sans celles que le tableau du plan met
     hors champ au début. Film campus, 01/10 : Tyler, qui entre au plan 1, était joint et
-    dessiné à côté de Leila (règle 6 : « doit être hors champ »). Une fiche illisible reste :
-    demande_image dira pourquoi."""
-    absents = {_norme_replique(str(e.get("nom") or "")) for e in (elements or [])
-               if isinstance(e, dict) and hors_champ(e.get("debut"))}
+    dessiné à côté de Leila (règle 6 : « doit être hors champ »). Ni celles que le plan ne
+    nomme pas du tout, ni dans son tableau ni dans son texte : « Leila et un martien »,
+    01/10, Zib n'arrive qu'au plan 2 et l'image du plan 1 le montrait déjà dans le jardin.
+    Sans tableau, rien n'est retiré. Une fiche illisible reste : demande_image dira pourquoi."""
+    tableau = [e for e in (elements or []) if isinstance(e, dict)]
+    absents = {_norme_replique(str(e.get("nom") or "")) for e in tableau if hors_champ(e.get("debut"))}
+    nommes = " ".join([_norme_replique(str(e.get("nom") or "")) for e in tableau]
+                      + [_norme_replique(str(texte or ""))])
     gardees = []
     for fid in fiches:
         try:
             nom = fiche_lire(fid)["nom"]
         except ValueError:
             nom = None
-        if nom is None or _norme_replique(nom) not in absents:
+        if nom is None:
+            gardees.append(fid)
+            continue
+        n = _norme_replique(nom)
+        if n not in absents and (not tableau or f" {n} " in f" {nommes} "):
             gardees.append(fid)
     return gardees
 

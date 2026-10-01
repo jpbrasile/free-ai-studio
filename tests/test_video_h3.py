@@ -3179,7 +3179,13 @@ def test_un_personnage_hors_champ_au_debut_n_est_pas_joint_a_l_image(h3, monkeyp
     assert len(demandes[0]["image_reference"]) == 1
     # Sans tableau, rien ne change : les deux fiches partent.
     assert v.fiches_au_depart([leila, tyler], None) == [leila, tyler]
-    assert v.fiches_au_depart([leila, tyler], [{"nom": "tyler", "debut": "Out of frame"}]) == [leila]
+    assert v.fiches_au_depart([leila, tyler], [{"nom": "tyler", "debut": "Out of frame"}],
+                              "Leila lit une carte") == [leila]
+    # « Leila et un martien », 01/10 : Zib, absent du plan 1 (ni tableau ni texte), y était dessiné.
+    zib = v.fiche_creer("Zib", "z")["id"]
+    plan1 = [{"nom": "Leila", "debut": "in the foreground"}, {"nom": "the saucer", "debut": "off-frame"}]
+    assert v.fiches_au_depart([leila, zib], plan1, "Leila looks into the telescope.") == [leila]
+    assert v.fiches_au_depart([leila, zib], plan1, "Leila looks at Zib.") == [leila, zib]
 
 
 def test_l_image_de_depart_nomme_qui_elle_montre_et_pas_le_hors_champ(h3):

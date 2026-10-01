@@ -4387,7 +4387,8 @@ async def _creer_depart(corps: dict) -> dict:
     """La route ci-dessus, aussi appelée par le tournage pour le plan 1 (01/10)."""
     # Un personnage hors champ au début du plan n'est pas joint à l'image (01/10).
     if isinstance(corps.get("fiches"), list) and isinstance(corps.get("elements"), list):
-        corps["fiches"] = video_h3.fiches_au_depart([str(f) for f in corps["fiches"]], corps["elements"])
+        corps["fiches"] = video_h3.fiches_au_depart([str(f) for f in corps["fiches"]], corps["elements"],
+                                                    str(corps.get("texte") or ""))
     # La tenue du plan (29/09) : `plans` (les textes du film) et `plan` (son numéro, 1…)
     # donnent à l'image de départ la même tenue que celle du plan tourné.
     tenues = {}
