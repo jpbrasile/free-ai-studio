@@ -42,6 +42,7 @@ import dialogue
 # Les montants et les dates s'ecrivent en francais -- virgule decimale, date en
 # jour/mois/annee -- des deux cotes : ici en Python, et dans le JavaScript des
 # pages via `format_fr.avec_formateurs`.
+import file_carte
 import format_fr
 # Le bouton « 🏠 Studio » pose sur chaque page (voir PAGES_HTML).
 import accueil
@@ -110,6 +111,9 @@ WORKER_URL = os.getenv("SANDBOX_WORKER_URL", "http://sandbox-worker:8000").rstri
 # seulement si la machine a une carte. Vide = pas de carte, et le routage part
 # chez Modal comme avant ce chantier.
 WORKER_GPU_URL = os.getenv("SANDBOX_WORKER_GPU_URL", "").rstrip("/")
+# La machine H3 de la carte (comfy-maison/, 01/10/2026), meme surcouche. Vide =
+# H3 part chez Modal, seul choix offert.
+WORKER_COMFY_URL = os.getenv("SANDBOX_WORKER_COMFY_URL", "").rstrip("/")
 # /workspace dans le conteneur ; configurable pour charger le service hors
 # conteneur (CI : scripts/verifier-imports.py, tests/).
 ROOT = Path(os.getenv("SANDBOX_WORKSPACE", "/workspace"))
@@ -581,7 +585,7 @@ def local_execute(jid: str, code: str) -> dict:
     return data
 
 
-def maison_execute(jid: str, code: str, secondes: int | None = None) -> dict:
+def maison_execute(jid: str, code: str, secondes: int | None = None, url: str | None = None) -> dict:
     """Le meme appel que local_execute, vers le bac a sable qui a la carte.
 
     Deux differences, toutes les deux mesurees le 19/09/2026 :
@@ -592,7 +596,8 @@ def maison_execute(jid: str, code: str, secondes: int | None = None) -> dict:
       - la source ecrite dans la fiche du fichier : << maison >>, pour que la
         page sache dire d'ou vient le clip.
     """
-    if not WORKER_GPU_URL:
+    url = url or WORKER_GPU_URL
+    if not url:
         raise BackendUnavailable("Aucun bac a sable GPU : la surcouche docker-compose.gpu.yml n'est pas appliquee.")
     # `secondes` RACCOURCIT, jamais ne rallonge : le bac a sable plafonne de
     # son cote, et la video garde ses 2 400 s en ne demandant rien.
@@ -602,7 +607,7 @@ def maison_execute(jid: str, code: str, secondes: int | None = None) -> dict:
     try:
         with httpx.Client(timeout=attente) as c:
             r = c.post(
-                WORKER_GPU_URL + "/run",
+                url + "/run",
                 headers={"Authorization": f"Bearer {WORKER_KEY}"},
                 json={"job_id": jid, "code": code, "secondes": demande},
             )
@@ -3138,19 +3143,20 @@ if REPRISE_AU_DEMARRAGE:
                      daemon=True).start()
 
 
-def arreter_maison(jid: str) -> dict:
+def arreter_maison(jid: str, url: Optional[str] = None) -> dict:
     """Arrete le calcul sur la carte de cet ordinateur (24/09).
 
     Le bac a sable de la carte tue le script et tout ce qu'il a lance : la
     memoire de la carte est rendue. Un arret arrive avant le calcul est retenu
     la-bas, et le calcul ne part pas.
     """
-    if not WORKER_GPU_URL:
+    url = url or WORKER_GPU_URL
+    if not url:
         return {"arretees": 0,
                 "detail": "Aucun bac à sable sur la carte de cet ordinateur : rien à arrêter."}
     try:
         with httpx.Client(timeout=15) as c:
-            r = c.post(WORKER_GPU_URL + "/stop", headers={"Authorization": f"Bearer {WORKER_KEY}"},
+            r = c.post(url + "/stop", headers={"Authorization": f"Bearer {WORKER_KEY}"},
                        json={"job_id": jid})
             r.raise_for_status()
             reponse = r.json()
@@ -3201,8 +3207,13 @@ def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
                    "detail": "Kaggle n'a pas d'annulation : le Studio cesse d'attendre, "
                              "mais le notebook tourne jusqu'à l'échéance que Kaggle applique "
                              "lui-même, et votre quota court jusque-là."}
+    elif fournisseur == "maison" and job.get("attente_carte"):
+        # Encore dans la file de la carte : rien n'a tourné. La fiche passe
+        # « annulé » plus bas, et l'attente le relit tout de suite.
+        constat = {"arretees": 0,
+                   "detail": "Le calcul attendait la carte de cet ordinateur : il ne partira pas."}
     elif fournisseur == "maison":
-        constat = arreter_maison(jid)
+        constat = arreter_maison(jid, WORKER_COMFY_URL if job.get("machine") == "comfy" else None)
     elif fournisseur == "colab":
         # Le fil du travail relit cette marque a chaque suivi (toutes les
         # colab_pont.SUIVI_S secondes) et tue le calcul dans le carnet.
@@ -3228,6 +3239,7 @@ def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "error": "Arrêt demandé depuis le Studio. " + constat["detail"],
     })
     write_job(jid, job)
+    file_carte.reveiller()
     return {"id": jid, "status": "cancelled", "deja_termine": False,
             "arretees": constat["arretees"], "detail": constat["detail"]}
 
@@ -3797,6 +3809,10 @@ def video_job(jid: str, authorization: Optional[str] = Header(default=None)):
         "avertissements": job.get("avertissements") or [],
         # Les étapes d'une finalisation (visages, 4K) et ses films.
         "finalisation": job.get("finalisation"),
+        # H3 « ici, sans urgence » : la file de la carte, et pourquoi on attend.
+        "attente_carte": bool(job.get("attente_carte")),
+        "file_position": job.get("file_position"),
+        "attente_motif": job.get("attente_motif") or "",
     }
     if fichiers.get("video"):
         sortie["video_url"] = f"/video/jobs/{jid}/fichier?cle={jeton_video(jid)}"
@@ -3856,11 +3872,15 @@ def video_page():
 # script qu'on y envoie lui parle par HTTP. Rien de ComfyUI n'est importe ici.
 # Le detail (graphe, scripts, page, garde de licence) est dans video_h3.py.
 
-def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: int = 0):
+def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: int = 0,
+                 ou: str = "modal"):
     """Un clip H3 chez Modal ; le temps de location est encaisse meme en echec.
 
     Avec `precedent` (prolonger), le plan rendu est recolle apres le clip
-    precedent, son compris, et la video du travail devient la chaine entiere."""
+    precedent, son compris, et la video du travail devient la chaine entiere.
+    `ou="maison"` : la file de la carte de cet ordinateur, gratuite."""
+    if ou == "maison":
+        return run_video_h3_maison(jid, code, precedent, retirer)
     debut = time.time()
     job = read_job(jid)
     job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
@@ -3895,6 +3915,48 @@ def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: 
             # Pas « réussi » avant le recollage : la page montrerait le plan seul.
             job.update({"status": "running", "etape": "recollage"})
         write_job(jid, job)
+    if a_recoller:
+        recoller_h3(jid, precedent, retirer)
+
+
+def run_video_h3_maison(jid: str, code: str, precedent: Optional[str] = None, retirer: int = 0):
+    """Le meme plan sur la carte de cet ordinateur : il attend son tour et une
+    carte libre (file_carte), puis part a la machine H3 d'ici. Rien a encaisser."""
+    def annule() -> bool:
+        return read_job(jid).get("status") == "cancelled"
+
+    def noter(rang: int, motif: str):
+        job = read_job(jid)
+        if job.get("status") == "cancelled":
+            return
+        job.update({"attente_carte": True, "file_position": rang, "attente_motif": motif})
+        write_job(jid, job)
+
+    if not file_carte.attendre_son_tour(jid, annule, noter):
+        return
+    try:
+        job = read_job(jid)
+        job.update({"status": "running", "started_at": time.time(), "provider_effective": "maison",
+                    "attente_carte": False, "file_position": None})
+        write_job(jid, job)
+        try:
+            finish_execution(jid, "maison", maison_execute(jid, code, secondes=video_h3.MAISON_DUREE_MAX_S,
+                                                           url=WORKER_COMFY_URL))
+        except BackendUnavailable as exc:
+            terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        file_carte.rendre(jid)
+    job = read_job(jid)
+    if job.get("status") == "failed":
+        if not job.get("error"):
+            phrase = video_h3.phrase_d_echec(job.get("stderr", ""), maison=True)
+            if phrase:
+                job["error"] = phrase
+        job["voisins_a_l_echec"] = gpu_local.voisins()
+    a_recoller = bool(precedent) and job.get("status") == "succeeded"
+    if a_recoller:
+        job.update({"status": "running", "etape": "recollage"})
+    write_job(jid, job)
     if a_recoller:
         recoller_h3(jid, precedent, retirer)
 
@@ -4036,7 +4098,8 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
         fiches_image = [{"id": f["id"], "nom": f["nom"]} for f in map(video_h3.fiche_lire, fiches_image)]
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    _h3_peut_louer()                 # poids, Modal, budget : avant la traduction aussi
+    ou = _ou_h3(payload)
+    _h3_peut(ou)                     # poids, Modal, budget ou carte : avant la traduction aussi
     texte_client = str(payload.get("image_paroles") or "")
     try:
         traduit = video_h3.a_traduire(payload)
@@ -4048,7 +4111,7 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
         raise HTTPException(400, str(exc)) from exc
     plan["resume_public"].update(traduit_en_anglais=traduit, texte_client=texte_client,
                                  fiches_image=fiches_image)
-    return _lancer_h3(plan)
+    return _lancer_h3(plan, ou=ou)
 
 
 # La correction des plans demande le haut de gamme gratuit. Mesuré le 29/09 sur les
@@ -4114,29 +4177,121 @@ def _h3_peut_louer():
         raise HTTPException(429, str(exc)) from exc
 
 
-def _lancer_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
+# --- Ici ou chez Modal (01/10/2026) -------------------------------------------------
+# « Le client débutant n'aura peut-être pas une carte GPU et en tout cas aucun hook
+# installé. Studio doit gérer les deux configs. » Sans machine H3 d'ici (pas de
+# surcouche GPU), ou carte trop petite, ou poids absents : seul Modal est offert, et la
+# page dit pourquoi. Sinon, le client choisit ; « ici » attend la carte, sans limite.
+_H3_ICI_CACHE_S = 30
+_h3_ici_vu: dict = {"le": 0.0, "sante": None}
+
+
+def _h3_ici_sante() -> Optional[dict]:
+    """Le /health de la machine H3 d'ici (liste des poids), gardé 30 s ; None si muette."""
+    t = time.time()
+    if _h3_ici_vu["sante"] is not None and t - _h3_ici_vu["le"] < _H3_ICI_CACHE_S:
+        return _h3_ici_vu["sante"]
+    try:
+        with httpx.Client(timeout=5.0) as c:
+            sante = c.get(WORKER_COMFY_URL + "/health").json()
+    except Exception:  # noqa: BLE001 -- muette = pas offerte, avec sa phrase
+        sante = None
+    _h3_ici_vu.update(le=t, sante=sante)
+    return sante
+
+
+def h3_ici(demande: Optional[dict] = None) -> dict:
+    """Peut-on offrir « ici » ? {possible, motif, carte}. `demande` : vérifie aussi
+    les poids que CE plan lit (chaque mode en lit d'autres)."""
+    def non(motif, carte=None):
+        return {"possible": False, "motif": motif, "carte": carte}
+    if not WORKER_COMFY_URL:
+        return non("Cet ordinateur n'a pas de carte graphique branchée au Studio : H3 se calcule chez Modal.")
+    if video_h3.motion_context_actif():
+        return non("L'option « par tronçon » (H3_MOTION_CONTEXT) garde la fin du clip sur le disque "
+                   "Modal : elle n'existe que là-bas.")
+    etat = gpu_local.releve()
+    if not etat["vue"]:
+        return non("La carte de cet ordinateur n'est pas visible (%s)." % etat["motif"])
+    carte = {"nom": etat["nom"], "totale_mo": etat["totale_mo"], "libre_mo": etat["libre_mo"]}
+    if etat["totale_mo"] < video_h3.MAISON_CARTE_MIN_MO:
+        return non("%s a %s de mémoire ; H3 n'a été essayé que sur une carte de 24 Go : il se "
+                   "calcule chez Modal." % (etat["nom"], format_fr.en_memoire(etat["totale_mo"], "")), carte)
+    sante = _h3_ici_sante()
+    if not sante:
+        return non("La machine H3 de cet ordinateur ne répond pas : relancez le Studio par "
+                   "demarrer.cmd (ou ./start.sh).", carte)
+    presents = sante.get("fichiers") or {}
+    if not presents:
+        return non("Les poids de H3 ne sont pas sur cet ordinateur (dossier des poids vide).", carte)
+    manque = video_h3.maison_manque(presents, demande or {"fichiers": list(video_h3.FICHIERS)})
+    if manque:
+        return non("Il manque sur cet ordinateur %d fichier%s de poids de H3 (%s)."
+                   % (len(manque), "s" if len(manque) > 1 else "", ", ".join(manque)[:300]), carte)
+    return {"possible": True, "motif": "", "carte": carte}
+
+
+def _ou_h3(payload: dict) -> str:
+    ou = str((payload or {}).get("ou") or "modal").strip()
+    if ou not in ("modal", "maison"):
+        raise HTTPException(400, "Lieu de calcul inconnu : « ici » ou « Modal ».")
+    return ou
+
+
+def _h3_peut(ou: str, demande: Optional[dict] = None):
+    """`_h3_peut_louer` pour Modal ; pour « ici », la machine, la carte et les poids."""
+    if ou == "modal":
+        return _h3_peut_louer()
+    ici = h3_ici(demande)
+    if not ici["possible"]:
+        raise HTTPException(409, ici["motif"] + " Rien n'est parti ; choisissez Modal pour le "
+                                 "calculer tout de suite (payant).")
+
+
+@app.get("/video-h3/ou")
+def video_h3_ou(authorization: Optional[str] = Header(default=None)):
+    """Ce que la page offre : « ici » (et pourquoi pas), Modal, et la file de la carte."""
+    _h3_ou_404()
+    auth(authorization)
+    ici = h3_ici()
+    f = file_carte.etat()
+    ici["file"] = len(f["en_attente"]) + (f["en_cours"] is not None)
+    if ici["possible"]:
+        _, ici["occupation"], _ = gpu_local.libre_pour_un_code_inconnu()
+    return {"ici": ici, "modal": {"configure": modal_configured(),
+                                  "poids_prets": video_h3.poids_etat()["prets"]}}
+
+
+def _lancer_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0, ou: str = "modal"):
     """Le travail part dans un fil. Commun a creer et prolonger."""
-    jid, args = _travail_h3(plan, precedent, retirer)
+    jid, args = _travail_h3(plan, precedent, retirer, ou)
     threading.Thread(target=run_video_h3, args=args, daemon=True).start()
     return read_job(jid)
 
 
-def _travail_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0):
+def _travail_h3(plan: dict, precedent: Optional[str] = None, retirer: int = 0, ou: str = "modal"):
     """Controles, puis la fiche du travail ; rend (jid, arguments de run_video_h3).
     Le scenario tourne s'en sert pour attendre chaque plan avant le suivant."""
-    _h3_peut_louer()
+    _h3_peut(ou, plan["demande"])
     jid = uuid.uuid4().hex
-    demande = video_h3.garder_latent(plan["demande"], jid)
+    demande = plan["demande"] if ou == "maison" else video_h3.garder_latent(plan["demande"], jid)
+    if ou == "maison":
+        # Le délai de ComfyUI dans le script : celui de la carte d'ici, pas celui de Modal.
+        demande = dict(demande, delai_s=max(60, video_h3.MAISON_DUREE_MAX_S - 120))
     resume = dict(plan["resume_public"])
     if demande.get("latent_vers"):
         resume["latent_vers"] = demande["latent_vers"]
-    write_job(jid, {
-        "id": jid, "provider": "modal", "title": "Free AI Studio video H3", "gpu": True,
-        "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
+    fiche = {
+        "id": jid, "provider": ou, "title": "Free AI Studio video H3", "gpu": True,
+        "internet": ou == "modal", "status": "queued", "created_at": time.time(), "artifacts": [],
         "video": resume,
         "titre": (resume["invite"][:60] or "Vidéo H3"),
-    })
-    return jid, (jid, video_h3.construire_script(demande), precedent, retirer)
+    }
+    if ou == "maison":
+        fiche.update(machine="comfy", attente_carte=True, provider_effective="maison",
+                     attente_motif="En file pour la carte de cet ordinateur.")
+    write_job(jid, fiche)
+    return jid, (jid, video_h3.construire_script(demande), precedent, retirer, ou)
 
 
 @app.post("/video-h3/prolonger")
@@ -4169,7 +4324,7 @@ async def video_h3_prolonger(request: Request, authorization: Optional[str] = He
         plan = video_h3.preparer_prolonger(payload, avant, derniere, fin_b64=fin)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return _lancer_h3(plan, precedent, retirer=video_h3.images_a_retirer(plan))
+    return _lancer_h3(plan, precedent, retirer=video_h3.images_a_retirer(plan), ou=_ou_h3(payload))
 
 
 def _derniere_et_raccord(video: bytes, fin_vue: Optional[bytes] = None) -> tuple:
@@ -5974,7 +6129,8 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
         commun, musique, a_tourner = _scenario_prepare(corps, plans)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    _h3_peut_louer()
+    ou = _ou_h3(corps)
+    _h3_peut(ou)
     # Les règles 0 à 8 AVANT le premier sou (30/09) : l'audit a montré des remarques
     # bloquantes vues, puis tournées quand même.
     forcer = corps.get("forcer") is True
@@ -5984,7 +6140,7 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
-    return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer)
+    return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer, ou=ou)
 
 
 def _fins_images(sc: dict) -> list:
@@ -6330,7 +6486,8 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     for i, p in enumerate(a_tourner):
         if i not in repris:
             p["payload"]["graine"] = None   # une nouvelle prise, pas la même
-    _h3_peut_louer()
+    ou = _ou_h3(corps)
+    _h3_peut(ou)
     forcer = corps.get("forcer") is True
     rapport = await _garde_des_regles(plans, commun, forcer,
                                       tournes={i + 1 for i in range(len(plans)) if i not in repris})
@@ -6340,7 +6497,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, tenues=tenues, repris=[i + 1 for i in repris],
-                            regles=rapport, force=forcer,
+                            regles=rapport, force=forcer, ou=ou,
                             plans_initiaux=parent.get("plans_initiaux") or parent["plans"])
 
 
@@ -6385,6 +6542,8 @@ def run_scenario_h3(sid: str, a_tourner: list):
     Un plan repris est découpé dans l'ancien film, sans rien louer."""
     precedent, en_attente, fins = None, None, []
     ips = video_h3.IMAGES_PAR_SECONDE
+    # Les scénarios d'avant le 01/10 n'ont pas de lieu : ils étaient tous chez Modal.
+    ou = video_h3.scenario_lire(sid).get("ou") or "modal"
 
     def poser_en_attente(n):
         # Les plans repris deviennent un film, pour que le plan suivant s'y recolle.
@@ -6427,7 +6586,7 @@ def run_scenario_h3(sid: str, a_tourner: list):
                     plan, retirer = video_h3.preparer(p["payload"]), 0
                 plan["resume_public"].update({"plans": i + 1, "scenario": sid,
                                               "traduit_en_anglais": p.get("traduit", False)})
-                jid, args = _travail_h3(plan, precedent, retirer)
+                jid, args = _travail_h3(plan, precedent, retirer, ou)
             except HTTPException as exc:
                 video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc.detail}")
                 return

@@ -23,6 +23,8 @@ services:
     environment:
       GPU_LOCAL_ACTIF: "${GPU_LOCAL_ACTIF:-true}"
       SANDBOX_WORKER_GPU_URL: http://sandbox-worker-gpu:8000
+      # La machine H3 de la carte (01/10/2026), service plus bas.
+      SANDBOX_WORKER_COMFY_URL: http://sandbox-worker-comfy:8000
       # Le decideur telecharge lui-meme les 34 Go quand un clip les demande
       # (regle du 20/09 : vider une ressource ne doit pas fermer une porte,
       # l'usage suivant la redescend). C'est LUI et pas le bac a sable parce
@@ -122,6 +124,54 @@ services:
     # sur processeur : les bibliotheques CUDA posent leurs fichiers de
     # compilation. Tout le reste du cloisonnement est garde, y compris le
     # reseau interne et le compte non privilegie.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # La machine H3 de la carte, « Ici, sans urgence » (01/10/2026 : « le client
+  # debutant n'aura peut-etre pas une carte GPU et en tout cas aucun hook
+  # installe. Studio doit gerer les deux configs »). La MEME machine que celle
+  # louee chez Modal pour H3 (comfy-maison/Dockerfile : Python 3.12 + ComfyUI
+  # epingle), avec le serveur des bacs a sable devant. Le Studio n'y envoie un
+  # plan que si la carte est libre (sandbox-manager/file_carte.py) ; sinon le
+  # plan attend, ou part chez Modal si le client l'a choisi.
+  sandbox-worker-comfy:
+    build:
+      context: .
+      dockerfile: comfy-maison/Dockerfile
+    image: free-ai-studio-comfy-maison
+    container_name: free-ai-studio-sandbox-worker-comfy
+    restart: unless-stopped
+    environment:
+      SANDBOX_WORKER_KEY: ${SANDBOX_WORKER_KEY}
+      # Mesure du 01/10 sur la 4090 : 215 s pour un plan 768p de 5 s. 1800 s
+      # couvre le plus long plan offert (15 s) avec de la marge.
+      SANDBOX_TIMEOUT_SECONDS: ${H3_MAISON_TIMEOUT_SECONDS:-1800}
+      # Le script d'un plan porte ses images en base64 (24 Mo au plus,
+      # video_h3.IMAGES_MAX_OCTETS) : la limite de 500 Ko des autres bacs a
+      # sable le refuserait.
+      SANDBOX_MAX_CODE_BYTES: "67108864"
+      SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-200000}
+      SANDBOX_ENV_PASSTHROUGH: "LD_LIBRARY_PATH,NVIDIA_VISIBLE_DEVICES,NVIDIA_DRIVER_CAPABILITIES,CUDA_VISIBLE_DEVICES"
+      # /health rend la liste des poids : chaque mode en lit d'autres.
+      SANDBOX_POIDS_REQUIS: /poids
+      SANDBOX_POIDS_OCTETS: "0"
+      SANDBOX_POIDS_LISTER: "true"
+    networks:
+      - sandbox-internal
+    volumes:
+      - sandbox-data:/workspace
+      # Les poids H3, en lecture seule, au meme chemin que le disque Modal.
+      - ${H3_POIDS_MAISON_DIR:-${USERPROFILE:-${HOME:-.}}/.cache/free-ai-studio/poids}:/poids:ro
     cap_drop:
       - ALL
     security_opt:

@@ -22,9 +22,42 @@ KITE = {"id": "k1", "nom": "yellow kite", "genre": "objet", "description": "kite
 
 
 def test_les_regles_sont_numerotees_par_etape(r):
-    assert [n for n, _, _ in r.REGLES] == list(range(14))
-    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13], "depart": [6, 7, 8], "clip": [9, 10, 11, 12]}
-    assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 6, 7, 8]
+    assert [n for n, _, _ in r.REGLES] == list(range(15))
+    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13, 14], "depart": [6, 7, 8], "clip": [9, 10, 11, 12]}
+    assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 14, 6, 7, 8]
+
+
+def _ecoute(r, texte, elements=None):
+    plan = {"image_paroles": texte, "ambiance": "", "enchainement": "coupe",
+            "elements": elements if elements is not None else
+            [el("Leila", "foreground, centre"), el("Marc", "off-frame", "foreground, right", "walks in and stops")]}
+    return r.regles_texte([plan], {"ok": True, "problemes": []}, [LEILA, MARC])[0][14]
+
+
+def test_regle_14_qui_ecoute_reagit(r):
+    """Campus, plan 1, 01/10, quatre graines : Tyler parle, Leila garde les yeux sur la carte.
+    Le texte ne disait rien d'elle après la réplique."""
+    x = _ecoute(r, "In a medium shot, Leila stands at the centre holding the map. Marc walks in, stops at "
+                   "the right, facing left towards Leila, and says, amused: « Hey, are you lost? »")
+    assert x["ok"] is False and "Leila" in x["pourquoi"] and "Marc" in x["pourquoi"]
+
+
+@pytest.mark.parametrize("apres", [
+    "Leila looks up from the map and turns her head towards him.",
+    "Leila keeps reading without looking at him.",
+    "Leila answers: « A little. »",
+])
+def test_regle_14_la_reaction_ou_l_absence_voulue_passent(r, apres):
+    x = _ecoute(r, "Leila stands at the centre holding the map. Marc walks in, stops at the right, facing "
+                   "Leila, and says: « Hey, are you lost? » " + apres)
+    assert x["ok"] is True, x
+
+
+def test_regle_14_ne_s_applique_qu_a_un_dialogue_entre_presents(r):
+    seul = _ecoute(r, "Leila looks at the map and says: « Where am I? »", [el("Leila", "foreground, centre")])
+    assert seul["ok"] is None
+    sans = _ecoute(r, "Leila looks at the map. Marc walks in and stops at the right.")
+    assert sans["ok"] is None
 
 
 @pytest.mark.parametrize("texte", [

@@ -791,7 +791,8 @@ def test_prolonger_part_de_la_derniere_image_puis_recolle(h3, monkeypatch, tmp_p
                            json=demande(precedent="../etc")).status_code == 400
     r = client(h3).post("/video-h3/prolonger", headers=CLE, json=demande(precedent="b" * 32))
     assert r.status_code == 200, r.text
-    jid, _code, precedent, retirer = lance[0]
+    jid, _code, precedent, retirer, ou = lance[0]
+    assert ou == "modal"
     assert (precedent, retirer) == ("b" * 32, 1)
     j = client(h3).get("/video/jobs/" + jid, headers=CLE).json()
     assert j["video"]["mode"] == "prolonger" and j["video"]["plans"] == 2
@@ -1441,7 +1442,7 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     monkeypatch.setattr(h3.montage, "fin", lambda octets, n: b"raccord")
     tournes = []
 
-    def tourner(jid, code, precedent, retirer):
+    def tourner(jid, code, precedent, retirer, ou="modal"):
         tournes.append((jid, precedent, retirer, h3.read_job(jid)["video"]))
         job = h3.read_job(jid)
         job["status"] = "succeeded"
@@ -2339,7 +2340,7 @@ def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeyp
     monkeypatch.setattr(h3.montage, "images", lambda chemin: 124)
     tournes = []
 
-    def tourner(jid, code, precedent, retirer):
+    def tourner(jid, code, precedent, retirer, ou="modal"):
         job = h3.read_job(jid)
         tournes.append((precedent, job["video"]))
         job["video"]["secondes"] = round(248 / 24, 2)   # la chaîne : plan 1 repris + plan 2 neuf
@@ -3371,7 +3372,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     assert r.status_code == 409 and not fils
     d = r.json()["detail"]
     assert "plan 1, règle 2 : deux actions à la fois" in d["message"] and d["passe_droit"] is True
-    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9)) + [13]
+    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9)) + [13, 14]
     # « Tourner quand même » : parti, et le scénario garde le rapport et le passe-droit.
     r = c.post("/video-h3/scenario/tourner", headers=CLE,
                json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": True})
@@ -4403,3 +4404,159 @@ def test_une_traduction_incomplete_est_redemandee(h3, monkeypatch, tmp_path):
     assert job["status"] == "succeeded", job.get("error")
     assert len(consignes) == 2 and '{"1": "Hey, are you lost?", "2": "Yes!"}' in consignes[0]
     assert [x["texte"] for x in job["video"]["sous_titres"]] == ["Hé, tu es perdue ?", "Oui !"]
+
+
+# --- « Ici, sans urgence » ou Modal (01/10) ----------------------------------------
+# « Le client débutant n'aura peut-être pas une carte GPU et en tout cas aucun hook
+# installé. Studio doit gérer les deux configs. »
+
+CARTE_24 = {"vue": True, "nom": "RTX 4090", "totale_mo": 24564, "libre_mo": 24100, "marge_mo": 1024, "motif": ""}
+
+
+def _ici(h3, monkeypatch, carte=CARTE_24, fichiers="tous"):
+    """Une machine H3 d'ici qui répond, une carte, des poids."""
+    monkeypatch.setattr(h3, "WORKER_COMFY_URL", "http://sandbox-worker-comfy:8000")
+    monkeypatch.setattr(h3.gpu_local, "releve", lambda *a, **k: dict(carte))
+    v = h3.video_h3
+    tous = {f: 1 for f in list(v.FICHIERS) + list(v.FICHIERS_REFERENCES)}
+    sante = {"ok": True, "fichiers": tous if fichiers == "tous" else fichiers}
+    monkeypatch.setattr(h3, "_h3_ici_sante", lambda: sante)
+
+
+def test_sans_carte_seul_modal_est_offert_avec_sa_raison(h3, monkeypatch):
+    monkeypatch.setattr(h3, "WORKER_COMFY_URL", "")
+    ici = h3.h3_ici()
+    assert ici["possible"] is False and "chez Modal" in ici["motif"]
+    r = client(h3).get("/video-h3/ou", headers=CLE).json()
+    assert r["ici"]["possible"] is False and r["ici"]["file"] == 0
+
+
+def test_une_carte_plus_petite_que_la_seule_mesuree_n_est_pas_offerte(h3, monkeypatch):
+    _ici(h3, monkeypatch, carte=dict(CARTE_24, nom="RTX 4070", totale_mo=12282))
+    ici = h3.h3_ici()
+    assert ici["possible"] is False and "RTX 4070" in ici["motif"] and "Modal" in ici["motif"]
+
+
+def test_les_poids_du_mode_sont_verifies_un_par_un(h3, monkeypatch):
+    v = h3.video_h3
+    _ici(h3, monkeypatch, fichiers={f: 1 for f in v.FICHIERS})
+    assert h3.h3_ici()["possible"] is True
+    ref = {"fichiers": list(v.fichiers_du_mode("references"))}
+    ici = h3.h3_ici(ref)
+    assert ici["possible"] is False and "manque" in ici["motif"]
+    _ici(h3, monkeypatch, fichiers={})
+    assert "pas sur cet ordinateur" in h3.h3_ici()["motif"]
+
+
+def test_ici_impossible_rien_ne_part_et_modal_n_est_pas_exige(h3, monkeypatch):
+    _autoriser(h3)
+    monkeypatch.setattr(h3, "WORKER_COMFY_URL", "")
+    lance = []
+    monkeypatch.setattr(h3, "run_video_h3", lambda *a: lance.append(a))
+    r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(ou="maison"))
+    assert r.status_code == 409 and "Modal" in r.json()["detail"]
+    assert lance == []
+    r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(ou="ailleurs"))
+    assert r.status_code == 400
+
+
+def test_ici_part_sans_modal_ni_poids_modal_et_attend_la_carte(h3, monkeypatch):
+    """Ni Modal branché, ni poids sur le disque Modal : le cas du client avec une carte."""
+    _autoriser(h3)
+    _ici(h3, monkeypatch)
+    monkeypatch.setattr(h3.video_h3, "a_traduire", lambda p: False)
+    lance = []
+    monkeypatch.setattr(h3, "run_video_h3", lambda *a: lance.append(a))
+    r = client(h3).post("/video-h3/creer", headers=CLE, json=demande(ou="maison"))
+    assert r.status_code == 200, r.text
+    jid = r.json()["id"]
+    assert len(lance) == 1 and lance[0][0] == jid and lance[0][4] == "maison"
+    j = client(h3).get("/video/jobs/" + jid, headers=CLE).json()
+    assert j["status"] == "queued" and j["attente_carte"] is True and j["fournisseur"] == "maison"
+    d = h3.video_h3
+    code = lance[0][1]
+    assert "__DEMANDE_B64__" not in code
+    demande_envoyee = json.loads(base64.b64decode(re.search(r'b64decode\("([^"]+)"\)', code).group(1)))
+    assert demande_envoyee["delai_s"] == d.MAISON_DUREE_MAX_S - 120
+
+
+def test_la_file_attend_la_carte_puis_calcule_ici_sans_rien_encaisser(h3, monkeypatch):
+    _ici(h3, monkeypatch)
+    libre = iter([(False, "RTX 4090 : 15,4 Go déjà pris sur 24 Go.", {}), (True, "libre", {})])
+    monkeypatch.setattr(h3.file_carte.gpu_local, "libre_pour_un_code_inconnu", lambda *a: next(libre))
+    monkeypatch.setattr(h3.file_carte, "SONDE_S", 0.01)
+    vus = []
+
+    def maison(jid, code, secondes=None, url=None):
+        vus.append((url, secondes, h3.read_job(jid).get("attente_carte")))
+        return {"exit_code": 0, "timed_out": False, "stdout": "", "stderr": "", "artifacts": []}
+
+    monkeypatch.setattr(h3, "maison_execute", maison)
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: pytest.fail("Modal appelé"))
+    monkeypatch.setattr(h3.budget_modal, "consommer", lambda *a, **k: pytest.fail("encaissé"))
+    jid = "e" * 32
+    h3.write_job(jid, {"id": jid, "status": "queued", "artifacts": [], "provider": "maison",
+                       "machine": "comfy", "attente_carte": True})
+    motifs = []
+    attendre = h3.file_carte.attendre_son_tour
+
+    def espion(j, annule, noter, **k):
+        return attendre(j, annule, lambda rang, m: (motifs.append(m), noter(rang, m)), sonde_s=0.01)
+
+    monkeypatch.setattr(h3.file_carte, "attendre_son_tour", espion)
+    h3.run_video_h3(jid, "print(1)", None, 0, "maison")
+    job = h3.read_job(jid)
+    assert job["status"] == "succeeded" and job["provider_effective"] == "maison"
+    assert vus == [("http://sandbox-worker-comfy:8000", h3.video_h3.MAISON_DUREE_MAX_S, False)]
+    assert motifs and "15,4 Go" in motifs[0]
+    assert h3.file_carte.etat() == {"en_cours": None, "en_attente": []}
+
+
+def test_un_arret_pendant_l_attente_ne_laisse_rien_partir(h3, monkeypatch):
+    _ici(h3, monkeypatch)
+    monkeypatch.setattr(h3.file_carte.gpu_local, "libre_pour_un_code_inconnu",
+                        lambda *a: (False, "occupée", {}))
+    monkeypatch.setattr(h3, "maison_execute", lambda *a, **k: pytest.fail("parti"))
+    monkeypatch.setattr(h3, "arreter_maison", lambda *a, **k: pytest.fail("rien à tuer"))
+    jid = "f" * 32
+    h3.write_job(jid, {"id": jid, "status": "queued", "artifacts": [], "provider": "maison",
+                       "provider_effective": "maison", "machine": "comfy", "attente_carte": True})
+    fil = threading.Thread(target=h3.run_video_h3_maison, args=(jid, "print(1)"))
+    fil.start()
+    for _ in range(100):
+        if h3.file_carte.position(jid) == 1:
+            break
+        time.sleep(0.01)
+    r = client(h3).post("/jobs/" + jid + "/arreter", headers=CLE).json()
+    assert r["status"] == "cancelled" and "ne partira pas" in r["detail"]
+    fil.join(5)
+    assert not fil.is_alive()
+    assert h3.read_job(jid)["status"] == "cancelled"
+    assert h3.file_carte.etat() == {"en_cours": None, "en_attente": []}
+
+
+def test_la_file_garde_l_ordre_d_arrivee(h3, monkeypatch):
+    f = h3.file_carte
+    ordre, tenu = [], threading.Event()
+
+    def travail(jid):
+        if f.attendre_son_tour(jid, lambda: False, lambda r, m: None,
+                               libre=lambda: (True, "", {}), sonde_s=0.01):
+            ordre.append(jid)
+            tenu.wait(0.05)
+            f.rendre(jid)
+
+    fils = []
+    for jid in ("un", "deux", "trois"):
+        fils.append(threading.Thread(target=travail, args=(jid,)))
+        fils[-1].start()
+        time.sleep(0.02)
+    for t in fils:
+        t.join(5)
+    assert ordre == ["un", "deux", "trois"]
+
+
+def test_la_page_offre_ici_ou_modal_et_l_envoie(h3):
+    page = client(h3).get("/video-h3", headers=CLE).text
+    assert 'id="ou_choix"' in page and "Ici, sans urgence" in page
+    assert page.count("ou: OU") == 5

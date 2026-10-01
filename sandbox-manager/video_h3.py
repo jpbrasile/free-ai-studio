@@ -96,6 +96,21 @@ COEURS = float(os.getenv("H3_COEURS", "4"))
 # calcule sur ce délai.
 DUREE_MAX_S = int(os.getenv("H3_TIMEOUT_SECONDS", "900"))
 APT = ("git", "ffmpeg")
+
+# --- La carte de cet ordinateur (« Ici, sans urgence », 01/10/2026) -----------------
+# Seule carte mesurée : la 4090 du propriétaire, 24 564 Mio. Un plan 768p de 5 s y a pris
+# 23 141 Mio au pic, carte vide (ComfyUI charge selon la place qu'on lui laisse :
+# l'encodeur de 25,9 Go et le DiT de 20 Go n'y sont jamais ensemble), 212 s de calcul.
+# Une carte plus petite n'a pas été essayée : elle n'est pas offerte, H3 part chez Modal.
+MAISON_CARTE_MIN_MO = int(os.getenv("H3_MAISON_CARTE_MIN_MO", "24000"))
+# Le plafond d'un plan sur la carte, attente de la file NON comprise (elle n'a pas de
+# limite) ; le bac à sable de la machine H3 le plafonne aussi (docker-compose.gpu.yml).
+MAISON_DUREE_MAX_S = int(os.getenv("H3_MAISON_TIMEOUT_SECONDS", "1800"))
+
+
+def maison_manque(fichiers_presents: dict, demande: dict) -> list:
+    """Les poids que ce plan lit et que la machine H3 d'ici n'a pas."""
+    return [f for f in demande.get("fichiers") or [] if f not in (fichiers_presents or {})]
 COMMANDES = (
     f"git clone --depth 1 --branch {COMFY_VERSION} {COMFY_DEPOT} {DOSSIER_COMFY}",
     f"pip install -r {DOSSIER_COMFY}/requirements.txt psutil",
@@ -1652,6 +1667,13 @@ CADRAGE = ("Framing: a close-up shows one character only; when two or more chara
            # 01/10 : la caméra a son menu ; une caméra écrite dans le texte le contredirait.
            "Never write a camera movement in the text (zoom, pan, push in, the camera follows or moves "
            "back): the camera is set apart, by the Studio. "
+           # 01/10, même plan, caméra fixe, quatre graines : Tyler dit « Hey, are you lost? »
+           # et Leila garde les yeux sur sa carte. Le texte ne disait rien d'elle après la
+           # réplique ; H3 l'a laissée dans sa pose. Propriétaire : « on généralise comment ? »
+           # Règle 14 de regles.py.
+           "When a character speaks to another one who is in the shot, write right after the line what "
+           "the listener does, as the story wants it (looks up at them, turns their head towards them, "
+           "answers with a nod); only when the story says the listener ignores them, write that instead. "
            # Le 28/09, au plan 2, des clients au premier plan (journal, tasse) ont disparu
            # dans le clip : les modèles vidéo perdent ce qui est proche et à moitié caché
            # (défaut connu, sans correctif dans H3). La mise en scène l'évite.
@@ -3028,8 +3050,11 @@ def poids_noter(prets: bool, detail: str = "") -> dict:
 
 # --- Messages d'échec --------------------------------------------------------------
 
-def phrase_d_echec(stderr: str) -> str:
+def phrase_d_echec(stderr: str, maison: bool = False) -> str:
     s = str(stderr or "")
+    if "POIDS_ABSENTS" in s and maison:
+        return ("Les poids de H3 ne sont pas tous dans le dossier des poids de cet ordinateur "
+                "(" + s.split("POIDS_ABSENTS", 1)[1].strip()[:300] + ").")
     if "POIDS_ABSENTS" in s:
         return ("Les poids de H3 ne sont pas sur le disque Modal « " + VOLUME + " ». "
                 "Cliquez « Préparer les poids » (une fois), puis relancez.")
@@ -3311,6 +3336,8 @@ PAGE_HTML = r"""<!doctype html>
 </nav>
 
 <div class="bloc" id="banniere">Lecture du budget…</div>
+<div class="bloc" id="ou_bloc"><b>Où calculer les plans.</b> <span id="ou_choix">Lecture…</span>
+  <p class="note" id="ou_note"></p></div>
 
 <div class="section" id="reglages">
 <p class="note">MiniMax H3 fabrique l'image <b>et</b> le son d'un clip, sur une machine louée chez Modal
@@ -3815,6 +3842,10 @@ function majPrix(){
       + " s de location mesurées par le Studio le " + dateFr(ETAT.mesure_le)
       + ". Le tout premier clip coûte davantage : il lit les 52 Go de poids sur un disque neuf. " + pire
     : "Durée jamais essayée : pas d'estimation mesurée. " + pire;
+  if (OU === "maison"){
+    document.getElementById("prix").textContent = "Ici : 0 $, sur la carte de cet ordinateur. Chez Modal, ce serait : "
+      + document.getElementById("prix").textContent;
+  }
 }
 
 function afficherLicence(a){
@@ -3851,7 +3882,37 @@ function afficherPoids(p){
   alerteBarre();
 }
 
+// Où calculer (01/10) : « ici, sans urgence » sur la carte de cet ordinateur, gratuit, en
+// file ; ou Modal tout de suite, payant. Sans carte, seul Modal est offert, et la page dit
+// pourquoi. Le choix vaut pour un clip, un plan suivant et un scénario.
+let OU = "modal";
+function chargerOu(){
+  return fetch("/video-h3/ou", {headers: H}).then(r => r.json()).then(d => {
+    const zone = document.getElementById("ou_choix");
+    zone.textContent = "";
+    let voulu = null;
+    try { voulu = localStorage.getItem("h3_ou"); } catch (e) {}
+    OU = d.ici.possible && voulu !== "modal" ? "maison" : "modal";
+    const choix = [["maison", "Ici, sans urgence (gratuit, sur la carte de cet ordinateur)", !d.ici.possible],
+                   ["modal", "Chez Modal, tout de suite (payant, prix dit avant)", false]];
+    for (const [val, texte, coupe] of choix){
+      const l = document.createElement("label");
+      const r = document.createElement("input");
+      r.type = "radio"; r.name = "ou"; r.value = val; r.checked = OU === val; r.disabled = coupe;
+      r.addEventListener("change", () => { OU = val; try { localStorage.setItem("h3_ou", val); } catch (e) {} if (ETAT) majPrix(); });
+      l.append(r, " " + texte);
+      zone.append(l);
+    }
+    document.getElementById("ou_note").textContent = d.ici.possible
+      ? "Ici : le plan attend que la carte soit libre, sans limite de durée, et n'arrête jamais "
+        + "ce qui la tient. " + (d.ici.occupation || "") + (d.ici.file ? " " + d.ici.file + " calcul(s) déjà en file." : "")
+      : d.ici.motif;
+    if (ETAT) majPrix();
+  });
+}
+
 function rafraichir(){
+  chargerOu();
   return fetch("/video-h3/etat", {headers: H}).then(r => r.json()).then(d => {
     ETAT = d;
     document.getElementById("banniere").textContent = "Budget Modal : " + fr(d.budget.usd, 2) + " $ dépensés sur "
@@ -4210,7 +4271,8 @@ function suivre(jid){
       const r = j.resume || {};
       const v = j.video || {};
       document.getElementById("fiche").textContent = "Graine " + r.graine + " ; " + fr(r.calcul_s, 0)
-        + " s de calcul, " + fr(r.total_s, 0) + " s de location."
+        + " s de calcul, " + fr(r.total_s, 0)
+        + (j.fournisseur === "maison" ? " s en tout, sur la carte de cet ordinateur (0 $)." : " s de location.")
         + (v.plans ? " Chaîne de " + v.plans + " plans, " + fr(v.secondes, 1) + " s en tout." : "");
       majProlonger(jid, v, r);
       if (CLIP_COURANT !== jid) document.getElementById("jugement_clip").textContent = "";
@@ -4233,8 +4295,17 @@ function suivre(jid){
       rafraichir();
       return;
     }
-    st.textContent = "En cours (" + j.status + ")… Le premier clip construit aussi la machine : plusieurs minutes.";
-    setTimeout(() => suivre(jid), 4000);
+    if (j.status === "cancelled"){
+      st.textContent = "Arrêté. " + (j.arret_detail || "");
+      return;
+    }
+    st.textContent = j.attente_carte
+      ? "En file pour la carte de cet ordinateur" + (j.file_position ? " (n° " + j.file_position + ")" : "")
+        + " : " + (j.attente_motif || "") + " Le plan part dès qu'elle est libre ; rien n'est payé."
+      : j.fournisseur === "maison"
+        ? "En cours sur la carte de cet ordinateur… environ 4 min pour 5 s en 768p."
+        : "En cours (" + j.status + ")… Le premier clip construit aussi la machine : plusieurs minutes.";
+    setTimeout(() => suivre(jid), j.attente_carte ? 10000 : 4000);
   });
 }
 
@@ -4300,7 +4371,7 @@ document.getElementById("prolonger").addEventListener("click", async () => {
     langue: document.getElementById("langue").value,
     longueur: Number(document.getElementById("longueur").value),
     definition: document.getElementById("definition").value,
-    camera: CAMERA_CLIP,
+    camera: CAMERA_CLIP, ou: OU,
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
   if (!r.ok){ alerteTexte(typeof d.detail === "string" ? d.detail : "Refusé."); return; }
@@ -4349,7 +4420,7 @@ document.getElementById("lancer").addEventListener("click", async () => {
     longueur: Number(document.getElementById("longueur").value),
     definition: document.getElementById("definition").value,
     coupe_s: Number(document.getElementById("coupe").value),
-    camera: CAMERA_CLIP,
+    camera: CAMERA_CLIP, ou: OU,
     graine: graine === "" ? null : Number(graine)})});
   const d = await r.json();
   if (!r.ok){ alerteTexte(typeof d.detail === "string" ? d.detail : "Refusé."); return; }
@@ -5409,7 +5480,7 @@ async function actionRejouer(forcer){
   occupe("Contrôle et traduction des plans à retourner…");
   const bouton = document.getElementById("rejouer_forcer");
   const rep = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/rejouer", {method: "POST", headers: H,
-    body: JSON.stringify({plans: PLANS, retourner: [...RETOURNER], forcer: !!forcer})});
+    body: JSON.stringify({plans: PLANS, retourner: [...RETOURNER], forcer: !!forcer, ou: OU})});
   const r = await rep.json();
   if (!rep.ok){
     // Revue du 30/09 : le rejeu refusé par une règle n'offrait pas « quand même ».
@@ -5596,7 +5667,7 @@ async function corrigerToutSeul(sid, tours, sansArret){
         + casse + "). Relisez les plans en gras.", true);
     }
     const retourner = [...new Set(gardes.map(d => d.plan))];
-    const r = await appeler("/video-h3/scenario/" + sid + "/rejouer", {plans: PLANS, retourner: retourner});
+    const r = await appeler("/video-h3/scenario/" + sid + "/rejouer", {plans: PLANS, retourner: retourner, ou: OU});
     const sc = await attendreScenario(r.id);
     if (sc.etat !== "réussi") return scenarioEtat("Tout seul : rejeu " + sc.etat + (sc.erreur ? " : " + sc.erreur : "."), true);
     sid = r.id;
@@ -5655,7 +5726,7 @@ function corpsScenario(){
 async function tournerScenario(forcer){
   occupe("Contrôle des règles et traduction des plans (gratuit)…");
   const r = await fetch("/video-h3/scenario/tourner", {method: "POST", headers: H,
-                                                       body: JSON.stringify(Object.assign(corpsScenario(), {forcer: !!forcer}))});
+                                                       body: JSON.stringify(Object.assign(corpsScenario(), {forcer: !!forcer, ou: OU}))});
   const d = await r.json();
   if (!r.ok){
     // Une règle non suivie : « Tourner quand même » est offert, sauf pour la voix (règle 4).

@@ -77,6 +77,8 @@ def health():
     if POIDS:
         etat["poids_chemin"] = POIDS
         etat["poids_presents"] = poids_complets()
+        if LISTER:
+            etat["fichiers"] = fichiers_presents()
     # La chanson sur la carte d'ici (26/09/2026) : le gestionnaire n'y envoie
     # YuE2 que si ce bac a sable a ses bibliotheques -- il n'a pas Internet
     # pour les installer. Chercher le module ne l'importe pas : rien ne charge.
@@ -93,6 +95,25 @@ def health():
 # (huggingface_hub les nomme ainsi pendant qu'il ecrit) et au moins 98 % des
 # 34 203 034 754 octets mesures le 20/09.
 POIDS_OCTETS = int(os.getenv("SANDBOX_POIDS_OCTETS", "34203034754"))
+
+
+# La machine H3 de la carte (01/10/2026) monte plusieurs modeles sous le meme
+# dossier, et chaque mode en lit d'autres (fl2va, ref2va, LoRA) : un total
+# d'octets ne dit pas si CE mode peut partir. Elle rend donc la liste, chemins
+# relatifs et tailles ; le gestionnaire compare a ce que le mode demande.
+LISTER = os.getenv("SANDBOX_POIDS_LISTER", "").strip().lower() == "true"
+
+
+def fichiers_presents() -> dict:
+    dossier = Path(POIDS)
+    rendu = {}
+    try:
+        for f in dossier.rglob("*"):
+            if f.is_file() and not f.name.endswith(".incomplete"):
+                rendu[f.relative_to(dossier).as_posix()] = f.stat().st_size
+    except OSError:
+        pass
+    return rendu
 
 
 def poids_complets() -> bool:

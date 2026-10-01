@@ -8,6 +8,9 @@
 # telle quelle, pour que les scripts envoyés (video_h3._SCRIPT, agrandir, visages)
 # tournent sans changement. Les poids sont montés en lecture seule sur /poids,
 # le même chemin que le disque Modal.
+#
+# Construit depuis la RACINE du dépôt (il copie sandbox-worker/) :
+#   docker build -f comfy-maison/Dockerfile -t free-ai-studio-comfy-maison .
 FROM python:3.12-slim
 
 RUN apt-get update \
@@ -25,4 +28,21 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
 
+# Le petit serveur des bacs à sable (sandbox-worker/app.py, sans changement) : le Studio
+# lui envoie le script d'un plan comme au bac à sable de la carte, sans aucun crochet de
+# la machine hôte (« le client débutant n'aura aucun hook installé », 01/10). Construit
+# depuis la racine du dépôt : docker-compose.gpu.yml, service sandbox-worker-comfy.
+COPY sandbox-worker/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+COPY sandbox-worker/app.py /app/app.py
+
+# Compte sans privilège, comme les autres bacs à sable ; ComfyUI écrit dans /comfy
+# (input, user, temp) pendant un plan.
+RUN useradd -r -u 10001 -m sandbox \
+ && mkdir -p /workspace/jobs \
+ && chown -R sandbox:sandbox /comfy /workspace
+
+USER sandbox
 WORKDIR /comfy
+EXPOSE 8000
+CMD ["uvicorn", "--app-dir", "/app", "app:app", "--host", "0.0.0.0", "--port", "8000"]

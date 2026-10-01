@@ -39,6 +39,9 @@ REGLES = (
     (13, "texte", "Un personnage qui change de place : le texte dit d'où il part et où il s'arrête, jamais le "
                   "trajet (côté par où il entre, passage devant, derrière ou à côté de quelqu'un, traversée "
                   "du cadre) ; le modèle vidéo choisit le chemin."),
+    # 01/10, propriétaire : « tyler parle et leila ne se retourne pas vers lui […] on généralise comment ? »
+    (14, "texte", "Quand un personnage parle à un autre qui est dans le plan, le texte dit ce que fait celui "
+                  "qui écoute juste après la réplique (il regarde, se tourne, répond), ou qu'il ne réagit pas."),
 )
 NUMEROS = {etape: [n for n, e, _ in REGLES if e == etape] for etape in ("texte", "depart", "clip")}
 # Les règles qui arrêtent le tournage (avant tout sou) : texte et image de départ.
@@ -354,9 +357,61 @@ def regle_trajet(plan: dict) -> dict:
                                   "s'arrête." % "», « ".join(trouves)) if trouves else "")
 
 
+# Règle 14. Le 01/10, plan 1 du film campus, quatre graines sur la 4090 : Tyler dit « Hey,
+# are you lost? » et Leila garde les yeux sur la carte. Le texte ne disait rien d'elle
+# après la réplique : H3 fait ce qui est écrit, et la laisse dans sa pose.
+def _qui_parle(dans: list, avant: str):
+    """Le sujet de la phrase qui porte la réplique : le premier personnage nommé depuis le
+    dernier point (« Marc walks in, facing Leila, and says: » → Marc) ; sinon le dernier
+    nommé avant. None si personne."""
+    def premier(nom, mots):
+        cles = set(mots_du_nom(nom))
+        return min((i for i, m in enumerate(mots) if m in cles), default=None)
+    phrase = video_h3._mots(re.split(r"[.;!?]", avant)[-1])
+    vus = {nom: premier(nom, phrase) for nom in dans}
+    vus = {n: i for n, i in vus.items() if i is not None}
+    if vus:
+        return min(vus, key=vus.get)
+    mots = video_h3._mots(avant)
+    derniers = {nom: max((i for i, m in enumerate(mots) if m in set(mots_du_nom(nom))), default=-1)
+                for nom in dans}
+    qui = max(derniers, key=derniers.get)
+    return qui if derniers[qui] >= 0 else None
+
+
+def regle_ecoute(plan: dict, personnes: set) -> dict:
+    """Règle 14 : après chaque réplique, le texte dit ce que fait chaque autre personnage
+    du plan (il regarde, se tourne, répond… ou ne réagit pas, si c'est voulu). Celui qui
+    parle est le sujet de la phrase qui porte la réplique."""
+    texte = str(plan.get("image_paroles", ""))
+    repliques = list(video_h3._PAROLES.finditer(texte))
+    dans = list(dict.fromkeys(e["nom"] for e in plan.get("elements") or []
+                              if isinstance(e, dict) and e.get("nom") and _cle(e["nom"]) in personnes))
+    if not repliques or len(dans) < 2:
+        return resultat(None, "Pas de réplique adressée à un autre personnage du plan.")
+    # Qui a déjà parlé dans le plan est dans l'échange : sa réplique était sa réaction.
+    fautes, parle = [], set()
+    for m in repliques:
+        avant = video_h3._PAROLES.sub(". ", texte[:m.start()])   # une réplique clôt la phrase
+        apres = video_h3._PAROLES.sub(" ", texte[m.end():])
+        qui = _qui_parle(dans, avant)
+        if qui is None:
+            return resultat(None, "Qui dit « %s » n'est pas nommé avant la réplique." % m.group(0)[:60])
+        muets = [nom for nom in dans if nom != qui and nom not in parle and not nomme_dans(nom, apres)]
+        parle.add(qui)
+        if muets:
+            fautes.append("après %s (%s), rien n'est dit de %s" % (m.group(0)[:60], qui, ", ".join(muets)))
+    fautes = list(dict.fromkeys(fautes))
+    # Pas « ou qu'il ne réagit pas » : le 01/10, la correction a pris cette sortie
+    # (« Leila does not react ») et le défaut restait. Ne pas réagir, écrit, passe la règle.
+    return resultat(not fautes, ("Réaction de qui écoute non écrite : " + " ; ".join(fautes) + ". Dites ce "
+                                 "qu'il fait juste après la réplique, comme l'histoire le veut (il lève les "
+                                 "yeux, se tourne vers celui qui parle, répond…).") if fautes else "")
+
+
 def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, langue=video_h3.LANGUE_PAROLES,
                  envoyees=None) -> list:
-    """Règles 0 à 5 et 13, par le code seul. `fiches` : les fiches du scénario (id, nom, genre, voix) ;
+    """Règles 0 à 5, 13 et 14, par le code seul. `fiches` : les fiches du scénario (id, nom, genre, voix) ;
     `envoyees` : pour chaque plan, les fiches dont la voix part avec lui (None : toutes)."""
     personnes = {_cle(f["nom"]) for f in fiches or [] if f.get("genre", "personne") == "personne"}
     problemes = {}
@@ -393,6 +448,7 @@ def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, lang
         r[4] = regle_voix(plan, fiches or [], langues or {}, langue, (envoyees or [None] * len(plans))[k - 1])
         r[5] = regle_deux_fois(plans, k)
         r[13] = regle_trajet(plan)
+        r[14] = regle_ecoute(plan, personnes)
         rapport.append(r)
     return rapport
 
