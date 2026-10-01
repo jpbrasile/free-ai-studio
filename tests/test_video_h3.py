@@ -702,7 +702,8 @@ def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3,
     assert invite.startswith("subject_definitions: <Subject 1> is the person in <Picture 1>. "
                              "<Subject 2> is the person in <Picture 2>. ")
     # Forme du guide de MiniMax (ref-en.txt, 2.2, 3, 4.1, 5.3).
-    assert "<Subject 2> is the person in <Picture 2>. <Picture 3> is the first frame of [Shot 1]. " in invite
+    assert ("<Subject 2> is the person in <Picture 2>. <Picture 3> is the first frame of [Shot 1], "
+            "showing <Subject 1> and <Subject 2>. ") in invite
     assert "summary: [reference generation + keyframe completion] The target video is a single shot with " \
            "<Subject 1> and <Subject 2>, beginning from <Picture 3>. " in invite
     assert "<Picture 3> ([Shot 1] first frame): fully_preserved - the shot begins exactly on <Picture 3>" in invite
@@ -3007,6 +3008,44 @@ def test_un_personnage_hors_champ_au_debut_n_est_pas_joint_a_l_image(h3, monkeyp
     # Sans tableau, rien ne change : les deux fiches partent.
     assert v.fiches_au_depart([leila, tyler], None) == [leila, tyler]
     assert v.fiches_au_depart([leila, tyler], [{"nom": "tyler", "debut": "Out of frame"}]) == [leila]
+
+
+def test_l_image_de_depart_nomme_qui_elle_montre_et_pas_le_hors_champ(h3):
+    # 01/10 : « <Picture 9> is the first frame of [Shot 1]. » ne liait la Leila de l'image à
+    # aucune fiche ; le guide de MiniMax écrit « …, showing a woman… » (ref-en.txt, 2.2).
+    v = h3.video_h3
+    leila, tyler = v.fiche_creer("Leila", "x")["id"], v.fiche_creer("Tyler", "y")["id"]
+    for fid in (leila, tyler):
+        v.fiche_poser_image(fid, "face", PNG)
+    d = demande(mode="references", fiches=[leila, tyler], depart_reference=PNG,
+                image_paroles="Leila lit une carte ; Tyler entre par la gauche.",
+                elements=[{"nom": "Leila", "debut": "centre"}, {"nom": "Tyler", "debut": "off-frame"}])
+    invite = v.preparer(d)["resume_public"]["invite"]
+    assert "<Picture 3> is the first frame of [Shot 1], showing <Subject 1>. " in invite
+    # Sans tableau : tous ceux que le plan nomme (l'image a été faite avec leurs fiches).
+    d.pop("elements")
+    invite = v.preparer(d)["resume_public"]["invite"]
+    assert "<Picture 3> is the first frame of [Shot 1], showing <Subject 1> and <Subject 2>. " in invite
+
+
+def test_le_mode_references_charge_ref2va_et_sa_lora(h3):
+    # 01/10 : le modèle Comfy-Org r2v charge ref2va ; sur fl2va, même graine, une seconde Leila.
+    v = h3.video_h3
+    leila = v.fiche_creer("Leila", "x")["id"]
+    v.fiche_poser_image(leila, "face", PNG)
+    refs = v.preparer(demande(mode="references", fiches=[leila], image_paroles="Leila marche."))["demande"]
+    assert refs["graphe"]["1"]["inputs"]["unet_name"] == "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+    assert refs["graphe"]["2"]["inputs"]["lora_name"] == "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+    assert refs["fichiers"] == list(v.fichiers_du_mode("references"))
+    assert set(v.FICHIERS_REFERENCES) <= set(refs["fichiers"]) and v.FICHIERS[0] not in refs["fichiers"]
+    # Les autres modes gardent fl2va et sa LoRA.
+    texte = v.preparer(demande(mode="texte"))["demande"]
+    assert texte["graphe"]["1"]["inputs"]["unet_name"] == "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+    assert texte["fichiers"] == list(v.FICHIERS)
+    # Le téléchargement des poids prend les deux jeux.
+    script = v.construire_script_poids()
+    d = json.loads(base64.b64decode(re.search(r'b64decode\("([A-Za-z0-9+/=]+)"\)', script).group(1)))
+    assert d["fichiers"] == list(v.FICHIERS + v.FICHIERS_REFERENCES)
 
 
 # --- Agrandir (SeedVR2, 30/09) : le devis, les coupes, le script, la route. ------

@@ -5639,7 +5639,8 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
         commun["musique"] = ""
     a_tourner = []
     for p in plans:
-        payload = dict(commun, image_paroles=p["image_paroles"], ambiance=p["ambiance"], coupe_s=0, images=[])
+        payload = dict(commun, image_paroles=p["image_paroles"], ambiance=p["ambiance"], coupe_s=0, images=[],
+                       elements=p.get("elements") or [])   # qui l'image de départ montre (01/10)
         if p["enchainement"] == "coupe" and p.get("image_depart"):
             # Parti de son image validée : H3 la suit à coup sûr ; les fiches ne
             # donnent plus que les voix, et la description de l'image passe à H3.

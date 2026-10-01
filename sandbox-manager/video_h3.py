@@ -52,7 +52,23 @@ FICHIERS = (
     "vae/minimax_h3_audio_vae_fp32.safetensors",
     "loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
 )
-POIDS_GO = 52   # total téléchargé le 27/09/2026 (essai hors du Studio)
+# Le mode Références a ses propres poids (01/10/2026) : le modèle officiel Comfy-Org
+# `video_minimax_h3_r2v.json` charge `ref2va` et sa LoRA, « a different set of weights
+# from the fl2va model used by the t2v/i2v templates ». Sur `fl2va`, même graine, H3
+# dessinait une seconde Leila dès l'image 40 ; sur `ref2va`, une seule (4090, 01/10).
+# Mêmes révision, encodeur et VAE ; ils remplacent FICHIERS[0] et FICHIERS[4].
+FICHIERS_REFERENCES = (
+    "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+    "loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+)
+POIDS_GO = 75   # 52 Go le 27/09/2026 (essai hors du Studio), + 22,9 Go de ref2va et sa LoRA (01/10)
+
+
+def fichiers_du_mode(mode: str) -> tuple:
+    """Les poids que charge un clip de ce mode, dans l'ordre de FICHIERS."""
+    if mode != "references":
+        return FICHIERS
+    return (FICHIERS_REFERENCES[0],) + FICHIERS[1:4] + (FICHIERS_REFERENCES[1],)
 
 
 def actif() -> bool:
@@ -1259,7 +1275,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
-                      presents=None, depart=None, parleurs=None, suite=False) -> str:
+                      presents=None, depart=None, parleurs=None, suite=False, au_depart=None) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -1274,7 +1290,9 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     <Picture N> de l'image de départ, première image de [Shot 1]. `parleurs` : {rang :
     numéro x de son (Sx)} ; la définition de sa voix le reprend (ref-en.txt, 2.4 :
     « <Audio 1> is the voice-timbre reference for <Subject 1> (S1). »), sans en créer.
-    `suite` : le plan continue <Video 1>, la fin du plan précédent (voie « raccord »)."""
+    `suite` : le plan continue <Video 1>, la fin du plan précédent (voie « raccord »).
+    `au_depart` : les rangs que l'image de départ montre ; ils y sont nommés (« showing
+    <Subject 1> »), sans quoi la personne de l'image n'est liée à aucune fiche."""
     definitions, garde, premiere, voix_dites, garde_sons = [], [], 1, [], []
     presents = set(range(len(nombres))) if presents is None else set(presents)
     for k, nombre in enumerate(nombres):
@@ -1329,7 +1347,14 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         garde.append(f"{ou}: fully_preserved - the face, hair and clothing of the person in "
                      f"{images} are retained, as one single person." + porte)
     if depart:   # ref-en.txt, 2.2 et 4.1 : l'image elle-même est une ancre de plan
-        definitions.append(f"<Picture {depart}> is the first frame of [Shot 1].")
+        # « <Picture 2> is the first frame of [Shot 1], showing a woman seated beside a café
+        # window » (ref-en.txt, 2.2) ; « …, showing <Subject 1> holding… » (modèle Comfy-Org
+        # multiframe). Sans ce lien, la Leila de l'image de départ n'était pas <Subject 1>,
+        # et H3 en dessinait une seconde (01/10).
+        vus_depart = [f"<Subject {k + 1}>" for k in sorted(au_depart or ())
+                      if k < len(nombres) and (objets.get(k) if isinstance(objets, dict) else None) != "pose"]
+        definitions.append(f"<Picture {depart}> is the first frame of [Shot 1]"
+                           + (", showing " + _liste_anglaise(vus_depart) if vus_depart else "") + ".")
         garde.append(f"<Picture {depart}> ([Shot 1] first frame): fully_preserved - the shot begins "
                      f"exactly on <Picture {depart}>: its framing, places and people.")
     if suite:   # guide de MiniMax : « video continuation », la source citée en <Video N>
@@ -2364,13 +2389,14 @@ def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0
     `simple`, puis image et son décodés et réunis en un MP4.
     """
     nom = lambda chemin: chemin.split("/")[1]  # noqa: E731
+    f = fichiers_du_mode(mode)
     g = {
-        "1": _n("UNETLoader", {"unet_name": nom(FICHIERS[0]), "weight_dtype": "default"}),
-        "2": _n("LoraLoaderModelOnly", {"model": ["1", 0], "lora_name": nom(FICHIERS[4]),
+        "1": _n("UNETLoader", {"unet_name": nom(f[0]), "weight_dtype": "default"}),
+        "2": _n("LoraLoaderModelOnly", {"model": ["1", 0], "lora_name": nom(f[4]),
                                          "strength_model": 1.0}),
-        "3": _n("CLIPLoader", {"clip_name": nom(FICHIERS[1]), "type": "minimax"}),
-        "4": _n("VAELoader", {"vae_name": nom(FICHIERS[2])}),
-        "5": _n("VAELoader", {"vae_name": nom(FICHIERS[3])}),
+        "3": _n("CLIPLoader", {"clip_name": nom(f[1]), "type": "minimax"}),
+        "4": _n("VAELoader", {"vae_name": nom(f[2])}),
+        "5": _n("VAELoader", {"vae_name": nom(f[3])}),
         "8": _n("KSamplerSelect", {"sampler_name": "res_multistep"}),
         "9": _n("BasicScheduler", {"model": ["2", 0], "scheduler": "simple", "steps": 4, "denoise": 1.0}),
     }
@@ -2652,8 +2678,14 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         for s, x in _LOCUTEUR_NUMERO.findall(nommes):
             parleurs.setdefault(int(s) - 1, int(x))
         numero = sum(nombres) + 1 if depart else None
+        # Qui l'image de départ montre : les fiches que le plan nomme, sauf celles que son
+        # tableau d'éléments met hors champ au début (même règle que fiches_au_depart).
+        elements = payload.get("elements") if isinstance(payload.get("elements"), list) else []
+        absents = {_norme_replique(str(e.get("nom") or "")) for e in elements
+                   if isinstance(e, dict) and hors_champ(e.get("debut"))}
+        au_depart = {k for k in presents if _norme_replique(fiches[k]["nom"]) not in absents}
         texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs,
-                                   suite)
+                                   suite, au_depart)
                  + " detailed_description: [Shot 1] "
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
@@ -2715,7 +2747,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         "classes": [m["noeud"]],
         "images": images,
         "sons": {f"voix_{j}.wav": s for j, s in enumerate(sons)},
-        "fichiers": list(FICHIERS),
+        "fichiers": list(fichiers_du_mode(mode)),
         "base_poids": POINT_DE_MONTAGE,
         "comfy": DOSSIER_COMFY,
         "comfy_version": COMFY_VERSION,
@@ -3076,7 +3108,8 @@ def construire_script(demande: dict) -> str:
 
 
 def construire_script_poids() -> str:
-    return _emballer(_SCRIPT_POIDS, {"fichiers": list(FICHIERS), "depot": HF, "revision": HF_REVISION,
+    return _emballer(_SCRIPT_POIDS, {"fichiers": list(FICHIERS + FICHIERS_REFERENCES), "depot": HF,
+                                     "revision": HF_REVISION,
                                      "base_poids": POINT_DE_MONTAGE})
 
 
