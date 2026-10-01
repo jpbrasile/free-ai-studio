@@ -634,9 +634,11 @@ def test_une_suite_en_references_epingle_les_22_dernieres_images_et_leur_son(h3,
     assert '**(D.get("videos") or {})' in v.construire_script(dem)
     # Au bout de la grille, pas de pas de plus.
     assert v.longueur_avec_raccord(v.LONGUEURS[-1]) == v.LONGUEURS[-1]
-    # Sans fin fournie, rien ne change : la dernière image, 1 image retirée.
+    # Sans fin fournie : la dernière image, épinglée à l'image 0 (01/10), 1 image retirée.
     plan = v.preparer_prolonger(d, _clip_reussi(h3), PNG)
-    assert "11" not in plan["demande"]["graphe"] and v.images_a_retirer(plan) == 1
+    g = plan["demande"]["graphe"]
+    assert g["11"]["class_type"] == "MiniMaxH3AddGuide" and "audio" not in g["11"]["inputs"]
+    assert "80" not in g and v.images_a_retirer(plan) == 1
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg absent")
@@ -2603,6 +2605,14 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     plan = v.preparer(dict(p0, depart_reference=PNG))
     assert "detailed_description: [Shot 1] The shot begins from <Picture 4>. " in plan["resume_public"]["invite"]
     assert list(plan["demande"]["images"]) == [f"ref_{i}.png" for i in range(4)]
+    # 01/10 : l'image de départ est aussi ÉPINGLÉE à l'image 0 (deux Leila sinon).
+    g = plan["demande"]["graphe"]
+    assert g["11"]["class_type"] == "MiniMaxH3AddGuide"
+    assert g["11"]["inputs"]["image"] == ["63", 0] and g["11"]["inputs"]["frame_idx"] == 0
+    assert "audio" not in g["11"]["inputs"] and g["13"]["inputs"]["conditioning"] == ["11", 0]
+    assert "MiniMaxH3AddGuide" in plan["demande"]["classes"]
+    # Sans image de départ, rien n'est épinglé.
+    assert "11" not in v.preparer(dict(p0, depart_reference=None))["demande"]["graphe"]
     # Des fiches sans photo : l'image seule, et les fiches donnent les voix.
     lea, james = v.fiche_creer("Léa", "x")["id"], v.fiche_creer("James", "y")["id"]
     corps = {"fiches": [lea, james], "langues": {james: "English"}, "langue": "French", "longueur": 124}

@@ -2475,6 +2475,24 @@ def ajouter_raccord(demande: dict, fin_b64: str) -> dict:
     return demande
 
 
+NOEUDS_DEPART = ("MiniMaxH3AddGuide",)
+
+
+def epingler_depart(demande: dict, rang: int) -> dict:
+    """Épingle l'image de départ, déjà chargée en <Picture N> (nœud « 6<rang> »), à
+    l'image 0 du plan. En <Picture N> seule, elle n'était qu'une référence de plus :
+    film campus, 01/10, plan 1 parti de l'image 95015619 (Leila seule, au centre) ;
+    dès l'image 0, H3 a recomposé un plan large avec DEUX Leila, celle des photos de
+    sa fiche et celle de l'image. AddGuide prend une image fixe à frame_idx 0 (PR
+    Comfy-Org/ComfyUI #15439), sans son : la bande son reste libre."""
+    g = demande["graphe"]
+    g["11"] = _n("MiniMaxH3AddGuide", {"positive": ["10", 0], "vae": ["4", 0], "audio_vae": ["5", 0],
+                                        "latent": ["10", 1], "image": [f"6{rang}", 0], "frame_idx": 0})
+    g["13"]["inputs"]["conditioning"] = ["11", 0]
+    demande["classes"] = list(demande["classes"]) + [c for c in NOEUDS_DEPART if c not in demande["classes"]]
+    return demande
+
+
 def longueur_avec_raccord(longueur: int) -> int:
     """Le pas suivant de la grille : le raccord reprend 22 images, le plan en gagne 17."""
     plus = int(longueur) + 17
@@ -2706,6 +2724,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         "longueur": longueur,
         "graine": graine,
     }
+    if depart:
+        epingler_depart(demande, len(brutes) - 1)
     return {
         "demande": demande,
         "resume_public": {
