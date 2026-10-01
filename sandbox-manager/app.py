@@ -6652,7 +6652,12 @@ def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
     film = chemin.read_bytes()
 
     async def juger():
-        r = await _regles_clip(film, premiere / ips, (fin - premiere) / ips, noms, refs, plan)
+        # 01/10, plan 2 de « Leila et un martien » : la reprise n'a pas été jugée (le chat
+        # du Studio, ReadTimeout) et a passé pour propre. Un second essai, puis « non jugé ».
+        for _ in range(2):
+            r = await _regles_clip(film, premiere / ips, (fin - premiere) / ips, noms, refs, plan)
+            if (r.get(10) or {}).get("ok") is not None:
+                break
         try:
             morceau = await asyncio.to_thread(montage.extraire, film, premiere, fin)
             paroles = await _ecouter(morceau, plan["image_paroles"])
@@ -6667,6 +6672,9 @@ def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
     note["regles"] = regles.en_liste(r)
     note["fautes"] = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in (9, 10)
                       if (r.get(n) or {}).get("ok") is False]
+    if (r.get(10) or {}).get("ok") is None:
+        # Gardée faute de mieux (une prise fautive vaut moins qu'une inconnue), mais dite.
+        note["non_juge"] = r.get(10, {}).get("pourquoi") or "règle 10 sans réponse"
     return note
 
 

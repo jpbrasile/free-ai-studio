@@ -1545,8 +1545,9 @@ def test_un_plan_en_echec_arrete_le_scenario(h3, monkeypatch):
     assert client(h3).get("/video-h3/scenario/" + sid, headers=CLE).json()["etat"] == "interrompu"
 
 
-def _tournage_juge(h3, monkeypatch, tmp_path, ou, fautifs):
-    """Deux plans tournés par le fil ; `fautifs` : les prises (1, 2…) où le juge voit un double."""
+def _tournage_juge(h3, monkeypatch, tmp_path, ou, fautifs, muets=()):
+    """Deux plans tournés par le fil ; `fautifs` : les appels du juge (1, 2…) qui voient un
+    double ; `muets` : ceux où le chat ne répond pas."""
     v = h3.video_h3
     _autoriser(h3)
     v.poids_noter(True)
@@ -1565,6 +1566,8 @@ def _tournage_juge(h3, monkeypatch, tmp_path, ou, fautifs):
 
     async def regles_clip(film, debut, duree, noms, refs, plan):
         juges.append((round(debut * 24), round(duree * 24), plan["image_paroles"]))
+        if len(juges) in muets:
+            return {10: h3.regles.resultat(None, "Le chat du Studio ne répond pas (ReadTimeout)")}
         double = len(juges) in fautifs
         return {10: h3.regles.resultat(not double, "deux Zib" if double else "")}
 
@@ -1607,6 +1610,16 @@ def test_ici_une_seule_reprise_et_la_moins_fautive_reste(h3, monkeypatch, tmp_pa
     # À égalité, la première prise reste, et le plan 2 part d'elle.
     assert len(tournes) == 3 and pc == a and sc["travaux"] == [a, c]
     assert sc["reprises_auto"] == [{"plan": 1, "prises": [a, b], "garde": a}]
+
+
+def test_un_juge_muet_est_redemande_puis_dit_non_juge(h3, monkeypatch, tmp_path):
+    """01/10, plan 2 rejoué : la reprise, jugée par un chat en ReadTimeout, a passé pour propre."""
+    sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "maison", fautifs={1}, muets={2})
+    # La reprise est rejugée (appels 2 et 3) : propre, rien n'est noté « non jugé ».
+    assert len(tournes) == 3 and len(juges) == 4 and "non_juge" not in sc["controles_plans"][1]
+    sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "maison", fautifs={1}, muets={2, 3})
+    # Muet deux fois : la reprise reste (la première est fautive), et le dit.
+    assert sc["travaux"][0] == tournes[1][0] and "ReadTimeout" in sc["controles_plans"][1]["non_juge"]
 
 
 def test_chez_modal_aucune_reprise_payee_sans_accord(h3, monkeypatch, tmp_path):
