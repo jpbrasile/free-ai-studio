@@ -7,6 +7,7 @@ garde Kaggle, carte demandee) et que le script envoye au GPU est du Python valid
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import pytest
@@ -278,10 +279,10 @@ def test_lora_dit_sa_licence_et_sa_reserve(ch):
     """La licence voyage avec le choix, et la reserve avec la licence."""
     public = ch.preparer({"style": "x", "lora": True}, "modal")["resume_public"]["lora"]
     assert ch.LORA["licence"] in public and ch.LORA["restriction"] in public
-    # La revision n'est PAS epinglee, contrairement au modele de base. Tant que
-    # c'est vrai, la fiche du travail doit le dire.
-    assert ch.LORA["revision"] is None
-    assert "non épinglée" in public
+    # Épinglée le 01/10/2026 (la carte d'ici, sans Internet, la lit dans le cache) :
+    # la fiche du travail dit laquelle.
+    assert re.fullmatch(r"[0-9a-f]{40}", ch.LORA["revision"])
+    assert ch.LORA["revision"][:8] in public and "non épinglée" not in public
 
 
 def test_lora_refusee_partout_sauf_modal(ch):

@@ -118,17 +118,22 @@ PAQUETS_MODAL = (URL_ROUE,)
 # promesse de son auteur, pas une mesure a nous : ne pas la presenter autrement.
 #
 # DEUX RESERVES ECRITES ICI PLUTOT QU'OUBLIEES :
-# 1. REVISION NON EPINGLEE. Le modele de base l'est (voir plus haut : un depot
-#    qui change sous nos pieds changerait le son sans que personne le sache).
-#    Celui-ci ne l'est pas : je n'ai pas verifie de hash. Meme risque, assume
-#    faute de mieux, et dit dans le resume de chaque chanson.
-# 2. VERIFIE SUR L4 (Modal) SEULEMENT. Le chemin Turing de Kaggle calcule en
-#    float16 avec des correctifs non officiels ; la fusion n'y a jamais tourne.
-#    preparer() refuse donc la combinaison au lieu de parier.
+# 1. ~~REVISION NON EPINGLEE.~~ Epinglee le 01/10/2026 (voir "revision") : la
+#    carte d'ici n'a pas Internet et lit le fichier dans le cache partage, a
+#    cette revision-la.
+# 2. VERIFIE SUR L4 (Modal). Ouverte le 01/10/2026 sur la carte d'ici (bfloat16,
+#    chemin officiel comme la L4), seulement quand la personne choisit << ici, sans
+#    urgence >> : le choix automatique la laisse chez Modal tant que sa memoire
+#    n'est pas mesuree ici (chanson_maison.decider). Le chemin Turing de
+#    Kaggle calcule en float16 avec des correctifs non officiels ; la fusion n'y
+#    a jamais tourne. preparer() refuse donc Kaggle et Colab au lieu de parier.
 LORA = {
     "hf": "Mothersuperior/YuE2-instrumental-cot-full-loras",
     "fichier": "ar_lora_inst_v3abc.bf16.safetensors",
-    "revision": None,
+    # Epinglee le 01/10/2026 : le commit du depot ce jour-la, modifie pour la derniere
+    # fois le 15/09, donc AVANT les rendus du 17/09 sur Modal -- le meme fichier.
+    # Telecharge dans le cache partage : 139 502 088 octets, SHA-256 e408fd31...2c5414.
+    "revision": "947f2f4b28978b2b6c3e316e6a87925c76bf3c4b",
     "couples": 196,          # 392 tenseurs = 196 couples A/B ; 7 projections x 28 couches
     "echelle": 1.0,
     "megaoctets": 139.5,
@@ -556,7 +561,9 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
     # La LoRA instrumentale est FUSIONNEE dans les poids du modele de base : ce
     # n'est pas un autre modele, c'est le meme, modifie avant de composer.
     lora = bool(payload.get("lora"))
-    if lora and ou != "modal":
+    # « maison » : la carte d'ici, bfloat16 comme la L4, poids épinglés dans le cache
+    # (01/10/2026) ; c'est `chanson_maison.pas_ici` qui garde la porte.
+    if lora and ou not in ("modal", "maison"):
         raise ValueError(
             "La version instrumentale n'est vérifiée que sur Modal (carte L4). Le chemin "
             "Kaggle applique déjà des correctifs non officiels pour sa carte T4, et la fusion "
@@ -638,7 +645,7 @@ def preparer(payload: dict, ou: str = "modal") -> dict:
             # écoute le morceau fini et dit si une voix s'y entend (30/09/2026).
             "sans_voix": lora or not re.sub(r"\[[^\]]*\]", "", paroles).strip(),
             "lora":(LORA["hf"] + " — " + LORA["licence"] + ", " + LORA["restriction"]
-                     + " ; révision non épinglée") if lora else None,
+                     + " ; révision " + LORA["revision"][:8]) if lora else None,
         },
     }
 
@@ -938,9 +945,9 @@ function majModele(){
        + '</b>, ' + l.territoire + '.<br><b>Son auteur l’annonce instrumentale</b> ; nous ne '
        + 'l’avons pas vérifié : le rendu témoin fait sans elle n’avait pas de voix non plus, '
        + 'donc notre essai ne prouve rien sur ce point. Les paroles sont ignorées. '
-       + 'Sa révision n’est <b>pas épinglée</b>, contrairement au modèle de base : '
-       + 'si le dépôt change, le rendu n’est plus reproductible. Vérifiée sur <b>'
-       + l.verifie_sur + '</b> seulement, donc indisponible sur Kaggle.')
+       + 'Sa révision est épinglée (' + String(l.revision || "").slice(0, 8) + '). Vérifiée sur <b>'
+       + l.verifie_sur + '</b> ; possible aussi « ici, sans urgence » quand elle est '
+       + 'téléchargée sur cet ordinateur ; indisponible sur Kaggle.')
     : "Version instrumentale : licence et détails non chargés, le service ne répond pas.";
   paroles.disabled = true;
   paroles.placeholder = "Ignoré ici : cette version est annoncée instrumentale par son auteur.";

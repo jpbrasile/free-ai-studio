@@ -81,12 +81,30 @@ def poids_presents(dossier: Path | None = None) -> tuple[bool, str]:
     return True, ""
 
 
-def pas_ici(duree: str, lora: bool, prete) -> str:
+def lora_presente(dossier: Path | None = None) -> tuple[bool, str]:
+    """La LoRA instrumentale, a SA revision epinglee, dans le cache partage : le bac a
+    sable de la carte n'a pas Internet et ne la telechargera jamais seul."""
+    L = chanson.LORA
+    depot = _depot(dossier or POIDS_DIR, L["hf"])
+    if not (depot / "snapshots" / str(L["revision"]) / L["fichier"]).is_file():
+        return False, ("La version instrumentale (%s) n'est pas téléchargée sur cet ordinateur."
+                       % L["hf"])
+    blobs = depot / "blobs"
+    if blobs.is_dir() and any(blobs.glob("*.incomplete")):
+        return False, "La version instrumentale est en cours de téléchargement."
+    return True, ""
+
+
+def pas_ici(duree: str, lora: bool, prete, dossier: Path | None = None) -> str:
     """« Ici, sans urgence » (01/10/2026) : pourquoi la chanson ne peut PAS attendre la
-    carte d'ici ; "" si elle le peut. La carte n'est pas sondée : la file l'attendra."""
+    carte d'ici ; "" si elle le peut. La carte n'est pas sondée : la file l'attendra.
+    La version instrumentale y passe depuis le soir même (demande du propriétaire :
+    la musique du film, instrumentale comme celle avec laquelle le Studio a été
+    validé), pourvu que sa LoRA épinglée soit dans le cache."""
     if lora:
-        return ("La version instrumentale n'est vérifiée que sur la carte L4 de Modal ; "
-                "sur la carte d'ici, ni sa mémoire ni son résultat n'ont été mesurés.")
+        ok, motif = lora_presente(dossier)
+        if not ok:
+            return motif
     if duree not in BESOIN_MO:
         return "Cette durée n'a pas été mesurée sur la carte d'ici."
     ok, motif = prete()

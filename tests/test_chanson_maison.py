@@ -9,6 +9,7 @@ n'a pas YuE2 (voir PLAN.md, point 15.5).
 from __future__ import annotations
 
 import base64
+import re
 import json
 import time
 
@@ -296,12 +297,29 @@ def test_ici_refuse_sans_machine_de_chanson_prete(sandbox, monkeypatch):
     assert r.status_code == 409 and "Pas de YuE2 ici." in r.json()["detail"] and "Modal" in r.json()["detail"]
 
 
-def test_ici_refuse_la_version_instrumentale_et_les_durees_non_mesurees():
+def test_ici_refuse_les_durees_non_mesurees_et_l_instrumentale_sans_sa_lora(tmp_path):
     import chanson_maison as cm
     pret = lambda: (True, "")  # noqa: E731
-    assert "L4" in cm.pas_ici("1", True, pret)
     assert "mesurée" in cm.pas_ici("9", False, pret)
     assert cm.pas_ici("3", False, pret) == ""
+    # 01/10 : l'instrumentale passe ici, mais seulement avec SA LoRA épinglée dans le cache.
+    L = cm.chanson.LORA
+    assert "pas téléchargée" in cm.pas_ici("1", True, pret, tmp_path)
+    depot = tmp_path / "hub" / ("models--" + L["hf"].replace("/", "--"))
+    autre = depot / "snapshots" / ("0" * 40)
+    autre.mkdir(parents=True)
+    (autre / L["fichier"]).write_bytes(b"x")
+    assert "pas téléchargée" in cm.pas_ici("1", True, pret, tmp_path)
+    bonne = depot / "snapshots" / L["revision"]
+    bonne.mkdir(parents=True)
+    (bonne / L["fichier"]).write_bytes(b"x")
+    assert cm.pas_ici("1", True, pret, tmp_path) == ""
+    (depot / "blobs").mkdir()
+    (depot / "blobs" / "abc.incomplete").write_bytes(b"")
+    assert "en cours" in cm.pas_ici("1", True, pret, tmp_path)
+    # La machine pas prête l'emporte toujours.
+    (depot / "blobs" / "abc.incomplete").unlink()
+    assert cm.pas_ici("1", True, lambda: (False, "Pas de YuE2 ici."), tmp_path) == "Pas de YuE2 ici."
 
 
 def test_ici_attend_la_file_puis_part_sur_la_machine_de_la_chanson(sandbox, monkeypatch):
@@ -327,6 +345,27 @@ def test_ici_attend_la_file_puis_part_sur_la_machine_de_la_chanson(sandbox, monk
     assert job["provider"] == "maison" and job["machine"] == "chanson"
     assert ordre == ["file", "calcul", "rendue"]
     assert vu == {"url": "http://sandbox-worker-chanson:8000", "statut": "running"}
+
+
+def test_ici_fait_l_instrumentale_quand_sa_lora_est_la(sandbox, monkeypatch):
+    """01/10/2026 : la musique du film « Leila et un martien », instrumentale, sur la
+    carte d'ici. Sans la LoRA dans le cache : 409, et la page dit pourquoi."""
+    monkeypatch.setattr(sandbox, "chanson_maison_prete", lambda: (True, ""))
+    lances = []
+    monkeypatch.setattr(sandbox, "run_chanson", lambda *a: lances.append(a))
+    monkeypatch.setattr(sandbox.threading, "Thread",
+                        lambda target, args, daemon: type("T", (), {"start": lambda s: target(*args)})())
+    corps = {"ou": "ici", "style": "celesta lullaby", "lora": True, "duree": "1"}
+    monkeypatch.setattr(sandbox.chanson_maison, "lora_presente", lambda d=None: (False, "LoRA absente."))
+    r = TestClient(sandbox.app).post("/chanson/creer", headers=CLE, json=corps)
+    assert r.status_code == 409 and "LoRA absente." in r.json()["detail"]
+    monkeypatch.setattr(sandbox.chanson_maison, "lora_presente", lambda d=None: (True, ""))
+    r = TestClient(sandbox.app).post("/chanson/creer", headers=CLE, json=corps)
+    assert r.status_code == 200, r.text
+    assert lances and lances[0][2] == "maison"
+    demande = json.loads(base64.b64decode(re.search(r'"([A-Za-z0-9+/=]{200,})"', lances[0][1]).group(1)))
+    assert demande["lora"]["revision"] == sandbox.chanson.LORA["revision"]
+    assert demande["cache"] == sandbox.chanson.CACHE_MAISON and demande["installer"] is False
 
 
 def test_le_bac_a_sable_dit_s_il_a_yue2(monkeypatch):
