@@ -6415,7 +6415,17 @@ def _film_du_scenario(sc: dict):
         return sc.get("film_sans_musique") or sc.get("film")
     faits = len(_fins_images(sc))
     travaux = sc.get("travaux") or []
-    return travaux[faits - 1] if 0 < faits <= len(travaux) else None
+    if not faits:
+        return None
+    # Les plans repris d'un rejeu n'ajoutent pas de travail (02/10, film 4 : rejouer un rejeu
+    # arrêté plantait en 500) : le dernier travail réussi porte toute la chaîne.
+    for jid in reversed(travaux):
+        try:
+            if read_job(jid).get("status") == "succeeded":
+                return jid
+        except (HTTPException, OSError, ValueError, TypeError):
+            continue
+    return travaux[faits - 1] if faits <= len(travaux) else None
 
 
 def _scenario_tourne(sid: str, partiel: bool = False) -> dict:
@@ -6429,7 +6439,8 @@ def _scenario_tourne(sid: str, partiel: bool = False) -> dict:
     fins = _fins_images(sc)
     entier = sc.get("etat") == "réussi" and len(fins) == len(sc["plans"])
     en_route = partiel and sc.get("etat") in ("échoué", "arrêté") and 0 < len(fins) < len(sc["plans"])
-    if not (entier or en_route) or not _video_h3_octets(_film_du_scenario(sc)):
+    film = _film_du_scenario(sc)
+    if not (entier or en_route) or not film or not _video_h3_octets(film):
         raise HTTPException(409, "Ce scénario n'est pas tourné en entier sur ce Studio.")
     return sc
 

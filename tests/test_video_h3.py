@@ -5358,3 +5358,14 @@ def test_une_coupe_tournee_prend_le_lieu_de_la_fiche_decor_pas_la_derniere_image
     assert v.CONSIGNE_COUPE_LIEU in au_tournage[-1]["prompt"] and v.CONSIGNE_COUPE % 1 not in au_tournage[-1]["prompt"]
     fin = base64.b64encode(base64.b64decode(PNG) + b"FIN-DU-PLAN-1").decode()
     assert not any(fin in p for p in poses)   # la dernière image ne sert pas
+
+
+def test_un_rejeu_de_rejeu_prend_le_dernier_travail_reussi(h3):
+    # 02/10, film 4 : un rejeu arrêté après un plan neuf n'a qu'un travail pour deux plans (le
+    # plan repris n'en ajoute pas) ; le rejouer plantait en 500 (travaux[1] inexistant).
+    fait, rate = "a" * 32, "b" * 32
+    h3.write_job(fait, {"id": fait, "status": "succeeded", "artifacts": []})
+    h3.write_job(rate, {"id": rate, "status": "failed", "artifacts": []})
+    sc = {"etat": "arrêté", "fins_images": [243, 362], "travaux": [fait, rate]}
+    assert h3._film_du_scenario(sc) == fait
+    assert h3._film_du_scenario({"etat": "arrêté", "fins_images": [243], "travaux": []}) is None
