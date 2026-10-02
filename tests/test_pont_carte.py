@@ -26,6 +26,11 @@ _spec.loader.exec_module(pc)
 @pytest.fixture(autouse=True)
 def journal_isole(tmp_path, monkeypatch):
     monkeypatch.setattr(pc, "JOURNAL", str(tmp_path / "pont.jsonl"))
+    # Le dossier de la file h3r aussi : le 02/10, son vrai `serveur_arrete.json` (llama arrêté pour
+    # l'opérateur) faisait échouer les trois tests de relance, selon l'état de la machine.
+    etat = tmp_path / "file_h3r"
+    etat.mkdir()
+    monkeypatch.setattr(pc, "FILE_ETAT", str(etat))
 
 
 class Horloge:
