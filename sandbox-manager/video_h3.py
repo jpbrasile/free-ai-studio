@@ -2140,6 +2140,10 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            # la valise » dans un seul plan, 2 fois sur 3.
            "Two characters each doing their own thing (she answers while he opens an umbrella) are TWO main "
            "actions, so two shots; in a shot, the other characters only listen, look or react with their face. "
+           # 02/10, film 4, plan 6b : « Tyler part à vélo, Leila le salue et lui lance sa réplique »
+           # refusé trois fois (« deux actions ») ; tourné forcé, réussi du premier coup, comme la
+           # prise 2 du plan 6. Propriétaire : « on changera la règle si ça passe à nouveau ».
+           "But a reaction TO the main action, as it happens, is part of it: the one who stays waves at, calls a line after or answers the one who leaves, arrives or acts (he rides away, she waves and calls goodbye: ONE main action). "
            # 29/09, demande du propriétaire : « une règle de cohérence entre le nombre
            # de plans et d'actions, exemple en 3 plans ». L'exemple n'est aucune des
            # histoires du banc (basket, cuisine, quai de gare), pour ne pas l'apprendre.
@@ -2882,7 +2886,7 @@ def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=()) -
             "or repeats), or a shot holding more than about 5 seconds can show: more than one main action, or more than "
             "three steps? Count the characters who act in each shot: two characters each doing their own "
             "thing (one answers while the other opens an umbrella) are two main actions, a problem; a character "
-            "who only listens, looks or reacts with the face does not count. Name the minor steps to leave out, skipped by the cut before the next shot: the "
+            "who only listens, looks or reacts with the face does not count, and a reaction TO the main action, as it happens, is part of it: the one who stays waves at, calls a line after or answers the one who leaves, arrives or acts (he rides away, she waves and calls goodbye: ONE main action). Name the minor steps to leave out, skipped by the cut before the next shot: the "
             "number of shots never changes, never ask to split a shot. "
             "(9) is a movement described twice or in two ways in the same shot, or does a shot give, at its "
             "start, the pose that one of its own movements only reaches (\"facing the camera\", then \"turns "
@@ -3108,6 +3112,42 @@ def scinder(plans: list, i: int, morceaux: list) -> list:
     """Les plans, le plan i remplacé par ses morceaux ; ValueError si les limites ne tiennent pas
     (SCENARIO_PLANS_MAX, PLANS_MAX d'affilée sans coupe)."""
     return verifier_plans(borner_les_suites(plans[:i] + morceaux + plans[i + 1:]))
+
+
+def _meme_texte(a, b) -> bool:
+    return " ".join(str(a or "").split()) == " ".join(str(b or "").split())
+
+
+def plans_initiaux_du_rejeu(initiaux: list, anciens: list, ecrits: list) -> list:
+    """Le texte d'origine de chaque plan d'un rejeu, celui que le juge du plan tourné lit
+    (règles 9 et 12) : l'origine héritée pour un plan au même texte (l'adaptation du départ
+    ne la change pas) ; le texte ÉCRIT pour un plan au texte changé. Bug du 02/10, film 4 :
+    le plan 6a, réécrit, était jugé sur le texte du plan 6 d'origine (réplique « fausse »,
+    « Tyler encore là »)."""
+    sortie = []
+    for i, p in enumerate(ecrits):
+        garde = (i < len(initiaux) and i < len(anciens)
+                 and _meme_texte(p.get("image_paroles"), anciens[i].get("image_paroles")))
+        sortie.append(initiaux[i] if garde else dict(p))
+    return sortie
+
+
+def plans_avec_coupes_refaites(nouveaux: list, anciens: list, departs_de_coupe: list) -> list:
+    """Bug du 02/10, film 4 : au tournage, le Studio refait l'image de départ d'une coupe d'après
+    le film et la met à la place de celle du découpage dans les plans du scénario. Un client qui
+    renvoie SES plans au rejeu y laisse l'image du découpage : le plan semblait changé et
+    repartait chez Modal (plan 5, arrêté au bout de ~3 min). Ici, un plan qui porte encore
+    l'image du découpage d'une coupe refaite reprend l'image tournée : il est inchangé."""
+    sortie = [dict(p) for p in nouveaux]
+    for note in departs_de_coupe or []:
+        i = int(note.get("plan") or 0) - 1
+        decoupage = note.get("decoupage")
+        if not (0 <= i < len(sortie) and i < len(anciens) and decoupage and note.get("garde") == note.get("depart")):
+            continue
+        if sortie[i].get("image_depart") == decoupage and anciens[i].get("image_depart") == note["garde"]:
+            sortie[i].update(image_depart=anciens[i]["image_depart"],
+                             description_depart=anciens[i].get("description_depart", ""))
+    return sortie
 
 
 def plans_a_reprendre(anciens: list, nouveaux: list, retourner=()) -> list:
@@ -3554,7 +3594,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         if d and bord in bords:
             texte = etiquette + d + (" " if d[-1] in ".!?" else ". ") + texte
     if len(texte) > 4000:
-        raise ValueError("Invite trop longue (4 000 caractères au plus).")
+        raise ValueError("Invite trop longue : %d caractères, 4 000 au plus. Raccourcissez le texte du plan."
+                         % len(texte))
     try:
         longueur = int(payload.get("longueur") or LONGUEUR_PAR_DEFAUT)
     except (TypeError, ValueError) as exc:
@@ -3641,6 +3682,16 @@ def voie_prolonger(precedent: dict) -> str:
     """« troncon » si l'option est mise ET que le clip a gardé son latent ; sinon « image »."""
     v = precedent.get("video") or {}
     return "troncon" if motion_context_actif() and v.get("latent_vers") else "image"
+
+
+def controler_suite(payload: dict) -> dict:
+    """Le contrôle d'avant le premier sou d'une « suite » en Références : l'invite telle que le
+    tournage la fabriquera (`preparer_prolonger`, voie « raccord ») — texte passé par
+    `texte_de_suite`, en-tête SUITE_DEBUT et lignes <Video 1>. Bug du 02/10, film 4, plan 6 :
+    le contrôle mesurait le texte nu, accepté ; au tournage, 4 015 caractères, refusé après
+    tous les contrôles."""
+    return preparer(dict(payload, mode="references", images=[], suite_video=True, depart_reference=None,
+                         image_paroles=texte_de_suite(payload.get("image_paroles", ""), payload.get("elements"))))
 
 
 def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[str] = None,
@@ -4299,11 +4350,17 @@ PAGE_HTML = r"""<!doctype html>
         <option value="corriger">Corriger le texte d'après mes remarques (gratuit)</option>
         <option value="rejouer">Rejouer les plans changés ou cochés (payant)</option>
         <option value="decor">Faire la fiche du décor d'après ce film (gratuit) : les coupes du rejeu en gardent le lieu</option>
+        <option value="fond">Régler le fond sonore, plan par plan (gratuit)</option>
       </select>
       <div id="suite_auto_options">
         <select id="auto_tours"><option value="1">1 tour</option><option value="2" selected>2 tours au plus</option>
           <option value="3">3 tours au plus</option></select>
         <label><input type="checkbox" id="auto_sans_arret"> sans pause (chaque fausse alerte fait payer un plan)</label>
+      </div>
+      <div id="suite_fond_options" hidden>
+        <p class="note">Le fond (eau, rue…) est déjà nivelé sur tout le film. Si un plan reste trop fort ou
+          trop faible à l'écoute : montez ou baissez-le ici, en dB (de -12 à +12 ; 0 = le niveau commun).</p>
+        <div id="fond_plans"></div>
       </div>
       <div id="suite_corriger_options" hidden>
         <label for="retours">Vos remarques</label>
@@ -5855,6 +5912,7 @@ let CAMERA_CLIP = Object.assign({}, CAMERA.defaut);
 document.getElementById("camera_clip").appendChild(menuCamera(CAMERA_CLIP, c => { CAMERA_CLIP = c; }));
 // Un scénario déjà tourné, repris : ses plans initiaux (pour le gras) et les plans à retourner.
 let PLANS_INITIAUX = null, SCENARIO_TOURNE = null, RETOURNER = new Set();
+let FOND = {plans_db: [], ambiance: null};
 
 // Les mots du plan, en gras ce qui n'était pas dans le plan initial, barré ce qui en a été retiré.
 function diffGras(avant, apres){
@@ -6183,6 +6241,8 @@ async function ouvrirScenario(sid){
   const sc = await fetch("/video-h3/scenario/" + sid, {headers: H}).then(r => r.json());
   if (sc.etat !== "réussi") return;
   SCENARIO_TOURNE = sid;
+  FOND = {plans_db: sc.ambiance_plans_db || [], ambiance: sc.ambiance || null};
+  dessinerFond();
   PLANS = sc.plans.map(p => Object.assign({}, p));
   PLANS_INITIAUX = sc.plans_initiaux || sc.plans;
   RETOURNER = new Set();
@@ -6293,6 +6353,41 @@ async function actionRejouer(forcer){
   scenarioEtat("Rejeu fini : " + (r.repris.length ? "plan(s) " + r.repris.join(", ") + " repris tels quels." : "tout a été retourné."));
 }
 
+// Le fond sonore réglé à la main, plan par plan (propriétaire, 02/10 : « un bouton d'ajustement
+// manuel pour chaque clip si besoin »). Refait depuis le film brut : rien ne s'accumule.
+function dessinerFond(){
+  const zone = document.getElementById("fond_plans");
+  zone.textContent = "";
+  const mesures = (FOND.ambiance && FOND.ambiance.plans) || [];
+  const n = Math.max(PLANS.length, mesures.length, FOND.plans_db.length);
+  for (let i = 0; i < n; i++){
+    const label = document.createElement("label");
+    const champ = document.createElement("input");
+    champ.type = "number"; champ.min = -12; champ.max = 12; champ.step = 1;
+    champ.value = FOND.plans_db[i] || 0;
+    champ.dataset.plan = i;
+    champ.style.width = "5em";
+    const m = mesures[i];
+    const mesure = m && m.niveau_db !== null && m.niveau_db !== undefined
+      ? " (mesuré " + fr(m.niveau_db, 1) + " dB" + (m.gain_db ? ", baissé de " + fr(-m.gain_db, 1) + " dB" : "") + ")" : "";
+    label.append("Plan " + (i + 1) + " : ", champ, " dB" + mesure);
+    zone.appendChild(label);
+    zone.appendChild(document.createElement("br"));
+  }
+}
+
+async function actionFond(){
+  const plans_db = [...document.querySelectorAll("#fond_plans input")].map(c => Number(c.value) || 0);
+  occupe("Le fond sonore est refait depuis le film brut (gratuit)…");
+  const r = await appeler("/video-h3/scenario/" + SCENARIO_TOURNE + "/ambiance", {plans_db});
+  FOND = {plans_db: r.plans_db, ambiance: r.ambiance};
+  dessinerFond();
+  document.getElementById("montage_resultat").hidden = false;
+  document.getElementById("montage_lecteur").src = r.video_url;
+  document.getElementById("montage_telecharger").href = r.video_url + "&telecharger=1&nom=film-h3";
+  scenarioEtat("Fond sonore refait : écoutez le film ci-dessous.");
+}
+
 const ACTIONS = {
   auto: ["Lancer", () => corrigerToutSeul(SCENARIO_TOURNE, Number(document.getElementById("auto_tours").value),
                                           document.getElementById("auto_sans_arret").checked)],
@@ -6300,12 +6395,14 @@ const ACTIONS = {
   corriger: ["Corriger le texte", actionCorriger],
   rejouer: ["Rejouer (payant)", actionRejouer],
   decor: ["Faire la fiche du décor", actionDecor],
+  fond: ["Refaire le fond sonore", actionFond],
 };
 
 function majSuite(){
   const a = document.getElementById("suite_action").value;
   document.getElementById("suite_auto_options").hidden = a !== "auto";
   document.getElementById("suite_corriger_options").hidden = a !== "corriger";
+  document.getElementById("suite_fond_options").hidden = a !== "fond";
   document.getElementById("suite_lancer").textContent = ACTIONS[a][0];
 }
 document.getElementById("suite_action").addEventListener("change", majSuite);

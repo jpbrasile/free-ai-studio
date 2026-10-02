@@ -5414,6 +5414,45 @@ def _film_h3(film: bytes, video: dict, titre: str, moteur: str = "MiniMax H3 (mo
     return jid
 
 
+def _egaliser_scenario(sid: str, film_jid: str, fins: list, ips: float, ajustements=None) -> str:
+    """L'ambiance du film fini égalisée d'un plan à l'autre (`montage.egaliser_ambiance` ;
+    propriétaire, 02/10 : « tu mets ces réglages en automatique dans le studio »). Rend le
+    film à garder. Un échec n'arrête rien : le film brut reste, l'erreur est notée."""
+    try:
+        brut = _video_h3_octets(film_jid)
+        if not brut:
+            raise ValueError("Ce film n'est plus sur ce Studio.")
+        octets = brut.read_bytes()
+        egal, rapport = montage.egaliser_ambiance(octets, [f / ips for f in fins], ajustements)
+    except (OSError, ValueError, HTTPException, montage.MontageImpossible, subprocess.SubprocessError) as exc:
+        video_h3.scenario_noter(sid, ambiance={"erreur": str(getattr(exc, "detail", exc))[:300]})
+        return film_jid
+    if egal is octets:
+        video_h3.scenario_noter(sid, ambiance=rapport)
+        return film_jid
+    avant = read_job(film_jid).get("video") or {}
+    jid = _film_h3(egal, {"mode": "ambiance", "mode_titre": "Ambiance égalisée", "invite": avant.get("invite", ""),
+                          "clips": [film_jid], "plans": avant.get("plans") or len(fins),
+                          **({"echelle": avant["echelle"]} if avant.get("echelle") else {}),
+                          "ambiance": rapport},
+                   (read_job(film_jid).get("titre") or "Film H3")[:50], moteur=_moteur_du_film(avant))
+    video_h3.scenario_noter(sid, ambiance=rapport, film_sans_ambiance=film_jid)
+    return jid
+
+
+def _musique_du_scenario(sid: str, film_jid: str, fins: list, ips: float) -> str:
+    """La musique du scénario posée sous `film_jid` (rien sans musique) ; rend le film à garder."""
+    musique = video_h3.scenario_lire(sid).get("musique")
+    if not musique:
+        return film_jid
+    k = musique["a_partir_du_plan"]
+    # Le film recollé à la fin du plan k-1 dure ce que la musique attend.
+    debut = fins[k - 2] / ips if k > 1 else 0.0
+    avec = _mettre_musique(film_jid, musique["chanson"], debut, 0.3)
+    video_h3.scenario_noter(sid, film_sans_musique=film_jid)
+    return avec
+
+
 def _chansons_pretes() -> list:
     """Les chansons réussies de ce Studio, pour servir de musique à un film."""
     pretes = []
@@ -5997,8 +6036,7 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
             nb_photos, visages_seuls = video_h3.photos_avec_depart(ids)
             if 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
                 payload.update(mode="references", visages_seuls=visages_seuls)
-                essai = video_h3.fiche_images(ids[0], visage_seul=True)[0]
-                video_h3.preparer(dict(payload, depart_reference=essai))
+                video_h3.controler_suite(payload)   # l'invite du tournage, pas le texte nu (bug 20)
             else:
                 payload.update(mode="premiere", fiche=None, fiches=None, langues=None)
                 video_h3.preparer(dict(payload, mode="texte"))
@@ -6307,7 +6345,9 @@ async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
             ecrite = par_plan[p["numero"] - 1] or base
             if ecrite and p["payload"].get("mode") == "references":
                 p["payload"].setdefault("tenues_ecrites", {})[fid] = ecrite
-                video_h3.preparer(p["payload"])   # invite toujours sous 4 000 caractères, avant le premier sou
+                # Invite toujours sous 4 000 caractères, avant le premier sou ; une suite, telle
+                # que le tournage la fabriquera (bug 20 du 02/10).
+                (video_h3.controler_suite if p["enchainement"] == "suite" else video_h3.preparer)(p["payload"])
     for fid, par_plan in releve.items():
         nom = video_h3.fiche_lire(fid)["nom"]
         for tenue in dict.fromkeys(t for t in par_plan if t):
@@ -6485,8 +6525,9 @@ def _fins_images(sc: dict) -> list:
 def _film_du_scenario(sc: dict):
     """Le film tourné jusqu'ici : le film fini, sinon (scénario échoué ou arrêté) le
     travail du dernier plan réussi, qui porte tous les plans d'avant recollés."""
-    if sc.get("film_sans_musique") or sc.get("film"):
-        return sc.get("film_sans_musique") or sc.get("film")
+    # Le film brut (02/10) : un rejeu y reprend ses plans, puis égalise l'ambiance une fois.
+    if sc.get("film_sans_ambiance") or sc.get("film_sans_musique") or sc.get("film"):
+        return sc.get("film_sans_ambiance") or sc.get("film_sans_musique") or sc.get("film")
     faits = len(_fins_images(sc))
     travaux = sc.get("travaux") or []
     if not faits:
@@ -6528,7 +6569,7 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
     auth(authorization)
     sc = _scenario_tourne(sid)
     fins, ips = _fins_images(sc), video_h3.IMAGES_PAR_SECONDE
-    film = _video_h3_octets(sc.get("film_sans_musique") or sc.get("film")).read_bytes()
+    film = _video_h3_octets(_film_du_scenario(sc)).read_bytes()
     fiches, refs = _photos_des_fiches(sc.get("fiches") or [sc.get("fiche")])
     if not refs:
         raise HTTPException(409, "Les fiches de ce scénario n'ont plus d'image : rien à comparer.")
@@ -6828,6 +6869,10 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
         retourner = {int(i) for i in corps.get("retourner") or []}
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
+    # Le texte tel qu'écrit, avant que l'adaptation du départ et le tableau ne le touchent.
+    initiaux = video_h3.plans_initiaux_du_rejeu(parent.get("plans_initiaux") or parent["plans"],
+                                                parent["plans"], [dict(p) for p in plans])
+    plans = video_h3.plans_avec_coupes_refaites(plans, parent["plans"], parent.get("departs_de_coupe"))
     reglages = dict(parent.get("reglages") or {"fiche": parent.get("fiche"), "fiches": parent.get("fiches")})
     for cle in ("decor", "plan_par_plan", "invite_legere"):   # se posent aussi sur un rejeu (02/10)
         if cle in corps:
@@ -6868,7 +6913,9 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, tenues=tenues, repris=[i + 1 for i in repris],
                             regles=rapport, force=forcer, ou=ou, adaptations=adaptations,
-                            plans_initiaux=parent.get("plans_initiaux") or parent["plans"], objets_clefs=objets)
+                            plans_initiaux=initiaux, objets_clefs=objets,
+                            ambiance_plans_db=(parent.get("ambiance_plans_db")
+                                               if len(parent.get("ambiance_plans_db") or []) == len(plans) else None))
 
 
 async def _adapter_departs(plans: list, film, fins: list, repris) -> list:
@@ -6910,13 +6957,17 @@ async def _tableaux_a_jour(plans: list, anciens: list, repris) -> list:
     {plan, erreur}]. Un tableau illisible garde l'ancien, et le dit."""
     notes = []
     for i, p in enumerate(plans):
-        avant = anciens[i].get("image_paroles") if i < len(anciens) and isinstance(anciens[i], dict) else None
-        if i in repris or not p.get("elements") or avant is None \
+        ancien = anciens[i] if i < len(anciens) and isinstance(anciens[i], dict) else {}
+        avant = ancien.get("image_paroles")
+        # Un tableau vidé par le client repart de l'ancien (02/10, plan 6a : texte changé,
+        # tableau retiré, plan tourné et jugé sans tableau).
+        base = p.get("elements") or ancien.get("elements")
+        if i in repris or not base or avant is None \
                 or " ".join(str(avant).split()) == " ".join(p["image_paroles"].split()):
             continue
         try:
             tableau = video_h3.lire_tableau_a_jour(await _chat_du_studio(
-                video_h3.consigne_tableau_a_jour(p["image_paroles"], p["elements"]), "la mise à jour du tableau",
+                video_h3.consigne_tableau_a_jour(p["image_paroles"], base), "la mise à jour du tableau",
                 modele=video_h3.MODELE_JUGE))
         except (ValueError, HTTPException) as exc:
             notes.append({"plan": i + 1, "erreur": str(getattr(exc, "detail", exc))})
@@ -7108,7 +7159,9 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
     neuve part."""
     sc = video_h3.scenario_lire(sid)
     plan = sc["plans"][i]
-    note = {"plan": i + 1, "depart": None, "garde": plan.get("image_depart"), "note": ""}
+    # `decoupage` : l'image d'avant, pour qu'un rejeu qui la renvoie ne retourne pas le plan (bug 18).
+    note = {"plan": i + 1, "depart": None, "garde": plan.get("image_depart"), "decoupage": plan.get("image_depart"),
+            "note": ""}
     try:
         chemin = _video_h3_octets(precedent)
         if not chemin:
@@ -7298,20 +7351,15 @@ def run_scenario_h3(sid: str, a_tourner: list):
             video_h3.scenario_noter(sid, fins_images=fins)
         if en_attente is not None:
             precedent = poser_en_attente(len(a_tourner))
-        musique = video_h3.scenario_lire(sid).get("musique")
-        if musique:
-            k = musique["a_partir_du_plan"]
-            # Le film recollé à la fin du plan k-1 dure ce que la musique attend.
-            debut = fins[k - 2] / ips if k > 1 else 0.0
-            try:
-                sans = precedent
-                precedent = _mettre_musique(sans, musique["chanson"], debut, 0.3)
-            except (ValueError, montage.MontageImpossible, HTTPException) as exc:
-                video_h3.scenario_noter(sid, etat="échoué", film=sans,
-                                        erreur="Film tourné, mais la musique n'a pas pu être posée : "
-                                        + str(getattr(exc, "detail", exc)))
-                return
-            video_h3.scenario_noter(sid, film_sans_musique=sans)
+        precedent = _egaliser_scenario(sid, precedent, fins, ips,
+                                       video_h3.scenario_lire(sid).get("ambiance_plans_db"))
+        try:
+            precedent = _musique_du_scenario(sid, precedent, fins, ips)
+        except (ValueError, montage.MontageImpossible, HTTPException) as exc:
+            video_h3.scenario_noter(sid, etat="échoué", film=precedent,
+                                    erreur="Film tourné, mais la musique n'a pas pu être posée : "
+                                    + str(getattr(exc, "detail", exc)))
+            return
         video_h3.scenario_noter(sid, etat="réussi", film=precedent)
     finally:
         _SCENARIOS_VIVANTS.discard(sid)
@@ -7355,6 +7403,41 @@ def video_h3_scenario(sid: str, authorization: Optional[str] = Header(default=No
     if sc.get("film"):
         sc["video_url"] = f"/video/jobs/{sc['film']}/fichier?cle={jeton_video(sc['film'])}"
     return sc
+
+
+@app.post("/video-h3/scenario/{sid}/ambiance")
+async def video_h3_scenario_ambiance(sid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """{plans_db: [dB par plan]} : le fond sonore refait depuis le film brut, avec un réglage à la
+    main par plan (propriétaire, 02/10 : « un bouton d'ajustement manuel pour chaque clip si
+    besoin »), puis la musique reposée. Rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    sc = _scenario_tourne(sid)
+    if sid in _SCENARIOS_VIVANTS:
+        raise HTTPException(409, "Le scénario tourne encore : réglez le fond quand il est fini.")
+    try:
+        ajustements = montage.ajustements_valides(corps.get("plans_db"), len(sc["plans"]))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    fins, ips = _fins_images(sc), video_h3.IMAGES_PAR_SECONDE
+    brut = _film_du_scenario(sc)
+    video_h3.scenario_noter(sid, ambiance_plans_db=ajustements)
+    film = await asyncio.to_thread(_egaliser_scenario, sid, brut, fins, ips, ajustements)
+    erreur = (video_h3.scenario_lire(sid).get("ambiance") or {}).get("erreur")
+    if erreur:
+        raise HTTPException(500, "Le fond sonore n'a pas pu être réglé : " + erreur)
+    try:
+        film = await asyncio.to_thread(_musique_du_scenario, sid, film, fins, ips)
+    except (ValueError, montage.MontageImpossible, HTTPException) as exc:
+        raise HTTPException(409, "Fond réglé, mais la musique n'a pas pu être reposée : "
+                                 + str(getattr(exc, "detail", exc))) from exc
+    sc = video_h3.scenario_noter(sid, film=film)
+    return {"ambiance": sc.get("ambiance"), "plans_db": ajustements, "film": film,
+            "video_url": f"/video/jobs/{film}/fichier?cle={jeton_video(film)}"}
 
 
 @app.post("/video-h3/scenario/{sid}/arreter")

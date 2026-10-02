@@ -1673,7 +1673,7 @@ def test_une_coupe_apres_un_plan_tourne_part_de_sa_derniere_image(h3, monkeypatc
     assert v.CONSIGNE_COUPE % 2 in demandes[-1]["prompt"] and "Délicieux" not in demandes[-1]["prompt"]
     assert "the saucer : in the background, right of the frame" in demandes[-1]["prompt"]
     neuve = sc["plans"][1]["image_depart"]
-    assert neuve != decoupage and sc["departs_de_coupe"] == [{"plan": 2, "depart": neuve, "garde": neuve, "note": ""}]
+    assert neuve != decoupage and sc["departs_de_coupe"] == [{"plan": 2, "depart": neuve, "garde": neuve, "decoupage": decoupage, "note": ""}]
     assert controles and controles[-1][0] == 1
     assert len(tournes) == 2 and fils[0][1][1]["payload"]["depart_reference"] == JPG   # l'image neuve part
     # L'image du Studio en panne au tournage (02/10, film 4, plan 5 : HTTP 503) : redemandée,
@@ -2719,7 +2719,10 @@ def test_rejouer_ne_retourne_que_le_plan_change_et_repose_la_musique(h3, monkeyp
     r = c.post(f"/video-h3/scenario/{sid}/rejouer", headers=CLE, json={"plans": nouveaux})
     assert r.status_code == 200, r.text
     assert r.json()["repris"] == [1, 3] and r.json()["parent"] == sid
-    assert r.json()["plans_initiaux"] == plans
+    # Le plan au texte changé est jugé sur son NOUVEAU texte (bug du 02/10, plan 6a) ; les autres, sur l'origine.
+    initiaux = r.json()["plans_initiaux"]
+    assert initiaux[0] == plans[0] and initiaux[2] == plans[2]
+    assert initiaux[1]["image_paroles"] == "Léa, en manteau rouge, répond « Non. »"
     vrai(*fils[0])
     sc = v.scenario_lire(r.json()["id"])
     assert sc["etat"] == "réussi", sc["erreur"]
@@ -5837,3 +5840,229 @@ def test_une_voix_dans_le_raccord_est_tue_avant_la_suite(h3, monkeypatch):
     assert base64.b64decode(raccord) == b"MUET"
     monkeypatch.setattr(h3.montage, "passages_de_voix", lambda video: [])
     assert base64.b64decode(h3._derniere_et_raccord(b"FILM", b"IMAGE")[1]) == b"RACCORD"
+
+
+# --- Ambiance égale d'un plan à l'autre (02/10, film 4 : « tu mets ces réglages en automatique ») ---
+
+def _trois_plans():
+    # Trois plans : eau forte (-26 dB, 3 s), silence (-73 dB, 5 s, une réplique au milieu), eau (-38 dB, 5 s).
+    amb = [-26.0] * 30 + [-73.0] * 50 + [-38.0] * 50
+    voix = [-60.0] * 130
+    for k in range(50, 61):
+        voix[k] = -20.0
+    return amb, voix, [30, 80, 130]
+
+
+def test_l_ambiance_trop_forte_est_baissee_et_la_muette_completee_hors_paroles(h3):
+    m = h3.montage
+    amb, voix, bornes = _trois_plans()
+    d = m.regler_ambiance(amb, voix, bornes)
+    # Référence : le plan le plus fort, AMB_RETRAIT_DB en retrait (12 dB, choix du propriétaire) ;
+    # le plan au-dessus est baissé (borné à AMB_BAISSE_MAX_DB), les autres ne bougent pas.
+    ref = -26.0 - m.AMB_RETRAIT_DB
+    assert m.AMB_RETRAIT_DB == 12.0 and d["reference_db"] == ref
+    assert [p["gain_db"] for p in d["plans"]] == [max(-m.AMB_BAISSE_MAX_DB, ref + 26.0), 0.0, 0.0]
+    assert d["parole"][55] and d["parole"][48] and not d["parole"][45] and not d["parole"][10]
+    # La nappe vient du plus long passage sans paroles au niveau visé : le plan 3.
+    k0, k1 = d["source"]
+    assert (k0, k1) == (80, 130) and not any(d["parole"][k0:k1])
+    # Elle comble le plan muet, baissée sous la réplique, et rien là où le fond est déjà au niveau.
+    assert d["nappe"][70] == pytest.approx(1.0, abs=0.02)
+    assert d["nappe"][55] == pytest.approx(m.AMB_SOUS_VOIX, abs=0.02)
+    assert d["nappe"][10] == pytest.approx(0.0, abs=0.01)
+    assert d["nappe"][110] == pytest.approx(0.0, abs=0.01)
+
+
+def test_le_fond_de_chaque_plan_se_regle_a_la_main(h3):
+    """Propriétaire, 02/10 : « un bouton d'ajustement manuel pour chaque clip si besoin »."""
+    m = h3.montage
+    amb, voix, bornes = _trois_plans()
+    d = m.regler_ambiance(amb, voix, bornes, [0, 6, -6])
+    ref = d["reference_db"]
+    assert [p["vise_db"] for p in d["plans"]] == [ref, ref + 6, ref - 6]
+    # Plan 2 monté de 6 dB : la nappe double ; plan 3 baissé de 6 dB.
+    assert d["nappe"][70] == pytest.approx(10 ** (6 / 20), abs=0.05)
+    assert d["plans"][2]["gain_db"] == -6.0
+    # Un réglage manquant vaut 0 ; hors bornes ou illisible : refusé.
+    assert m.ajustements_valides([3], 3) == [3.0, 0.0, 0.0]
+    for faux in ([0, 0, 0, 0], [99], ["fort"], [float("nan")]):
+        with pytest.raises(ValueError):
+            m.ajustements_valides(faux, 3)
+
+
+def test_la_nappe_ne_se_prend_jamais_sur_une_replique(h3):
+    m = h3.montage
+    amb = [-30.0] * 100
+    voix = [-60.0] * 100
+    for k in list(range(5, 15)) + list(range(60, 70)):   # deux répliques dans l'unique plan
+        voix[k] = -10.0
+    d = m.regler_ambiance(amb, voix, [100])
+    k0, k1 = d["source"]
+    assert not any(d["parole"][k0:k1]) and (k0, k1) == (18, 57)
+
+
+def test_sans_ambiance_rien_n_est_touche(h3):
+    m = h3.montage
+    d = m.regler_ambiance([-80.0] * 100, [-60.0] * 100, [50, 100])
+    assert d["reference_db"] is None and d["source"] is None
+    assert [p["gain_db"] for p in d["plans"]] == [0.0, 0.0] and not any(d["nappe"])
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_l_ambiance_egalisee_garde_les_images_et_rapproche_les_plans(h3, tmp_path):
+    m = h3.montage
+    film = tmp_path / "film.mp4"
+    # Deux plans de 3 s : un bruit d'eau fort, puis presque rien.
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=24:d=6",
+                    "-f", "lavfi", "-i", "anoisesrc=a=0.2:d=3:seed=1", "-f", "lavfi",
+                    "-i", "anoisesrc=a=0.002:d=3:seed=2", "-filter_complex", "[1:a][2:a]concat=n=2:v=0:a=1[a]",
+                    "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac", "-ar", "48000", "-ac", "2",
+                    str(film)], check=True)
+    egal, rapport = m.egaliser_ambiance(film.read_bytes(), [3.0, 6.0])
+    sortie = tmp_path / "egal.mp4"
+    sortie.write_bytes(egal)
+    assert m.images(sortie) == m.images(film)
+    baisse = -min(m.AMB_RETRAIT_DB, m.AMB_BAISSE_MAX_DB)
+    assert rapport["plans"][0]["gain_db"] == baisse and rapport["plans"][1]["gain_db"] == 0.0
+    assert rapport["nappe_depuis_s"] is not None
+    avant = m._niveaux(m._pcm(film, m.AMB_BANDE, 1, m.AMB_TAUX), m.AMB_PAS)
+    apres = m._niveaux(m._pcm(sortie, m.AMB_BANDE, 1, m.AMB_TAUX), m.AMB_PAS)
+    ecart_avant = m._mediane(avant[5:25]) - m._mediane(avant[35:55])
+    ecart_apres = m._mediane(apres[5:25]) - m._mediane(apres[35:55])
+    assert ecart_avant > 30 and abs(ecart_apres) < 3
+
+
+def test_le_scenario_fini_egalise_son_ambiance_et_garde_le_film_brut(h3, monkeypatch, tmp_path):
+    v = h3.video_h3
+    sid = "a" * 32
+    v.scenario_ecrire({"id": sid, "etat": "en cours", "erreur": "", "plans": [], "travaux": ["b" * 32]})
+    brut = tmp_path / "brut.mp4"
+    brut.write_bytes(b"BRUT")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: brut)
+    monkeypatch.setattr(h3, "read_job", lambda jid: {"titre": "Leila", "video": {"plans": 2}})
+    vus, faits = [], []
+    rapport = {"reference_db": -33.9, "plans": []}
+    monkeypatch.setattr(h3.montage, "egaliser_ambiance", lambda f, b, aj=None: vus.append((f, b)) or (b"EGAL", rapport))
+    monkeypatch.setattr(h3, "_film_h3", lambda film, video, titre, moteur="": faits.append((film, video)) or "c" * 32)
+    assert h3._egaliser_scenario(sid, "b" * 32, [124, 248], 24.0) == "c" * 32
+    assert vus == [(b"BRUT", [124 / 24, 248 / 24])]
+    assert faits[0][0] == b"EGAL" and faits[0][1]["mode"] == "ambiance" and faits[0][1]["clips"] == ["b" * 32]
+    sc = v.scenario_lire(sid)
+    assert sc["ambiance"] == rapport and sc["film_sans_ambiance"] == "b" * 32
+    # Un rejeu reprend ses plans sur le film brut : l'ambiance ne s'égalise qu'une fois.
+    assert h3._film_du_scenario(dict(sc, film="c" * 32, film_sans_musique="c" * 32)) == "b" * 32
+    # Un échec n'arrête pas le film : le brut reste, l'erreur est notée.
+    def rate(f, b, aj=None):
+        raise h3.montage.MontageImpossible("La lecture du son du film a échoué.")
+    monkeypatch.setattr(h3.montage, "egaliser_ambiance", rate)
+    assert h3._egaliser_scenario(sid, "b" * 32, [124], 24.0) == "b" * 32
+    assert v.scenario_lire(sid)["ambiance"] == {"erreur": "La lecture du son du film a échoué."}
+
+
+def test_le_fond_se_refait_a_la_main_depuis_le_film_brut_et_la_musique_revient(h3, monkeypatch, tmp_path):
+    """Propriétaire, 02/10 : « un bouton d'ajustement manuel pour chaque clip si besoin »."""
+    v = h3.video_h3
+    sid, _ = _scenario_tourne(h3, monkeypatch, tmp_path)
+    v.scenario_noter(sid, film_sans_ambiance="b" * 32, film_sans_musique="e" * 32)
+    film = tmp_path / "brut.mp4"
+    film.write_bytes(b"BRUT")
+    lus, egalises, musiques = [], [], []
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: lus.append(jid) or film)
+    monkeypatch.setattr(h3, "read_job", lambda jid: {"titre": "Film", "video": {}})
+    rapport = {"reference_db": -40.0, "plans": []}
+    monkeypatch.setattr(h3.montage, "egaliser_ambiance",
+                        lambda f, b, aj=None: egalises.append(aj) or (b"EGAL", rapport))
+    monkeypatch.setattr(h3, "_film_h3", lambda *a, **k: "a" * 32)
+    monkeypatch.setattr(h3, "_mettre_musique", lambda jid, *a: musiques.append(jid) or "m" * 32)
+    c = client(h3)
+    for _ in range(2):
+        r = c.post(f"/video-h3/scenario/{sid}/ambiance", headers=CLE, json={"plans_db": [0, -3]})
+        assert r.status_code == 200, r.text
+    # Chaque fois depuis le film BRUT (rien ne s'accumule), le réglage complété à un par plan.
+    assert set(lus) == {"b" * 32}
+    assert egalises == [[0.0, -3.0, 0.0]] * 2
+    assert musiques == ["a" * 32] * 2
+    sc = v.scenario_lire(sid)
+    assert sc["film"] == "m" * 32 and sc["film_sans_ambiance"] == "b" * 32 and sc["film_sans_musique"] == "a" * 32
+    assert sc["ambiance_plans_db"] == [0.0, -3.0, 0.0] and r.json()["film"] == "m" * 32
+    r = c.post(f"/video-h3/scenario/{sid}/ambiance", headers=CLE, json={"plans_db": [40]})
+    assert r.status_code == 400 and "dB" in r.json()["detail"]
+    page = c.get("/video-h3").text
+    assert 'value="fond"' in page and "function actionFond" in page and 'id="fond_plans"' in page
+
+
+def test_un_plan_au_texte_change_est_juge_sur_son_nouveau_texte_et_son_tableau_vide_se_refait(h3, monkeypatch):
+    """Bug du 02/10, film 4, plan 6a : réécrit au rejeu, il était jugé sur le texte du plan 6
+    d'origine (`plans_initiaux` hérité) ; son tableau, vidé, n'était pas réécrit."""
+    v = h3.video_h3
+    initiaux = [{"image_paroles": "Plan 1 tel qu'écrit"}, {"image_paroles": "Tyler part, Leila salue."}]
+    anciens = [{"image_paroles": "Plan 1 adapté par le Studio"}, {"image_paroles": "Tyler part, Leila salue."}]
+    ecrits = [{"image_paroles": "Plan 1 adapté par le Studio"},
+              {"image_paroles": "Leila regarde la photo et dit « Merci ! »"},
+              {"image_paroles": "Un plan de plus"}]
+    sortie = v.plans_initiaux_du_rejeu(initiaux, anciens, ecrits)
+    # Même texte : l'origine héritée ; texte changé ou plan neuf : le texte écrit.
+    assert [p["image_paroles"] for p in sortie] == ["Plan 1 tel qu'écrit", "Leila regarde la photo et dit « Merci ! »",
+                                                    "Un plan de plus"]
+    tableau = [{"nom": "Leila", "debut": "sitting", "mouvement": "looks", "fin": "sitting"}]
+    demandes = []
+
+    async def chat(consigne, quoi, images=None, modele=None):
+        demandes.append(consigne)
+        return json.dumps({"elements": tableau})
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    ancien_tableau = [{"nom": "Tyler", "debut": "astride", "mouvement": "rides away", "fin": "gone"}]
+    plans = [dict(ecrits[1], elements=[])]
+    notes = asyncio.run(h3._tableaux_a_jour(plans, [dict(anciens[1], elements=ancien_tableau)], set()))
+    assert plans[0]["elements"] == tableau and "rides away" in demandes[0] and notes[0]["plan"] == 1
+
+
+def test_une_reaction_a_l_action_principale_n_est_pas_une_seconde_action(h3):
+    """02/10, film 4, plan 6b : « Tyler part à vélo, Leila le salue et lui lance sa réplique »,
+    refusé trois fois (« deux actions »), tourné forcé et réussi. Propriétaire : « on changera
+    la règle si ça passe à nouveau ». Deux actions indépendantes restent deux plans."""
+    v = h3.video_h3
+    plans = [{"image_paroles": "Tyler rides away; Leila waves and calls « À demain ! »", "ambiance": "",
+              "enchainement": "coupe"}]
+    for texte in (v.TABLEAU, v.consigne_continuite(plans, "Histoire")):
+        assert "she waves and calls goodbye: ONE main action" in texte
+        assert "umbrella" in texte
+
+
+def test_un_rejeu_qui_renvoie_l_image_du_decoupage_ne_retourne_pas_la_coupe(h3):
+    """Bug 18 du 02/10, film 4 : le plan 5 repartait chez Modal parce que le client renvoyait
+    l'image du découpage, que le tournage avait remplacée par une image refaite d'après le film."""
+    v = h3.video_h3
+    anciens = [{"image_paroles": "A", "ambiance": "", "enchainement": "coupe", "image_depart": "refaite",
+                "description_depart": "d'après le film"}]
+    notes = [{"plan": 1, "depart": "refaite", "garde": "refaite", "decoupage": "decoupe", "note": ""}]
+    client = [{"image_paroles": "A", "ambiance": "", "enchainement": "coupe", "image_depart": "decoupe",
+               "description_depart": "du découpage"}]
+    assert v.plans_a_reprendre(anciens, client) == []          # avant : retourné pour rien
+    remis = v.plans_avec_coupes_refaites(client, anciens, notes)
+    assert remis[0]["image_depart"] == "refaite" and v.plans_a_reprendre(anciens, remis) == [0]
+    assert client[0]["image_depart"] == "decoupe"              # la liste du client n'est pas touchée
+    # Une autre image choisie par le client, ou une coupe non refaite : rien ne change.
+    autre = [dict(client[0], image_depart="neuve")]
+    assert v.plans_avec_coupes_refaites(autre, anciens, notes)[0]["image_depart"] == "neuve"
+    rate = [dict(notes[0], depart=None, garde="decoupe")]
+    assert v.plans_avec_coupes_refaites(client, anciens, rate)[0]["image_depart"] == "decoupe"
+
+
+def test_une_suite_trop_longue_est_refusee_avant_le_premier_sou(h3):
+    """Bug 20 du 02/10, film 4, plan 6 : le contrôle mesurait l'invite d'une suite SANS l'en-tête
+    de suite ni les lignes <Video 1> ; acceptée, puis refusée au tournage à 4 015 caractères."""
+    v = h3.video_h3
+    lea = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    base = {"mode": "references", "fiches": [lea], "langues": {lea: "French"}, "ambiance": "", "coupe_s": 0,
+            "images": [], "longueur": 124, "visages_seuls": False}
+    court = dict(base, image_paroles="Léa sourit.")
+    nu = len(v.preparer(dict(court, depart_reference=JPG))["resume_public"]["invite"])
+    vrai = len(v.controler_suite(court)["resume_public"]["invite"])
+    assert v.SUITE_DEBUT[:40] in v.controler_suite(court)["resume_public"]["invite"] and vrai > nu
+    # Un texte qui tient nu, mais pas en suite : refusé dès le contrôle, avec sa longueur.
+    long = dict(base, image_paroles="Léa sourit. " + "x" * (4000 - nu - (vrai - nu) // 2))
+    v.preparer(dict(long, depart_reference=JPG))
+    with pytest.raises(ValueError, match=r"Invite trop longue : \d+ caractères, 4 000 au plus"):
+        v.controler_suite(long)

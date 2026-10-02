@@ -13,10 +13,13 @@ presente comme prolonge.
 """
 from __future__ import annotations
 
+import array
+import math
 import re
 import shutil
 import subprocess
 import tempfile
+import wave
 from pathlib import Path
 
 DELAI_S = 120
@@ -272,6 +275,231 @@ def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0
             raise MontageImpossible("La pose de la musique a changé le nombre d'images : "
                                     "le film n'est pas rendu.")
         return sortie.read_bytes()
+
+
+# Ambiance égale d'un plan à l'autre (02/10/2026, film 4 ; propriétaire : « le niveau sonore de
+# la fontaine est inégal », « à 20 s avant la fin le niveau sonore augmente », puis « tu mets
+# ces réglages en automatique dans le studio »). Chaque plan H3 fabrique son propre son :
+# mesuré sur le film 4, bande 4-10 kHz (l'eau ; la voix y pèse peu), de -73 dB (plan 2, fin
+# des plans 3 et 6 : silence) à -26 dB (plan 4). Deux gestes, réglés à la main puis repris ici :
+#   0. la référence : l'ambiance du plan qui l'a le plus fort, AMB_RETRAIT_DB en retrait (le réglage
+#      fait à la main : plan 4, -29,9 dB → -33,9). Pas la médiane des plans : le plan 1 (pigeons,
+#      peu d'eau, -49 dB) la tirait si bas que le plan 4, baissé de 10 dB, devenait un creux ;
+#   1. un plan dont l'ambiance dépasse la référence de plus de AMB_TROP_FORT_DB est baissé à
+#      la référence (plan 4 : -4 dB), avec des fondus ;
+#   2. là où l'ambiance manque, une nappe la complète jusqu'à la référence ; la nappe est le
+#      VRAI son du film (le plus long passage sans paroles d'un plan au niveau de référence),
+#      répété en fondu, et baissée sous la parole (AMB_SOUS_VOIX ; sans cela Whisper lisait
+#      « e-suit » pour « instant »).
+# Rien n'est jamais monté : un plan trop bas est complété, pas amplifié (sa voix resterait).
+#   3. un grondement sous AMB_COUPE_BAS_HZ est retiré de tout le film (propriétaire, 02/10 : « le
+#      bruit de fond augmente brutalement » ; mesuré : plan 5 à -16,8 dB sous 150 Hz, les autres
+#      de -27 à -44 ; hors de la bande d'eau, rien d'autre ne le voyait). Les voix d'enfants
+#      sont au-dessus ;
+#   4. chaque plan garde un réglage à la main (`ajustements_db`, ± AMB_AJUSTEMENT_MAX_DB) : son
+#      fond visé est la référence + son ajustement (« un bouton d'ajustement manuel pour chaque
+#      clip si besoin »).
+AMB_COUPE_BAS_HZ = 120
+AMB_AJUSTEMENT_MAX_DB = 12.0
+AMB_BANDE = "highpass=f=4000,lowpass=f=10000"
+AMB_TAUX, AMB_PAS = 24000, 2400            # mesures : 100 ms
+AMB_MIX_TAUX = 48000
+# La parole : la bande voix nettement au-dessus de ce que l'eau y met déjà (~4 dB de plus que la
+# bande d'eau, mesuré plan 4 du film 4), ou du plancher du film. « 12 dB au-dessus de la médiane »
+# ne couvrait que 4 % des mots situés par Whisper sur le film 4 entier (dialogue partout : la
+# médiane EST la parole) ; la nappe masquait alors « notebook » et « instant ». Celle-ci : 92 %.
+AMB_EAU_DANS_VOIX_DB = 4.0
+AMB_VOIX_DB = 9.0
+AMB_VOIX_MARGE = 3                         # ± 0,3 s autour de la parole
+# ~ -16 dB sous la parole. 0,35 (-9 dB) masquait encore « notebook » (Whisper : « le nôtre ») au
+# plan 6b du film 4 ; à 0,15, toutes les répliques du film reviennent comme sur le son brut.
+AMB_SOUS_VOIX = 0.15
+# 12 dB sous le plan le plus fort : choix du propriétaire à l'écoute (02/10, film 4 : « le niveau du
+# background est trop fort » à 4 dB ; trois versions comparées, « moins 8 dB, mets-le par défaut »).
+AMB_RETRAIT_DB = 12.0
+AMB_TROP_FORT_DB, AMB_BAISSE_MAX_DB = 1.0, 10.0
+AMB_SANS_DB = -55.0                        # un plan plus bas n'a pas d'ambiance : il ne compte pas
+AMB_SOURCE_MIN_S, AMB_SOURCE_MAX_S = 2.0, 8.0
+AMB_FONDU_S = 0.5
+AMB_NAPPE_MAX = 1.5
+
+
+def _db(x: float) -> float:
+    return 20 * math.log10(x) if x > 1e-9 else -180.0
+
+
+def _mediane(valeurs: list) -> float:
+    v = sorted(valeurs)
+    return v[len(v) // 2] if v else -180.0
+
+
+def ajustements_valides(ajustements_db, plans: int) -> list:
+    """Un réglage à la main par plan, en dB, borné ; ValueError si ce n'est pas des nombres."""
+    ajustements = list(ajustements_db or [])
+    if len(ajustements) > plans:
+        raise ValueError("Un réglage du fond par plan, %d au plus." % plans)
+    try:
+        ajustements = [float(x or 0) for x in ajustements]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Le réglage du fond se donne en dB, un nombre par plan.") from exc
+    if any(not math.isfinite(x) or abs(x) > AMB_AJUSTEMENT_MAX_DB for x in ajustements):
+        raise ValueError("Le réglage du fond va de -%g à +%g dB." % (AMB_AJUSTEMENT_MAX_DB, AMB_AJUSTEMENT_MAX_DB))
+    return [round(x, 1) for x in ajustements] + [0.0] * (plans - len(ajustements))
+
+
+def regler_ambiance(amb_db: list, voix_db: list, bornes: list, ajustements_db=None) -> dict:
+    """La décision, sans rien lire ni écrire (100 ms par mesure).
+
+    `amb_db`, `voix_db` : niveau de la bande d'ambiance et de la bande voix par pas ;
+    `bornes` : la fin de chaque plan, en pas ; `ajustements_db` : le réglage à la main de
+    chaque plan (son fond visé = référence + réglage). Rend {parole, plans: [{niveau_db, gain_db}],
+    reference_db, source: (k0, k1) ou None, nappe: [gain par pas]}."""
+    n = min(len(amb_db), len(voix_db))
+    plancher = sorted(voix_db[:n])[n // 10] if n else -180.0
+    brut = [voix_db[k] > max(amb_db[k] + AMB_EAU_DANS_VOIX_DB, plancher) + AMB_VOIX_DB for k in range(n)]
+    parole = [any(brut[max(0, k - AMB_VOIX_MARGE):k + AMB_VOIX_MARGE + 1]) for k in range(n)]
+    debuts = [0] + [min(b, n) for b in bornes[:-1]]
+    fins = [min(b, n) for b in bornes]
+    plans = []
+    ajustements = ajustements_valides(ajustements_db, len(bornes))
+    for a, b, aj in zip(debuts, fins, ajustements):
+        calmes = [amb_db[k] for k in range(a, b) if not parole[k]]
+        plans.append({"niveau_db": round(_mediane(calmes), 1) if len(calmes) >= 10 else None,
+                      "ajustement_db": aj})
+    vivants = [p["niveau_db"] for p in plans if p["niveau_db"] is not None and p["niveau_db"] > AMB_SANS_DB]
+    if not vivants:
+        return {"parole": parole, "plans": [dict(p, gain_db=0.0, vise_db=None) for p in plans], "reference_db": None,
+                "source": None, "nappe": [0.0] * n}
+    ref = max(vivants) - AMB_RETRAIT_DB
+    for p in plans:
+        lv, p["vise_db"] = p["niveau_db"], round(ref + p["ajustement_db"], 1)
+        trop = lv is not None and lv > p["vise_db"] + AMB_TROP_FORT_DB
+        p["gain_db"] = round(max(-AMB_BAISSE_MAX_DB, p["vise_db"] - lv), 1) if trop else 0.0
+    gain_pas, vise_pas = [0.0] * n, [ref] * n
+    for p, a, b in zip(plans, debuts, fins):
+        for k in range(a, b):
+            gain_pas[k], vise_pas[k] = p["gain_db"], p["vise_db"]
+    # La source : le plus long passage sans paroles d'un plan au niveau de référence.
+    source, longueur = None, 0
+    min_pas, max_pas = round(AMB_SOURCE_MIN_S * 10), round(AMB_SOURCE_MAX_S * 10)
+    for p, a, b in zip(plans, debuts, fins):
+        lv = p["niveau_db"]
+        if lv is None or abs(lv + p["gain_db"] - p["vise_db"]) > 3.0:
+            continue
+        k = a
+        while k < b:
+            if parole[k]:
+                k += 1
+                continue
+            j = k
+            while j < b and not parole[j]:
+                j += 1
+            if j - k > longueur:
+                source, longueur = (k, min(j, k + max_pas)), j - k
+            k = j
+    if source is None or longueur < min_pas:
+        return {"parole": parole, "plans": plans, "reference_db": round(ref, 1), "source": None,
+                "nappe": [0.0] * n}
+    k0, k1 = source
+    # La nappe est le son BRUT de la source : le réglage de son propre plan ne l'affaiblit pas ailleurs.
+    niveau_source = _mediane([amb_db[k] for k in range(k0, k1)])
+    unite = 10 ** (niveau_source / 20)
+    nappe = []
+    for k in range(n):
+        cible = 10 ** (vise_pas[k] / 20)
+        o = 10 ** ((amb_db[k] + gain_pas[k]) / 20)
+        g = math.sqrt(max(0.0, cible * cible - o * o)) / unite
+        plafond = AMB_NAPPE_MAX * 10 ** (max(0.0, vise_pas[k] - ref) / 20)
+        nappe.append(min(g, plafond) * (AMB_SOUS_VOIX if parole[k] else 1.0))
+    lisse = [sum(nappe[max(0, k - 2):k + 3]) / len(nappe[max(0, k - 2):k + 3]) for k in range(n)]
+    return {"parole": parole, "plans": plans, "reference_db": round(ref, 1), "source": source,
+            "nappe": lisse}
+
+
+def _pcm(chemin: Path, filtre: str, canaux: int, taux: int) -> array.array:
+    fini = subprocess.run([_ffmpeg(), "-v", "error", "-i", str(chemin), "-vn", "-af", filtre, "-ac", str(canaux),
+                           "-ar", str(taux), "-f", "s16le", "-"], capture_output=True, timeout=DELAI_S)
+    if fini.returncode != 0:
+        raise MontageImpossible("La lecture du son du film a échoué.")
+    a = array.array("h")
+    a.frombytes(fini.stdout[:len(fini.stdout) // 2 * 2])
+    return a
+
+
+def _niveaux(ech: array.array, pas: int) -> list:
+    return [_db(math.sqrt(sum(x * x for x in ech[i:i + pas]) / pas) / 32768)
+            for i in range(0, len(ech) - pas + 1, pas)]
+
+
+def egaliser_ambiance(film: bytes, bornes_s: list, ajustements_db=None) -> tuple:
+    """Le film, son ambiance égalisée d'un plan à l'autre (voir AMB_*), et le rapport.
+    Les images ne sont pas réencodées. `bornes_s` : la fin de chaque plan, en secondes ;
+    `ajustements_db` : le réglage à la main du fond de chaque plan."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, son, sortie = Path(dossier, "film.mp4"), Path(dossier, "son.wav"), Path(dossier, "egal.mp4")
+        a.write_bytes(film)
+        amb = _niveaux(_pcm(a, AMB_BANDE, 1, AMB_TAUX), AMB_PAS)
+        voix = _niveaux(_pcm(a, VOIX_BANDE.rstrip(","), 1, AMB_TAUX), AMB_PAS)
+        bornes = [round(b * 10) for b in bornes_s]
+        d = regler_ambiance(amb, voix, bornes, ajustements_db)
+        orig = _pcm(a, "highpass=f=%d" % AMB_COUPE_BAS_HZ, 2, AMB_MIX_TAUX)
+        cadres = len(orig) // 2
+        par_pas = AMB_MIX_TAUX // 10
+        # Le gain de chaque plan, avec des fondus de AMB_FONDU_S de part et d'autre de ses bornes.
+        g_plan = [0.0] * len(d["nappe"])
+        debuts = [0] + bornes[:-1]
+        for p, b0, b1 in zip(d["plans"], debuts, bornes):
+            for k in range(b0, min(b1, len(g_plan))):
+                g_plan[k] = p["gain_db"]
+        f = round(AMB_FONDU_S * 10)
+        lin = [10 ** (x / 20) for x in g_plan]
+        lin = [sum(lin[max(0, k - f // 2):k + f // 2 + 1]) / len(lin[max(0, k - f // 2):k + f // 2 + 1])
+               for k in range(len(lin))]
+        nappe = d["nappe"]
+        if d["source"]:
+            s0, s1 = d["source"][0] * par_pas, d["source"][1] * par_pas
+            src = orig[2 * s0:2 * s1]
+            fondu = min(round(AMB_FONDU_S * AMB_MIX_TAUX), (s1 - s0) // 3)
+        sortie_pcm = array.array("h", bytes(len(orig) * 2))
+        lg = len(src) // 2 - fondu if d["source"] else 1
+        for i in range(cadres):
+            k = min(i // par_pas, len(lin) - 1)
+            go = lin[k]
+            gn = nappe[k] if d["source"] else 0.0
+            for c in (0, 1):
+                v = orig[2 * i + c] * go
+                if gn:
+                    # La boucle : la fin de chaque tour se fond dans le début du suivant.
+                    t = i % lg
+                    x = src[2 * t + c]
+                    if t < fondu and i >= lg:
+                        w = t / fondu
+                        x = x * w + src[2 * (t + lg) + c] * (1 - w)
+                    v += x * gn
+                sortie_pcm[2 * i + c] = max(-32768, min(32767, int(v)))
+        with wave.open(str(son), "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(AMB_MIX_TAUX)
+            w.writeframes(sortie_pcm.tobytes())
+        _lancer(["-i", str(a), "-i", str(son), "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
+                 "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(sortie)],
+                "L'égalisation de l'ambiance")
+        if images(sortie) != images(a):
+            raise MontageImpossible("L'égalisation de l'ambiance a changé le nombre d'images : "
+                                    "le film n'est pas rendu.")
+        return sortie.read_bytes(), _rapport_ambiance(d)
+
+
+def _rapport_ambiance(d: dict) -> dict:
+    return {"reference_db": d["reference_db"],
+            "coupe_bas_hz": AMB_COUPE_BAS_HZ,
+            "plans": [{"plan": i + 1, "niveau_db": p["niveau_db"], "gain_db": p["gain_db"],
+                       "ajustement_db": p["ajustement_db"], "vise_db": p.get("vise_db")}
+                      for i, p in enumerate(d["plans"])],
+            "nappe_depuis_s": [round(d["source"][0] / 10, 1), round(d["source"][1] / 10, 1)]
+            if d["source"] else None,
+            "parole_s": round(sum(d["parole"]) / 10, 1)}
 
 
 PASSAGES_MAX = 8
