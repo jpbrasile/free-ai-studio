@@ -6826,15 +6826,17 @@ async def _adapter_departs(plans: list, film, fins: list, repris) -> list:
     notes, video = [], None
     chemin = _video_h3_octets(film) if film else None
     for i, p in enumerate(plans):
+        # Une coupe aussi (02/10, plan 5) : même instant, autre cadrage ; poses et mains recalées.
         if not chemin or not i or i in repris or i - 1 not in repris or i - 1 >= len(fins) \
-                or p["enchainement"] != "suite":
+                or p["enchainement"] not in ("suite", "coupe"):
             continue
         video = video or chemin.read_bytes()
         debut, fin = (fins[i - 2] if i >= 2 else 0), fins[i - 1]
         try:
             images = montage.vignettes(video, sorted({max(debut, fin - 1 - k) for k in (24, 12, 0)}), largeur=640)
             r = video_h3.lire_depart_reel(await _chat_du_studio(
-                video_h3.consigne_depart_reel(i, p["image_paroles"]), "l'adaptation du départ",
+                video_h3.consigne_depart_reel(i, p["image_paroles"], coupe=p["enchainement"] == "coupe"),
+                "l'adaptation du départ",
                 images=[_data_url(x) for x in images], modele=video_h3.MODELE_JUGE), p["image_paroles"])
         except (ValueError, HTTPException, montage.MontageImpossible) as exc:
             notes.append({"plan": i + 1, "erreur": str(getattr(exc, "detail", exc))})
@@ -6870,6 +6872,58 @@ async def _tableaux_a_jour(plans: list, anciens: list, repris) -> list:
             plans[i] = dict(p, elements=tableau)
             notes.append({"plan": i + 1, "tableau": "Tableau des éléments réécrit d'après le texte changé."})
     return notes
+
+
+async def _image_redemandee(demande: dict) -> str:
+    """`_image_du_studio`, redemandée sur panne passagère (COUPE_ESSAIS)."""
+    for essai in range(COUPE_ESSAIS):
+        try:
+            return await _image_du_studio(dict(demande))
+        except HTTPException as exc:
+            if exc.status_code not in (429, 500, 502, 503, 504) or essai == COUPE_ESSAIS - 1:
+                raise
+            await asyncio.sleep(COUPE_PAUSE_S)
+
+
+@app.post("/video-h3/scenario/{sid}/decor")
+async def video_h3_scenario_decor(sid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """La fiche du décor D'APRÈS LE FILM (02/10) : les dernières images des plans tournés,
+    décrites en détail par le juge (gratuit) ; la vue d'ensemble vide et la planche à
+    quatre vues faites par l'image du Studio à partir d'elles. Rend la fiche ; elle se
+    choisit ensuite comme décor du scénario (au rejeu : `decor`)."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    try:
+        sc = video_h3.scenario_lire(sid)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    fins = _fins_images(sc)
+    film = _film_du_scenario(sc)
+    chemin = _video_h3_octets(film) if film and fins else None
+    if not chemin:
+        raise HTTPException(409, "Aucun plan tourné sur ce Studio : la fiche du décor se fait d'après le film.")
+    try:
+        images = montage.vignettes(chemin.read_bytes(), video_h3.images_pour_decor(fins), largeur=1024)
+    except montage.MontageImpossible as exc:
+        raise HTTPException(500, str(exc)) from exc
+    urls = [_data_url(x) for x in images]
+    try:
+        lu = video_h3.lire_decor_du_film(await _chat_du_studio(
+            video_h3.consigne_decor_du_film(len(urls)), "la description du décor", images=urls,
+            modele=video_h3.MODELE_JUGE))
+    except ValueError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    vue, planche = video_h3.demandes_decor_du_film(lu["description"], urls)
+    image_vue = await _image_redemandee(vue)
+    image_planche = await _image_redemandee(planche)
+    nom = " ".join(str((corps or {}).get("nom") or "").split()) if isinstance(corps, dict) else ""
+    fiche = _fiche_ou_400(lambda: video_h3.fiche_creer(nom or lu["nom"], lu["description"], "decor"))
+    _fiche_ou_400(lambda: video_h3.fiche_poser_image(fiche["id"], video_h3.ANGLE_DEPART, image_vue))
+    return _fiche_publique(_fiche_ou_400(lambda: video_h3.fiche_poser_planche(fiche["id"], image_planche)))
 
 
 def _fins_vues(film, fins: list, repris: list) -> dict:
@@ -6980,16 +7034,20 @@ def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
     return note
 
 
+COUPE_ESSAIS, COUPE_PAUSE_S = 3, 20   # l'image d'une coupe, redemandée sur panne passagère
+
+
 def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
     """Une coupe après un plan tourné : son image de départ est refaite depuis la
     DERNIÈRE image de ce plan, retouchée (même lieu, mêmes objets aux mêmes places ;
     cadrage et poses selon le plan), puis contrôlée comme une fin de plan (règles 6 à
     8). Demande du propriétaire, 02/10 (« code le 1 ») : au plan 5 de « Leila et un
     martien », l'image faite au découpage partait du plan 1, et le décor a sauté.
-    Une image refusée ou impossible laisse celle du découpage, et c'est écrit dans
-    `departs_de_coupe` ; le film ne s'arrête (ValueError) que si cette image-là a des
-    fautes d'image au rapport d'avant tournage, hors « tourner quand même ». Rend True
-    si l'image neuve part."""
+    Une panne passagère se redemande (COUPE_ESSAIS). Une image refusée ou impossible
+    est écrite dans `departs_de_coupe` et arrête le film (ValueError) ; avec « tourner
+    quand même » seulement, celle du découpage part (et arrête encore le film si elle a
+    des fautes d'image au rapport d'avant tournage... sauf forcé). Rend True si l'image
+    neuve part."""
     sc = video_h3.scenario_lire(sid)
     plan = sc["plans"][i]
     note = {"plan": i + 1, "depart": None, "garde": plan.get("image_depart"), "note": ""}
@@ -7003,10 +7061,20 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
         fin = montage.derniere_image(chemin.read_bytes())
         decor = None if lieu else video_h3.depart_poser(base64.b64encode(fin).decode())
         ids = [f for f in (sc.get("fiches") or [sc.get("fiche")]) if f]
-        d = asyncio.run(_creer_depart({"texte": video_h3.texte_depart(plan), "fiches": ids, "decor": decor,
-                                       "lieu": lieu,
-                                       "coupe": True, "elements": plan.get("elements") or [],
-                                       "plans": [x["image_paroles"] for x in sc["plans"]], "plan": i + 1}))
+        corps = {"texte": video_h3.texte_depart(plan), "fiches": ids, "decor": decor, "lieu": lieu,
+                 "coupe": True, "elements": plan.get("elements") or [],
+                 "plans": [x["image_paroles"] for x in sc["plans"]], "plan": i + 1}
+        # 02/10, film 4, plan 5 : « Google a refusé la demande d'image (HTTP 503) », une panne
+        # passagère, et la coupe est partie de l'image du découpage (Tyler debout, d'avant les
+        # corrections). Une panne passagère se redemande.
+        for essai in range(COUPE_ESSAIS):
+            try:
+                d = asyncio.run(_creer_depart(dict(corps)))
+                break
+            except HTTPException as exc:
+                if exc.status_code not in (429, 500, 502, 503, 504) or essai == COUPE_ESSAIS - 1:
+                    raise
+                time.sleep(COUPE_PAUSE_S)
         image = video_h3.depart_lire(d["id"])
         note["depart"] = d["id"]
         arret = _controle_derniere_image(sid, i, image)
@@ -7029,6 +7097,12 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
         note["garde"] = d["id"]
     sc = video_h3.scenario_lire(sid)
     video_h3.scenario_noter(sid, departs_de_coupe=(sc.get("departs_de_coupe") or []) + [note])
+    # 02/10, même plan 5 : l'image du découpage date d'avant le tournage et d'avant les textes
+    # corrigés ; elle ne part plus sans « tourner quand même ». Le film s'arrête, et se rejoue.
+    if note["garde"] != note["depart"] and not sc.get("force"):
+        raise ValueError("%s. Le film s'arrête plutôt que de partir de l'image du découpage, faite avant le "
+                         "tournage : rejouez-le, ou relancez avec « tourner quand même »."
+                         % note["note"].replace(", celle du découpage part", ""))
     # L'image du découpage repart : ses fautes d'image, laissées passer avant le tournage
     # parce qu'elle devait être refaite (`_departs_refaits`), arrêtent ici le film.
     fautes = [f for f in regles.non_suivies(sc.get("regles") or [], regles.NUMEROS["depart"]) if f[0] == i + 1]

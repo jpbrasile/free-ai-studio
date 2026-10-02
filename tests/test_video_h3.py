@@ -1675,21 +1675,46 @@ def test_une_coupe_apres_un_plan_tourne_part_de_sa_derniere_image(h3, monkeypatc
     assert neuve != decoupage and sc["departs_de_coupe"] == [{"plan": 2, "depart": neuve, "garde": neuve, "note": ""}]
     assert controles and controles[-1][0] == 1
     assert len(tournes) == 2 and fils[0][1][1]["payload"]["depart_reference"] == JPG   # l'image neuve part
-    # L'image du Studio en panne au tournage : celle du découpage part, et c'est écrit.
+    # L'image du Studio en panne au tournage (02/10, film 4, plan 5 : HTTP 503) : redemandée,
+    # puis le film s'arrête, au lieu de partir de l'image du découpage, faite avant le tournage.
+    pannes = []
 
     async def panne(demande):
+        pannes.append(1)
         raise h3.HTTPException(502, "L'image du Studio n'a rendu aucune image.")
-    monkeypatch.setattr(h3, "_image_du_studio", panne)
+    monkeypatch.setattr(h3, "COUPE_PAUSE_S", 0)
     demandes.clear()
     monkeypatch.setattr(h3, "_image_du_studio", image)
     r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
     sid2, decoupage2 = r.json()["id"], r.json()["plans"][1]["image_depart"]
     monkeypatch.setattr(h3, "_image_du_studio", panne)
+    tournes.clear()
     vrai(*fils[1])
     sc = v.scenario_lire(sid2)
-    assert sc["etat"] == "réussi" and sc["plans"][1]["image_depart"] == decoupage2
+    assert sc["etat"] == "échoué" and "Plan 2" in sc["erreur"] and "rejouez" in sc["erreur"], sc.get("erreur")
+    assert len(pannes) == h3.COUPE_ESSAIS and len(tournes) == 1   # redemandée ; le plan 2 n'est pas tourné
     (note,) = sc["departs_de_coupe"]
     assert note["garde"] == decoupage2 and note["depart"] is None and "aucune image" in note["note"]
+    # Une panne passagère, puis l'image : elle part.
+    reponses = [panne, image]
+
+    async def puis(demande):
+        return await reponses.pop(0)(demande)
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    monkeypatch.setattr(h3, "_image_du_studio", puis)
+    vrai(*fils[2])
+    sc = v.scenario_lire(r.json()["id"])
+    assert sc["etat"] == "réussi" and sc["departs_de_coupe"][0]["note"] == "", sc.get("erreur")
+    # « Tourner quand même » : celle du découpage part, et c'est écrit.
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE,
+                        json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": True})
+    sid4, decoupage4 = r.json()["id"], r.json()["plans"][1]["image_depart"]
+    monkeypatch.setattr(h3, "_image_du_studio", panne)
+    vrai(*fils[3])
+    sc = v.scenario_lire(sid4)
+    assert sc["etat"] == "réussi" and sc["plans"][1]["image_depart"] == decoupage4, sc.get("erreur")
 
 
 def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch, sans_regles, sans_depart_auto, sans_objets_clefs):
@@ -5483,6 +5508,68 @@ def test_la_suite_a_tourner_part_de_la_vraie_fin_du_plan_filme(h3, monkeypatch):
     assert plans[2]["image_paroles"] == p3 and notes == [{"plan": 3, "changements":
                                                           "Le départ écrit correspond déjà à la fin filmée."}]
     assert "when unsure" in v.consigne_depart_reel(2, p3)
+    # 02/10, plan 5 : une COUPE après un plan filmé est recalée aussi, son cadrage écrit gardé.
+    coupe = v.consigne_depart_reel(4, "Wide shot. Tyler holds the camera to his eye.", coupe=True)
+    assert "it is a CUT" in coupe and "Keep its framing exactly" in coupe
+    assert "last second of shot 4" in coupe and "Shot 5: Wide shot." in coupe and "shot 5\"" in coupe
+    assert "CUT" not in v.consigne_depart_reel(2, p3)
+    plans[2] = {"image_paroles": p3, "enchainement": "coupe"}
+    vues = []
+
+    async def chat_coupe(consigne, quoi, images=None, modele=None):
+        vues.append(consigne)
+        return json.dumps({"texte": a_cheval, "changements": "à cheval"})
+    monkeypatch.setattr(h3, "_chat_du_studio", chat_coupe)
+    notes = asyncio.run(h3._adapter_departs(plans, "f" * 32, [243, 481], {0, 1}))
+    assert "it is a CUT" in vues[0] and plans[2]["image_paroles"] == a_cheval and notes[0]["plan"] == 3
+
+
+def test_la_fiche_du_decor_se_fait_d_apres_le_film(h3, monkeypatch):
+    # 02/10, film 4 : la fiche faite d'après l'image de départ du plan 1 montrait une colonne,
+    # le film une vasque à deux étages ; la coupe du plan 5 a recopié la fiche. Propriétaire :
+    # « la planche décor détaillée aussi dans studio, on l'utilise pour le plan 5 ».
+    v = h3.video_h3
+    _autoriser(h3)
+    assert v.images_pour_decor([243, 481, 600]) == [242, 480, 599]
+    assert v.images_pour_decor([100, 200, 300, 400, 500, 600, 700]) == [99, 299, 499, 699]
+    with pytest.raises(ValueError, match="rien n'est créé"):
+        v.lire_decor_du_film('{"nom": "square", "description": "a fountain"}')
+    assert "never invent" in v.consigne_decor_du_film(3) and "The 3 attached" in v.consigne_decor_du_film(3)
+    description = ("A small cobbled square: in the middle a round stone fountain with a high basin wall at seat "
+                   "height and a two-tier bowl on a central column, beige stone buildings behind.")
+    lues, vues, demandes = [], [], []
+    monkeypatch.setattr(v, "scenario_lire", lambda sid: {"etat": "arrêté", "plans": [{}, {}, {}]})
+    monkeypatch.setattr(h3, "_fins_images", lambda sc: [243, 481, 600])
+    monkeypatch.setattr(h3, "_film_du_scenario", lambda sc: "f" * 32)
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: Path(__file__))
+    monkeypatch.setattr(h3.montage, "vignettes", lambda video, numeros, largeur: lues.append(numeros) or
+                        [base64.b64decode(PNG)] * len(numeros))
+
+    async def chat(consigne, quoi, images=None, modele=None):
+        vues.append(len(images))
+        return json.dumps({"nom": "the cobbled square", "description": description})
+
+    async def image(demande):
+        demandes.append(demande)
+        if len(demandes) == 1:   # une panne passagère : redemandée
+            raise h3.HTTPException(503, "Google a refuse la demande d'image (HTTP 503).")
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    monkeypatch.setattr(h3, "COUPE_PAUSE_S", 0)
+    r = client(h3).post("/video-h3/scenario/" + "a" * 32 + "/decor", headers=CLE, json={})
+    assert r.status_code == 200, r.text
+    f = r.json()
+    assert f["nom"] == "the cobbled square" and f["genre"] == "decor" and f["description"] == description
+    assert f["images"] and f["planche"] and lues == [[242, 480, 599]] and vues == [3]
+    assert len(demandes) == 3 and all(len(d["image_reference"]) == 3 for d in demandes)
+    assert "Quatre vues" in demandes[2]["prompt"] and "two-tier bowl" in demandes[1]["prompt"]
+    # Les coupes reçoivent la vue d'ensemble ET la planche.
+    demande, _ = v.demande_image("Wide shot of the square.", lieu=f["id"], coupe=True)
+    assert len(demande["image_reference"]) == 2 and v.CONSIGNE_LIEU_PLANCHE % 2 in demande["prompt"]
+    # Rien de tourné : refus.
+    monkeypatch.setattr(h3, "_fins_images", lambda sc: [])
+    assert client(h3).post("/video-h3/scenario/" + "a" * 32 + "/decor", headers=CLE, json={}).status_code == 409
 
 
 def test_un_texte_change_fait_reecrire_son_tableau(h3, monkeypatch):

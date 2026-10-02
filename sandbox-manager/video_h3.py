@@ -811,6 +811,8 @@ CONSIGNE_LIEU = ("L'image jointe %d est le DÉCOR du film, vide de personnes : c
                  "bâtiments, le même sol, la même lumière et chaque élément fixe à la même place (ce qui est à "
                  "gauche reste à gauche, rien n'apparaît ni ne disparaît) ; les personnes et les objets se placent "
                  "comme la description le dit. ")
+CONSIGNE_LIEU_PLANCHE = ("L'image jointe %d montre ce même décor sous quatre vues : pour un cadrage d'un autre côté, "
+                         "le lieu est celui de la vue qui lui correspond. ")
 CONSIGNE_COUPE_LIEU = ("Ceci est une COUPE : le cadrage et l'angle de la caméra sont NETTEMENT différents de ceux du "
                        "plan précédent (une autre valeur de plan ou un autre côté), comme la description le dit. ")
 
@@ -862,6 +864,10 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
     if lieu:
         photos.append(fiche_lieu_image(lieu))
         tete += CONSIGNE_LIEU % len(photos) + (CONSIGNE_COUPE_LIEU if coupe else "")
+        planche_lieu = fiche_planche_data_url(lieu)
+        if planche_lieu:   # la planche du décor (02/10) : le même lieu sous quatre vues
+            photos.append(planche_lieu)
+            tete += CONSIGNE_LIEU_PLANCHE % len(photos)
     elif decor:
         octets = depart_lire(decor)
         genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
@@ -1026,6 +1032,77 @@ CONSIGNE_OBJET_VUES = (
 CADRE_DECOR = ("Vue d'ensemble large du lieu seul, à hauteur d'homme, cadrage paysage : tout le lieu visible, "
                "vide de personnes et d'animaux, sans texte ni enseigne lisible ; lumière naturelle, photographie "
                "réaliste.")
+# --- La fiche du décor D'APRÈS LE FILM (02/10) ---------------------------------------
+# Film 4 : la fiche du décor, faite d'après la seule image de départ du plan 1 (gros plan)
+# et la description « a round stone fountain with a carved central pillar », montrait une
+# colonne sur un bassin bas ; le film, dès le plan 2, a une vasque à deux étages sur un
+# bassin haut. La coupe du plan 5 a recopié la fiche, pas le film. Propriétaire : « la
+# planche décor détaillée aussi dans studio, on l'utilise pour le plan 5 ». Elle part donc
+# des images VRAIES du film (fins des plans tournés), décrites en détail par le juge, et
+# porte une planche multi-vues faite d'elles.
+DECOR_IMAGES_MAX = 4
+
+
+def images_pour_decor(fins: list) -> list:
+    """Les numéros d'image à lire : la dernière de chaque plan tourné, DECOR_IMAGES_MAX au
+    plus, réparties du premier plan au dernier (le dernier toujours)."""
+    dernieres = [f - 1 for f in fins if f > 0]
+    if len(dernieres) <= DECOR_IMAGES_MAX:
+        return dernieres
+    pas = (len(dernieres) - 1) / (DECOR_IMAGES_MAX - 1)
+    return sorted({dernieres[round(k * pas)] for k in range(DECOR_IMAGES_MAX)})
+
+
+def consigne_decor_du_film(nombre: int) -> str:
+    return ("The %d attached images are frames of one short film, all shot in the same place. Describe THE PLACE "
+            "ONLY, for an image model that must redraw it empty of people: every fixed element you can see "
+            "(fountains, statues, benches, steps, doors, windows, lamps, signs, trees, ground), with its exact "
+            "shape (how many tiers or levels, how high compared with a seated person, what material, what "
+            "colour), and where it stands relative to the others (left, right, behind, in front). Prefer what "
+            "several images agree on. Never describe people, animals, vehicles or anything held; never invent "
+            "what no image shows. Answer JSON only: {\"nom\": \"a short English name of the place, 2-5 words\", "
+            "\"description\": \"the place in English, one paragraph, %d characters at most\"}."
+            % (nombre, FICHE_DESCRIPTION_MAX - 50))
+
+
+def lire_decor_du_film(reponse: str) -> dict:
+    """{nom, description} ; ValueError si illisible."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    nom = " ".join(str((d or {}).get("nom") or "").split())[:FICHE_NOM_MAX] if isinstance(d, dict) else ""
+    description = " ".join(str((d or {}).get("description") or "").split()) if isinstance(d, dict) else ""
+    if not nom or len(description) < 80:
+        raise ValueError("La description du décor n'a pas pu être lue : rien n'est créé.")
+    return {"nom": nom, "description": description[:FICHE_DESCRIPTION_MAX]}
+
+
+CONSIGNE_DECOR_DU_FILM = ("Les images jointes 1 à %d sont des images d'un film tourné dans ce lieu. Fais la vue "
+                          "d'ensemble de CE lieu, exactement : chaque élément fixe avec sa forme, son nombre "
+                          "d'étages, sa hauteur, sa matière et sa place, comme sur les images jointes et dans la "
+                          "description ; sans aucune personne, aucun animal, aucun vélo ni objet tenu. ")
+CONSIGNE_PLANCHE_DECOR = ("Planche de référence d'un LIEU, photo réaliste, sans aucune personne, aucun animal, aucun "
+                          "vélo ni objet tenu : le lieu des images jointes 1 à %d, exactement (mêmes éléments fixes, "
+                          "mêmes formes, mêmes matières, même lumière). Quatre vues sur une grille 2x2 : en haut à "
+                          "gauche, vue d'ensemble de face ; en haut à droite, le même lieu vu depuis la gauche ; en "
+                          "bas à gauche, vu depuis la droite ; en bas à droite, plus près de l'élément principal. "
+                          "Chaque élément garde sa place dans le lieu d'une vue à l'autre. Aucun texte, aucune "
+                          "légende.")
+
+
+def demandes_decor_du_film(description: str, images: list) -> tuple:
+    """(demande de la vue d'ensemble, demande de la planche), les images vraies jointes."""
+    n = len(images)
+    vue = {"prompt": CONSIGNE_DECOR_DU_FILM % n + f"Description : {description}. {CADRE_DECOR}", "n": 1,
+           "size": TAILLE_IMAGE_DEMANDEE, "image_reference": list(images)}
+    planche = {"prompt": CONSIGNE_PLANCHE_DECOR % n + f" Description : {description}", "n": 1,
+               "size": TAILLE_PLANCHE, "image_reference": list(images)}
+    return vue, planche
+
+
 OBJETS_CLEFS_PLANS_MIN = 2   # un objet d'un seul plan n'a pas de continuité à tenir
 
 
@@ -2750,12 +2827,24 @@ def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=()) -
 # besoin le prompt du clip suivant ». Le même jour, quatre corrections à la main du début d'une
 # suite : le cadrage (gros plan, pas plan moyen), Tyler déjà arrêté, à cheval, deux mains au
 # guidon. La dernière seconde du plan filmé fait foi ; seul le départ du texte suivant change.
-def consigne_depart_reel(numero: int, texte: str) -> str:
+# 02/10, film 4, plan 5 (une coupe) : écrit « l'appareil contre l'œil », alors qu'à la fin filmée du
+# plan 4 Tyler l'avait déjà baissé devant sa poitrine. Le relecteur l'a vu, mais rien ne réécrivait
+# une coupe : elle montre le même instant sous un autre cadrage, poses et mains comprises.
+COUPE_DEPART = ("The text below is the NEXT shot (shot %d): it is a CUT, the same instant seen with a new framing. "
+                "Keep its framing exactly as written (shot size, angle, what the frame shows); rewrite only the "
+                "STARTING state of the characters and objects so that it matches the final frame: their pose "
+                "(standing, sitting, astride…), which way they face, what each hand holds and how, and the "
+                "left/right order of characters across the frame. ")
+SUITE_DEPART = ("The text below is the NEXT shot (shot %d): a video model continues exactly from that final frame. "
+                "Rewrite the text so that its STARTING state matches the final frame: where each character and "
+                "object is, their pose (standing, sitting, astride…), which way they face, what each hand holds, "
+                "the framing. ")
+
+
+def consigne_depart_reel(numero: int, texte: str, coupe: bool = False) -> str:
     return ("The attached images, in order, are the last second of shot %d of a short film, already filmed; the "
-            "last image is its final frame. The text below is the NEXT shot (shot %d): a video model continues "
-            "exactly from that final frame. Rewrite the text so that its STARTING state matches the final frame: "
-            "where each character and object is, their pose (standing, sitting, astride…), which way they face, "
-            "what each hand holds, the framing. Then fix any later action that the real start makes impossible or "
+            "last image is its final frame. " % numero + (COUPE_DEPART if coupe else SUITE_DEPART) % (numero + 1) +
+            "Then fix any later action that the real start makes impossible or "
             "useless (walking to someone already next to them, taking with a hand that is busy), with the smallest "
             "change. If an action that the story expects to have happened is not visible in the images, do not "
             "assume it. Change only what the images show CLEARLY: when unsure (which hand of a character, his "
@@ -2765,7 +2854,7 @@ def consigne_depart_reel(numero: int, texte: str) -> str:
             "[tags], the order of actions, the time of day, the names. If the text already matches, return it "
             "unchanged. Answer with JSON only: {\"texte\": \"the full text of shot %d\", \"changements\": \"what "
             "you changed and why, one short sentence in French, empty if nothing\"}.\n\nShot %d: %s"
-            % (numero, numero + 1, numero + 1, numero + 1, texte))
+            % (numero + 1, numero + 1, texte))
 
 
 # 02/10, film 4 : le texte du plan 4 corrigé (Tyler à cheval sur le vélo, deux mains au
@@ -4107,6 +4196,7 @@ PAGE_HTML = r"""<!doctype html>
         <option value="juger">Faire juger les plans (gratuit)</option>
         <option value="corriger">Corriger le texte d'après mes remarques (gratuit)</option>
         <option value="rejouer">Rejouer les plans changés ou cochés (payant)</option>
+        <option value="decor">Faire la fiche du décor d'après ce film (gratuit) : les coupes du rejeu en gardent le lieu</option>
       </select>
       <div id="suite_auto_options">
         <select id="auto_tours"><option value="1">1 tour</option><option value="2" selected>2 tours au plus</option>
@@ -6069,11 +6159,23 @@ async function actionCorriger(){
   else scenarioEtat("Texte corrigé : les changements sont en gras." + tels + " Relisez, puis choisissez « Rejouer ».");
 }
 
+// La fiche du décor d'après le film (02/10) : faite des images vraies, elle part au rejeu suivant.
+let DECOR_REJEU;
+async function actionDecor(){
+  occupe("Fiche du décor d'après le film : description, vue d'ensemble et planche à quatre vues (gratuit)…");
+  const f = await appeler("/video-h3/scenario/" + SCENARIO_TOURNE + "/decor", {});
+  DECOR_REJEU = f.id;
+  await chargerFiches();
+  scenarioEtat("Fiche du décor « " + f.nom + " » créée d'après le film : vérifiez-la dans Fiches ; "
+    + "les coupes du prochain rejeu en gardent le lieu.");
+}
+
 async function actionRejouer(forcer){
   occupe("Contrôle et traduction des plans à retourner…");
   const bouton = document.getElementById("rejouer_forcer");
   const rep = await fetch("/video-h3/scenario/" + SCENARIO_TOURNE + "/rejouer", {method: "POST", headers: H,
-    body: JSON.stringify({plans: PLANS, retourner: [...RETOURNER], forcer: !!forcer, ou: OU})});
+    body: JSON.stringify(Object.assign({plans: PLANS, retourner: [...RETOURNER], forcer: !!forcer, ou: OU},
+      DECOR_REJEU ? {decor: DECOR_REJEU} : {}))});
   const r = await rep.json();
   if (!rep.ok){
     // Revue du 30/09 : le rejeu refusé par une règle n'offrait pas « quand même ».
@@ -6095,6 +6197,7 @@ const ACTIONS = {
   juger: ["Faire juger", actionJuger],
   corriger: ["Corriger le texte", actionCorriger],
   rejouer: ["Rejouer (payant)", actionRejouer],
+  decor: ["Faire la fiche du décor", actionDecor],
 };
 
 function majSuite(){
