@@ -141,6 +141,9 @@ ART.mkdir(parents=True, exist_ok=True)
 WORKER_UID = int(os.getenv("SANDBOX_WORKER_UID", "10001"))
 
 MAX_UPLOAD = int(os.getenv("SANDBOX_MAX_ARTIFACT_BYTES", str(100 * 1024 * 1024)))
+# Un film fait PAR le Studio (montage, 4K) n'est pas un envoi : 02/10, la 4K de « Leila et
+# un martien » (102 Mo) a été jetée après 3 h 30 de carte. Propriétaire : « on peut dépasser ».
+MAX_FILM = int(os.getenv("SANDBOX_MAX_FILM_BYTES", str(2 * 1024 ** 3)))
 MAX_JOB_CODE = int(os.getenv("SANDBOX_MAX_CODE_BYTES", "500000"))
 MAX_OUTPUT = int(os.getenv("SANDBOX_MAX_OUTPUT_BYTES", "200000"))
 COLAB_API_ENABLED = os.getenv("COLAB_API_ENABLED", "false").lower() == "true"
@@ -328,14 +331,14 @@ def truncate(value: str) -> str:
     return raw[:MAX_OUTPUT].decode("utf-8", errors="replace") + "\n[output truncated]"
 
 
-def add_artifact(jid: str, path: Path, source: str) -> dict:
+def add_artifact(jid: str, path: Path, source: str, limite: int = 0) -> dict:
     if jid in SUPPRIMES:
         return {"name": path.name, "job_id": jid, "source": source,
                 "skipped": True, "reason": "job_deleted"}
     if path.is_symlink() or not path.is_file():
         raise ValueError("Artifact must be a regular file")
     size = path.stat().st_size
-    if size > MAX_UPLOAD:
+    if size > (limite or MAX_UPLOAD):
         return {
             "name": path.name,
             "size": size,
@@ -5323,23 +5326,24 @@ def _artefact_du_film(jid: str, chemin: Path) -> dict:
 
     Le 30/09, le film campus 4K sous-titré (147 Mo) a dépassé la réserve des
     artefacts : mis de côté, sans fichier, et le travail disait « réussi »."""
-    art = add_artifact(jid, chemin, "montage")
+    art = add_artifact(jid, chemin, "montage", limite=MAX_FILM)
     if art.get("skipped"):
         message = ("Le film fait %d Mo, au-delà de la réserve du Studio (%d Mo) : il n'est pas gardé."
-                   % (art.get("size", 0) // 2**20, MAX_UPLOAD // 2**20)
+                   % (art.get("size", 0) // 2**20, MAX_FILM // 2**20)
                    if art.get("reason") == "artifact_too_large" else "Le film n'a pas été gardé.")
         terminer_en_echec(jid, message)
         raise montage.MontageImpossible(message)
     return art
 
 
-def _compacter_hd(film: bytes, moteur: str) -> tuple:
+def _compacter_hd(film: bytes, moteur: str, plafond: int = 0) -> tuple:
     """Un film en haute définition passe en AV1 si la qualité mesurée tient
-    (`montage.compacter_av1`, 30/09) ; les autres, et tout échec, restent tels quels."""
+    (`montage.compacter_av1`, 30/09) ; les autres, et tout échec, restent tels quels.
+    `plafond` (octets) : recompression plus forte, sur demande seulement (02/10)."""
     if moteur != "SeedVR2 (agrandissement)":
         return film, None
     try:
-        return montage.compacter_av1(film, MAX_UPLOAD)
+        return montage.compacter_av1(film, plafond)
     except (montage.MontageImpossible, subprocess.TimeoutExpired) as exc:
         return film, {"raison": str(exc) or type(exc).__name__}
 

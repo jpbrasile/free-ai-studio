@@ -4814,9 +4814,14 @@ def test_un_visage_refait_qui_saute_est_signale(h3, tmp_path):
 
 
 def test_un_film_trop_lourd_pour_la_reserve_finit_en_echec(h3, monkeypatch):
-    """Film campus 4K sous-titré, 30/09 : 147 Mo, mis de côté sans fichier, et « réussi »."""
+    """Film campus 4K sous-titré, 30/09 : 147 Mo, mis de côté sans fichier, et « réussi ».
+    02/10, propriétaire : « on peut dépasser » la réserve des envois ; un film fait ici a la
+    sienne (MAX_FILM), et seul ce plafond-là le refuse."""
     monkeypatch.setattr(h3, "MAX_UPLOAD", 3)
     monkeypatch.setattr(h3.montage, "images", lambda chemin: 24)
+    garde = h3._film_h3(b"FILM-AU-DELA-DES-ENVOIS", {"mode": "musique", "mode_titre": "Film et musique"}, "Gros film")
+    assert h3.read_job(garde)["status"] == "succeeded"
+    monkeypatch.setattr(h3, "MAX_FILM", 3)
     with pytest.raises(h3.montage.MontageImpossible, match="réserve"):
         h3._film_h3(b"FILM-TROP-LOURD", {"mode": "musique", "mode_titre": "Film et musique"}, "Film trop lourd 30-09")
     fiches = [json.loads(p.read_text(encoding="utf-8")) for p in h3.JOBS.glob("*/job.json")]
