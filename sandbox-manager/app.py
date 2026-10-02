@@ -305,6 +305,11 @@ def read_job(jid: str) -> dict:
 # memoire seulement : les fils meurent avec le processus.
 SUPPRIMES: set = set()
 
+# La fiche d'un travail qui attend la carte et l'arrêt du client l'écrivent tous deux en
+# « lire, changer, réécrire » (02/10) : ce verrou empêche l'un de recouvrir l'autre.
+FICHE_ARRET_VERROU = threading.RLock()
+ECRITURE_FICHE_VERROU = threading.Lock()   # un remplacement de fiche à la fois (write_job)
+
 
 def write_job(jid: str, data: dict):
     if jid in SUPPRIMES:
@@ -319,9 +324,22 @@ def write_job(jid: str, data: dict):
             os.chown(d, WORKER_UID, -1)
         except OSError as exc:
             log.warning("chown %s -> uid %s impossible : %s", d, WORKER_UID, exc)
-    tmp = d / "job.json.tmp"
+    # Un fichier temporaire par écriture (02/10) : deux fils qui écrivaient la même fiche
+    # partageaient « job.json.tmp », et sous Windows le second replace() échouait
+    # (PermissionError) ou publiait le texte de l'autre.
+    tmp = d / ("job.json.%d.%d.tmp" % (os.getpid(), threading.get_ident()))
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(meta_path(jid))
+    # Sous Windows (la suite de tests), remplacer un fichier qu'un autre fil remplace ou lit
+    # à cet instant est refusé (PermissionError) ; sous Linux, jamais. Courte relance.
+    with ECRITURE_FICHE_VERROU:
+        for essai in range(50):
+            try:
+                tmp.replace(meta_path(jid))
+                break
+            except PermissionError:
+                if essai == 49:
+                    raise
+                time.sleep(0.01)
 
 
 def truncate(value: str) -> str:
@@ -3238,19 +3256,20 @@ def arreter_job(jid: str, authorization: Optional[str] = Header(default=None)):
         constat = {"arretees": 0,
                    "detail": f"Rien à arrêter à distance pour « {fournisseur or 'inconnu'} »."}
 
-    job = read_job(jid)
-    job.update({
-        "status": "cancelled",
-        "finished_at": time.time(),
-        "arret_demande": True,
-        # arret_detail vit dans une cle QUE PERSONNE D'AUTRE N'ECRIT. La fin de
-        # travail reecrit status et error ; le 17/09 elle a ainsi detruit le
-        # compte-rendu de cette route, et je n'ai plus pu dire si le bouton
-        # avait termine une machine ou si elle etait morte seule.
-        "arret_detail": constat["detail"],
-        "error": "Arrêt demandé depuis le Studio. " + constat["detail"],
-    })
-    write_job(jid, job)
+    with FICHE_ARRET_VERROU:   # jamais entre la lecture et l'écriture d'une attente de la carte
+        job = read_job(jid)
+        job.update({
+            "status": "cancelled",
+            "finished_at": time.time(),
+            "arret_demande": True,
+            # arret_detail vit dans une cle QUE PERSONNE D'AUTRE N'ECRIT. La fin de
+            # travail reecrit status et error ; le 17/09 elle a ainsi detruit le
+            # compte-rendu de cette route, et je n'ai plus pu dire si le bouton
+            # avait termine une machine ou si elle etait morte seule.
+            "arret_detail": constat["detail"],
+            "error": "Arrêt demandé depuis le Studio. " + constat["detail"],
+        })
+        write_job(jid, job)
     file_carte.reveiller()
     return {"id": jid, "status": "cancelled", "deja_termine": False,
             "arretees": constat["arretees"], "detail": constat["detail"]}
@@ -3938,11 +3957,14 @@ def attendre_la_carte(jid: str) -> bool:
         return read_job(jid).get("status") == "cancelled"
 
     def noter(rang: int, motif: str):
-        job = read_job(jid)
-        if job.get("status") == "cancelled":
-            return
-        job.update({"attente_carte": True, "file_position": rang, "attente_motif": motif})
-        write_job(jid, job)
+        # Sous FICHE_ARRET_VERROU (02/10) : un arrêt écrit entre la lecture et l'écriture
+        # était recouvert par la fiche « queued » relue avant lui, et l'attente ne le voyait plus.
+        with FICHE_ARRET_VERROU:
+            job = read_job(jid)
+            if job.get("status") == "cancelled":
+                return
+            job.update({"attente_carte": True, "file_position": rang, "attente_motif": motif})
+            write_job(jid, job)
 
     return file_carte.attendre_son_tour(jid, annule, noter)
 

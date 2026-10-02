@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -5263,6 +5264,74 @@ def test_un_arret_pendant_l_attente_ne_laisse_rien_partir(h3, monkeypatch):
     assert not fil.is_alive()
     assert h3.read_job(jid)["status"] == "cancelled"
     assert h3.file_carte.etat() == {"en_cours": None, "en_attente": []}
+
+
+def test_un_arret_signale_juste_avant_l_attente_n_est_pas_perdu(h3):
+    """02/10, les deux tests « instables » : l'arrêt était lu hors du verrou, puis l'attente
+    entrait dans wait() ; un reveiller() tombé entre les deux se perdait, et le fil dormait
+    toute la sonde. Ici l'arrêt arrive exactement dans cette fenêtre."""
+    f = h3.file_carte
+    arret = []
+
+    def annule():
+        if not arret:          # première lecture : pas encore arrêté… puis l'arrêt et son signal
+            arret.append(1)
+            f.reveiller()
+            return False
+        return True
+
+    debut = time.monotonic()
+    assert f.attendre_son_tour("z", annule, lambda r, m: None, libre=lambda: (False, "occupée", {}),
+                               sonde_s=5) is False
+    assert time.monotonic() - debut < 1 and f.etat() == {"en_cours": None, "en_attente": []}
+
+
+def test_l_arret_n_est_pas_recouvert_par_la_place_dans_la_file(h3, monkeypatch):
+    """02/10 : `noter` lisait la fiche « queued », l'arrêt écrivait « cancelled », puis `noter`
+    réécrivait sa copie : l'arrêt disparaissait et l'attente ne finissait jamais. L'arrêt
+    arrive ici pendant `noter`, entre sa lecture et son écriture."""
+    _ici(h3, monkeypatch)
+    monkeypatch.setattr(h3.file_carte.gpu_local, "libre_pour_un_code_inconnu", lambda *a: (False, "occupée", {}))
+    monkeypatch.setattr(h3.file_carte, "SONDE_S", 0.05)
+    jid = "a1" * 16
+    h3.write_job(jid, {"id": jid, "status": "queued", "artifacts": [], "provider": "maison",
+                       "provider_effective": "maison", "machine": "comfy", "attente_carte": True})
+    lire, arrets = h3.read_job, []
+
+    def lecture(j):
+        job = lire(j)
+        if sys._getframe(1).f_code.co_name == "noter" and not arrets:
+            fil = threading.Thread(target=lambda: arrets.append(
+                client(h3).post("/jobs/" + jid + "/arreter", headers=CLE).json()))
+            arrets.append(fil)
+            fil.start()
+            fil.join(0.5)      # sans verrou, l'arrêt s'écrit ici, avant la réécriture de noter
+        return job
+    monkeypatch.setattr(h3, "read_job", lecture)
+    assert h3.attendre_la_carte(jid) is False
+    arrets[0].join(5)
+    assert arrets[1]["status"] == "cancelled" and lire(jid)["status"] == "cancelled"
+
+
+def test_deux_fils_ecrivent_la_meme_fiche_sans_se_gener(h3):
+    """02/10 : un seul « job.json.tmp » pour tous ; sous Windows, deux écritures en même temps
+    levaient PermissionError (mémoire, bug n°11)."""
+    jid = "b2" * 16
+    pannes = []
+
+    def ecrire(k):
+        for i in range(60):
+            try:
+                h3.write_job(jid, {"id": jid, "status": "queued", "k": k, "i": i})
+            except OSError as exc:
+                pannes.append(exc)
+    fils = [threading.Thread(target=ecrire, args=(k,)) for k in range(4)]
+    for t in fils:
+        t.start()
+    for t in fils:
+        t.join(30)
+    assert not pannes and h3.read_job(jid)["i"] == 59
+    assert not list((h3.JOBS / jid).glob("*.tmp"))
 
 
 def test_la_file_garde_l_ordre_d_arrivee(h3, monkeypatch):

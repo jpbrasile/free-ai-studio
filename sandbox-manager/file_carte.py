@@ -82,6 +82,11 @@ def attendre_son_tour(jid: str, annule: Callable[[], bool],
                 noter(rang, motif)
                 dit = (rang, motif)
             with _cond:
+                # Relu SOUS le verrou, juste avant d'attendre (02/10) : un arrêt écrit puis
+                # signalé (`reveiller`) entre la lecture du haut et ce wait perdait son
+                # signal, et l'attente dormait toute la sonde (20 s) avant de le voir.
+                if annule():
+                    return False
                 _cond.wait(sonde_s)
     finally:
         with _cond:
