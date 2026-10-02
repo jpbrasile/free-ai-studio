@@ -4356,8 +4356,17 @@ def _derniere_et_raccord(video: bytes, fin_vue: Optional[bytes] = None) -> tuple
     """La dernière image (base64) et les video_h3.RACCORD_IMAGES dernières images avec
     leur son (mp4 base64) : une suite en « Références » les épingle à son début (30/09)."""
     fin_vue = fin_vue if fin_vue is not None else montage.derniere_image(video)
-    return (base64.b64encode(fin_vue).decode(),
-            base64.b64encode(montage.fin(video, video_h3.RACCORD_IMAGES)).decode())
+    raccord = montage.fin(video, video_h3.RACCORD_IMAGES)
+    # 02/10, film 4, plan 2, deux prises : le plan 1 finit sur « Parfaite ! » (9,2-9,8 s), dans le
+    # raccord ; H3 a continué à faire parler Leila 4 à 5 s (anglais puis français sans suite), malgré
+    # la consigne écrite. Une voix dans le raccord est tue : ses images restent, et elles sont
+    # retirées au recollage ; les voix viennent des fiches.
+    try:
+        if montage.passages_de_voix(raccord):
+            raccord = montage.taire(raccord)
+    except montage.MontageImpossible:
+        pass   # une aide : sans elle, le raccord part tel quel, comme avant le 02/10
+    return base64.b64encode(fin_vue).decode(), base64.b64encode(raccord).decode()
 
 
 @app.post("/video-h3/image")
@@ -5896,7 +5905,8 @@ def _histoire(plans: list) -> str:
 
 
 REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine",
-                     "definition", "decor")   # `decor` : la fiche du lieu (02/10), jointe aux images des coupes
+                     "definition", "decor",   # `decor` : la fiche du lieu (02/10), jointe aux images des coupes
+                     "plan_par_plan")         # 02/10 : arrêt après chaque plan neuf, pour le valider
 
 
 def _scenario_prepare(corps: dict, plans: list) -> tuple:
@@ -6630,6 +6640,10 @@ async def _ecouter(video: bytes, texte: str) -> dict:
         texte, entendu + (" " + " ".join(m["entendu"] for m in morceaux) if morceaux else ""))
     resultat["entendu"] = " ".join(entendu.split())
     resultat["passages"] = morceaux
+    trop = video_h3.passages_en_trop(resultat.get("attendu"), morceaux)
+    if trop:   # 02/10 : la réplique entendue ne suffit pas, rien d'autre ne doit être dit
+        resultat["en_trop"] = trop
+        resultat["ok"] = False
     if ecartes:
         resultat["ecartes"] = ecartes
     return resultat
@@ -6751,8 +6765,9 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     reglages = dict(parent.get("reglages") or {"fiche": parent.get("fiche"), "fiches": parent.get("fiches")})
-    if "decor" in corps:   # la fiche du décor se pose aussi sur un rejeu (02/10)
-        reglages["decor"] = corps.get("decor")
+    for cle in ("decor", "plan_par_plan"):   # se posent aussi sur un rejeu (02/10)
+        if cle in corps:
+            reglages[cle] = corps.get(cle)
     musique = parent.get("musique") or {}
     commun_corps = dict(reglages, musique_chanson=musique.get("chanson"),
                         musique_a_partir_du_plan=musique.get("a_partir_du_plan"))
@@ -6857,15 +6872,20 @@ def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
             morceau = await asyncio.to_thread(montage.extraire, film, premiere, fin)
             paroles = await _ecouter(morceau, plan["image_paroles"])
         except montage.MontageImpossible as exc:
-            paroles = {"erreur": str(exc)}
-        return r, paroles
+            morceau, paroles = None, {"erreur": str(exc)}
+        try:
+            ecarts = await asyncio.to_thread(montage.ecarts_d_images, morceau) if morceau else None
+        except montage.MontageImpossible:
+            ecarts = None
+        return r, paroles, ecarts
     try:
-        r, paroles = asyncio.run(juger())
+        r, paroles, ecarts = asyncio.run(juger())
     except HTTPException as exc:
         return dict(note, erreur=str(exc.detail))
     r[9] = regles.regle_paroles(paroles)
+    r[15] = regles.regle_sans_coupe(ecarts, ips)
     note["regles"] = regles.en_liste(r)
-    note["fautes"] = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in (9, 10)
+    note["fautes"] = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in (9, 10, 15)
                       if (r.get(n) or {}).get("ok") is False]
     if (r.get(10) or {}).get("ok") is None:
         # Gardée faute de mieux (une prise fautive vaut moins qu'une inconnue), mais dite.
@@ -6948,8 +6968,11 @@ def run_scenario_h3(sid: str, a_tourner: list):
                         "Scénario : plans repris")
     try:
         for i, p in enumerate(a_tourner):
-            if video_h3.scenario_lire(sid).get("arret_demande"):
-                video_h3.scenario_noter(sid, etat="arrêté")
+            sc_avant = video_h3.scenario_lire(sid)
+            if sc_avant.get("arret_demande"):
+                # Le motif (plan fautif, ou plan par plan) s'affiche comme une erreur de la page.
+                video_h3.scenario_noter(sid, etat="arrêté", **({"erreur": sc_avant["arret_motif"]}
+                                                              if sc_avant.get("arret_motif") else {}))
                 return
             try:
                 if "reprise" in p:
@@ -7020,20 +7043,35 @@ def run_scenario_h3(sid: str, a_tourner: list):
                     video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : "
                                             + (job.get("error") or "échec, voir son journal."))
                     return
-                prises.append(_juger_plan_tourne(sid, i, jid, premiere) if ou == "maison" else
-                              {"plan": i + 1, "travail": jid, "fautes": []})
+                # Jugé aussi chez Modal (02/10, film 4 : deux prises fautives du plan 2, une coupe
+                # cachée puis des paroles non écrites, passées sans un mot) ; le jugement est gratuit.
+                prises.append(_juger_plan_tourne(sid, i, jid, premiere))
                 if not prises[-1]["fautes"] or video_h3.scenario_lire(sid).get("arret_demande"):
                     break
             # La prise gardée : la moins fautive ; à égalité, la première.
             garde = min(prises, key=lambda x: len(x["fautes"]))
             jid = garde["travail"]
             sc = video_h3.scenario_lire(sid)
-            maj = {"travaux": sc["travaux"][:-1] + [jid]}
-            if ou == "maison":
-                maj["controles_plans"] = (sc.get("controles_plans") or []) + prises
+            maj = {"travaux": sc["travaux"][:-1] + [jid],
+                   "controles_plans": (sc.get("controles_plans") or []) + prises}
             if len(prises) > 1:
                 maj["reprises_auto"] = (sc.get("reprises_auto") or []) + [
                     {"plan": i + 1, "prises": [x["travail"] for x in prises], "garde": jid}]
+            # Chez Modal, une reprise se paie : un plan fautif arrête le film pour qu'on décide,
+            # au lieu de bâtir le plan suivant dessus. Et, réglage « plan par plan » (demande du
+            # propriétaire, 02/10 : « tu valides (ou pas) chaque plan avant de passer au suivant »),
+            # chaque plan neuf arrête le film ; `/rejouer` reprend les plans faits sans rien louer.
+            # Le dernier plan n'arrête rien : le film se finit (musique), et un scénario réussi
+            # se rejoue ; ses fautes restent dans `controles_plans`.
+            motif = None
+            if i == len(a_tourner) - 1:
+                pass
+            elif garde["fautes"] and ou != "maison" and not sc.get("force"):
+                motif = "Plan %d à revoir : %s" % (i + 1, " ; ".join(garde["fautes"]))
+            elif (sc.get("reglages") or {}).get("plan_par_plan"):
+                motif = "Plan %d tourné : à valider avant le suivant (plan par plan)." % (i + 1)
+            if motif:
+                maj.update(arret_demande=True, arret_motif=motif)
             video_h3.scenario_noter(sid, **maj)
             job = read_job(jid)
             precedent = jid

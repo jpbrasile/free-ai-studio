@@ -15,6 +15,7 @@ modèle qui voit, gratuit), « clip » (le plan tourné : planche et écoute, gr
 import json
 import re
 
+import montage
 import video_h3
 
 REGLES = (
@@ -31,7 +32,7 @@ REGLES = (
                   "sur l'image de départ."),
     (7, "depart", "Sur l'image de départ, le visage de chaque personnage ressemble à sa fiche."),
     (8, "depart", "Ni texte, ni bulle, ni légende ajoutés sur l'image de départ."),
-    (9, "clip", "Chaque réplique est entendue comme elle est écrite."),
+    (9, "clip", "Chaque réplique est entendue comme elle est écrite, et rien d'autre n'est dit."),
     (10, "clip", "Aucun personnage ni objet n'apparaît en double dans le plan tourné."),
     (11, "clip", "Les personnages restent ceux de leurs fiches pendant tout le plan."),
     (12, "clip", "La fin du plan montre ce que le tableau des éléments annonce en « fin »."),
@@ -42,6 +43,8 @@ REGLES = (
     # 01/10, propriétaire : « tyler parle et leila ne se retourne pas vers lui […] on généralise comment ? »
     (14, "texte", "Quand un personnage parle à un autre qui est dans le plan, le texte dit ce que fait celui "
                   "qui écoute juste après la réplique (il regarde, se tourne, répond), ou qu'il ne réagit pas."),
+    # 02/10, film 4, plan 2 : une suite partie d'un gros plan a sauté en plan moyen au bout de 0,8 s.
+    (15, "clip", "Aucune coupe franche dans le plan tourné : le cadre bouge, il ne saute pas."),
 )
 NUMEROS = {etape: [n for n, e, _ in REGLES if e == etape] for etape in ("texte", "depart", "clip")}
 # Les règles qui arrêtent le tournage (avant tout sou) : texte et image de départ.
@@ -590,9 +593,24 @@ def regle_paroles(paroles) -> dict:
         if paroles.get("doute"):
             return resultat(None, "Aucune réplique écrite ; voix possible : à vérifier à l'oreille.")
         return resultat(None, "Pas de réplique dans ce plan.")
+    if paroles.get("en_trop"):
+        m = paroles["en_trop"][0]
+        return resultat(False, "Paroles non écrites, %.1f-%.1f s : « %s »." % (m["de_s"], m["a_s"], m["entendu"]))
     if paroles.get("ok") is None:
         return resultat(None, "Écoute douteuse : à vérifier à l'oreille.")
     return resultat(bool(paroles["ok"]), "" if paroles["ok"] else "Entendu : « %s »." % paroles.get("entendu", ""))
+
+
+def regle_sans_coupe(ecarts, ips: float) -> dict:
+    """Règle 15, depuis les écarts entre images voisines du plan (montage.ecarts_d_images)."""
+    if not ecarts:
+        return resultat(None, "Les images du plan n'ont pas pu être lues.")
+    sauts = montage.sauts_d_image(ecarts)
+    if sauts:
+        k, x = sauts[0]
+        return resultat(False, "Coupe franche dans le plan à %.1f s (images %d → %d, écart %.1f) : le cadre saute "
+                               "au lieu de bouger." % ((k + 1) / ips, k, k + 1, x))
+    return resultat(True)
 
 
 def en_liste(r: dict) -> list:

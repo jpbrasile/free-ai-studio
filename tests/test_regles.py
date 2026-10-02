@@ -22,8 +22,8 @@ KITE = {"id": "k1", "nom": "yellow kite", "genre": "objet", "description": "kite
 
 
 def test_les_regles_sont_numerotees_par_etape(r):
-    assert [n for n, _, _ in r.REGLES] == list(range(15))
-    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13, 14], "depart": [6, 7, 8], "clip": [9, 10, 11, 12]}
+    assert [n for n, _, _ in r.REGLES] == list(range(16))
+    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13, 14], "depart": [6, 7, 8], "clip": [9, 10, 11, 12, 15]}
     assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 14, 6, 7, 8]
 
 

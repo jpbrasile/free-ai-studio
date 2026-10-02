@@ -65,6 +65,9 @@ def sans_regles(h3, monkeypatch):
     monkeypatch.setattr(h3, "_verifier_scenario", aucun_rapport)
     monkeypatch.setattr(h3, "_controle_derniere_image", lambda sid, i, image: None)
     monkeypatch.setattr(h3, "_regles_clip", aucune_regle_clip)
+    # Le jugement de chaque plan tourné (chez Modal aussi depuis le 02/10) a ses tests.
+    monkeypatch.setattr(h3, "_juger_plan_tourne",
+                        lambda sid, i, jid, premiere: {"plan": i + 1, "travail": jid, "fautes": []})
 
 
 @pytest.fixture
@@ -1841,8 +1844,30 @@ def test_un_juge_muet_est_redemande_puis_dit_non_juge(h3, monkeypatch, tmp_path)
 
 
 def test_chez_modal_aucune_reprise_payee_sans_accord(h3, monkeypatch, tmp_path):
+    # 02/10, film 4 : chez Modal, les plans n'étaient pas jugés. Jugés maintenant (gratuit) ; un plan
+    # fautif n'est pas repris (une reprise se paie) : le film s'arrête et dit pourquoi.
     sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "modal", fautifs={1})
-    assert len(tournes) == 2 and juges == [] and "reprises_auto" not in sc and sc["etat"] == "réussi"
+    assert len(tournes) == 1 and len(juges) == 1 and "reprises_auto" not in sc and sc["etat"] == "arrêté"
+    assert sc["erreur"] == "Plan 1 à revoir : règle 10 : deux Zib"
+    assert [x["fautes"] for x in sc["controles_plans"]] == [["règle 10 : deux Zib"]]
+
+
+def test_chez_modal_un_plan_propre_continue_et_le_dernier_plan_n_arrete_rien(h3, monkeypatch, tmp_path):
+    sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "modal", fautifs={2})
+    assert len(tournes) == 2 and sc["etat"] == "réussi"
+    assert [x["fautes"] for x in sc["controles_plans"]] == [[], ["règle 10 : deux Zib"]]
+
+
+def test_plan_par_plan_arrete_le_film_apres_chaque_plan_neuf(h3, monkeypatch, tmp_path):
+    # Propriétaire, 02/10 : « tu valides (ou pas) chaque plan avant de passer au suivant ».
+    vrai = h3.video_h3.scenario_ecrire
+
+    def avec_reglage(sc):
+        vrai(dict(sc, reglages={"plan_par_plan": True}) if "reglages" not in sc else sc)
+    monkeypatch.setattr(h3.video_h3, "scenario_ecrire", avec_reglage)
+    sc, tournes, juges = _tournage_juge(h3, monkeypatch, tmp_path, "modal", fautifs=set())
+    assert len(tournes) == 1 and sc["etat"] == "arrêté"
+    assert sc["erreur"] == "Plan 1 tourné : à valider avant le suivant (plan par plan)."
 
 
 # --- 10. Deux personnages, deux langues, une musique posée après coup (28/09) ---
@@ -5369,3 +5394,43 @@ def test_un_rejeu_de_rejeu_prend_le_dernier_travail_reussi(h3):
     sc = {"etat": "arrêté", "fins_images": [243, 362], "travaux": [fait, rate]}
     assert h3._film_du_scenario(sc) == fait
     assert h3._film_du_scenario({"etat": "arrêté", "fins_images": [243], "travaux": []}) is None
+
+
+def test_une_parole_non_ecrite_est_une_faute_meme_si_la_replique_est_dite(h3):
+    # 02/10, film 4, plan 2 (prise 4) : ce que l'écoute a entendu, passage par passage.
+    v = h3.video_h3
+    morceaux = [{"de_s": 0.0, "a_s": 4.3, "entendu": "and all my postplasticity mark, and all of the pravies"},
+                {"de_s": 7.1, "a_s": 9.9, "entendu": "Hey Leila, is that a real instant camera?"}]
+    attendues = ["Hey Leila! Is that a real instant camera?"]
+    trop = v.passages_en_trop(attendues, morceaux)
+    assert trop == morceaux[:1]
+    assert v.passages_en_trop(attendues, morceaux[1:]) == []
+    assert v.passages_en_trop(attendues, [{"de_s": 0, "a_s": 1, "entendu": "Oh."}]) == []   # trop court
+    paroles = {"attendu": attendues, "ok": False, "entendu": "", "en_trop": trop}
+    r = h3.regles.regle_paroles(paroles)
+    assert r["ok"] is False and "postplasticity" in r["pourquoi"] and "0.0-4.3" in r["pourquoi"]
+    assert "Paroles non écrites" in v.defaut_de_paroles(paroles, 10.0)["quoi"]
+
+
+def test_une_coupe_franche_dans_un_plan_se_voit_pas_un_mouvement(h3):
+    m = h3.montage
+    # Plan 2, prise 3 : un pic seul (48,2) sur une médiane de 3,3.
+    coupe = [3.3] * 19 + [48.2] + [3.3] * 20
+    assert m.sauts_d_image(coupe) == [(19, 48.2)]
+    # Pigeons qui s'envolent (prise 2) : 8 à 10 sur plusieurs paires de suite, pas une coupe.
+    mouvement = [2.0] * 27 + [10.4, 9.0, 8.0, 9.5, 8.5, 9.0, 8.3, 8.4] + [2.0] * 20
+    assert m.sauts_d_image(mouvement) == []
+    assert h3.regles.regle_sans_coupe(coupe, 24)["ok"] is False
+    assert h3.regles.regle_sans_coupe(mouvement, 24)["ok"] is True
+    assert h3.regles.regle_sans_coupe(None, 24)["ok"] is None
+
+
+def test_une_voix_dans_le_raccord_est_tue_avant_la_suite(h3, monkeypatch):
+    # 02/10 : « Parfaite ! » à la fin du plan 1, dans le raccord ; H3 faisait parler Leila 4 à 5 s.
+    monkeypatch.setattr(h3.montage, "fin", lambda video, n: b"RACCORD")
+    monkeypatch.setattr(h3.montage, "passages_de_voix", lambda video: [(0.0, 0.92, [(0.0, 0.92)])])
+    monkeypatch.setattr(h3.montage, "taire", lambda video: b"MUET")
+    _, raccord = h3._derniere_et_raccord(b"FILM", b"IMAGE")
+    assert base64.b64decode(raccord) == b"MUET"
+    monkeypatch.setattr(h3.montage, "passages_de_voix", lambda video: [])
+    assert base64.b64decode(h3._derniere_et_raccord(b"FILM", b"IMAGE")[1]) == b"RACCORD"

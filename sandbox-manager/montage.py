@@ -318,6 +318,51 @@ def passages_parles(video: bytes) -> list:
         return lire_silences(fini.stderr, int(h) * 3600 + int(m) * 60 + float(s))
 
 
+# Coupe franche DANS un plan (02/10, film 4, plan 2) : une « suite » partie du gros plan de fin du
+# plan 1 l'a gardé 0,8 s puis a sauté en plan moyen. Mesuré, en gris 160x90, écart moyen entre deux
+# images voisines : 48,2 au saut, médiane 3,3 sur ce plan ; aucune paire au-dessus de 4 fois la
+# médiane sur le plan 1 (médiane 4,0) ni sur la reprise au recul continu (3,7).
+SAUT_LARGEUR, SAUT_HAUTEUR = 160, 90
+SAUT_FOIS_MEDIANE = 4.0
+# Un mouvement rapide (pigeons qui s'envolent, prise 2 du même plan) fait des écarts de 8 à 10
+# sur huit paires de suite ; une coupe est un pic SEUL, loin au-dessus de ses deux voisines.
+SAUT_ECART_MIN = 15.0
+SAUT_FOIS_VOISINES = 3.0
+
+
+def ecarts_d_images(video: bytes) -> list:
+    """L'écart moyen (0-255) entre chaque image et la suivante, en gris 160x90."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "entree")
+        a.write_bytes(video)
+        fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-i", str(a), "-an", "-vf",
+                               "scale=%d:%d,format=gray" % (SAUT_LARGEUR, SAUT_HAUTEUR), "-f", "rawvideo", "-"],
+                              capture_output=True, timeout=DELAI_S)
+    taille = SAUT_LARGEUR * SAUT_HAUTEUR
+    if fini.returncode != 0 or len(fini.stdout) < 2 * taille:
+        raise MontageImpossible("La lecture des images du plan a échoué.")
+    brut = fini.stdout
+    images = [brut[k:k + taille] for k in range(0, len(brut) - taille + 1, taille)]
+    return [sum(abs(x - y) for x, y in zip(a, b)) / taille for a, b in zip(images, images[1:])]
+
+
+def sauts_d_image(ecarts: list) -> list:
+    """[(k, écart)] : les paires (k, k+1) dont l'écart passe SAUT_FOIS_MEDIANE fois la médiane
+    du plan, SAUT_ECART_MIN, et SAUT_FOIS_VOISINES fois ses deux voisines : une coupe franche,
+    pas un mouvement."""
+    if not ecarts:
+        return []
+    tries = sorted(ecarts)
+    mediane = tries[len(tries) // 2]
+    seuil = max(SAUT_FOIS_MEDIANE * mediane, SAUT_ECART_MIN)
+    sauts = []
+    for k, x in enumerate(ecarts):
+        voisines = ecarts[max(0, k - 1):k] + ecarts[k + 1:k + 2]
+        if x > seuil and all(x > SAUT_FOIS_VOISINES * v for v in voisines):
+            sauts.append((k, round(x, 1)))
+    return sauts
+
+
 # Sous-titres (30/09/2026, « il manque la musique et les sous-titres… via le studio »).
 # Mesuré sur le film campus : à -35 dB sur tout le spectre, l'ambiance fait un seul passage
 # de 17 à 28 s ; dans la bande de la voix (300-3400 Hz) à -30 dB, sept morceaux pour six
@@ -693,6 +738,15 @@ def fin(video: bytes, nombre: int) -> bytes:
     if total < nombre:
         raise MontageImpossible("Le plan précédent a %d images, moins que les %d du raccord." % (total, nombre))
     return extraire(video, total - nombre, total)
+
+
+def taire(video: bytes) -> bytes:
+    """La même vidéo, images intactes (copiées), son mis à zéro : la piste reste."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, b = Path(dossier, "a.mp4"), Path(dossier, "b.mp4")
+        a.write_bytes(video)
+        _lancer(["-i", str(a), "-c:v", "copy", "-af", "volume=0", "-c:a", "aac", str(b)], "Le silence du raccord")
+        return b.read_bytes()
 
 
 def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:

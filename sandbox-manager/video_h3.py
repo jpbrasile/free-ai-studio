@@ -2527,10 +2527,33 @@ def tons_dits(entendu: str, attendues=()) -> list:
     return dits
 
 
+# 02/10, film 4, plan 2 : la réplique de Tyler entendue à 7,1 s, l'écoute disait « ok » ; de 0 à
+# 4,3 s, Leila avait dit un anglais sans suite (« and all my postplasticity mark… »). Un passage
+# parlé d'au moins PAROLES_EN_TROP_MOTS mots dont moins de PAROLES_EN_TROP_PART viennent des
+# répliques est une parole non écrite. Choisi sur ce cas, pas mesuré sur un corpus.
+PAROLES_EN_TROP_MOTS = 4
+PAROLES_EN_TROP_PART = 0.3
+
+
+def passages_en_trop(attendues, morceaux) -> list:
+    """Les passages écoutés à part (`_ecouter`) qui ne disent aucune des répliques écrites."""
+    ecrits = set(_mots(" ".join(attendues or [])))
+    trop = []
+    for m in morceaux or []:
+        mots = _mots(m.get("entendu"))
+        if len(mots) >= PAROLES_EN_TROP_MOTS and sum(x in ecrits for x in mots) / len(mots) < PAROLES_EN_TROP_PART:
+            trop.append(m)
+    return trop
+
+
 def defaut_de_paroles(paroles: dict, t_s: float):
     """Un défaut du jugement quand la réplique manque ; None sinon."""
     if paroles.get("ok") is not False:
         return None
+    if paroles.get("en_trop"):
+        m = paroles["en_trop"][0]
+        return {"t_s": round(t_s + float(m.get("de_s") or 0), 1),
+                "quoi": "Paroles non écrites : « %s » (%.1f-%.1f s du plan)." % (m["entendu"], m["de_s"], m["a_s"])}
     if paroles.get("ton_dit"):
         return {"t_s": round(t_s, 1), "quoi": "Le clip prononce le ton écrit pour H3 (« %s ») ; il dit : « %s »."
                 % (" / ".join(paroles["ton_dit"]), paroles["entendu"])}
@@ -3959,6 +3982,8 @@ PAGE_HTML = r"""<!doctype html>
     <div id="scenario_objets"></div>
     <label for="scenario_decor">Décor du film (facultatif) : chaque coupe en garde le lieu et change de cadrage</label>
     <select id="scenario_decor"><option value="">Aucun</option></select>
+    <label><input type="checkbox" id="scenario_plan_par_plan"> Plan par plan : le film s'arrête après chaque
+    plan neuf pour que vous le validiez ; « Rejouer » reprend les plans faits sans rien louer</label>
     <span class="note">Nommez le personnage qui parle dans la phrase de sa réplique : le Studio lui attribue
     la réplique et sa langue.</span>
     <label for="scenario_chanson">Musique de fond (une chanson du Studio, posée après le tournage)</label>
@@ -6196,6 +6221,7 @@ function corpsScenario(){
     longueur: Number(document.getElementById("longueur").value),
     definition: document.getElementById("definition").value,
     decor: document.getElementById("scenario_decor").value || null,
+    plan_par_plan: document.getElementById("scenario_plan_par_plan").checked,
     graine: graine === "" ? null : Number(graine)};
 }
 
