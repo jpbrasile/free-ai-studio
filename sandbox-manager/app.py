@@ -5909,7 +5909,8 @@ def _histoire(plans: list) -> str:
 
 REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine",
                      "definition", "decor",   # `decor` : la fiche du lieu (02/10), jointe aux images des coupes
-                     "plan_par_plan")         # 02/10 : arrêt après chaque plan neuf, pour le valider
+                     "plan_par_plan",         # 02/10 : arrêt après chaque plan neuf, pour le valider
+                     "invite_legere")         # 02/10 : invite H3 sans redites (sujets_des_fiches), à l'essai
 
 
 def _scenario_prepare(corps: dict, plans: list) -> tuple:
@@ -6806,7 +6807,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     reglages = dict(parent.get("reglages") or {"fiche": parent.get("fiche"), "fiches": parent.get("fiches")})
-    for cle in ("decor", "plan_par_plan"):   # se posent aussi sur un rejeu (02/10)
+    for cle in ("decor", "plan_par_plan", "invite_legere"):   # se posent aussi sur un rejeu (02/10)
         if cle in corps:
             reglages[cle] = corps.get(cle)
     musique = parent.get("musique") or {}

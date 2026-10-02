@@ -1743,7 +1743,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
                       presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
-                      planches=(), vues=()) -> str:
+                      planches=(), vues=(), legere=False) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -1779,15 +1779,18 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         if k in objets:
             definitions.append(f"<Subject {k + 1}> is the object in {images}"
                                # un objet clef (02/10) : ses vues sur une seule image
-                               + ("; it shows this one same object from several angles." if k in vues else "."))
-            garde.append(f"{ou}: fully_preserved - the shape, colour and size of the object in "
+                               + (("; all angles." if legere else "; it shows this one same object from several "
+                                   "angles.") if k in vues else "."))
+            garde.append(f"{ou}: fully_preserved - same shape and colour; exactly one." if legere else
+                         f"{ou}: fully_preserved - the shape, colour and size of the object in "
                          f"{images} are retained; there is exactly one of it in every frame where it appears.")
             continue
         definitions.append(f"<Subject {k + 1}> is the person in {images}"
                            # Ce que chaque image apporte (guide de MiniMax, ref-en, 2.1) : la planche
                            # est sa dernière image (fiche_images_h3, 01/10).
-                           + (f"; <Picture {premiere - 1}> shows this same person from every angle: front, "
-                              "three-quarter, profile and back." if k in planches else "."))
+                           + ((f"; <Picture {premiere - 1}> shows all angles." if legere else
+                               f"; <Picture {premiere - 1}> shows this same person from every angle: front, "
+                               "three-quarter, profile and back.") if k in planches else "."))
         j = (voix or {}).get(k)
         if isinstance(j, dict) and len(j) == 1:
             j = next(iter(j.values()))
@@ -1810,6 +1813,11 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         # fois, la description la replaçait à sa table, et H3 en a dessiné deux
         # (règle 1 du matin, retirée le soir ; remarque du propriétaire).
         ecrite = (ecrites or {}).get(k)
+        if legere:   # 02/10 : une fois chaque chose ; la tenue écrite remplace « clothing retained »
+            garde.append(f"{ou}: fully_preserved - one single person, same face and hair; "
+                         + (f"wears {ecrite}." if ecrite else
+                            f"clothing of <Picture {premiere - 1}>." if k in tenues else "same clothing."))
+            continue
         # La tenue écrite, pour les plans où le visage ne se voit pas (de dos, 29/09).
         porte = (f" <Subject {k + 1}> wears {ecrite} in every frame, also when seen from behind, in profile "
                  "or from afar." if ecrite else "")
@@ -1829,14 +1837,21 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
                       if k < len(nombres) and (objets.get(k) if isinstance(objets, dict) else None) != "pose"]
         definitions.append(f"<Picture {depart}> is the first frame of [Shot 1]"
                            + (", showing " + _liste_anglaise(vus_depart) if vus_depart else "") + ".")
-        garde.append(f"<Picture {depart}> ([Shot 1] first frame): fully_preserved - the shot begins "
+        garde.append(f"<Picture {depart}>: fully_preserved - the shot begins exactly on it." if legere else
+                     f"<Picture {depart}> ([Shot 1] first frame): fully_preserved - the shot begins "
                      f"exactly on <Picture {depart}>: its framing, places and people.")
     if suite:   # guide de MiniMax : « video continuation », la source citée en <Video N>
         definitions.append("<Video 1> is the end of the previous shot.")
-        garde.append(SUITE_GARDE)
+        garde.append(SUITE_GARDE_LEGERE if legere else SUITE_GARDE)
     # ref-en.txt, 3 : un préfixe de types entre crochets, puis les étiquettes déjà définies.
     types = (["video continuation"] if suite else []) + ["reference generation"] \
         + (["keyframe completion"] if depart else []) + (["audio reference"] if voix_dites else [])
+    if legere:   # 02/10 : les voix et le raccord sont déjà dits plus haut ; une ligne pour tous les sons
+        resume = f"[{' + '.join(types)}] One single shot."
+        if garde_sons:
+            garde_sons = ["Each <Audio> gives only a voice timbre; its words are never said."]
+        return ("subject_definitions: " + " ".join(definitions) + " summary: " + resume
+                + " retention_analysis: " + " ".join(garde + garde_sons))
     vus = [f"<Subject {k + 1}>" for k in range(len(nombres)) if k in presents]
     resume = (f"[{' + '.join(types)}] The target video is a single shot"
               + (" with " + _liste_anglaise(vus) if vus else "")
@@ -3227,6 +3242,9 @@ SUITE_GARDE = ("<Video 1> ([Shot 1] start): fully_preserved - [Shot 1] continues
                # parle : un guide de H3 écrit « The voice heard in Video 1 guides Speaker 1 ».
                "The sound of <Video 1> continues only as ambient sound: no voice heard in <Video 1> "
                "is a voice reference; each speaking person keeps the voice of their own <Audio> reference.")
+# L'invite légère (02/10, propriétaire : « trop d'infos tue l'info ») : le raccord est déjà dit
+# en tête de la description (SUITE_DEBUT) ; reste ce que celle-ci ne dit pas, la voix.
+SUITE_GARDE_LEGERE = "<Video 1>: fully_preserved - no cut; voices heard in <Video 1> are not voice references."
 SUITE_DEBUT = ("The shot continues <Video 1> without a cut: where each person and object stands and "
                "faces comes from the end of <Video 1>, even where the text below places them otherwise. ")
 
@@ -3520,7 +3538,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         au_depart = {k for k in presents if _norme_replique(fiches[k]["nom"]) not in absents}
         texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs,
                                    suite, au_depart, avec_planche,
-                                   {k for k, f in enumerate(fiches) if f.get("vues")})
+                                   {k for k, f in enumerate(fiches) if f.get("vues")},
+                                   legere=payload.get("invite_legere") is True)
                  + " detailed_description: [Shot 1] "
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
@@ -4245,6 +4264,8 @@ PAGE_HTML = r"""<!doctype html>
     <select id="scenario_decor"><option value="">Aucun</option></select>
     <label><input type="checkbox" id="scenario_plan_par_plan"> Plan par plan : le film s'arrête après chaque
     plan neuf pour que vous le validiez ; « Rejouer » reprend les plans faits sans rien louer</label>
+    <label><input type="checkbox" id="scenario_invite_legere"> Invite courte (à l'essai) : chaque consigne
+    dite une seule fois au modèle vidéo</label>
     <span class="note">Nommez le personnage qui parle dans la phrase de sa réplique : le Studio lui attribue
     la réplique et sa langue.</span>
     <label for="scenario_chanson">Musique de fond (une chanson du Studio, posée après le tournage)</label>
@@ -6497,6 +6518,7 @@ function corpsScenario(){
     definition: document.getElementById("definition").value,
     decor: document.getElementById("scenario_decor").value || null,
     plan_par_plan: document.getElementById("scenario_plan_par_plan").checked,
+    invite_legere: document.getElementById("scenario_invite_legere").checked,
     graine: graine === "" ? null : Number(graine)};
 }
 

@@ -4649,6 +4649,28 @@ def test_summary_et_appears_in_comme_le_guide(h3):
     assert set(re.findall(r"<(?:Subject|Picture|Audio) \d+>", resume)) <= definies
 
 
+def test_l_invite_legere_dit_chaque_chose_une_fois(h3):
+    """02/10, plan 6 : 4 015 caractères, dont la scène 685 ; les voix dites trois fois, le raccord
+    quatre. Propriétaire : « trop d'infos tue l'info ». Même plan, chaque consigne une fois."""
+    v = h3.video_h3
+    args = dict(tenues=(), ecrites={0: "a purple jacket over a yellow hoodie", 1: "a varsity jacket"},
+                objets={2: "objet", 3: "objet"}, voix={0: 1, 1: 2}, presents={0, 1, 2, 3},
+                parleurs={0: 1, 1: 2}, suite=True, planches={0}, vues={2, 3})
+    plein = v.sujets_des_fiches([2, 4, 1, 1], **args)
+    leger = v.sujets_des_fiches([2, 4, 1, 1], legere=True, **args)
+    assert len(leger) < len(plein) * 0.55
+    # Les étiquettes, les voix et les tenues restent ; chacune une fois.
+    assert leger.count("<Audio 1>") == 1 and leger.count("<Audio 2>") == 1
+    assert leger.count("a purple jacket over a yellow hoodie") == 1 and "same face and hair" in leger
+    assert "<Subject 1> (appears in [Shot 1]): fully_preserved - one single person" in leger
+    assert "<Subject 3> (appears in [Shot 1]): fully_preserved - same shape and colour; exactly one." in leger
+    assert v.SUITE_GARDE_LEGERE in leger and v.SUITE_GARDE not in leger
+    assert "summary: [video continuation + reference generation + audio reference] One single shot." in leger
+    assert "Each <Audio> gives only a voice timbre; its words are never said." in leger
+    assert "clothing" not in leger.split("retention_analysis:")[1].replace("same clothing", "")
+    assert v.sujets_des_fiches([1, 1], legere=False) == v.sujets_des_fiches([1, 1])
+
+
 def _finaliser_monte(h3, monkeypatch, tmp_path):
     """Un film de 370 images en trois plans ; les locations réussissent tout de suite."""
     lance, fid = _source_visages(h3, monkeypatch, tmp_path)
