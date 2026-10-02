@@ -6050,6 +6050,11 @@ async def _controle_image(image: bytes, attendus: list, absents: list, personnes
     for f, a in personnes:
         try:
             avis = await _comparer_visage(image, f["id"], a["ou"])
+            # 02/10, film 4, plan 4 refusé : « Ressemblance faible : Tyler » sur la fin du plan 3 ;
+            # rejoué 3 fois, « moyenne » 3 fois. Un « faible » seul ne bloque plus : il est redemandé,
+            # et le second avis compte.
+            if avis.get("ressemblance") == "faible":
+                avis = await _comparer_visage(image, f["id"], a["ou"])
             ressemblances[f["nom"]] = avis.get("ressemblance")
         except HTTPException:
             ressemblances[f["nom"]] = None
