@@ -2758,7 +2758,10 @@ def consigne_depart_reel(numero: int, texte: str) -> str:
             "what each hand holds, the framing. Then fix any later action that the real start makes impossible or "
             "useless (walking to someone already next to them, taking with a hand that is busy), with the smallest "
             "change. If an action that the story expects to have happened is not visible in the images, do not "
-            "assume it. Keep everything else exactly: every line of dialogue word for word with its « » and its "
+            "assume it. Change only what the images show CLEARLY: when unsure (which hand of a character, his "
+            # 02/10, plan 4, trois essais à blanc : une fois sur trois, les mains de Leila inversées à tort.
+            "left or right), keep the text as written. "
+            "Keep everything else exactly: every line of dialogue word for word with its « » and its "
             "[tags], the order of actions, the time of day, the names. If the text already matches, return it "
             "unchanged. Answer with JSON only: {\"texte\": \"the full text of shot %d\", \"changements\": \"what "
             "you changed and why, one short sentence in French, empty if nothing\"}.\n\nShot %d: %s"

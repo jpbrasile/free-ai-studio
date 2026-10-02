@@ -6837,6 +6837,8 @@ async def _adapter_departs(plans: list, film, fins: list, repris) -> list:
             notes.append({"plan": i + 1, "avant": p["image_paroles"], "apres": r["texte"],
                           "changements": r["changements"]})
             plans[i] = dict(p, image_paroles=r["texte"])
+        else:   # 02/10, plan 4 : sans note, rien ne disait que la lecture avait eu lieu
+            notes.append({"plan": i + 1, "changements": "Le départ écrit correspond déjà à la fin filmée."})
     return notes
 
 

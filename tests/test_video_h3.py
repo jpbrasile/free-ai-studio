@@ -5477,6 +5477,12 @@ def test_la_suite_a_tourner_part_de_la_vraie_fin_du_plan_filme(h3, monkeypatch):
     notes = asyncio.run(h3._adapter_departs(plans, "f" * 32, [243, 481], {0, 1}))
     assert plans[2]["image_paroles"] == p3 and "réplique" in notes[0]["erreur"]
     assert asyncio.run(h3._adapter_departs(plans, None, [243, 481], {0, 1})) == []
+    # Rien à changer : la lecture est notée quand même.
+    reponses.append(json.dumps({"texte": p3, "changements": ""}))
+    notes = asyncio.run(h3._adapter_departs(plans, "f" * 32, [243, 481], {0, 1}))
+    assert plans[2]["image_paroles"] == p3 and notes == [{"plan": 3, "changements":
+                                                          "Le départ écrit correspond déjà à la fin filmée."}]
+    assert "when unsure" in v.consigne_depart_reel(2, p3)
 
 
 def test_une_parole_non_ecrite_est_une_faute_meme_si_la_replique_est_dite(h3):
