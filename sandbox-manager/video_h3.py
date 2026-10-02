@@ -2746,6 +2746,43 @@ def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=()) -
             % ((DEJA_FILMES + jointes) if deja else "", histoire, json.dumps(plans_json, ensure_ascii=False)))
 
 
+# 02/10, film 4, demande du propriétaire : « faire relire la vidéo précédente pour améliorer si
+# besoin le prompt du clip suivant ». Le même jour, quatre corrections à la main du début d'une
+# suite : le cadrage (gros plan, pas plan moyen), Tyler déjà arrêté, à cheval, deux mains au
+# guidon. La dernière seconde du plan filmé fait foi ; seul le départ du texte suivant change.
+def consigne_depart_reel(numero: int, texte: str) -> str:
+    return ("The attached images, in order, are the last second of shot %d of a short film, already filmed; the "
+            "last image is its final frame. The text below is the NEXT shot (shot %d): a video model continues "
+            "exactly from that final frame. Rewrite the text so that its STARTING state matches the final frame: "
+            "where each character and object is, their pose (standing, sitting, astride…), which way they face, "
+            "what each hand holds, the framing. Then fix any later action that the real start makes impossible or "
+            "useless (walking to someone already next to them, taking with a hand that is busy), with the smallest "
+            "change. If an action that the story expects to have happened is not visible in the images, do not "
+            "assume it. Keep everything else exactly: every line of dialogue word for word with its « » and its "
+            "[tags], the order of actions, the time of day, the names. If the text already matches, return it "
+            "unchanged. Answer with JSON only: {\"texte\": \"the full text of shot %d\", \"changements\": \"what "
+            "you changed and why, one short sentence in French, empty if nothing\"}.\n\nShot %d: %s"
+            % (numero, numero + 1, numero + 1, numero + 1, texte))
+
+
+def lire_depart_reel(reponse: str, texte: str) -> dict:
+    """{texte, changements} ; ValueError si illisible, ou si une réplique a bougé."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    nouveau = " ".join(str((d or {}).get("texte") or "").split()) if isinstance(d, dict) else ""
+    if not nouveau:
+        raise ValueError("L'adaptation du départ n'a pas pu être lue.")
+    if repliques(nouveau) != repliques(texte):
+        raise ValueError("L'adaptation du départ a touché une réplique : le texte écrit est gardé.")
+    if len(nouveau) < len(texte) // 2:
+        raise ValueError("L'adaptation du départ a trop raccourci le texte : le texte écrit est gardé.")
+    return {"texte": nouveau, "changements": " ".join(str(d.get("changements") or "").split())[:400]}
+
+
 def lire_continuite(reponse: str, nombre: int, textes: list | None = None, deja_filmes=None) -> dict:
     """Avec les textes des plans, un problème qui cite des mots absents de son plan
     est écarté : premier essai réel (29/09), le relecteur réclamait ce qui était déjà écrit.

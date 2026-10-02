@@ -5441,6 +5441,44 @@ def test_au_rejeu_le_relecteur_voit_la_vraie_fin_du_plan_repris(h3, monkeypatch)
     assert h3._fins_vues(None, [243], [0]) == {}
 
 
+def test_la_suite_a_tourner_part_de_la_vraie_fin_du_plan_filme(h3, monkeypatch):
+    # 02/10, film 4, propriétaire : « faire relire la vidéo précédente pour améliorer si besoin
+    # le prompt du clip suivant ». Tyler finit le plan 2 à cheval, deux mains au guidon.
+    v = h3.video_h3
+    ligne = "Leila says: « [French] Regarde ! »"
+    p3 = "Tyler stands beside the bicycle, one hand on it. " + ligne
+    a_cheval = "Tyler is astride the bicycle, both hands on the handlebar. " + ligne
+    r = v.lire_depart_reel('{"texte": "%s", "changements": "Tyler est à cheval."}' % a_cheval.replace('"', '\\"'), p3)
+    assert r == {"texte": a_cheval, "changements": "Tyler est à cheval."}
+    with pytest.raises(ValueError, match="réplique"):
+        v.lire_depart_reel(json.dumps({"texte": "Tyler is astride. Leila says: « [French] Regarde ça ! »"}), p3)
+    with pytest.raises(ValueError):
+        v.lire_depart_reel("rien", p3)
+    assert "last second of shot 2" in v.consigne_depart_reel(2, p3) and "Shot 3: " + p3 in v.consigne_depart_reel(2, p3)
+    # Seule la suite qui suit un plan repris est adaptée, sur les images de la dernière seconde.
+    lues, reponses = [], [json.dumps({"texte": a_cheval, "changements": "à cheval"})]
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: Path(__file__))
+    monkeypatch.setattr(h3.montage, "vignettes", lambda video, numeros, largeur: lues.append(numeros) or
+                        [b"jpg"] * len(numeros))
+
+    async def chat(consigne, quoi, images=None, modele=None):
+        assert len(images) == 3 and "Shot 3: " in consigne
+        return reponses.pop(0)
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    plans = [{"image_paroles": "a", "enchainement": "coupe"}, {"image_paroles": "b", "enchainement": "suite"},
+             {"image_paroles": p3, "enchainement": "suite"}, {"image_paroles": "d", "enchainement": "suite"}]
+    notes = asyncio.run(h3._adapter_departs(plans, "f" * 32, [243, 481], {0, 1}))
+    assert lues == [[456, 468, 480]] and plans[2]["image_paroles"] == a_cheval
+    assert notes == [{"plan": 3, "avant": p3, "apres": a_cheval, "changements": "à cheval"}]
+    assert plans[3]["image_paroles"] == "d"   # le plan d'avant n'est pas filmé : rien à lire
+    # Une réplique touchée : le texte écrit est gardé, et la note le dit.
+    plans[2]["image_paroles"] = p3
+    reponses.append(json.dumps({"texte": "Tyler is astride. Leila says: « [French] Regarde ça ! »"}))
+    notes = asyncio.run(h3._adapter_departs(plans, "f" * 32, [243, 481], {0, 1}))
+    assert plans[2]["image_paroles"] == p3 and "réplique" in notes[0]["erreur"]
+    assert asyncio.run(h3._adapter_departs(plans, None, [243, 481], {0, 1})) == []
+
+
 def test_une_parole_non_ecrite_est_une_faute_meme_si_la_replique_est_dite(h3):
     # 02/10, film 4, plan 2 (prise 4) : ce que l'écoute a entendu, passage par passage.
     v = h3.video_h3

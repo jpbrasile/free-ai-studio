@@ -6777,16 +6777,19 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     musique = parent.get("musique") or {}
     commun_corps = dict(reglages, musique_chanson=musique.get("chanson"),
                         musique_a_partir_du_plan=musique.get("a_partir_du_plan"))
-    try:
-        objets = await _avec_objets_clefs(plans, commun_corps)
-        commun, musique, a_tourner = _scenario_prepare(commun_corps, plans)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
     fins, source = _fins_images(parent), _film_du_scenario(parent)
     # Un scénario arrêté en route : seuls ses plans tournés se reprennent.
     repris = [i for i in video_h3.plans_a_reprendre(parent["plans"], plans, retourner) if i < len(fins)]
     if len(repris) == len(plans):
         raise HTTPException(400, "Aucun plan n'a changé : modifiez un plan, ou cochez ceux à retourner.")
+    # Le départ de la suite à tourner, lu sur le film (02/10) ; `adapter_depart: false` le coupe.
+    adaptations = (await _adapter_departs(plans, source, fins, set(repris))
+                   if corps.get("adapter_depart") is not False else [])
+    try:
+        objets = await _avec_objets_clefs(plans, commun_corps)
+        commun, musique, a_tourner = _scenario_prepare(commun_corps, plans)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     for i in repris:
         a_tourner[i]["reprise"] = {"film": source, "de": fins[i - 1] if i else 0, "a": fins[i]}
     for i, p in enumerate(a_tourner):
@@ -6797,15 +6800,44 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     forcer = corps.get("forcer") is True
     rapport = await _garde_des_regles(plans, commun, forcer,
                                       tournes={i + 1 for i in range(len(plans)) if i not in repris},
-                                      fins_vues=_fins_vues(source, fins, repris))
+                                      fins_vues=_fins_vues(source, fins, repris),
+                                      refus={"plans": plans, "adaptations": adaptations} if adaptations else None)
     try:
         tenues = await _scenario_tenues(commun, plans, [p for p in a_tourner if "reprise" not in p])
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, tenues=tenues, repris=[i + 1 for i in repris],
-                            regles=rapport, force=forcer, ou=ou,
+                            regles=rapport, force=forcer, ou=ou, adaptations=adaptations,
                             plans_initiaux=parent.get("plans_initiaux") or parent["plans"], objets_clefs=objets)
+
+
+async def _adapter_departs(plans: list, film, fins: list, repris) -> list:
+    """Chaque « suite » à tourner juste après un plan repris (déjà filmé) : son texte adapté
+    à la dernière seconde de ce plan (`consigne_depart_reel`, gratuit). `plans` est modifié
+    en place ; rend les notes [{plan, avant, apres, changements} | {plan, erreur}]. Une
+    adaptation illisible garde le texte écrit : les contrôles qui suivent le jugent."""
+    notes, video = [], None
+    chemin = _video_h3_octets(film) if film else None
+    for i, p in enumerate(plans):
+        if not chemin or not i or i in repris or i - 1 not in repris or i - 1 >= len(fins) \
+                or p["enchainement"] != "suite":
+            continue
+        video = video or chemin.read_bytes()
+        debut, fin = (fins[i - 2] if i >= 2 else 0), fins[i - 1]
+        try:
+            images = montage.vignettes(video, sorted({max(debut, fin - 1 - k) for k in (24, 12, 0)}), largeur=640)
+            r = video_h3.lire_depart_reel(await _chat_du_studio(
+                video_h3.consigne_depart_reel(i, p["image_paroles"]), "l'adaptation du départ",
+                images=[_data_url(x) for x in images], modele=video_h3.MODELE_JUGE), p["image_paroles"])
+        except (ValueError, HTTPException, montage.MontageImpossible) as exc:
+            notes.append({"plan": i + 1, "erreur": str(getattr(exc, "detail", exc))})
+            continue
+        if r["texte"] != " ".join(p["image_paroles"].split()):
+            notes.append({"plan": i + 1, "avant": p["image_paroles"], "apres": r["texte"],
+                          "changements": r["changements"]})
+            plans[i] = dict(p, image_paroles=r["texte"])
+    return notes
 
 
 def _fins_vues(film, fins: list, repris: list) -> dict:
