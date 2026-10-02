@@ -6102,6 +6102,49 @@ async def video_h3_scenario_verifier(request: Request, authorization: Optional[s
     return {"rapport": rapport, "non_suivies": regles.non_suivies(rapport, regles.AVANT_TOURNAGE)}
 
 
+async def _avec_objets_clefs(plans: list, corps: dict) -> dict:
+    """Ajoute aux fiches du scénario celles de ses objets clefs (`video_h3.objets_clefs`),
+    tant qu'elles tiennent avec l'image de départ dans les neuf images de H3 : sans
+    place, les photos des personnes passeraient au seul visage (`photos_avec_depart`).
+    L'image d'une fiche neuve est faite par l'image du Studio (gratuite) ; une image
+    impossible laisse l'objet sans fiche, comme avant. Rend la note du scénario."""
+    ids = [f for f in (corps.get("fiches") or ([corps["fiche"]] if corps.get("fiche") else [])) if f]
+    fiches = [video_h3.fiche_lire(f) for f in ids]
+    place = video_h3.MODES["references"]["images_max"] - 1 - sum(video_h3._nombre_images_h3(f) for f in fiches)
+    note = {"ajoutes": [], "sans_fiche": []}
+    du_chat = []
+    if place > 0:
+        try:
+            du_chat = video_h3.lire_objets(await _chat_du_studio(video_h3.consigne_objets(plans),
+                                                                 "la liste des objets clefs"), plans)
+        except HTTPException as exc:   # sans chat : les objets des tableaux seuls
+            note["chat"] = str(exc.detail)
+    for nom in video_h3.objets_clefs(plans, [f["nom"] for f in fiches], place, du_chat):
+        try:
+            fiche = video_h3.fiche_objet_clef(nom)
+            if not fiche.get("images"):
+                image = await _image_du_studio(video_h3.fiche_demande_image(fiche, video_h3.ANGLE_DEPART))
+                fiche = video_h3.fiche_poser_image(fiche["id"], video_h3.ANGLE_DEPART, image)
+        except (HTTPException, ValueError) as exc:
+            note["sans_fiche"].append({"nom": nom, "erreur": str(getattr(exc, "detail", exc))})
+            continue
+        ids.append(fiche["id"])
+        note["ajoutes"].append({"nom": nom, "fiche": fiche["id"]})
+    if note["ajoutes"]:
+        corps["fiches"] = ids
+    return note
+
+
+def _departs_refaits(plans: list) -> set:
+    """Les numéros (1…) des coupes dont l'image de départ sera refaite au tournage,
+    depuis la dernière image du plan d'avant (`_depart_de_coupe`) : toute coupe après
+    le premier plan. 02/10, « Leila et un martien » : rejeu refusé pour la règle 6 sur
+    l'image du découpage du plan 5, qui allait être remplacée ; « tourner quand même »
+    a alors rendu non bloquants les vrais contrôles des plans 2 et 3. Ses règles
+    d'image (6 à 8) se jugent sur l'image neuve, au tournage."""
+    return {i + 1 for i, p in enumerate(plans) if i and p.get("enchainement") == "coupe"}
+
+
 async def _garde_des_regles(plans: list, commun: dict, forcer: bool, tournes=None, rapport=None,
                             refus=None) -> list:
     """Refuse le tournage (409) si une règle d'avant tournage n'est pas suivie, sauf
@@ -6111,7 +6154,9 @@ async def _garde_des_regles(plans: list, commun: dict, forcer: bool, tournes=Non
     `refus` : ajouté tel quel au refus (les plans corrigés, pour la page)."""
     if rapport is None:
         rapport = await _verifier_scenario(plans, commun)
-    fautes = [f for f in regles.non_suivies(rapport, regles.AVANT_TOURNAGE) if tournes is None or f[0] in tournes]
+    refaites = _departs_refaits(plans)
+    fautes = [f for f in regles.non_suivies(rapport, regles.AVANT_TOURNAGE) if (tournes is None or f[0] in tournes)
+              and not (f[0] in refaites and f[1] in regles.NUMEROS["depart"])]
     bloquent = [f for f in fautes if f[1] in REGLES_SANS_PASSE_DROIT] if forcer else fautes
     if bloquent:
         raise HTTPException(409, dict({"message": "Règles non suivies : "
@@ -6301,6 +6346,7 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     corps = await request.json()
     try:
         plans = video_h3.verifier_plans(corps.get("plans"))
+        objets = await _avec_objets_clefs(plans, corps)
         commun, musique, a_tourner = _scenario_prepare(corps, plans)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -6333,7 +6379,7 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer, ou=ou,
-                            correction=refus.get("correction"))
+                            correction=refus.get("correction"), objets_clefs=objets)
 
 
 def _fins_images(sc: dict) -> list:
@@ -6681,6 +6727,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     commun_corps = dict(reglages, musique_chanson=musique.get("chanson"),
                         musique_a_partir_du_plan=musique.get("a_partir_du_plan"))
     try:
+        objets = await _avec_objets_clefs(plans, commun_corps)
         commun, musique, a_tourner = _scenario_prepare(commun_corps, plans)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -6706,7 +6753,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, tenues=tenues, repris=[i + 1 for i in repris],
                             regles=rapport, force=forcer, ou=ou,
-                            plans_initiaux=parent.get("plans_initiaux") or parent["plans"])
+                            plans_initiaux=parent.get("plans_initiaux") or parent["plans"], objets_clefs=objets)
 
 
 def _controle_derniere_image(sid: str, i: int, image: bytes):
@@ -6802,8 +6849,10 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
     cadrage et poses selon le plan), puis contrôlée comme une fin de plan (règles 6 à
     8). Demande du propriétaire, 02/10 (« code le 1 ») : au plan 5 de « Leila et un
     martien », l'image faite au découpage partait du plan 1, et le décor a sauté.
-    Rien ne s'arrête ici : une image refusée ou impossible laisse celle du découpage,
-    et c'est écrit dans `departs_de_coupe`. Rend True si l'image neuve part."""
+    Une image refusée ou impossible laisse celle du découpage, et c'est écrit dans
+    `departs_de_coupe` ; le film ne s'arrête (ValueError) que si cette image-là a des
+    fautes d'image au rapport d'avant tournage, hors « tourner quand même ». Rend True
+    si l'image neuve part."""
     sc = video_h3.scenario_lire(sid)
     plan = sc["plans"][i]
     note = {"plan": i + 1, "depart": None, "garde": plan.get("image_depart"), "note": ""}
@@ -6839,6 +6888,13 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
         note["garde"] = d["id"]
     sc = video_h3.scenario_lire(sid)
     video_h3.scenario_noter(sid, departs_de_coupe=(sc.get("departs_de_coupe") or []) + [note])
+    # L'image du découpage repart : ses fautes d'image, laissées passer avant le tournage
+    # parce qu'elle devait être refaite (`_departs_refaits`), arrêtent ici le film.
+    fautes = [f for f in regles.non_suivies(sc.get("regles") or [], regles.NUMEROS["depart"]) if f[0] == i + 1]
+    if note["garde"] != note["depart"] and fautes and not sc.get("force"):
+        raise ValueError("%s ; et l'image du découpage ne suit pas les règles (%s). Retournez ce plan, ou "
+                         "relancez avec « tourner quand même »." % (
+                             note["note"], " ; ".join("règle %d : %s" % (n, pq) for _, n, pq in fautes)))
     return note["garde"] == note["depart"]
 
 

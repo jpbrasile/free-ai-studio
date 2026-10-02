@@ -76,6 +76,15 @@ def sans_depart_auto(h3, monkeypatch):
     monkeypatch.setattr(h3, "_departs_des_coupes", rien)
 
 
+@pytest.fixture
+def sans_objets_clefs(h3, monkeypatch):
+    """Les tests du tournage écrits avant les fiches d'objets clefs (02/10) : leur chat
+    simulé n'attend pas la question des objets ; elle a ses propres tests."""
+    async def aucun(plans, corps):
+        return {"ajoutes": [], "sans_fiche": []}
+    monkeypatch.setattr(h3, "_avec_objets_clefs", aucun)
+
+
 def client(sandbox):
     return TestClient(sandbox.app, base_url="http://127.0.0.1:8020")
 
@@ -1479,7 +1488,7 @@ def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3
     assert d["relecture"]["corrige"] is False and "rien changé" in d["relecture"]["erreur"]
 
 
-def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path, sans_regles, sans_depart_auto):
+def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_path, sans_regles, sans_depart_auto, sans_objets_clefs):
     v = h3.video_h3
     _autoriser(h3)
     v.poids_noter(True)
@@ -1680,7 +1689,7 @@ def test_une_coupe_apres_un_plan_tourne_part_de_sa_derniere_image(h3, monkeypatc
     assert note["garde"] == decoupage2 and note["depart"] is None and "aucune image" in note["note"]
 
 
-def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch, sans_regles, sans_depart_auto):
+def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch, sans_regles, sans_depart_auto, sans_objets_clefs):
     """29/09 : « si on change les vêtements on le fait pour tous les plans et on rajoute
     une photo de référence pour la consistance »."""
     v = h3.video_h3
@@ -1844,9 +1853,14 @@ def test_chaque_replique_va_au_personnage_nomme_dans_sa_phrase(h3):
              "« Non, asseyez-vous. » Puis « Bon café. »")
     assert v.attribuer_repliques(texte, [("Léa", "French"), ("James", "English")]) == (
         # Forme du guide (5.4) : (Sx) suit le nom du locuteur dans sa phrase, jamais un second nom.
-        "<Subject 1> sourit à <Subject 2>. <Subject 2> (S1) dit <d>[English] Hello Léa, is this "
-        "seat taken?</d> <Subject 1> (S2) répond <d>[French] Non, asseyez-vous.</d> "
-        "Puis <Subject 1> (S2) <d>[French] Bon café.</d>")
+        # 02/10 : (Sx) est le rang de la PERSONNE dans les fiches, pas l'ordre de parole du
+        # plan — le même numéro d'un plan à l'autre (« la voix change », le propriétaire).
+        "<Subject 1> sourit à <Subject 2>. <Subject 2> (S2) dit <d>[English] Hello Léa, is this "
+        "seat taken?</d> <Subject 1> (S1) répond <d>[French] Non, asseyez-vous.</d> "
+        "Puis <Subject 1> (S1) <d>[French] Bon café.</d>")
+    # Un objet ne prend pas de numéro : Tom, après le ballon, reste (S2).
+    assert v.attribuer_repliques("Tom dit « Hi. »", [("Léa", "French"), ("ballon", "English"), ("Tom", "English")],
+                                 objets={1: "objet"}) == "<Subject 3> (S2) dit <d>[English] Hi.</d>"
     # Un nom dans un autre mot n'est pas un personnage.
     assert v.attribuer_repliques("Jameson entre.", [("James", "English")]) == "Jameson entre."
 
@@ -1905,8 +1919,8 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
         # Chaque personnage n'est placé qu'une fois, par la description elle-même.
         # La caméra en tête quand aucune phrase n'est finie hors réplique (01/10).
         "detailed_description: [Shot 1] The camera holds a static shot throughout. "
-        "<Subject 2> (S1) demande <d>[English] Is this seat taken?</d> "
-        "<Subject 1> (S2) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
+        "<Subject 2> (S2) demande <d>[English] Is this seat taken?</d> "
+        "<Subject 1> (S1) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
     for mauvais, message in (({"langues": {lea: "Klingon"}}, "inconnue"), ({"fiches": [lea, lea]}, "illisible")):
@@ -1932,7 +1946,7 @@ def test_le_profil_voix_part_avec_les_photos_en_audio_de_reference(h3, sans_regl
     invite = plan["resume_public"]["invite"]
     # Le (Sx) de James repris, pas créé (ref-en.txt, 2.4).
     assert "<Subject 2> is the person in <Picture 2>. <Audio 1> is the voice-timbre reference for " \
-           "<Subject 2> (S1)." in invite
+           "<Subject 2> (S2)." in invite
     assert "<Audio 1>: reference - its vocal timbre guides the spoken voice of <Subject 2> in every line; " \
            "the words of <Audio 1> are never said." in invite
     assert "<Audio 2>" not in invite   # Léa n'a pas de voix : H3 lui en invente une
@@ -2376,7 +2390,7 @@ def test_un_scenario_a_deux_pose_la_musique_des_le_plan_voulu(h3, monkeypatch, s
         assert vid["invite"].startswith("subject_definitions: <Subject 1> is the person in <Picture 1>. "
                                         "<Subject 2> is the person in <Picture 2>.")
         assert vid["invite"].endswith("non_diegetic_music: N/A") and "Piano" not in vid["invite"]
-    assert "<Subject 2> (S1) demande <d>[English] Is this seat taken?</d>" in tournes[0]["invite"]
+    assert "<Subject 2> (S2) demande <d>[English] Is this seat taken?</d>" in tournes[0]["invite"]
     assert "<Subject 1> (S1) répond <d>[French] Non.</d>" in tournes[1]["invite"]
     # Le départ se compte en images (124 à la fin du plan 1), pas en secondes arrondies.
     assert poses == [(sc["travaux"][2], c_id, pytest.approx(124 / 24), 0.3)]
@@ -2992,7 +3006,7 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     invite = v.preparer(dict(p0, images=[PNG]))["resume_public"]["invite"]
     # Sans photos de fiche, les noms restent des noms ; James parle anglais.
     assert invite.startswith("First frame: Un café bondé, une chaise vide. ")
-    assert "<Subject" not in invite and "James (S1)" in invite and "[English]" in invite
+    assert "<Subject" not in invite and "James (S2)" in invite and "[English]" in invite
     assert "overall_soundscape" not in invite and "detailed_description" not in invite
     with pytest.raises(ValueError, match="Première image"):
         v.preparer(demande(fiches=[lea]))
@@ -3259,7 +3273,7 @@ def v_lire(h3):
     return lambda rep: h3.video_h3.lire_jugement(rep, 0.0, 12)
 
 
-def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, monkeypatch, sans_regles, sans_depart_auto):
+def test_les_tenues_se_relevent_plan_par_plan_et_se_gardent_sur_la_fiche(h3, monkeypatch, sans_regles, sans_depart_auto, sans_objets_clefs):
     """29/09 : « le profil dérive de la fiche de base, avec des attributs qui changent »."""
     v = h3.video_h3
     _autoriser(h3)
@@ -3781,7 +3795,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     assert r.status_code == 200 and r.json()["non_suivies"] == [[1, 2, "deux actions à la fois"]]
 
 
-def test_avant_de_refuser_le_studio_corrige_une_fois_le_texte(h3, monkeypatch, sans_depart_auto):
+def test_avant_de_refuser_le_studio_corrige_une_fois_le_texte(h3, monkeypatch, sans_depart_auto, sans_objets_clefs):
     """« Leila et un martien », 01/10 : sept règles de texte non suivies au moment de
     tourner, corrigées à la main en trois passages. Le correcteur du découpage les reçoit
     une fois ; gardé s'il fait mieux, la réplique intacte ; sinon le texte d'origine."""
@@ -5082,3 +5096,110 @@ def test_la_page_offre_ici_ou_modal_et_l_envoie(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     assert 'id="ou_choix"' in page and "Ici, sans urgence" in page
     assert page.count("ou: OU") == 5
+
+
+def test_une_suite_ne_redit_ni_le_cadrage_ni_les_places_de_depart(h3):
+    """02/10, « Leila et un martien », plans 3 → 4 : le plan 3 finit sur un zoom avant, le
+    plan 4 redisait « Medium shot » et d'où chacun part ; H3 a recadré et rejoué le salut.
+    Remarque du propriétaire : une suite part du bout de vidéo d'avant."""
+    v = h3.video_h3
+    elements = [
+        {"nom": "the small telescope", "debut": "in the foreground, left of the frame, mounted on a tripod",
+         "mouvement": "none", "fin": "in the foreground, left of the frame, mounted on a tripod"},
+        {"nom": "Zib", "debut": "in the middle ground, centre of the frame, facing left, holding his hand up",
+         "mouvement": "lowers his hand", "fin": "in the foreground, centre of the frame"},
+        {"nom": "Leila", "debut": "in the foreground, left of the frame, facing right, standing, looking at Zib",
+         "mouvement": "smiles", "fin": "in the foreground, left of the frame"}]
+    texte = ("Medium shot in a quiet garden at night. The small telescope stands in the foreground, left of the "
+             "frame, mounted on a tripod. Zib, starting in the middle ground, centre of the frame, facing left, "
+             "holding his hand up, lowers his hand. In the foreground, left of the frame, facing right, standing, "
+             "looking at Zib, Leila smiles. Leila dit : « Bonjour. Ça va ? »")
+    assert v.texte_de_suite(texte, elements) == (
+        "Zib lowers his hand. Leila smiles. Leila dit : « Bonjour. Ça va ? »")
+    # Sans tableau, seul le cadrage part ; un texte sans cadrage reste tel quel.
+    assert v.texte_de_suite("Wide shot of the park. Tom runs.", None) == "Tom runs."
+    assert v.texte_de_suite("Tom runs.", elements) == "Tom runs."
+    # Le son de <Video 1> n'est qu'ambiance : un plan d'avant muet ne donne pas sa voix.
+    assert "no voice heard in <Video 1> is a voice reference" in v.SUITE_GARDE
+
+
+def test_les_objets_clefs_ont_leur_fiche_aux_vues_multiples(h3):
+    """02/10 : la soucoupe vire à la voiture, « le biscuit … change entre plan ». Un objet
+    qui revient a sa fiche ; d'abord ceux qui bougent, dans la place qui reste."""
+    v = h3.video_h3
+    t = lambda nom, bouge: {"nom": nom, "debut": "in the background", "mouvement": bouge,   # noqa: E731
+                            "fin": "in the background"}
+    plans = [{"image_paroles": "The saucer lands. Zib eats the only cookie.",
+              "elements": [t("the telescope", "none"), t("the saucer", "lands"), t("Zib", "walks")]},
+             {"image_paroles": "The telescope stands. The saucer rises. Zib holds the only cookie.",
+              "elements": [t("the telescope", "none"), t("the saucer", "rises"), t("Zib", "waves")]},
+             {"image_paroles": "A bird flies.", "elements": [t("the bird", "flies")]}]
+    assert v.objets_clefs(plans, ["Zib"], 2) == ["the saucer", "the telescope"]
+    assert v.objets_clefs(plans, ["Zib"], 0) == []
+    reponse = ('Voici : [{"nom": "the only cookie", "plans": [1, 2], "bouge": [1, 2]}, '
+               '{"nom": "the moon", "plans": [1, 2], "bouge": []}, {"nom": "the bird", "plans": [3], "bouge": [3]}]')
+    lus = v.lire_objets(reponse, plans)
+    assert [o["nom"] for o in lus] == ["the only cookie"]   # la lune n'est écrite nulle part, l'oiseau une fois
+    assert v.objets_clefs(plans, ["Zib"], 2, lus) == ["the only cookie", "the saucer"]
+    assert v.lire_objets("pas de JSON", plans) == []
+    f = v.fiche_objet_clef("the saucer")
+    assert f["genre"] == "objet" and f["vues"] and v.fiche_objet_clef("The Saucer")["id"] == f["id"]
+    assert v.CONSIGNE_OBJET_VUES in v.fiche_demande_image(f, v.ANGLE_DEPART)["prompt"]
+    sujets = v.sujets_des_fiches([2, 1], objets={1: "objet"}, vues={1})
+    assert "<Subject 2> is the object in <Picture 3>; it shows this one same object from several angles." in sujets
+
+
+def test_le_tournage_ajoute_les_objets_clefs_tant_qu_il_y_a_place(h3, monkeypatch):
+    """Les fiches d'objets rejoignent celles du scénario sans faire passer les personnes
+    au seul visage (neuf images au plus, l'image de départ comprise)."""
+    v = h3.video_h3
+    leila = v.fiche_creer("Leila", "une fille")["id"]
+    for angle in ("face", "trois_quarts", "profil", "pied"):
+        v.fiche_poser_image(leila, angle, "data:image/png;base64," + PNG)
+    vus = []
+
+    async def chat(consigne, quoi="", **k):
+        vus.append(quoi)
+        return ('[{"nom": "the cookie", "plans": [1, 2], "bouge": [1, 2]}, '
+                '{"nom": "the saucer", "plans": [1, 2], "bouge": [2]}, '
+                '{"nom": "the lamp", "plans": [1, 2], "bouge": []}, '
+                '{"nom": "the car", "plans": [1, 2], "bouge": []}, '
+                '{"nom": "the hat", "plans": [1, 2], "bouge": []}]')
+
+    async def image(demande):
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    plans = [{"image_paroles": "Leila holds the cookie near the saucer, the lamp, the car and the hat."},
+             {"image_paroles": "Leila eats the cookie; the saucer rises; the lamp, the car and the hat stay."}]
+    corps = {"fiches": [leila]}
+    note = asyncio.run(h3._avec_objets_clefs(plans, corps))
+    # 9 images : 4 photos de Leila + l'image de départ ; 4 places, prises par ordre.
+    assert [o["nom"] for o in note["ajoutes"]] == ["the cookie", "the saucer", "the lamp", "the car"]
+    assert corps["fiches"][0] == leila and len(corps["fiches"]) == 5
+    assert v.photos_avec_depart(corps["fiches"]) == (8, False) and vus == ["la liste des objets clefs"]
+    # Un second tournage reprend les mêmes fiches, sans refaire leurs images.
+    monkeypatch.setattr(h3, "_image_du_studio", None)
+    corps2 = {"fiches": [leila]}
+    asyncio.run(h3._avec_objets_clefs(plans, corps2))
+    assert corps2["fiches"] == corps["fiches"]
+    # Sans place, rien n'est demandé.
+    plein = {"fiches": corps["fiches"]}
+    assert asyncio.run(h3._avec_objets_clefs(plans, plein)) == {"ajoutes": [], "sans_fiche": []}
+
+
+def test_avant_le_tournage_l_image_d_une_coupe_refaite_ne_se_juge_pas(h3):
+    """02/10 : rejeu refusé, « plan 5, règle 6 », sur l'image du découpage d'une coupe
+    qui allait être refaite depuis la fin du plan 4. Le plan 1 et le texte se jugent."""
+    plans = [{"enchainement": "coupe"}, {"enchainement": "suite"}, {"enchainement": "coupe"}]
+    assert h3._departs_refaits(plans) == {3}
+    faute = lambda n: {"n": n, "regle": "", "ok": False, "pourquoi": "x"}   # noqa: E731
+    rapport = [{"plan": 1, "regles": [faute(6)]}, {"plan": 3, "regles": [faute(6), faute(7)]}]
+    with pytest.raises(h3.HTTPException) as refus:
+        asyncio.run(h3._garde_des_regles(plans, {}, False, rapport=rapport))
+    assert "plan 1, règle 6" in refus.value.detail["message"] and "plan 3" not in refus.value.detail["message"]
+    rapport = [{"plan": 3, "regles": [faute(6), faute(1)]}]
+    with pytest.raises(h3.HTTPException) as refus:
+        asyncio.run(h3._garde_des_regles(plans, {}, False, rapport=rapport))
+    assert refus.value.detail["message"] == "Règles non suivies : plan 3, règle 1 : x"
+    assert asyncio.run(h3._garde_des_regles(plans, {}, False, rapport=[{"plan": 3, "regles": [faute(8)]}]))

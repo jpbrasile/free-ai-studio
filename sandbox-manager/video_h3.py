@@ -557,7 +557,11 @@ def attribuer_repliques(texte: str, sujets: list, garder_noms: bool = False, obj
         if dans_la_phrase:
             nom_du_locuteur[dans_la_phrase[0][0]] = k
             dit_par_son_nom.add(m.start())
-        locuteurs.setdefault(k, len(locuteurs) + 1)
+        # Un numéro par PERSONNE, le même dans tous les plans (02/10) : numérotés dans
+        # l'ordre de parole de chaque plan, Zib était (S1) au plan 5 et Leila (S1) au
+        # plan 6, une suite qui reçoit la fin du plan 5, son compris ; « la voix change »
+        # (le propriétaire). Guides de H3 : « The woman is Speaker 1. The man is Speaker 2 ».
+        locuteurs.setdefault(k, sum(1 for r in range(k) if r not in objets) + 1)
         fin_precedente = m.end()
     evenements = sorted([(a, b, "nom", k) for a, b, k in noms]
                         + [(m.start(), m.end(), "replique", m) for m in repliques_vues], key=lambda e: e[0])
@@ -972,6 +976,101 @@ def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
     return fiche
 
 
+# --- Les objets clefs d'un scénario (02/10) -----------------------------------------
+# « Leila et un martien », deuxième tournage : la soucoupe vire à la voiture des plans 3
+# à 5, et « le biscuit est un élément clef aussi, il change entre plan » (le
+# propriétaire). Seules les personnes avaient une fiche : H3 réinventait chaque objet à
+# chaque plan. Un objet que le tableau des plans fait revenir reçoit une fiche d'objet,
+# faite par l'image du Studio : une seule image, l'objet sous plusieurs angles (la
+# « fiche multiface » demandée pour la soucoupe), qui ne coûte qu'une place sur les neuf.
+CONSIGNE_OBJET_VUES = (
+    "Planche de référence d'un seul et même objet, photographie réaliste, fond gris clair uni, lumière "
+    "douce et égale : quatre vues côte à côte, à la même taille — de face, de profil, de dos et de "
+    "trois-quarts au-dessus. Le même modèle exactement sur les quatre vues ; sans marque, logo ni texte, "
+    "aucune personne.")
+OBJETS_CLEFS_PLANS_MIN = 2   # un objet d'un seul plan n'a pas de continuité à tenir
+
+
+def consigne_objets(plans: list) -> str:
+    """Pour le chat du Studio : les objets qui reviennent, tableau ou pas. Le biscuit de
+    « Leila et un martien » n'est dans aucun tableau : on le tient, on le sort d'une
+    poche, il n'est dit que dans les textes."""
+    plans_txt = "\n".join(f"Shot {i + 1}: {p.get('image_paroles', '')}" for i, p in enumerate(plans))
+    return ("Here are the shots of a short film. List the physical OBJECTS (never a person, an animal, a "
+            "place, the sky, the ground or a body part) that are seen in at least two shots and must look "
+            "exactly the same in each: props, vehicles, tools, food. For each, give \"nom\": the name "
+            "copied EXACTLY as the shots write it (the longest form, with its article), \"plans\": the "
+            "numbers of the shots where it is seen, \"bouge\": the numbers of the shots where it moves or "
+            "is handled. Answer with the JSON array only, [] if none.\n\n" + plans_txt)
+
+
+def lire_objets(texte: str, plans: list) -> list:
+    """La réponse du chat, gardée seulement là où le nom se lit dans les plans qu'il cite."""
+    m = re.search(r"\[.*\]", str(texte or ""), re.DOTALL)
+    try:
+        liste = json.loads(m.group(0)) if m else []
+    except ValueError:
+        return []
+    sortie = []
+    for o in liste if isinstance(liste, list) else []:
+        nom = " ".join(str((o or {}).get("nom") or "").split()) if isinstance(o, dict) else ""
+        if not nom:
+            continue
+        ecrit = {i for i, p in enumerate(plans) if _norme_replique(nom) in _norme_replique(p.get("image_paroles", ""))}
+        nums = lambda k: {int(x) - 1 for x in (o.get(k) or []) if str(x).isdigit()} & ecrit   # noqa: E731
+        if len(nums("plans")) >= OBJETS_CLEFS_PLANS_MIN:
+            sortie.append({"nom": nom, "plans": nums("plans"), "bouge": nums("bouge")})
+    return sortie
+
+
+def objets_clefs(plans: list, exclus=(), place: int = 0, du_chat=()) -> list:
+    """Les noms des objets à mettre en fiche, au plus `place` : ceux que le tableau
+    d'au moins deux plans nomme, et ceux que le chat a lus dans les textes (`du_chat`,
+    `lire_objets`), hors `exclus` (les fiches déjà là). D'abord ceux qui bougent dans
+    le plus de plans (un objet qu'on prend, qui se pose, s'envole), puis les plus
+    présents, puis le premier venu."""
+    if place <= 0:
+        return []
+    deja = {_norme_replique(str(n)) for n in exclus}
+    vus = {}
+    for o in du_chat:
+        cle = _norme_replique(o["nom"])
+        if cle not in deja and o["plans"]:
+            vus[cle] = {"nom": o["nom"], "plans": set(o["plans"]), "bouge": set(o["bouge"]),
+                        "premier": min(o["plans"])}
+    for i, p in enumerate(plans or []):
+        for e in (p.get("elements") or []) if isinstance(p, dict) else []:
+            nom = " ".join(str((e or {}).get("nom") or "").split()) if isinstance(e, dict) else ""
+            cle = _norme_replique(nom)
+            if not nom or cle in deja or (hors_champ(e.get("debut")) and hors_champ(e.get("fin"))):
+                continue
+            v = vus.setdefault(cle, {"nom": nom, "plans": set(), "bouge": set(), "premier": i})
+            v["plans"].add(i)
+            if str(e.get("mouvement") or "").strip().lower().rstrip(".") not in _IMMOBILE:
+                v["bouge"].add(i)
+    gardes = [v for v in vus.values() if len(v["plans"]) >= OBJETS_CLEFS_PLANS_MIN]
+    gardes.sort(key=lambda v: (-len(v["bouge"]), -len(v["plans"]), v["premier"]))
+    return [v["nom"] for v in gardes[:place]]
+
+
+def fiche_objet_clef(nom: str) -> dict:
+    """La fiche d'objet clef de ce nom : celle d'un tournage d'avant si elle existe (même
+    objet d'un film à l'autre, rien à refaire), sinon une neuve, encore sans image."""
+    cle = _norme_replique(nom)
+    racine = DOSSIER_FICHES
+    for dossier in sorted(racine.iterdir()) if racine.is_dir() else []:
+        try:
+            f = fiche_lire(dossier.name)
+        except ValueError:
+            continue
+        if f.get("genre") == "objet" and f.get("vues") and _norme_replique(f["nom"]) == cle:
+            return f
+    fiche = fiche_creer(nom[:FICHE_NOM_MAX], nom[:FICHE_DESCRIPTION_MAX], "objet")
+    fiche["vues"] = True
+    _fiche_ecrire(fiche)
+    return fiche
+
+
 def fiche_supprimer(fid) -> None:
     dossier = _dossier_fiche(fid)
     fiche_lire(fid)
@@ -997,6 +1096,9 @@ def fiche_demande_image(fiche: dict, angle: str) -> dict:
     if genre in ("objet", "pose"):
         if angle != ANGLE_DEPART:
             raise ValueError("Un objet ou une pose n'a qu'une image : la vue de face.")
+        if genre == "objet" and fiche.get("vues"):   # un objet clef (02/10) : ses vues sur une image
+            return {"prompt": f"{CONSIGNE_OBJET_VUES} L'objet : {fiche['description']}.", "n": 1,
+                    "size": TAILLE_IMAGE_FICHE}
         cadre = ("L'objet seul, entier, centré, sans marque, logo ni texte" if genre == "objet" else
                  "Gros plan sur les mains et les avant-bras seulement, cinq doigts bien formés à chaque "
                  "main, geste net, aucun visage")
@@ -1442,7 +1544,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
                       presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
-                      planches=()) -> str:
+                      planches=(), vues=()) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -1476,7 +1578,9 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         # sont NOMMÉES (30/09, remarque du propriétaire) : « the reference pictures » ne disait
         # pas lesquelles, avec Leila en <Picture 1…4> et Tyler en <Picture 5…8>.
         if k in objets:
-            definitions.append(f"<Subject {k + 1}> is the object in {images}.")
+            definitions.append(f"<Subject {k + 1}> is the object in {images}"
+                               # un objet clef (02/10) : ses vues sur une seule image
+                               + ("; it shows this one same object from several angles." if k in vues else "."))
             garde.append(f"{ou}: fully_preserved - the shape, colour and size of the object in "
                          f"{images} are retained; there is exactly one of it in every frame where it appears.")
             continue
@@ -2013,8 +2117,12 @@ def consigne_decoupage(scenario: str) -> str:
             # 01/10, propriétaire : « raccord par défaut sauf si le scénario veut un coupé ».
             # « Leila et un martien » : six « coupe » (une par mouvement de caméra), aucun raccord.
             "\"suite\" BY DEFAULT: the shot continues the previous one without a cut, and the Studio joins "
-            "them smoothly; a new framing or camera movement is not a reason for a cut. \"coupe\" only "
-            "when the script wants a cut: another place, a jump in time, a new scene. The first shot is "
+            "them smoothly, from the framing the previous shot ends on; a camera movement is not a reason "
+            "for a cut. \"coupe\" only when the script wants a cut: another place, a jump in time, a new "
+            # 02/10, propriétaire : la coupe sert aux changements de point de vue
+            # significatifs ; sinon, le bout de vidéo d'avant (plans 3 → 4 recadrés).
+            "scene, or a clearly different viewpoint (from a wide shot to a close-up, the other side of "
+            "the scene). The first shot is "
             "\"coupe\"; never more than %d shots in a row without a \"coupe\" (put it where the story "
             "allows a cut best). Answer with the JSON array only.\n\n%s"
             % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, PLANS_MAX, scenario))
@@ -2762,9 +2870,72 @@ NOEUDS_RACCORD = ("LoadVideo", "GetVideoComponents", "MiniMaxH3AddGuide")
 # qu'en cas de désaccord sur les places, c'est <Video 1> qui a raison.
 SUITE_GARDE = ("<Video 1> ([Shot 1] start): fully_preserved - [Shot 1] continues <Video 1> in one "
                "continuous take, with no cut: the same framing, and every person and object in the same "
-               "place and facing the same way as at the end of <Video 1>.")
+               "place and facing the same way as at the end of <Video 1>. "
+               # 02/10, « la voix change » quand le plan d'avant ne parle pas, ou qu'un autre y
+               # parle : un guide de H3 écrit « The voice heard in Video 1 guides Speaker 1 ».
+               "The sound of <Video 1> continues only as ambient sound: no voice heard in <Video 1> "
+               "is a voice reference; each speaking person keeps the voice of their own <Audio> reference.")
 SUITE_DEBUT = ("The shot continues <Video 1> without a cut: where each person and object stands and "
                "faces comes from the end of <Video 1>, even where the text below places them otherwise. ")
+
+
+# 02/10, « Leila et un martien », plans 3 → 4 : le plan 3 finit sur un zoom avant ; le
+# plan 4, une suite, redisait « Medium shot », le télescope au premier plan et Zib
+# « starting in the middle ground » : H3 a suivi le texte, recadré et rejoué le salut.
+# Remarque du propriétaire : la coupe sert aux vrais changements de point de vue ; une
+# suite part de la fin du plan d'avant. Le texte d'une suite ne dit donc plus ni le
+# cadrage, ni ce qui ne bouge pas, ni d'où partent ceux qui bougent : <Video 1> le montre.
+_CADRAGE_EN_TETE = re.compile(
+    r"^\s*(?:an?\s+)?(?:extreme\s+|very\s+|tight\s+|static\s+)?(?:close[- ]?up|medium(?:[- ]close(?:[- ]?up)?)?"
+    r"(?:[- ]wide)?\s+shot|medium\s+close[- ]?up|wide\s+shot|long\s+shot|full\s+shot|establishing\s+shot|"
+    r"over[- ]the[- ]shoulder\s+shot|two[- ]shot|gros\s+plan|plan\s+(?:large|moyen|rapproch[ée]|serr[ée]|"
+    r"d'ensemble|am[ée]ricain))\b[^.!?]*[.!?]\s*", re.IGNORECASE)
+# Une phrase : jusqu'à son point, une réplique « … » comprise avec ses propres points.
+_PHRASES = re.compile(r"[^.!?«]*(?:«[^»]*»[^.!?«]*)*(?:[.!?]+\s*|$)")
+_IMMOBILE = ("", "none", "no", "nothing", "static", "still", "aucun", "rien", "immobile")
+
+
+def texte_de_suite(texte: str, elements) -> str:
+    """Le texte d'une « suite » sans ce que la fin du plan d'avant montre déjà : la
+    phrase du cadrage en tête, les phrases sur les seuls éléments immobiles, et l'état
+    de départ de chacun (« starting … », ou en tête de phrase). Les gestes,
+    les arrivées et les répliques restent. Sans tableau, seul le cadrage part."""
+    t = _CADRAGE_EN_TETE.sub("", str(texte or ""), count=1)
+    tableau = [e for e in (elements or []) if isinstance(e, dict) and str(e.get("nom") or "").strip()]
+    if not tableau:
+        return t.strip() or str(texte or "").strip()
+    bougent = [e for e in tableau if str(e.get("mouvement") or "").strip().lower().rstrip(".") not in _IMMOBILE]
+    immobiles = [e for e in tableau if e not in bougent]
+    noms = lambda es: [str(e["nom"]).strip() for e in es]   # noqa: E731
+    contient = lambda p, n: re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", p, re.IGNORECASE)   # noqa: E731
+    gardees = []
+    for p in _PHRASES.findall(t):
+        if not p.strip():
+            continue
+        if "«" not in p and any(contient(p, n) for n in noms(immobiles)) \
+                and not any(contient(p, n) for n in noms(bougent)):
+            continue
+        # Seulement l'état d'un élément que la phrase nomme ; et, en tête de phrase, le plus
+        # long qui colle : Leila et le télescope partent tous deux « in the foreground,
+        # left of the frame », la phrase « …, looking into the small telescope, Leila
+        # turns » est celle de Leila. Un état de départ se reconnaît aussi par son début
+        # seul (« …, standing, Leila looks at Zib » : sans « looking at Zib »).
+        motifs = []
+        for e in tableau:
+            d = " ".join(str(e.get("debut") or "").split()).rstrip(" ,.")
+            if d and not hors_champ(d) and contient(p, str(e["nom"]).strip()):
+                parts = [x.strip() for x in d.split(",") if x.strip()]
+                motifs += [(k, r"\s*,\s*".join(re.escape(x) for x in parts[:k])) for k in range(1, len(parts) + 1)]
+        for _, debut in sorted(motifs, reverse=True):
+            p = re.sub(r",?\s*starting\s+" + debut + r"\s*,", "", p, count=1, flags=re.IGNORECASE)
+        for _, debut in sorted(motifs, reverse=True):
+            court = re.sub(r"^\s*" + debut + r"\s*,\s*", "", p, count=1, flags=re.IGNORECASE)
+            if court != p:
+                p = court
+                break
+        p = p.lstrip()
+        gardees.append(p[:1].upper() + p[1:])
+    return " ".join(x.strip() for x in gardees).strip() or t.strip() or str(texte or "").strip()
 
 
 def ajouter_raccord(demande: dict, fin_b64: str) -> dict:
@@ -2970,7 +3141,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                    if isinstance(e, dict) and hors_champ(e.get("debut"))}
         au_depart = {k for k in presents if _norme_replique(fiches[k]["nom"]) not in absents}
         texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs,
-                                   suite, au_depart, avec_planche)
+                                   suite, au_depart, avec_planche,
+                                   {k for k, f in enumerate(fiches) if f.get("vues")})
                  + " detailed_description: [Shot 1] "
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
@@ -3088,7 +3260,8 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
         raise ValueError(f"Cette chaîne a déjà {PLANS_MAX} plans : au-delà, l'image se dégrade. "
                          "Repartez d'une image.")
     voie = voie_prolonger(precedent)
-    base = dict(payload, coupe_s=0)
+    base = dict(payload, coupe_s=0, image_paroles=texte_de_suite(payload.get("image_paroles", ""),
+                                                                 payload.get("elements")))
     if voie == "troncon":
         plan = preparer(dict(base, mode="texte", images=[]), graine_hasard)
         d = plan["demande"]
