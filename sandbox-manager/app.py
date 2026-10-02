@@ -4139,6 +4139,8 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
 # même consigne avec une règle « garde le nombre de plans » 7 sur 15 ; free-ai-max
 # (gemini-3.8-flash) 15 sur 15. Même routage gratuit, son propre quota.
 MODELE_CORRECTION = "free-ai-max"
+# L'attente d'une réponse du chat : le routeur attend 120 s chaque service, puis passe au suivant.
+CHAT_DU_STUDIO_S = 300.0
 
 
 async def _chat_du_studio(consigne: str, quoi: str = "la traduction en anglais", images=None,
@@ -4152,8 +4154,11 @@ async def _chat_du_studio(consigne: str, quoi: str = "la traduction en anglais",
     if not cle:
         raise HTTPException(503, "Le chat du Studio n'est pas joignable d'ici (clé interne du routeur "
                                  "absente) : %s est impossible, rien n'est lancé." % quoi)
+    # Plus long que l'attente du routeur par service (120 s) : le 02/10, Gemini Max a expiré à 120 s
+    # sur la correction d'avant tournage, deux fois ; le routeur passait au secours, mais le Studio
+    # avait raccroché à la même seconde, et le secours ne servait à rien.
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(CHAT_DU_STUDIO_S, connect=15.0)) as client:
             r = await client.post(ROUTEUR_INTERNE + "/v1/chat/completions",
                                   headers={"Authorization": "Bearer " + cle, "X-Studio-Interne": "1"},
                                   json={"model": modele, "stream": False,

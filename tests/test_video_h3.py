@@ -3736,6 +3736,10 @@ def test_un_plan_a_deux_repliques_est_coupe_en_deux(h3, monkeypatch):
     assert [p["enchainement"] for p in d["plans"]] == ["coupe", "coupe", "suite"]
     assert [len(v.repliques(p["image_paroles"])) for p in d["plans"]] == [0, 1, 1]
     assert "exactly 2 consecutive shots" in vus[0][1] and "could not be used" in vus[1][1]
+    # 02/10 : le chat avait mis « fixe » (le mot de la caméra) dans l'enchaînement ; la découpe était refusée.
+    camera_mal_placee = json.dumps([dict(m, enchainement="fixe") for m in json.loads(bonne)], ensure_ascii=False)
+    morceaux = v.lire_scission(camera_mal_placee, plans[1])
+    assert [m["enchainement"] for m in morceaux] == ["coupe", "suite"]
     # Au-delà des plans d'un scénario : la découpe n'est pas posée, et c'est dit.
     cinq = v.verifier_plans([dict(plans[0]) for _ in range(v.SCENARIO_PLANS_MAX - 1)] + [plans[1]])
     _faux_chat(monkeypatch, h3, {"la découpe d'un plan à deux répliques": [bonne]}, vus)

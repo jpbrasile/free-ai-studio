@@ -2735,6 +2735,18 @@ def lire_scission(reponse: str, plan: dict) -> list:
     """La découpe du chat, contrôlée : une réplique par morceau, toutes, dans l'ordre."""
     texte = plan["image_paroles"] + " " + plan.get("ambiance", "")
     attendues = repliques(texte)
+    # L'enchaînement des morceaux est posé plus bas, quoi que dise le chat : le 02/10 (« Leila et
+    # l'appareil photo », plan 6), il avait écrit « fixe » (le mot de la caméra), et toute la découpe
+    # était refusée pour « enchaînement inconnu ».
+    t = str(reponse or "")
+    debut, fin = t.find("["), t.rfind("]")
+    try:
+        brut = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        brut = None
+    if isinstance(brut, list):
+        reponse = json.dumps([dict(m, enchainement="suite") if isinstance(m, dict) else m for m in brut],
+                             ensure_ascii=False)
     morceaux = lire_decoupage(reponse, texte)
     if len(morceaux) != len(attendues):
         raise ValueError("La découpe n'a pas rendu un plan par réplique.")
