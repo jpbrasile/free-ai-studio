@@ -1414,6 +1414,12 @@ def lire_visage(reponse: str):
     return x0, y0, x1, y1
 
 
+# Sous cette largeur (pixels de l'image), un visage ne se compare pas à une fiche : la règle 7
+# ne conclut pas. Mesuré le 02/10 (film 4) : 93-111 px, « faible » à tort ; 350 px, « forte ».
+VISAGE_MIN_PX = 128
+TROP_PETIT = "trop petit"
+
+
 def zone_gros_plan(visage: tuple) -> tuple:
     """Du visage au gros plan : les cheveux au-dessus, le cou en dessous, un peu
     d'air sur les côtés (comme les recadrages faits à la main le 28/09)."""

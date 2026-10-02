@@ -764,6 +764,17 @@ def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:
     return valeur[0]
 
 
+def largeur_image(image: bytes) -> int:
+    """La largeur d'une image, en pixels."""
+    with tempfile.TemporaryDirectory() as dossier:
+        chemin = Path(dossier, "image")
+        chemin.write_bytes(image)
+        try:
+            return int(_sonde(chemin, "width"))
+        except ValueError as exc:
+            raise MontageImpossible("La largeur de l'image est illisible.") from exc
+
+
 def _cadence(chemin: Path) -> tuple[int, int]:
     num, _, den = _sonde(chemin, "r_frame_rate").partition("/")
     try:

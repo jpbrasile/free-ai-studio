@@ -7505,12 +7505,16 @@ def _data_url(octets: bytes) -> str:
     return "data:%s;base64,%s" % (type_mime, base64.b64encode(octets).decode())
 
 
-async def _gros_plan_visage(octets: bytes, qui: str = "", ou: str = ""):
+async def _boite_visage(octets: bytes, qui: str = "", ou: str = ""):
+    """La boîte (x0, y0, x1, y1, en fractions) du visage de `qui`, ou None."""
+    return video_h3.lire_visage(await _chat_du_studio(video_h3.consigne_visage(qui, ou), "la recherche du visage",
+                                                      images=[_data_url(octets)]))
+
+
+async def _gros_plan_visage(octets: bytes, qui: str = "", ou: str = "", visage=None):
     """Le gros plan du visage de `qui` (sinon du visage principal), en PNG ; None si le
-    modèle qui voit n'en trouve pas."""
-    reponse = await _chat_du_studio(video_h3.consigne_visage(qui, ou), "la recherche du visage",
-                                    images=[_data_url(octets)])
-    visage = video_h3.lire_visage(reponse)
+    modèle qui voit n'en trouve pas. `visage` : sa boîte, déjà trouvée."""
+    visage = visage or await _boite_visage(octets, qui, ou)
     if visage is None:
         return None
     try:
@@ -7557,11 +7561,24 @@ async def _comparer_visage(depart: bytes, fid: str, ou: str = "") -> dict:
         raise HTTPException(400, "La fiche n'a encore aucune photo à comparer.")
     # Le visage de CETTE fiche, nommé et décrit (audit du 30/09, réparation 3).
     fiche = video_h3.fiche_lire(fid)
-    visage = await _gros_plan_visage(depart, "%s (%s)" % (fiche["nom"], fiche["description"]), ou) or depart
+    boite = await _boite_visage(depart, "%s (%s)" % (fiche["nom"], fiche["description"]), ou)
+    visage = (await _gros_plan_visage(depart, visage=boite) if boite else None) or depart
     try:
         planche = await asyncio.to_thread(montage.planche_visages, references + [visage])
     except montage.MontageImpossible as exc:
         raise HTTPException(400, str(exc)) from exc
+    # 02/10, film 4 : fin du plan 2 en plan large, Leila de profil, visage de 93 à 111 px sur
+    # 1344 ; « faible » 3 fois sur 3, alors que c'est la Leila du plan 1 (« forte » 3 fois sur 3,
+    # visage de 350 px). Trop petit, le visage ne se juge pas : ni bon, ni mauvais.
+    if boite:
+        try:
+            largeur = round((boite[2] - boite[0]) * await asyncio.to_thread(montage.largeur_image, depart))
+        except montage.MontageImpossible:
+            largeur = None
+        if largeur is not None and largeur < video_h3.VISAGE_MIN_PX:
+            return {"planche": _data_url(planche), "ressemblance": video_h3.TROP_PETIT,
+                    "ecarts": "Visage de %d px de large (moins de %d) : trop petit pour juger la ressemblance."
+                              % (largeur, video_h3.VISAGE_MIN_PX)}
     avis = video_h3.lire_ressemblance(await _chat_du_studio(
         video_h3.consigne_ressemblance(len(references)), "l'avis sur la ressemblance",
         images=[_data_url(o) for o in references + [visage]]))

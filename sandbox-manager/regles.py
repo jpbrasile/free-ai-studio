@@ -538,7 +538,11 @@ def regles_depart(attendus: list, presence, ressemblances: dict, absents=()) -> 
         r[7] = resultat(None, "Une comparaison de visage n'a pas pu être lue.")
     else:
         faibles = [n for n, v in ressemblances.items() if v == "faible"]
-        r[7] = resultat(not faibles, ("Ressemblance faible : " + ", ".join(faibles) + ".") if faibles else "")
+        petits = [n for n, v in ressemblances.items() if v == video_h3.TROP_PETIT]
+        if petits and not faibles:   # 02/10 : un plan large ne se juge pas sur un visage de 100 px
+            r[7] = resultat(None, "Visage trop petit pour juger la ressemblance : " + ", ".join(petits) + ".")
+        else:
+            r[7] = resultat(not faibles, ("Ressemblance faible : " + ", ".join(faibles) + ".") if faibles else "")
     return r
 
 

@@ -288,6 +288,11 @@ def test_regles_6_a_8_l_image_de_depart(r):
     assert x[7]["ok"] is False and x[8]["ok"] is False
     x = r.regles_depart(att, None, {"Leila": None})
     assert x[6]["ok"] is None and x[7]["ok"] is None
+    # 02/10 : un visage trop petit ne se juge pas ; un autre visage faible reste une faute.
+    x = r.regles_depart(att, presence, {"Leila": "trop petit"})
+    assert x[7]["ok"] is None and "trop petit" in x[7]["pourquoi"]
+    assert r.regles_depart(att, presence, {"Leila": "trop petit", "Marc": "faible"})[7]["ok"] is False
+    assert r.regles_depart(att, presence, {"Leila": "forte"})[7]["ok"] is True
     with pytest.raises(ValueError):
         r.lire_presence('{"comptes": [1], "texte_ajoute": false}', 3)
     assert set(r.sans_depart({"enchainement": "suite"})) == {6, 7, 8}

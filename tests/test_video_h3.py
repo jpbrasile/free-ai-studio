@@ -3139,6 +3139,7 @@ def test_l_image_de_depart_se_compare_au_visage_de_la_fiche(h3, monkeypatch):
     planches, vus = [], []
     monkeypatch.setattr(h3.montage, "recadrer_zone", lambda image, zone: CADRE)
     monkeypatch.setattr(h3.montage, "planche_visages", lambda images: planches.append(images) or b"\x89PNGplanche")
+    monkeypatch.setattr(h3.montage, "largeur_image", lambda image: 1344)   # visage de 269 px : il se juge
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
         ['{"x0": 0.4, "y0": 0.2, "x1": 0.6, "y1": 0.4}',
          '{"ressemblance": "faible", "ecarts": "nez plus large, nez plus fin"}'], vus))
@@ -3150,6 +3151,24 @@ def test_l_image_de_depart_se_compare_au_visage_de_la_fiche(h3, monkeypatch):
     assert montrees == ["data:image/jpeg;base64," + JPG, "data:image/png;base64," + base64.b64encode(CADRE).decode()]
     assert c.post("/video-h3/depart/" + "b" * 24 + "/comparer", headers=CLE,
                   json={"fiche": fid}).status_code == 404
+
+
+def test_un_visage_trop_petit_ne_se_juge_pas(h3, monkeypatch):
+    # 02/10, film 4 : fin du plan 2 en plan large (1344 px), visage de 0,07 de large (≈ 94 px) ;
+    # « faible » 3 fois sur 3 pour la Leila du plan 1. Le modèle n'est plus consulté.
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    v = h3.video_h3
+    fid = v.fiche_creer("Leila", "une fille")["id"]
+    v.fiche_poser_image(fid, "face", JPG)
+    vus = []
+    monkeypatch.setattr(h3.montage, "recadrer_zone", lambda image, zone: CADRE)
+    monkeypatch.setattr(h3.montage, "planche_visages", lambda images: b"\x89PNGplanche")
+    monkeypatch.setattr(h3.montage, "largeur_image", lambda image: 1344)
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        ['{"x0": 0.51, "y0": 0.35, "x1": 0.58, "y1": 0.46}', '{"ressemblance": "faible", "ecarts": "profil"}'], vus))
+    d = asyncio.run(h3._comparer_visage(base64.b64decode(PNG), fid))
+    assert d["ressemblance"] == v.TROP_PETIT and "94 px" in d["ecarts"] and len(vus) == 1
+    assert h3.regles.regles_depart([], {"comptes": [], "texte_ajoute": False}, {"Leila": d["ressemblance"]})[7]["ok"] is None
 
 
 def test_la_page_propose_le_visage_la_comparaison_et_la_musique_reglable(h3):
