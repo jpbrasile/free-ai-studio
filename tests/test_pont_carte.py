@@ -154,6 +154,22 @@ def test_garde_attend_que_le_studio_rende_la_carte():
     assert m.actes == ["relance p"] and h.t == 80
 
 
+def test_garde_laisse_la_relance_a_la_file_qui_a_arrete_llama(tmp_path, monkeypatch):
+    """02/10 (dsh3) : la file h3r arrête llama pour rendre la carte à l'opérateur et l'écrit dans
+    serveur_arrete.json ; relancer ici reprendrait la carte pendant son travail."""
+    monkeypatch.setattr(pc, "FILE_ETAT", str(tmp_path))
+    (tmp_path / "serveur_arrete.json").write_text("{}", encoding="utf-8")
+    m = FausseMachine(ecoute=False)
+    pc.garde(77, None, "p", conteneur="c", m=m, en_vie=lambda *a: False, present=lambda n: False,
+             dormir=lambda s: None)
+    assert m.actes == []
+    assert "relance laissée à la file h3r" in Path(pc.JOURNAL).read_text(encoding="utf-8")
+    (tmp_path / "serveur_arrete.json").unlink()
+    pc.garde(77, None, "p", conteneur="c", m=m, en_vie=lambda *a: False, present=lambda n: False,
+             dormir=lambda s: None)
+    assert m.actes == ["relance p"], "sans la marque, la garde relance comme avant"
+
+
 def test_garde_ne_fait_rien_si_le_lanceur_a_relance():
     m = FausseMachine(ecoute=True)
     pc.garde(77, None, "p", conteneur="c", m=m, en_vie=lambda *a: False, present=lambda n: False,

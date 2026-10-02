@@ -195,7 +195,7 @@ def liberer(m=None, lancer=None, lire=studio_file, **tenir_kw):
     finally:
         m.rendre(fds)
         if arrete:
-            res["relance_llama"] = m.relancer_llama(m.profil)
+            res["relance_llama"] = relancer_sauf_file(m, m.profil)
         journal(**res)
     return 0 if "erreur" not in res else 1
 
@@ -246,8 +246,17 @@ def garde(pid, cree, profil, conteneur=None, m=None, en_vie=vivant, present=cont
     if m.llama_ecoute():
         return 0  # le lanceur a fini proprement : rien à faire
     journal(evenement="garde", lanceur=pid, constat="lanceur disparu, llama arrêté", attendu=attendu,
-            relance_llama=m.relancer_llama(profil))
+            relance_llama=relancer_sauf_file(m, profil))
     return 0
+
+
+def relancer_sauf_file(m, profil, etat=None):
+    """Relance llama, SAUF si la file h3r l'a arrêté exprès pour l'opérateur (02/10, demande de dsh3) :
+    elle a écrit `serveur_arrete.json` et déposera elle-même la relance. Relancer ici reprendrait la carte
+    pendant le travail de l'opérateur."""
+    if os.path.exists(os.path.join(etat or FILE_ETAT, "serveur_arrete.json")):
+        return "relance laissée à la file h3r (serveur_arrete.json présent)"
+    return m.relancer_llama(profil)
 
 
 def main(argv):
