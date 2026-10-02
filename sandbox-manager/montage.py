@@ -534,9 +534,41 @@ def psnr(distordu: Path, reference: Path) -> tuple:
     return tuple(float(x) for x in m.groups())
 
 
-def compacter_av1(film: bytes) -> tuple:
+# 02/10, « Leila et un martien » en 4K : sept passages de carte (3 h 30), puis 102 Mo
+# après la compression, pour une réserve de 100 Mo : le film a été jeté. Au-dessus du
+# plafond, on comprime un cran de plus, jusqu'à tenir ; la fiche garde le PSNR mesuré.
+AV1_CRFS_PLAFOND = (38, 42, 46, 50)
+
+
+def compacter_av1(film: bytes, plafond: int = 0) -> tuple:
     """Le film en AV1 s'il garde la qualité mesurée et pèse moins ; sinon tel quel.
-    Rend (octets, fiche) ; la fiche dit ce qui a été fait et mesuré."""
+    Rend (octets, fiche) ; la fiche dit ce qui a été fait et mesuré. Avec `plafond`
+    (octets), un film qui le dépasse encore est recomprimé plus fort jusqu'à tenir."""
+    octets, fiche = _compacter_av1_qualite(film)
+    if not plafond or len(octets) <= plafond or fiche.get("deja"):
+        return octets, fiche
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "film.mp4")
+        a.write_bytes(film)
+        essais = list(fiche.get("essais") or [])
+        for crf in AV1_CRFS_PLAFOND:
+            sortie = Path(dossier, "av1_%d.mp4" % crf)
+            fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-map", "0:v", "-map", "0:a?",
+                                   *_av1(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                                  capture_output=True, text=True, timeout=DELAI_AV1_S)
+            if fini.returncode != 0 or images(sortie) != images(a):
+                break
+            moyen, pire = psnr(sortie, a)
+            essai = {"crf": crf, "mo": round(sortie.stat().st_size / 1e6, 1),
+                     "psnr_y": round(moyen, 2), "psnr_pire": round(pire, 2)}
+            essais.append(essai)
+            if sortie.stat().st_size <= plafond:
+                return sortie.read_bytes(), dict(essai, codec="av1", avant_mo=round(len(film) / 1e6, 1),
+                                                 sous_plafond=True, essais=essais)
+        return octets, dict(fiche, essais=essais, plafond="aucun réglage ne tient sous le plafond")
+
+
+def _compacter_av1_qualite(film: bytes) -> tuple:
     with tempfile.TemporaryDirectory() as dossier:
         a = Path(dossier, "film.mp4")
         a.write_bytes(film)

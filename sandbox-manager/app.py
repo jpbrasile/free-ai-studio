@@ -5339,7 +5339,7 @@ def _compacter_hd(film: bytes, moteur: str) -> tuple:
     if moteur != "SeedVR2 (agrandissement)":
         return film, None
     try:
-        return montage.compacter_av1(film)
+        return montage.compacter_av1(film, MAX_UPLOAD)
     except (montage.MontageImpossible, subprocess.TimeoutExpired) as exc:
         return film, {"raison": str(exc) or type(exc).__name__}
 

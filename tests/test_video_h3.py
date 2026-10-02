@@ -4856,15 +4856,24 @@ def test_un_film_hd_passe_en_av1_si_la_qualite_mesuree_tient(h3, tmp_path):
         m.AV1_PSNR_Y_MOYEN_MIN = m_seuil
     assert rendu == film.read_bytes() and fiche["codec"] == "h264"
     assert [e["crf"] for e in fiche["essais"]] == list(m.AV1_CRFS) and "qualité" in fiche["raison"]
+    # 02/10 : 102 Mo pour 100 Mo de réserve, film jeté. Au-dessus du plafond, un cran de
+    # plus jusqu'à tenir, PSNR noté ; sous le plafond, rien ne change.
+    assert m.compacter_av1(film.read_bytes(), plafond=10**9)[1]["crf"] == m.AV1_CRFS[0]
+    premier = m.compacter_av1(film.read_bytes())[0]
+    rendu, fiche = m.compacter_av1(film.read_bytes(), plafond=len(premier) - 1)
+    assert fiche["sous_plafond"] and fiche["crf"] in m.AV1_CRFS_PLAFOND and len(rendu) < len(premier), fiche
+    rendu, fiche = m.compacter_av1(film.read_bytes(), plafond=1)
+    assert rendu == premier and "plafond" in fiche
+    assert [e["crf"] for e in fiche["essais"]][-len(m.AV1_CRFS_PLAFOND):] == list(m.AV1_CRFS_PLAFOND)
 
 
 def test_seuls_les_films_hd_sont_compresses_et_un_echec_les_laisse_tels_quels(h3, monkeypatch):
     appels = []
-    monkeypatch.setattr(h3.montage, "compacter_av1", lambda f: appels.append(f) or (b"AV1", {"codec": "av1", "mo": 1}))
+    monkeypatch.setattr(h3.montage, "compacter_av1", lambda f, plafond=0: appels.append(f) or (b"AV1", {"codec": "av1", "mo": 1}))
     assert h3._compacter_hd(b"CLIP", "MiniMax H3 (montage)") == (b"CLIP", None) and appels == []
     assert h3._compacter_hd(b"HD", "SeedVR2 (agrandissement)") == (b"AV1", {"codec": "av1", "mo": 1})
 
-    def casse(f):
+    def casse(f, plafond=0):
         raise h3.montage.MontageImpossible("La mesure de qualité (PSNR) a échoué.")
     monkeypatch.setattr(h3.montage, "compacter_av1", casse)
     assert h3._compacter_hd(b"HD", "SeedVR2 (agrandissement)") == (
@@ -5096,6 +5105,19 @@ def test_la_page_offre_ici_ou_modal_et_l_envoie(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     assert 'id="ou_choix"' in page and "Ici, sans urgence" in page
     assert page.count("ou: OU") == 5
+
+
+def test_une_personne_sans_mouvement_ecrit_reste_vivante(h3):
+    """02/10, plan 1 : « mouvement : none » pour Leila, figée tout le plan (« il manque une
+    indication d'action »). Un objet immobile, lui, ne reçoit rien."""
+    v = h3.video_h3
+    elements = [{"nom": "Leila", "debut": "in the foreground, left", "mouvement": "none", "fin": "same"},
+                {"nom": "the small telescope", "debut": "left", "mouvement": "none", "fin": "left"},
+                {"nom": "Zib", "debut": "off-frame", "mouvement": "none", "fin": "off-frame"},
+                {"nom": "Tom", "debut": "right", "mouvement": "waves", "fin": "right"}]
+    assert v.phrases_vivants(elements, ["Leila", "Zib", "Tom"]) == v.VIVANT.format(nom="Leila")
+    assert v.phrases_vivants(elements, []) == ""
+    assert "none\" for an object only" in v.TABLEAU
 
 
 def test_une_suite_ne_redit_ni_le_cadrage_ni_les_places_de_depart(h3):

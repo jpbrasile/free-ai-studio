@@ -16,7 +16,6 @@ d'origine reposé. Les poids (3,5 Go) sont posés sur le disque Modal de H3 au
 premier agrandissement, et y restent.
 """
 import base64
-import json
 
 import budget_modal
 import video_h3

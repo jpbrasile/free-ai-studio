@@ -1894,8 +1894,9 @@ TABLEAU = ("For each shot, FIRST fill \"elements\", one entry per key element th
            "when the shot starts (place in the frame, which way it faces, standing or sitting, what it holds "
            "and how: which hand, which end of the object is up), "
            "\"mouvement\": what it does during the shot, step by step, each contact with a named surface, or "
-           "\"none\" (a character who changes place: the action only, \"walks in and stops\", never the "
-           "route), \"fin\": where it is when the shot ends}. Use the same name for an element in every shot. "
+           "\"none\" for an object only (a character always does something visible, even small, as the "
+           "story wants it: adjusts the telescope, turns their head, smiles; a character who changes "
+           "place: the action only, \"walks in and stops\", never the route), \"fin\": where it is when the shot ends}. Use the same name for an element in every shot. "
            "In a \"suite\" shot, each element's \"debut\" copies WORD FOR WORD its \"fin\" in the previous shot. "
            # 29/09, quai de gare rejoué : « tenant un parapluie fermé dans la main droite »
            # à la fin du plan 1, sans dire quel bout en haut ; le modèle l'a tenu crosse
@@ -2893,6 +2894,26 @@ _CADRAGE_EN_TETE = re.compile(
 # Une phrase : jusqu'à son point, une réplique « … » comprise avec ses propres points.
 _PHRASES = re.compile(r"[^.!?«]*(?:«[^»]*»[^.!?«]*)*(?:[.!?]+\s*|$)")
 _IMMOBILE = ("", "none", "no", "nothing", "static", "still", "aucun", "rien", "immobile")
+# 02/10, « Leila et un martien », plan 1 : « mouvement : none » pour Leila, qui regarde
+# dans le télescope ; H3 l'a figée tout le plan. Propriétaire : « il manque une indication
+# d'action, leila est figée ». Une personne dans le cadre n'est jamais une statue.
+VIVANT = ("{nom} stays alive, never frozen: {nom} breathes, blinks and makes small natural movements "
+          "of the head and hands while keeping this pose.")
+
+
+def phrases_vivants(elements, personnes) -> str:
+    """Pour chaque personne du tableau, dans le cadre, sans mouvement écrit : la phrase qui
+    la garde vivante. `personnes` : les noms des fiches de personnes (pas des objets)."""
+    noms = {_norme_replique(n): n for n in personnes or ()}
+    phrases = []
+    for e in elements or ():
+        if not isinstance(e, dict):
+            continue
+        nom = noms.get(_norme_replique(str(e.get("nom") or "")))
+        if (nom and str(e.get("mouvement") or "").strip().lower().rstrip(".") in _IMMOBILE
+                and not (hors_champ(e.get("debut")) and hors_champ(e.get("fin")))):
+            phrases.append(VIVANT.format(nom=nom))
+    return " ".join(phrases)
 
 
 def texte_de_suite(texte: str, elements) -> str:
@@ -3089,6 +3110,9 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         raise ValueError("Marque de réplique inconnue : « [%s] ». Une marque donne la langue et/ou "
                          "l'émotion (menu « Langue et émotion d'une réplique »)." % inconnues[0])
     image_paroles = avec_camera(image_paroles, phrase_camera(payload.get("camera")))
+    vivants = phrases_vivants(payload.get("elements"), [f["nom"] for f in fiches if not fiche_est_objet(f)])
+    if vivants:
+        image_paroles = (image_paroles.rstrip() + " " + vivants).strip()
     if fiches:
         sujets = [(f["nom"], langues.get(f["id"], langue)) for f in fiches]
         # Une voix ne part qu'avec qui parle dans ce plan : envoyée à un personnage muet,
