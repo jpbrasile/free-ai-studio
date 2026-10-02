@@ -293,6 +293,24 @@ def test_regles_6_a_8_l_image_de_depart(r):
     assert set(r.sans_depart({"enchainement": "suite"})) == {6, 7, 8}
 
 
+def test_l_age_d_un_personnage_ne_part_pas_aux_juges_d_image(r):
+    """02/10, Leila : « adolescente de 15 ans » à côté de l'image, et Gemini refusait tout
+    (PROHIBITED_CONTENT) ; sans le chiffre, le même contrôle répondait."""
+    v = r.video_h3
+    leila = "adolescente de 15 ans, cheveux châtain clair, sweat jaune"
+    assert v.sans_age(leila) == "adolescente, cheveux châtain clair, sweat jaune"
+    assert v.sans_age("a 15-year-old girl in a yellow hoodie") == "a girl in a yellow hoodie"
+    assert v.sans_age("a girl aged 15, 15 years old") == "a girl,"
+    assert v.sans_age("âgée de 9 ans") == ""
+    assert v.sans_age("deux antennes, une ceinture bleue") == "deux antennes, une ceinture bleue"
+    att = r.attendus_du_depart({"elements": [el("Leila", "foreground, left")]}, [("Leila", leila, "personne")])
+    consigne = r.consigne_presence(att)
+    assert "15" not in consigne and "Leila (adolescente, cheveux châtain clair" in consigne
+    assert "15" not in v.consigne_jugement(["Leila"], "Leila, a 15-year-old girl, looks up.")
+    # Ailleurs, la fiche garde son âge.
+    assert att[0]["description"] == leila
+
+
 def test_regles_9_a_12_le_plan_tourne(r):
     plan = {"elements": [el("Marc", "left", "foreground, centre, clapping")]}
     consigne = r.consigne_regles_clip(["Marc"], plan)

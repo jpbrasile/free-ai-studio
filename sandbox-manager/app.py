@@ -5248,8 +5248,11 @@ def run_finaliser(fid: str):
                                                     % (read_job(jid).get("error") or "voir le travail " + jid))
             _finaliser_noter(fid, etape="Recollage final")
             # Sans réencoder : des locations de la même machine, mêmes réglages.
+            # Cadence reposée et son de l'original : les morceaux agrandis sortent à
+            # 24,77 ou 24,83 images/s (02/10), le film doit rester calé sur sa voix.
             recolle = montage.coller_sans_reencoder(
-                _film_des_passages(plans, "agrandi", lambda p: _extrait(p["agrandi"], p)))
+                _film_des_passages(plans, "agrandi", lambda p: _extrait(p["agrandi"], p)),
+                ips=video_h3.IMAGES_PAR_SECONDE, son=film)
             _finaliser_noter(fid, etape="Compression AV1 (qualité mesurée)")
             final = _film_h3(recolle, {"mode": "finalisation", "mode_titre": "Film finalisé", "source": source,
                                        "echelle": echelle, "finalisation": fid},

@@ -523,6 +523,18 @@ def _av1(crf: int) -> list:
     return ["-c:v", "libsvtav1", "-preset", str(AV1_PRESET), "-crf", str(crf), "-pix_fmt", "yuv420p"]
 
 
+# 02/10, 4K de « Leila et un martien » : l'AV1 rendait 752 images pour 843 (ffmpeg en
+# cadence fixe jetait celles aux horodatages irréguliers des morceaux agrandis), et la
+# garde refusait le film. Chaque image passe, horodatée de neuf à 24 images/s.
+AV1_IPS = 24
+
+
+def _av1_film(crf: int) -> list:
+    # « -fps_mode passthrough » laisse SVT-AV1 sans cadence (Invalid argument) : les
+    # horodatages refaits sont réguliers, la cadence fixe n'a plus rien à jeter.
+    return ["-vf", "setpts=N/(%d*TB)" % AV1_IPS, "-r", str(AV1_IPS), *_av1(crf)]
+
+
 def psnr(distordu: Path, reference: Path) -> tuple:
     """(PSNR-Y moyen, PSNR de la pire image) en dB, une image sur 4."""
     f = ("[0:v]select='not(mod(n\\,4))',setpts=N[a];[1:v]select='not(mod(n\\,4))',setpts=N[b];[a][b]psnr")
@@ -554,7 +566,7 @@ def compacter_av1(film: bytes, plafond: int = 0) -> tuple:
         for crf in AV1_CRFS_PLAFOND:
             sortie = Path(dossier, "av1_%d.mp4" % crf)
             fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-map", "0:v", "-map", "0:a?",
-                                   *_av1(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                                   *_av1_film(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
                                   capture_output=True, text=True, timeout=DELAI_AV1_S)
             if fini.returncode != 0 or images(sortie) != images(a):
                 break
@@ -578,7 +590,7 @@ def _compacter_av1_qualite(film: bytes) -> tuple:
         for crf in AV1_CRFS:
             sortie = Path(dossier, "av1_%d.mp4" % crf)
             fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-map", "0:v", "-map", "0:a?",
-                                   *_av1(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                                   *_av1_film(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
                                   capture_output=True, text=True, timeout=DELAI_AV1_S)
             if fini.returncode != 0 or images(sortie) != images(a):
                 return film, {"codec": codec_video(a), "raison": "l'encodage AV1 a échoué", "essais": essais}
@@ -791,17 +803,24 @@ def vignettes(video: bytes, numeros: list, largeur: int = 320) -> list:
     return [par_numero[int(n)] for n in numeros]
 
 
-def coller_sans_reencoder(videos: list) -> bytes:
+def coller_sans_reencoder(videos: list, ips: float = 0, son: bytes = b"") -> bytes:
     """Des vidéos faites par la même machine, de mêmes réglages, mises bout à bout
     sans réencodage : un film 4K réencodé ici prendrait plusieurs minutes de
-    processeur (finalisation, 30/09/2026). Nombre d'images vérifié."""
-    if len(videos) == 1:
+    processeur (finalisation, 30/09/2026). Nombre d'images vérifié.
+
+    `ips` : la cadence du film, reposée sans réencoder. 02/10, 4K de « Leila et un
+    martien » : les morceaux agrandis sortaient à 24,77 et 24,83 images/s, en deux
+    échelles de temps ; collés tels quels, 843 images duraient 43,6 s pour 34 s de son,
+    et l'AV1 échouait ensuite. `son` : le film d'où reprendre le son (l'original)."""
+    if len(videos) == 1 and not ips:
         return videos[0]
     with tempfile.TemporaryDirectory() as dossier:
         chemins = []
         for k, v in enumerate(videos):
             c = Path(dossier, "m%02d.mp4" % k)
             c.write_bytes(v)
+            if ips:
+                c = _recadencer(c, Path(dossier, "r%02d.mp4" % k), ips)
             chemins.append(c)
         liste, sortie = Path(dossier, "liste.txt"), Path(dossier, "film.mp4")
         liste.write_text("".join("file '%s'\n" % c.name for c in chemins))
@@ -811,4 +830,26 @@ def coller_sans_reencoder(videos: list) -> bytes:
         if images(sortie) != attendu:
             raise MontageImpossible("La mise bout à bout a rendu %d images au lieu de %d."
                                     % (images(sortie), attendu))
+        if son:
+            original, avec_son = Path(dossier, "son.mp4"), Path(dossier, "film_son.mp4")
+            original.write_bytes(son)
+            _lancer(["-i", str(sortie), "-i", str(original), "-map", "0:v", "-map", "1:a?", "-c", "copy",
+                     "-movflags", "+faststart", str(avec_son)], "Le son de l'original")
+            if images(avec_son) != attendu:
+                raise MontageImpossible("Le son repris a laissé %d images au lieu de %d."
+                                        % (images(avec_son), attendu))
+            sortie = avec_son
         return sortie.read_bytes()
+
+
+def _recadencer(morceau: Path, sortie: Path, ips: float) -> Path:
+    """Le même flux vidéo, sans réencodage, horodaté à `ips` images/s sur une échelle de
+    temps commune (`-itsscale` garde l'ordre des images B) ; le son du morceau part, le
+    film reprend celui de l'original."""
+    n = images(morceau)
+    duree = float(_sonde(morceau, "duration"))
+    if n <= 0 or duree <= 0:
+        raise MontageImpossible("Un morceau du film n'a pas pu être lu.")
+    _lancer(["-itsscale", "%.9f" % (n / duree / ips), "-i", str(morceau), "-map", "0:v", "-c", "copy",
+             "-video_track_timescale", str(int(round(ips * 512))), str(sortie)], "La cadence reposée")
+    return sortie

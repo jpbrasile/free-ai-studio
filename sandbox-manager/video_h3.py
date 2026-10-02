@@ -2277,6 +2277,19 @@ def scenario_noter(sid: str, **champs) -> dict:
 
 MODELE_JUGE = "free-ai-max"   # le modèle plus fort du routeur, gratuit, son propre quota
 
+# 02/10, « Leila et un martien » : la fiche « adolescente de 15 ans » à côté d'une image
+# réaliste, et Gemini refuse tout (content_filter: PROHIBITED_CONTENT, non réglable),
+# deux modèles, à chaque essai ; sans le chiffre, le même contrôle répond. Compter ou
+# reconnaître un personnage n'a pas besoin de son âge : il ne part pas aux juges d'image.
+_AGE = re.compile(r"(?:\b(?:âgée?s?|aged?)\s+)?(?:\bde\s+)?\b\d{1,3}\s*(?:ans\b|-?\s*years?\s*-?\s*olds?\b)"
+                  r"|\baged?\s+\d{1,3}\b", re.I)
+
+
+def sans_age(texte: str) -> str:
+    """Le texte sans âge chiffré (« de 15 ans », « 15-year-old », « aged 15 »)."""
+    texte = _AGE.sub("", texte or "")
+    return re.sub(r"\s+([,.;:)])", r"\1", re.sub(r"[ \t]{2,}", " ", texte)).strip()
+
 # Le juge est trop zélé (29/09, remarque du propriétaire : « le LLM red team est trop
 # pressé de trouver un problème ; s'il y a un problème majeur, le qualifier en détail,
 # sinon dire que le clip est propre »). Banc de trois clips vérifiés à l'œil, 4 essais :
@@ -2306,7 +2319,7 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
              "the cut and gone after it." if raccord else "")
     # Le texte du plan : la vidéo doit faire ce qu'il dit, dans le même ordre (28/09).
     voulu = (" The shot is meant to show: «%s». Also say if the video does not show these actions, or not in "
-             "this order." % " ".join(texte.split()) + CAUSE) if texte.strip() else ""
+             "this order." % " ".join(sans_age(texte).split()) + CAUSE) if texte.strip() else ""
     # Le modèle rend le NUMÉRO de l'image, le Studio en fait l'heure : le 28/09,
     # un départ mal annoncé dans la consigne a décalé sa réponse d'une seconde.
     return (refs + f" Image {len(noms) + 1} is a contact sheet of ONE video shot: frames numbered from 1, "

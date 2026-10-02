@@ -481,7 +481,9 @@ def absents_du_depart(plan: dict, fiches: list) -> list:
 
 def consigne_presence(attendus: list, absents=()) -> str:
     tous = list(attendus) + list(absents)
-    liste = " ".join("%d. %s%s, expected: %s." % (i + 1, a["nom"], (" (" + a["description"] + ")") if a["description"]
+    # Sans l'âge : à côté d'une image, Gemini refuse une mineure dont l'âge est écrit (video_h3.sans_age).
+    liste = " ".join("%d. %s%s, expected: %s." % (i + 1, a["nom"], (" (" + video_h3.sans_age(a["description"]) + ")")
+                                                  if video_h3.sans_age(a["description"])
                                                   else "", a["ou"] if i < len(attendus) else "NOT in the image yet")
                      for i, a in enumerate(tous))
     attendu = ("Items 1 to %d are expected each exactly once; items %d to %d must NOT be visible yet (count "

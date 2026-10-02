@@ -4538,6 +4538,7 @@ def _finaliser_monte(h3, monkeypatch, tmp_path):
     monkeypatch.setattr(h3, "run_visages", reussir("visages"))
     monkeypatch.setattr(h3, "run_agrandir", reussir("agrandir"))
     monkeypatch.setattr(h3, "_recoller_tous", lambda videos: b"".join(videos))
+    monkeypatch.setattr(h3.montage, "coller_sans_reencoder", lambda videos, **k: b"".join(videos))
     monkeypatch.setattr(h3.montage, "extraire", lambda video, de, a: b"plan-%d-%d" % (de, a))
     # Le fil tourne ici, pour lire son résultat.
     monkeypatch.setattr(h3, "_finaliser_lancer", h3.run_finaliser)
@@ -4600,7 +4601,7 @@ def test_finaliser_la_4k_ici_en_morceaux_courts_sans_rien_louer(h3, monkeypatch,
         h3.write_job(jid, job)
 
     monkeypatch.setattr(h3, "run_agrandir_maison", run)
-    monkeypatch.setattr(h3.montage, "coller_sans_reencoder", lambda videos: b"".join(videos))
+    monkeypatch.setattr(h3.montage, "coller_sans_reencoder", lambda videos, **k: b"".join(videos))
     monkeypatch.setattr(h3, "_extrait", lambda jid, p: b"x")
     monkeypatch.setattr(h3, "_film_h3", lambda *a, **k: "f" * 32)
     p = client(h3).post("/video-h3/finaliser/prix", headers=CLE,
@@ -4834,6 +4835,36 @@ def _encodeur(nom):
         return False
     r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True)
     return nom in (r.stdout or "")
+
+
+@pytest.mark.skipif(not (_encodeur("libx264") and shutil.which("ffprobe")), reason="ffmpeg avec libx264 absent")
+def test_le_recollage_repose_la_cadence_et_reprend_le_son_de_l_original(h3, tmp_path):
+    """02/10, 4K de « Leila et un martien » : morceaux à 24,77 et 24,83 images/s, en deux
+    échelles de temps ; collés tels quels, 843 images duraient 43,6 s pour 34 s de son."""
+    m = h3.montage
+
+    def clip(nom, cadence, n, son=False):
+        c = tmp_path / nom
+        cmd = ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=%s" % cadence]
+        if son:
+            cmd += ["-f", "lavfi", "-i", "sine=frequency=440"]
+        cmd += ["-frames:v", str(n), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-video_track_timescale",
+                str(int(float(cadence) * 500))]
+        cmd += (["-c:a", "aac", "-t", "%.3f" % (n / 24)] if son else [])
+        subprocess.run(cmd + [str(c)], check=True)
+        return c.read_bytes()
+    morceaux = [clip("a.mp4", "24.774", 30), clip("b.mp4", "24.8333", 28)]
+    original = clip("o.mp4", "24", 58, son=True)
+    film = tmp_path / "film.mp4"
+    film.write_bytes(m.coller_sans_reencoder(morceaux, ips=24, son=original))
+    assert m.images(film) == 58
+    duree = float(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                  "stream=duration", "-of", "csv=p=0", str(film)],
+                                 capture_output=True, text=True).stdout)
+    assert abs(duree - 58 / 24) < 0.1, duree
+    pistes = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0",
+                             str(film)], capture_output=True, text=True).stdout.split()
+    assert pistes.count("audio") == 1
 
 
 @pytest.mark.skipif(not (_encodeur("libsvtav1") and shutil.which("ffprobe")), reason="SVT-AV1 absent (il est dans le conteneur)")
