@@ -2023,7 +2023,9 @@ def lire_ordre(reponse: str, permis) -> list:
 # raccords reste : PLANS_MAX plans au plus d'affilée sans « coupe » (verifier_plans).
 # 6 le soir même (« limite à 6 plans ») : une réplique par plan, coupée par le Studio
 # (plans_a_scinder), et le film campus en a six.
-SCENARIO_PLANS_MAX = 6
+# 8 le 02/10 (décision du propriétaire, film 4) : le plan 6 coupé en deux (6a, 6b) pour qu'une
+# réplique remplisse chaque plan ; le 7e plan était refusé. PLANS_MAX reste la limite technique.
+SCENARIO_PLANS_MAX = 8
 ENCHAINEMENTS = {
     "coupe": "Nouveau plan (la fiche garde le personnage)",
     "suite": "Suite directe (repart de la dernière image du plan précédent)",

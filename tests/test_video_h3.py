@@ -4572,17 +4572,23 @@ def test_le_studio_marque_les_repliques_d_apres_le_chat(h3, monkeypatch):
                                                                           "ne se lit pas."})
 
 
-def test_un_scenario_a_six_plans_mais_pas_cinq_raccords_d_affilee(h3):
+def test_un_scenario_a_huit_plans_mais_pas_cinq_raccords_d_affilee(h3):
     """30/09 : 5 plans, puis 6 le soir (décisions du propriétaire ; une réplique par plan,
-    et le film campus en a six) ; la limite mesurée des raccords reste."""
+    et le film campus en a six), 8 le 02/10 (film 4, plan 6 en deux) ; la limite mesurée des raccords reste."""
     v = h3.video_h3
-    assert v.SCENARIO_PLANS_MAX == 6 and v.PLANS_MAX == 4
+    assert v.SCENARIO_PLANS_MAX == 8 and v.PLANS_MAX == 4
     plan = lambda e: {"image_paroles": "x", "ambiance": "", "enchainement": e}
     assert len(v.verifier_plans([plan("coupe")] + [plan("suite")] * 3 + [plan("coupe"), plan("suite")])) == 6
     with pytest.raises(ValueError, match="4 plans au plus d'affilée sans « coupe »"):
         v.verifier_plans([plan("coupe")] + [plan("suite")] * 4)
     assert "never more than 4 shots in a row" in v.consigne_decoupage("Un film.")
-    assert client(h3).get("/video-h3/etat", headers=CLE).json()["scenario"] == {"plans_max": 6}
+    assert client(h3).get("/video-h3/etat", headers=CLE).json()["scenario"] == {"plans_max": 8}
+    # Film 4 : plan 5 coupe, 6a et 6b en suite ; huit plans passent, neuf non.
+    huit = [plan("coupe"), plan("suite"), plan("suite"), plan("coupe"), plan("coupe"), plan("suite"),
+            plan("suite"), plan("coupe")]
+    assert len(v.verifier_plans(huit)) == 8
+    with pytest.raises(ValueError, match="8 plans au plus"):
+        v.verifier_plans(huit + [plan("coupe")])
 
 
 def test_le_ton_n_est_pas_redit_quand_la_phrase_le_dit_deja(h3):
