@@ -5485,6 +5485,42 @@ def test_la_suite_a_tourner_part_de_la_vraie_fin_du_plan_filme(h3, monkeypatch):
     assert "when unsure" in v.consigne_depart_reel(2, p3)
 
 
+def test_un_texte_change_fait_reecrire_son_tableau(h3, monkeypatch):
+    # 02/10, film 4 : le plan 4 réécrit (Tyler à cheval, deux mains au guidon), son tableau disait
+    # encore « debout, une main » ; la règle 7 cherchait Tyler à cette place-là.
+    v = h3.video_h3
+    debout = [{"nom": "Tyler", "debut": "standing left, one hand on the bicycle", "mouvement": "smiles",
+               "fin": "standing left"}]
+    a_cheval = [{"nom": "Tyler", "debut": "astride the bicycle, left, both hands on the handlebar",
+                 "mouvement": "smiles", "fin": "astride the bicycle, left"}]
+    assert v.lire_tableau_a_jour(json.dumps({"elements": a_cheval})) == a_cheval
+    for illisible in ("rien", json.dumps({"elements": []})):
+        with pytest.raises(ValueError, match="ancien est gardé"):
+            v.lire_tableau_a_jour(illisible)
+    consigne = v.consigne_tableau_a_jour("Tyler is astride.", debout)
+    assert "Shot text: Tyler is astride." in consigne and "one hand on the bicycle" in consigne
+    reponses, demandes = [json.dumps({"elements": a_cheval})], []
+
+    async def chat(consigne, quoi, images=None, modele=None):
+        demandes.append(consigne)
+        return reponses.pop(0)
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    anciens = [{"image_paroles": "a", "elements": debout}, {"image_paroles": "Tyler stands.", "elements": debout},
+               {"image_paroles": "c", "elements": debout}]
+    plans = [dict(anciens[0], image_paroles="a changé"),            # repris : pas touché
+             dict(anciens[1], image_paroles="Tyler is astride."),   # changé, à tourner : réécrit
+             dict(anciens[2])]                                      # inchangé : pas touché
+    notes = asyncio.run(h3._tableaux_a_jour(plans, anciens, {0}))
+    assert len(demandes) == 1 and plans[1]["elements"] == a_cheval
+    assert plans[0]["elements"] == debout and plans[2]["elements"] == debout
+    assert notes == [{"plan": 2, "tableau": "Tableau des éléments réécrit d'après le texte changé."}]
+    # Illisible : l'ancien tableau reste, et la note le dit.
+    plans[1]["elements"] = debout
+    reponses.append("rien")
+    notes = asyncio.run(h3._tableaux_a_jour(plans, anciens, {0}))
+    assert plans[1]["elements"] == debout and "ancien est gardé" in notes[0]["erreur"]
+
+
 def test_une_parole_non_ecrite_est_une_faute_meme_si_la_replique_est_dite(h3):
     # 02/10, film 4, plan 2 (prise 4) : ce que l'écoute a entendu, passage par passage.
     v = h3.video_h3

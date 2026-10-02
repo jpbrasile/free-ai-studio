@@ -6790,6 +6790,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     # Le départ de la suite à tourner, lu sur le film (02/10) ; `adapter_depart: false` le coupe.
     adaptations = (await _adapter_departs(plans, source, fins, set(repris))
                    if corps.get("adapter_depart") is not False else [])
+    adaptations += await _tableaux_a_jour(plans, parent["plans"], set(repris))
     try:
         objets = await _avec_objets_clefs(plans, commun_corps)
         commun, musique, a_tourner = _scenario_prepare(commun_corps, plans)
@@ -6844,6 +6845,30 @@ async def _adapter_departs(plans: list, film, fins: list, repris) -> list:
             plans[i] = dict(p, image_paroles=r["texte"])
         else:   # 02/10, plan 4 : sans note, rien ne disait que la lecture avait eu lieu
             notes.append({"plan": i + 1, "changements": "Le départ écrit correspond déjà à la fin filmée."})
+    return notes
+
+
+async def _tableaux_a_jour(plans: list, anciens: list, repris) -> list:
+    """Chaque plan à tourner dont le texte a changé (à la main, ou par l'adaptation du
+    départ) depuis l'ancien scénario : son tableau `elements` réécrit d'après le nouveau
+    texte (gratuit). `plans` est modifié en place ; rend les notes [{plan, tableau} |
+    {plan, erreur}]. Un tableau illisible garde l'ancien, et le dit."""
+    notes = []
+    for i, p in enumerate(plans):
+        avant = anciens[i].get("image_paroles") if i < len(anciens) and isinstance(anciens[i], dict) else None
+        if i in repris or not p.get("elements") or avant is None \
+                or " ".join(str(avant).split()) == " ".join(p["image_paroles"].split()):
+            continue
+        try:
+            tableau = video_h3.lire_tableau_a_jour(await _chat_du_studio(
+                video_h3.consigne_tableau_a_jour(p["image_paroles"], p["elements"]), "la mise à jour du tableau",
+                modele=video_h3.MODELE_JUGE))
+        except (ValueError, HTTPException) as exc:
+            notes.append({"plan": i + 1, "erreur": str(getattr(exc, "detail", exc))})
+            continue
+        if tableau != p["elements"]:
+            plans[i] = dict(p, elements=tableau)
+            notes.append({"plan": i + 1, "tableau": "Tableau des éléments réécrit d'après le texte changé."})
     return notes
 
 

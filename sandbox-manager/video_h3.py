@@ -2768,6 +2768,33 @@ def consigne_depart_reel(numero: int, texte: str) -> str:
             % (numero, numero + 1, numero + 1, numero + 1, texte))
 
 
+# 02/10, film 4 : le texte du plan 4 corrigé (Tyler à cheval sur le vélo, deux mains au
+# guidon), son tableau disait encore « debout, une main ». La règle 7 cherchait Tyler à
+# la place du tableau, et le tableau part dans l'invite de H3 : un texte changé fait
+# réécrire son tableau.
+def consigne_tableau_a_jour(texte: str, elements: list) -> str:
+    return ("The text of a shot of a short film was rewritten; its table of key elements was not. Rewrite the "
+            "table so that every entry is true to the NEW text: where each element is when the shot starts, "
+            "what it does, where it is when it ends, which hand holds what. Keep the same names, and keep an "
+            "entry unchanged when the text does not contradict it. " + TABLEAU +
+            "Answer with JSON only: {\"elements\": [...]}.\n\nShot text: %s\n\nOld table: %s"
+            % (texte, json.dumps(elements, ensure_ascii=False)))
+
+
+def lire_tableau_a_jour(reponse: str) -> list:
+    """Le tableau réécrit, nettoyé ; ValueError s'il est illisible ou vide."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    tableau = lire_tableau((d or {}).get("elements") if isinstance(d, dict) else None)
+    if not tableau:
+        raise ValueError("Le tableau du plan n'a pas pu être réécrit : l'ancien est gardé.")
+    return tableau
+
+
 def lire_depart_reel(reponse: str, texte: str) -> dict:
     """{texte, changements} ; ValueError si illisible, ou si une réplique a bougé."""
     t = str(reponse or "")
