@@ -1589,6 +1589,97 @@ def test_chaque_coupe_part_d_une_image_que_le_studio_cree_sinon_rien_ne_part(h3,
     assert r.status_code == 502 and len(fils) == 1
 
 
+def test_la_description_de_depart_suit_le_tableau_sans_les_repliques(h3):
+    """02/10 : depuis le texte entier, Gemini a écrit « Delicious! » sur l'image."""
+    v = h3.video_h3
+    plan = {"image_paroles": "Medium shot in a garden at night. Zib bites the cookie. Zib dit : « Delicious! »",
+            "elements": [{"nom": "the saucer", "debut": "in the background, right of the frame"},
+                         {"nom": "Zib", "debut": "in the foreground, centre"},
+                         {"nom": "Tom", "debut": "off-frame"}]}
+    assert v.texte_depart(plan) == (v.PREFIXE_DEPART + "Medium shot in a garden at night. "
+                                    "the saucer : in the background, right of the frame. Zib : in the foreground, centre.")
+    assert v.texte_depart({"image_paroles": "Il dit : « Bonjour. » puis sourit"}) == v.PREFIXE_DEPART + "Il puis sourit"
+    demande, _ = v.demande_image("x", decor=v.depart_poser(PNG), coupe=True)
+    assert v.CONSIGNE_COUPE % 1 in demande["prompt"] and "dernière image du plan précédent" in demande["prompt"]
+
+
+def test_une_coupe_apres_un_plan_tourne_part_de_sa_derniere_image(h3, monkeypatch, tmp_path, sans_regles):
+    """02/10, propriétaire : « code le 1 ». Plan 5 de « Leila et un martien » : l'image de
+    la coupe partait de celle du plan 1, et le décor a sauté. Au tournage, la coupe est
+    refaite depuis la dernière image du plan d'avant ; en panne, celle du découpage part."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    fid = v.fiche_creer("Zib", "un martien")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+
+    async def tenues(commun, plans, a_tourner):
+        return []
+    monkeypatch.setattr(h3, "_scenario_tenues", tenues)
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: image)
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/jpeg;base64," + JPG if len(demandes) > 2 else "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    fils, vrai = [], h3.run_scenario_h3
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    plans = [{"image_paroles": "Zib atterrit dans le jardin", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Zib mange un biscuit et dit « Délicieux. »", "ambiance": "", "enchainement": "coupe",
+              "elements": [{"nom": "the saucer", "debut": "in the background, right of the frame"}]}]
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    assert r.status_code == 200, r.text
+    sid, decoupage = r.json()["id"], r.json()["plans"][1]["image_depart"]
+    video = tmp_path / "plan.mp4"
+    video.write_bytes(b"mp4")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
+    monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG) + b"FIN-DU-PLAN-1")
+    monkeypatch.setattr(h3.montage, "recoller_son", lambda a, b, retirer: a + b)
+    controles = []
+    monkeypatch.setattr(h3, "_controle_derniere_image", lambda s, i, img: controles.append((i, img)) or None)
+    tournes = []
+
+    def tourner(jid, code, precedent, retirer, ou="modal"):
+        tournes.append(h3.read_job(jid)["video"])
+        job = h3.read_job(jid)
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+    monkeypatch.setattr(h3, "run_video_h3", tourner)
+    poses = []
+    vrai_poser = v.depart_poser
+    monkeypatch.setattr(v, "depart_poser", lambda img: poses.append(img) or vrai_poser(img))
+    vrai(*fils[0])   # le fil, joué ici pour attendre sa fin
+    sc = v.scenario_lire(sid)
+    assert sc["etat"] == "réussi", sc["erreur"]
+    assert sc.get("departs_de_coupe") and sc["departs_de_coupe"][0]["note"] == "", sc.get("departs_de_coupe")
+    # La dernière image du plan 1 jointe à Gemini, avec la consigne de coupe, sans la réplique.
+    assert base64.b64decode(poses[-2]).endswith(b"FIN-DU-PLAN-1")
+    assert v.CONSIGNE_COUPE % 2 in demandes[-1]["prompt"] and "Délicieux" not in demandes[-1]["prompt"]
+    assert "the saucer : in the background, right of the frame" in demandes[-1]["prompt"]
+    neuve = sc["plans"][1]["image_depart"]
+    assert neuve != decoupage and sc["departs_de_coupe"] == [{"plan": 2, "depart": neuve, "garde": neuve, "note": ""}]
+    assert controles and controles[-1][0] == 1
+    assert len(tournes) == 2 and fils[0][1][1]["payload"]["depart_reference"] == JPG   # l'image neuve part
+    # L'image du Studio en panne au tournage : celle du découpage part, et c'est écrit.
+
+    async def panne(demande):
+        raise h3.HTTPException(502, "L'image du Studio n'a rendu aucune image.")
+    monkeypatch.setattr(h3, "_image_du_studio", panne)
+    demandes.clear()
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
+    sid2, decoupage2 = r.json()["id"], r.json()["plans"][1]["image_depart"]
+    monkeypatch.setattr(h3, "_image_du_studio", panne)
+    vrai(*fils[1])
+    sc = v.scenario_lire(sid2)
+    assert sc["etat"] == "réussi" and sc["plans"][1]["image_depart"] == decoupage2
+    (note,) = sc["departs_de_coupe"]
+    assert note["garde"] == decoupage2 and note["depart"] is None and "aucune image" in note["note"]
+
+
 def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, monkeypatch, sans_regles, sans_depart_auto):
     """29/09 : « si on change les vêtements on le fait pour tous les plans et on rajoute
     une photo de référence pour la consistance »."""

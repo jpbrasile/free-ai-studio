@@ -785,7 +785,19 @@ def _data_url(b64: str) -> str:
     return f"data:{_TYPES[genre]};base64,{b64}"
 
 
-def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None) -> tuple:
+# La coupe part de la dernière image du plan d'avant, retouchée (02/10). « Leila et un
+# martien », plan 5 : parti de l'image de la coupe d'avant (plan 1, soucoupe encore dans
+# le ciel), le télescope est passé à droite et la soucoupe posée a disparu. Essai réel du
+# 02/10 avec cette consigne, deux images : soucoupe à droite et télescope à gauche gardés,
+# cadrage changé. Gabarit de Google : « change only… Keep everything else… exactly the same ».
+CONSIGNE_COUPE = ("L'image jointe %d est la dernière image du plan précédent : ceci est une COUPE vers le plan "
+                  "suivant, au même endroit et au même instant. Garder exactement le même lieu, la même lumière, "
+                  "le même style, et chaque objet du décor à la même place dans le lieu (ce qui est à gauche reste à "
+                  "gauche, ce qui est à droite reste à droite, rien n'apparaît ni ne disparaît) ; seuls le cadrage, "
+                  "l'angle de la caméra et la pose des personnes changent, comme la description le dit. ")
+
+
+def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
     l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
 
@@ -831,9 +843,12 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
         photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
         # Le 28/09, « garder le même lieu » a recopié la pelouse du plan 1 dans
         # un plan 2 voulu devant une résidence : le lieu précis suit la description.
-        tete += ("L'image jointe %d est le plan précédent : garder le même univers, la même lumière et le même "
-                 "style ; l'endroit précis, le cadrage et la place des personnes suivent la description, et si elle "
-                 "dit le même endroit, garder aussi le même décor et les mêmes enseignes. " % len(photos))
+        if coupe:   # `decor` est la dernière image du plan tourné juste avant (02/10)
+            tete += CONSIGNE_COUPE % len(photos)
+        else:
+            tete += ("L'image jointe %d est le plan précédent : garder le même univers, la même lumière et le même "
+                     "style ; l'endroit précis, le cadrage et la place des personnes suivent la description, et si "
+                     "elle dit le même endroit, garder aussi le même décor et les mêmes enseignes. " % len(photos))
     if len(photos) > PHOTOS_IMAGE_MAX:
         raise ValueError("Quatorze photos au plus sur une image (fiches et plan précédent) : retirez un personnage.")
     demande = {"prompt": tete + description + " " + FIGURANTS_IMAGE, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
@@ -1831,6 +1846,32 @@ def hors_champ(etat: str) -> bool:
     """L'état d'un élément le dit hors du cadre (« off-frame », « out of frame »…)."""
     t = f" {_norme_replique(str(etat or ''))} "
     return any(f" {_norme_replique(h)} " in t for h in HORS_CHAMP + _HORS_CHAMP_DEDANS)
+
+
+PREFIXE_DEPART = "Photo réaliste, cadrage paysage 16:9, image nette, début de la scène : "
+_PAROLES_ENTRE_GUILLEMETS = re.compile(r"«[^»]*»|\"[^\"]*\"")
+_VERBE_DE_PAROLE = re.compile(r"\s*(?:,\s*)?(?:\bet\s+)?\b(?:dit|demande|crie|murmure|chuchote|répond)\s*:\s*",
+                              re.IGNORECASE)
+
+
+def sans_paroles(texte: str) -> str:
+    """Les répliques ôtées d'une description d'image (règle de `sansParoles`, la page)."""
+    t = _VERBE_DE_PAROLE.sub(" ", _PAROLES_ENTRE_GUILLEMETS.sub("", str(texte or "")))
+    t = re.sub(r"\s+([,.])", r"\1", " ".join(t.split()))
+    return t.rstrip(" ,;:").strip()
+
+
+def texte_depart(plan: dict) -> str:
+    """La description de l'image de départ d'un plan : son cadre, puis l'état « debut »
+    de chaque élément dans le champ — la règle de `texteDepart` (la page), ici pour le
+    Studio qui crée l'image seul. 02/10 : depuis le texte entier, Gemini a écrit la
+    réplique « [English, enthusiasm] Delicious! » sur l'image."""
+    presents = [e for e in (plan.get("elements") or []) if isinstance(e, dict) and e.get("nom")
+                and e.get("debut") and not hors_champ(e.get("debut"))]
+    texte = sans_paroles(plan.get("image_paroles") or "")
+    if not presents:
+        return PREFIXE_DEPART + texte
+    return PREFIXE_DEPART + texte.split(".")[0] + ". " + " ".join(f"{e['nom']} : {e['debut']}." for e in presents)
 
 
 def fiches_au_depart(fiches: list, elements, texte: str = "") -> list:

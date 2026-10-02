@@ -4407,7 +4407,8 @@ async def _creer_depart(corps: dict) -> dict:
             image, texte = str(corps["image"]), ""
         else:
             demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
-                                                    corps.get("fiches") or [], corps.get("decor"), tenues)
+                                                    corps.get("fiches") or [], corps.get("decor"), tenues,
+                                                    coupe=corps.get("coupe") is True)
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -6282,7 +6283,7 @@ async def _departs_des_coupes(plans: list, commun: dict) -> bool:
         if p["enchainement"] != "coupe":
             continue
         if not p.get("image_depart"):
-            d = await _creer_depart({"texte": p["image_paroles"], "fiches": ids, "decor": decor,
+            d = await _creer_depart({"texte": video_h3.texte_depart(p), "fiches": ids, "decor": decor,
                                      "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
             p.update(image_depart=d["id"], description_depart=d["texte"])
             pose = True
@@ -6795,6 +6796,52 @@ def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
     return note
 
 
+def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
+    """Une coupe après un plan tourné : son image de départ est refaite depuis la
+    DERNIÈRE image de ce plan, retouchée (même lieu, mêmes objets aux mêmes places ;
+    cadrage et poses selon le plan), puis contrôlée comme une fin de plan (règles 6 à
+    8). Demande du propriétaire, 02/10 (« code le 1 ») : au plan 5 de « Leila et un
+    martien », l'image faite au découpage partait du plan 1, et le décor a sauté.
+    Rien ne s'arrête ici : une image refusée ou impossible laisse celle du découpage,
+    et c'est écrit dans `departs_de_coupe`. Rend True si l'image neuve part."""
+    sc = video_h3.scenario_lire(sid)
+    plan = sc["plans"][i]
+    note = {"plan": i + 1, "depart": None, "garde": plan.get("image_depart"), "note": ""}
+    try:
+        chemin = _video_h3_octets(precedent)
+        if not chemin:
+            raise ValueError("la vidéo du plan précédent est introuvable.")
+        fin = montage.derniere_image(chemin.read_bytes())
+        decor = video_h3.depart_poser(base64.b64encode(fin).decode())
+        ids = [f for f in (sc.get("fiches") or [sc.get("fiche")]) if f]
+        d = asyncio.run(_creer_depart({"texte": video_h3.texte_depart(plan), "fiches": ids, "decor": decor,
+                                       "coupe": True, "elements": plan.get("elements") or [],
+                                       "plans": [x["image_paroles"] for x in sc["plans"]], "plan": i + 1}))
+        image = video_h3.depart_lire(d["id"])
+        note["depart"] = d["id"]
+        arret = _controle_derniere_image(sid, i, image)
+        if arret:
+            raise ValueError("image refusée par le contrôle : " + arret)
+        definition = str(payload.get("definition") or video_h3.DEFINITION_PAR_DEFAUT)
+        recadree = base64.b64encode(montage.recadrer_image(image, *video_h3.DEFINITIONS[definition])).decode()
+    except HTTPException as exc:
+        note["note"] = "image de la coupe non refaite, celle du découpage part : %s" % exc.detail
+    except (ValueError, KeyError, OSError, montage.MontageImpossible) as exc:
+        note["note"] = "image de la coupe non refaite, celle du découpage part : %s" % exc
+    else:
+        if payload.get("mode") == "premiere":   # trop de photos pour tenir avec l'image
+            payload.update(images=[recadree], description_premiere=d["texte"])
+        else:
+            payload.update(mode="references", depart_reference=recadree)
+        plans = [dict(x) for x in video_h3.scenario_lire(sid)["plans"]]
+        plans[i].update(image_depart=d["id"], description_depart=d["texte"])
+        video_h3.scenario_noter(sid, plans=plans)
+        note["garde"] = d["id"]
+    sc = video_h3.scenario_lire(sid)
+    video_h3.scenario_noter(sid, departs_de_coupe=(sc.get("departs_de_coupe") or []) + [note])
+    return note["garde"] == note["depart"]
+
+
 def run_scenario_h3(sid: str, a_tourner: list):
     """Chaque plan attend le précédent ; chacun est recollé au film déjà tourné.
     Un plan repris est découpé dans l'ancien film, sans rien louer."""
@@ -6832,6 +6879,8 @@ def run_scenario_h3(sid: str, a_tourner: list):
                 if en_attente is not None:
                     precedent, en_attente = poser_en_attente(i), None
                 derniere = fin = None
+                if p["enchainement"] == "coupe" and precedent:
+                    _depart_de_coupe(sid, i, precedent, p["payload"])
                 if p["enchainement"] == "suite":
                     chemin = _video_h3_octets(precedent)
                     if not chemin:
