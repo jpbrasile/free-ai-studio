@@ -2638,10 +2638,31 @@ def texte_photo_tenue(nom: str, tenue: str) -> str:
             "Même visage et même coiffure que sur ses photos ; seule la tenue change.")
 
 
-def consigne_continuite(plans: list, histoire: str) -> str:
+DEJA_FILMES = (
+    # 02/10, film 4 : au rejeu du plan 2, le relecteur bloquait « le plan 1 s'achevait en
+    # plan moyen » ; le plan 1 FILMÉ finit en gros plan, et c'est de cette image que la
+    # suite repart. Il jugeait sur un texte que le film a démenti.
+    "Shots marked \"deja_filme\": true are ALREADY FILMED and will not change; their text is only a summary, "
+    "and the film may end in another framing (closer or wider) or another camera position. Never report a "
+    "problem on them. The shot after one of them starts from its real last image: never judge that shot's "
+    "starting framing, camera distance or camera position against the filmed shot's text; judge only who and "
+    "what is there, and what they do. ")
+
+
+def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=()) -> str:
     """Le texte des plans se tient-il ? Un état au début et à la fin de chaque
     plan (28/09/2026) : un plan part de l'état où le précédent s'arrête, et
-    aucune action ne vient avant ce qui la cause. Rien n'est loué."""
+    aucune action ne vient avant ce qui la cause. Rien n'est loué.
+    `deja_filmes` : les numéros (1…) des plans repris d'un film (rejeu) ; `vues` :
+    ceux dont la vraie dernière image est jointe, dans cet ordre."""
+    deja = set(deja_filmes or ())
+    # Banc du 02/10 (texte du film 4, 4 relectures) : la marque seule laissait encore une
+    # remarque sur le recul du plan 2, lue dans le « Medium shot » du texte du plan 1.
+    jointes = ("The attached images, in order, are the REAL last images of shots %s, already filmed: they "
+               "are the truth over those shots' text, and the next shot starts exactly from each of them. "
+               % ", ".join(str(n) for n in vues)) if vues else ""
+    plans_json = [dict({k: p[k] for k in ("image_paroles", "enchainement")}, **({"deja_filme": True} if k in deja else {}))
+                  for k, p in enumerate(plans, 1)]
     # Le 29/09, le relecteur du scénario complet (demande du propriétaire : « rajoute
     # un reviewer pour le scénario complet qui fera comme toi ») : les défauts que
     # l'agent a trouvés à la main en relisant les découpages s'y vérifient tous.
@@ -2715,12 +2736,11 @@ def consigne_continuite(plans: list, histoire: str) -> str:
             "Answer in French, JSON only: {\"etats\": [{\"plan\": number, "
             "\"debut\": \"...\", \"fin\": \"...\"}], \"problemes\": [{\"plan\": number, \"citation\": \"...\", "
             "\"quoi\": \"...\", \"gravite\": \"bloquant|detail\"}]}; "
-            "an empty \"problemes\" list if the shots hold together.\n\nStory: %s\n\nShots: %s"
-            % (histoire, json.dumps([{k: p[k] for k in ("image_paroles", "enchainement")} for p in plans],
-                                    ensure_ascii=False)))
+            "an empty \"problemes\" list if the shots hold together.\n\n%sStory: %s\n\nShots: %s"
+            % ((DEJA_FILMES + jointes) if deja else "", histoire, json.dumps(plans_json, ensure_ascii=False)))
 
 
-def lire_continuite(reponse: str, nombre: int, textes: list | None = None) -> dict:
+def lire_continuite(reponse: str, nombre: int, textes: list | None = None, deja_filmes=None) -> dict:
     """Avec les textes des plans, un problème qui cite des mots absents de son plan
     est écarté : premier essai réel (29/09), le relecteur réclamait ce qui était déjà écrit.
     Seuls les problèmes bloquants restent dans `problemes` (et font corriger) ; les
@@ -2740,8 +2760,8 @@ def lire_continuite(reponse: str, nombre: int, textes: list | None = None) -> di
             plan = int(x["plan"])
         except (KeyError, TypeError, ValueError):
             continue
-        if not (1 <= plan <= nombre and str(x.get("quoi") or "").strip()):
-            continue
+        if not (1 <= plan <= nombre and str(x.get("quoi") or "").strip()) or plan in (deja_filmes or ()):
+            continue   # un plan déjà filmé ne se corrige plus par son texte (02/10)
         citation = _norme_replique(str(x.get("citation") or ""))
         if citation and textes is not None and plan <= len(textes) \
                 and f" {citation} " not in f" {_norme_replique(textes[plan - 1])} ":

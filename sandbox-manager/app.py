@@ -5882,14 +5882,17 @@ async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> t
     return corriges, apres, {"trouves": trouves, "corrige": True}
 
 
-async def _continuite(plans: list, histoire: str) -> dict:
+async def _continuite(plans: list, histoire: str, deja_filmes=None, fins_vues=None) -> dict:
     """Le contrôle de continuité du texte (gratuit) ; illisible, il le dit sans
-    rien bloquer : c'est une aide, le propriétaire relit."""
+    rien bloquer : c'est une aide, le propriétaire relit. `deja_filmes` : les plans
+    repris d'un rejeu, dont le film fait foi, pas le texte (02/10) ; `fins_vues` :
+    {numéro: JPEG} de la vraie dernière image de certains d'entre eux, jointe."""
+    vues = sorted(fins_vues or {})
     try:
         c = video_h3.lire_continuite(await _chat_du_studio(
-            video_h3.consigne_continuite(plans, histoire), "le contrôle de continuité",
-            modele=video_h3.MODELE_JUGE), len(plans),
-            [p["image_paroles"] + " " + p.get("ambiance", "") for p in plans])
+            video_h3.consigne_continuite(plans, histoire, deja_filmes, vues), "le contrôle de continuité",
+            images=[_data_url(fins_vues[n]) for n in vues] or None, modele=video_h3.MODELE_JUGE), len(plans),
+            [p["image_paroles"] + " " + p.get("ambiance", "") for p in plans], deja_filmes)
     except (ValueError, HTTPException) as exc:
         return {"ok": None, "problemes": [], "details": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
     # Le tableau des éléments (29/09) : un élément qui surgit sans origine se voit
@@ -6087,12 +6090,13 @@ async def _regles_depart(plan: dict, fiches: list) -> dict:
     return r
 
 
-async def _verifier_scenario(plans: list, commun: dict, continuite=None) -> list:
+async def _verifier_scenario(plans: list, commun: dict, continuite=None, deja_filmes=None,
+                             fins_vues=None) -> list:
     """Le rapport des règles 0 à 8, plan par plan : [{plan, regles: [{n, regle, ok, pourquoi}]}].
     Gratuit (chat du Studio et modèle qui voit)."""
     fiches = _fiches_du_scenario(commun)
     if continuite is None:
-        continuite = await _continuite(plans, _histoire(plans))
+        continuite = await _continuite(plans, _histoire(plans), deja_filmes, fins_vues)
     texte = regles.regles_texte(plans, continuite, fiches, commun.get("langues") or {},
                                 commun.get("langue") or video_h3.LANGUE_PAROLES,
                                 [_voix_envoyees(p, fiches, commun.get("langues") or {},
@@ -6170,14 +6174,16 @@ def _departs_refaits(plans: list) -> set:
 
 
 async def _garde_des_regles(plans: list, commun: dict, forcer: bool, tournes=None, rapport=None,
-                            refus=None) -> list:
+                            refus=None, fins_vues=None) -> list:
     """Refuse le tournage (409) si une règle d'avant tournage n'est pas suivie, sauf
     « tourner quand même » ; la règle de la voix n'a jamais de passe-droit.
-    `tournes` : les numéros des plans vraiment tournés (un rejeu reprend les autres).
+    `tournes` : les numéros des plans vraiment tournés (un rejeu reprend les autres) ;
+    `fins_vues` : la vraie dernière image de plans repris, montrée au relecteur.
     `rapport` : déjà fait (la correction d'avant tournage vient de le refaire) ;
     `refus` : ajouté tel quel au refus (les plans corrigés, pour la page)."""
     if rapport is None:
-        rapport = await _verifier_scenario(plans, commun)
+        rapport = await _verifier_scenario(plans, commun, deja_filmes=None if tournes is None else
+                                           set(range(1, len(plans) + 1)) - set(tournes), fins_vues=fins_vues)
     refaites = _departs_refaits(plans)
     fautes = [f for f in regles.non_suivies(rapport, regles.AVANT_TOURNAGE) if (tournes is None or f[0] in tournes)
               and not (f[0] in refaites and f[1] in regles.NUMEROS["depart"])]
@@ -6790,7 +6796,8 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     _h3_peut(ou)
     forcer = corps.get("forcer") is True
     rapport = await _garde_des_regles(plans, commun, forcer,
-                                      tournes={i + 1 for i in range(len(plans)) if i not in repris})
+                                      tournes={i + 1 for i in range(len(plans)) if i not in repris},
+                                      fins_vues=_fins_vues(source, fins, repris))
     try:
         tenues = await _scenario_tenues(commun, plans, [p for p in a_tourner if "reprise" not in p])
     except ValueError as exc:
@@ -6799,6 +6806,22 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     return _scenario_lancer(plans, commun, musique, a_tourner, parent=sid, tenues=tenues, repris=[i + 1 for i in repris],
                             regles=rapport, force=forcer, ou=ou,
                             plans_initiaux=parent.get("plans_initiaux") or parent["plans"], objets_clefs=objets)
+
+
+def _fins_vues(film, fins: list, repris: list) -> dict:
+    """{numéro: JPEG} : la vraie dernière image de chaque plan repris suivi d'un plan
+    retourné, lue dans l'ancien film. Le relecteur jugeait la suite sur le TEXTE du
+    plan repris (02/10, film 4 : « le plan 1 s'achevait en plan moyen », il finit en
+    gros plan). Sans film lisible, rien : le relecteur relit le texte, comme avant."""
+    garder = [i for i in repris if i + 1 not in repris and i < len(fins)]
+    chemin = _video_h3_octets(film) if film and garder else None
+    if not chemin:
+        return {}
+    try:
+        images = montage.vignettes(chemin.read_bytes(), [fins[i] - 1 for i in garder], largeur=640)
+    except montage.MontageImpossible:
+        return {}
+    return {i + 1: v for i, v in zip(garder, images)}
 
 
 def _controle_derniere_image(sid: str, i: int, image: bytes):

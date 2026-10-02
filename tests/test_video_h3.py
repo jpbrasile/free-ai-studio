@@ -53,7 +53,7 @@ def sans_traduction(h3, monkeypatch):
 def sans_regles(h3, monkeypatch):
     """Les tests du tournage et du juge écrits avant les règles numérotées (30/09) :
     ni garde, ni contrôle de la dernière image, ni règles 10 à 12 ; elles ont leurs tests."""
-    async def aucune_garde(plans, commun, forcer, tournes=None, rapport=None, refus=None):
+    async def aucune_garde(plans, commun, forcer, tournes=None, rapport=None, refus=None, fins_vues=None):
         return []
 
     async def aucune_regle_clip(*a, **k):
@@ -3804,7 +3804,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     fils = _tourner_sans_louer(h3, monkeypatch)
     probleme = {"ok": False, "problemes": [{"plan": 1, "quoi": "deux actions à la fois", "gravite": "bloquant"}]}
 
-    async def continuite(plans, histoire):
+    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None):
         return probleme
     monkeypatch.setattr(h3, "_continuite", continuite)
     plans = [{"image_paroles": "Léa says « Bonjour. »", "ambiance": "", "enchainement": "coupe"}]
@@ -3831,7 +3831,7 @@ def test_avant_de_refuser_le_studio_corrige_une_fois_le_texte(h3, monkeypatch, s
     fid = _scenario_pret(h3, avec_voix=True)
     fils = _tourner_sans_louer(h3, monkeypatch)
 
-    async def continuite(plans, histoire):
+    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None):
         if "telescope" in plans[0]["image_paroles"]:
             return {"ok": True, "problemes": []}
         return {"ok": False, "problemes": [{"plan": 1, "quoi": "le télescope disparaît", "gravite": "bloquant"}]}
@@ -3869,7 +3869,7 @@ def test_la_voix_du_locuteur_n_a_pas_de_passe_droit(h3, monkeypatch, sans_depart
     fid = _scenario_pret(h3, avec_voix=False)
     fils = _tourner_sans_louer(h3, monkeypatch)
 
-    async def continuite(plans, histoire):
+    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None):
         return {"ok": True, "problemes": []}
     monkeypatch.setattr(h3, "_continuite", continuite)
     plans = [{"image_paroles": "Léa says « Bonjour. »", "ambiance": "", "enchainement": "coupe"}]
@@ -5394,6 +5394,32 @@ def test_un_rejeu_de_rejeu_prend_le_dernier_travail_reussi(h3):
     sc = {"etat": "arrêté", "fins_images": [243, 362], "travaux": [fait, rate]}
     assert h3._film_du_scenario(sc) == fait
     assert h3._film_du_scenario({"etat": "arrêté", "fins_images": [243], "travaux": []}) is None
+
+
+def test_au_rejeu_le_relecteur_voit_la_vraie_fin_du_plan_repris(h3, monkeypatch):
+    # 02/10, film 4 : au rejeu du plan 2, « le plan 1 s'achevait en plan moyen » (son texte) ;
+    # le plan 1 filmé finit en gros plan. Le relecteur reçoit la marque et la vraie image.
+    v = h3.video_h3
+    plans = [{"image_paroles": "Medium shot. Leila.", "enchainement": "coupe"},
+             {"image_paroles": "The camera pulls back.", "enchainement": "suite"}]
+    neuf = v.consigne_continuite(plans, "x")
+    assert "deja_filme" not in neuf and "REAL last images" not in neuf
+    rejeu = v.consigne_continuite(plans, "x", {1}, [1])
+    assert '"deja_filme": true' in rejeu and "REAL last images of shots 1" in rejeu
+    assert rejeu.count("deja_filme") == 2   # la consigne, puis le seul plan 1
+    # Une remarque sur un plan déjà filmé est écartée : son texte ne se corrige plus.
+    reponse = json.dumps({"problemes": [{"plan": 1, "quoi": "cadre", "gravite": "bloquant"},
+                                        {"plan": 2, "quoi": "geste", "gravite": "bloquant"}]})
+    assert [p["plan"] for p in v.lire_continuite(reponse, 2, deja_filmes={1})["problemes"]] == [2]
+    assert len(v.lire_continuite(reponse, 2)["problemes"]) == 2
+    # Seuls les plans repris suivis d'un plan retourné ont leur image, lue à leur dernière image.
+    lues = []
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: Path(__file__))
+    monkeypatch.setattr(h3.montage, "vignettes", lambda video, numeros, largeur: lues.extend(numeros) or
+                        [b"jpg%d" % n for n in numeros])
+    assert h3._fins_vues("f" * 32, [243, 481, 700], [0, 1]) == {2: b"jpg480"}
+    assert lues == [480]
+    assert h3._fins_vues(None, [243], [0]) == {}
 
 
 def test_une_parole_non_ecrite_est_une_faute_meme_si_la_replique_est_dite(h3):
