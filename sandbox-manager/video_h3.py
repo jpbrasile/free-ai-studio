@@ -799,9 +799,20 @@ CONSIGNE_COUPE = ("L'image jointe %d est la dernière image du plan précédent 
                   "le même style, et chaque objet du décor à la même place dans le lieu (ce qui est à gauche reste à "
                   "gauche, ce qui est à droite reste à droite, rien n'apparaît ni ne disparaît) ; seuls le cadrage, "
                   "l'angle de la caméra et la pose des personnes changent, comme la description le dit. ")
+# Le décor a sa fiche (02/10, propriétaire : « les coupes doivent changer drastiquement
+# l'image par rapport à celle de fin […] le décor doit avoir son id image pour la
+# consistance »). Film 4, plan 2 : refait depuis la dernière image du plan 1, un gros
+# plan, le lieu est sorti inventé (brique et terrasse de café au lieu de pierre beige).
+CONSIGNE_LIEU = ("L'image jointe %d est le DÉCOR du film, vide de personnes : c'est le même lieu, avec les mêmes "
+                 "bâtiments, le même sol, la même lumière et chaque élément fixe à la même place (ce qui est à "
+                 "gauche reste à gauche, rien n'apparaît ni ne disparaît) ; les personnes et les objets se placent "
+                 "comme la description le dit. ")
+CONSIGNE_COUPE_LIEU = ("Ceci est une COUPE : le cadrage et l'angle de la caméra sont NETTEMENT différents de ceux du "
+                       "plan précédent (une autre valeur de plan ou un autre côté), comme la description le dit. ")
 
 
-def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False) -> tuple:
+def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False,
+                  lieu=None) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
     l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
 
@@ -812,7 +823,10 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
     `decor` : le numéro d'une image de départ déjà gardée (celle du plan d'avant),
     jointe en dernier pour garder le même lieu. Le 28/09, le plan 2 décrit par
     écrit seulement (« Le Chat Noir ») est sorti avec le même nom mais un autre
-    auvent et une autre rue (remarque du propriétaire)."""
+    auvent et une autre rue (remarque du propriétaire).
+
+    `lieu` : la fiche « décor » du film ; son image remplace `decor` comme référence du
+    lieu, et une coupe change alors franchement de cadrage (CONSIGNE_COUPE_LIEU)."""
     description = texte_image(texte, ameliorations)
     if not isinstance(fiches, (list, tuple)) or len(set(map(str, fiches))) != len(fiches):
         raise ValueError("Liste de fiches illisible.")
@@ -841,7 +855,10 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
     # description l'emporte (essai du 28/09 : photos en sweat et en débardeur).
     tete = ("; ".join(presentation) + " (mêmes visage et coiffure ; même tenue, sauf si la description en "
             "donne une). Chaque personne apparaît une seule fois. ") if photos else ""
-    if decor:
+    if lieu:
+        photos.append(fiche_lieu_image(lieu))
+        tete += CONSIGNE_LIEU % len(photos) + (CONSIGNE_COUPE_LIEU if coupe else "")
+    elif decor:
         octets = depart_lire(decor)
         genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
         photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
@@ -949,17 +966,30 @@ def fiches_liste() -> list:
 # Une POSE aussi (29/09, « améliorer les mains ») : le guide de MiniMax range « a pose »
 # parmi les <Subject N> ; une image du geste des mains donne au modèle un geste réel
 # à suivre au lieu de le deviner.
-GENRES_FICHE = ("personne", "objet", "pose")
+# Un DÉCOR aussi (02/10) : le lieu du film, vide de personnes, joint à chaque image de
+# départ de coupe (`demande_image(lieu=)`). Il ne part jamais à H3 : réglage `decor` du
+# scénario, hors de `fiches`, il ne compte pas dans les neuf images.
+GENRES_FICHE = ("personne", "objet", "pose", "decor")
 
 
 def fiche_est_objet(fiche: dict) -> bool:
-    """Pas une personne (objet ou pose) : ni réplique, ni tenue."""
-    return fiche.get("genre") in ("objet", "pose")
+    """Pas une personne (objet, pose ou décor) : ni réplique, ni tenue."""
+    return fiche.get("genre") in ("objet", "pose", "decor")
+
+
+def fiche_lieu_image(fid) -> str:
+    """L'image (data URL) d'une fiche « décor ». ValueError si ce n'en est pas une, ou sans image."""
+    fiche = fiche_lire(fid)
+    if fiche.get("genre") != "decor":
+        raise ValueError(f"« {fiche['nom']} » n'est pas une fiche de décor.")
+    if ANGLE_DEPART not in (fiche.get("images") or {}):
+        raise ValueError(f"Le décor « {fiche['nom']} » n'a pas encore d'image : créez-la d'abord.")
+    return fiche_image_data_url(fid, ANGLE_DEPART)
 
 
 def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
     if genre not in GENRES_FICHE:
-        raise ValueError("Une fiche est une personne, un objet ou une pose.")
+        raise ValueError("Une fiche est une personne, un objet, une pose ou un décor.")
     nom, description = " ".join(str(nom or "").split()), " ".join(str(description or "").split())
     if not nom or len(nom) > FICHE_NOM_MAX:
         raise ValueError(f"Donnez un nom à la fiche ({FICHE_NOM_MAX} caractères au plus).")
@@ -967,6 +997,7 @@ def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
         raise ValueError(f"Décrivez-la ({FICHE_DESCRIPTION_MAX} caractères au plus) : "
                          + ("âge, visage, coiffure, tenue." if genre == "personne" else
                             "forme, couleur, matière." if genre == "objet" else
+                            "le lieu : bâtiments, sol, éléments fixes, lumière." if genre == "decor" else
                             "ce que fait chaque main et ses doigts."))
     fiche = {"id": os.urandom(6).hex(), "nom": nom, "description": description,
              "cree_le": time.strftime("%Y-%m-%d %H:%M:%S"), "images": {}}  # date-machine
@@ -988,6 +1019,9 @@ CONSIGNE_OBJET_VUES = (
     "douce et égale : quatre vues côte à côte, à la même taille — de face, de profil, de dos et de "
     "trois-quarts au-dessus. Le même modèle exactement sur les quatre vues ; sans marque, logo ni texte, "
     "aucune personne.")
+CADRE_DECOR = ("Vue d'ensemble large du lieu seul, à hauteur d'homme, cadrage paysage : tout le lieu visible, "
+               "vide de personnes et d'animaux, sans texte ni enseigne lisible ; lumière naturelle, photographie "
+               "réaliste.")
 OBJETS_CLEFS_PLANS_MIN = 2   # un objet d'un seul plan n'a pas de continuité à tenir
 
 
@@ -1093,6 +1127,10 @@ def fiche_demande_image(fiche: dict, angle: str) -> dict:
     # angles sont ceux d'une personne. Texte repris des deux fiches essayées le 29/09
     # (ballon uni, prise de tir) : une marque dessinée revenait dans le clip.
     genre = fiche.get("genre")
+    if genre == "decor":   # 02/10 : le lieu seul, la référence des images de départ des coupes
+        if angle != ANGLE_DEPART:
+            raise ValueError("Un décor n'a qu'une image : sa vue d'ensemble.")
+        return {"prompt": f"{fiche['description']}. {CADRE_DECOR}", "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
     if genre in ("objet", "pose"):
         if angle != ANGLE_DEPART:
             raise ValueError("Un objet ou une pose n'a qu'une image : la vue de face.")
@@ -3099,6 +3137,9 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         if mode not in ("references", "premiere", "premiere_derniere"):
             raise ValueError("Une fiche de casting se joue en mode « Références » ou « Première image ».")
         fiche = fiche_lire(fid)
+        if fiche.get("genre") == "decor":
+            raise ValueError(f"« {fiche['nom']} » est un décor : il se choisit comme décor du scénario, "
+                             "pas parmi les fiches du plan.")
         fiches.append(fiche)
         if fiche_est_objet(fiche):
             objets[len(fiches) - 1] = fiche["genre"]
@@ -3755,6 +3796,7 @@ PAGE_HTML = r"""<!doctype html>
     <option value="personne">Un personnage (quatre angles)</option>
     <option value="objet">Un objet, le même dans tout le film (une photo)</option>
     <option value="pose">Une pose des mains, pour un geste précis (une photo)</option>
+    <option value="decor">Un décor, le lieu du film (une vue d'ensemble, sans personne)</option>
   </select>
   <label for="fiche_nom">Nom (celui qu'écrit le scénario : « Leila », « the basketball »)</label>
   <input type="text" id="fiche_nom" maxlength="60">
@@ -3911,6 +3953,8 @@ PAGE_HTML = r"""<!doctype html>
     <select id="scenario_langue2">__LANGUES__</select>
     <span class="note">Objets et poses des mains du scénario (facultatif) :</span>
     <div id="scenario_objets"></div>
+    <label for="scenario_decor">Décor du film (facultatif) : chaque coupe en garde le lieu et change de cadrage</label>
+    <select id="scenario_decor"><option value="">Aucun</option></select>
     <span class="note">Nommez le personnage qui parle dans la phrase de sa réplique : le Studio lui attribue
     la réplique et sa langue.</span>
     <label for="scenario_chanson">Musique de fond (une chanson du Studio, posée après le tournage)</label>
@@ -4832,10 +4876,11 @@ document.getElementById("lancer").addEventListener("click", async () => {
 // Fiches de casting (PLAN 18.9) : le Studio fabrique les images angle par angle ;
 // chacune se rejoue ou se supprime.
 let FICHES = [], ANGLES = {};
-const GENRES = {objet: "objet", pose: "pose des mains"};
+const GENRES = {objet: "objet", pose: "pose des mains", decor: "décor"};
 const DESCRIPTIONS_GENRE = {personne: "Description (âge, visage, coiffure, tenue)",
   objet: "Description (forme, couleur, matière ; sans marque)",
-  pose: "Description (ce que fait chaque main et ses doigts)"};
+  pose: "Description (ce que fait chaque main et ses doigts)",
+  decor: "Description (le lieu : bâtiments, sol, éléments fixes, lumière)"};
 
 function genreFiche(){ return document.getElementById("fiche_genre").value; }
 
@@ -4949,7 +4994,8 @@ async function chargerFiches(choisir){
   const zoneObjets = document.getElementById("scenario_objets");
   const objetsCoches = new Set(objetsDuScenario());
   zoneObjets.innerHTML = "";
-  const objets = FICHES.filter(x => x.angles.length && x.genre !== "personne");
+  // Un décor ne part pas à H3 (02/10) : il se choisit comme décor du scénario.
+  const objets = FICHES.filter(x => x.angles.length && x.genre !== "personne" && x.genre !== "decor");
   for (const f of objets){
     const c = document.createElement("input");
     c.type = "checkbox";
@@ -4960,6 +5006,16 @@ async function chargerFiches(choisir){
     zoneObjets.appendChild(l);
   }
   if (!objets.length) zoneObjets.textContent = "aucun : créez une fiche « objet » ou « pose » plus haut.";
+  // Le décor (02/10) : une fiche « décor », jointe à l'image de départ de chaque coupe.
+  const sd = document.getElementById("scenario_decor"), gardeSd = sd.value;
+  sd.innerHTML = '<option value="">Aucun</option>';
+  for (const f of FICHES.filter(x => x.angles.length && x.genre === "decor")){
+    const o = document.createElement("option");
+    o.value = f.id;
+    o.textContent = f.nom;
+    sd.appendChild(o);
+  }
+  sd.value = FICHES.some(f => f.id === gardeSd) ? gardeSd : "";
   await montrerFiche();
 }
 
@@ -6135,6 +6191,7 @@ function corpsScenario(){
     musique: document.getElementById("musique").value,
     longueur: Number(document.getElementById("longueur").value),
     definition: document.getElementById("definition").value,
+    decor: document.getElementById("scenario_decor").value || null,
     graine: graine === "" ? null : Number(graine)};
 }
 

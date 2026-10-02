@@ -5265,3 +5265,96 @@ def test_avant_le_tournage_l_image_d_une_coupe_refaite_ne_se_juge_pas(h3):
         asyncio.run(h3._garde_des_regles(plans, {}, False, rapport=rapport))
     assert refus.value.detail["message"] == "Règles non suivies : plan 3, règle 1 : x"
     assert asyncio.run(h3._garde_des_regles(plans, {}, False, rapport=[{"plan": 3, "regles": [faute(8)]}]))
+
+
+def test_le_decor_a_sa_fiche_et_ne_part_pas_a_h3(h3):
+    """02/10, propriétaire : « le décor doit avoir son id image pour la consistance ». Une fiche
+    « décor » : une vue d'ensemble du lieu seul, jointe aux images de départ, jamais à H3."""
+    v = h3.video_h3
+    lieu = v.fiche_creer("la place", "petite place pavée, fontaine de pierre, façades beiges", genre="decor")
+    assert v.fiche_est_objet(lieu)
+    demande = v.fiche_demande_image(lieu, "face")
+    assert v.CADRE_DECOR in demande["prompt"] and demande["size"] == v.TAILLE_IMAGE_DEMANDEE
+    with pytest.raises(ValueError):
+        v.fiche_demande_image(lieu, "profil")
+    with pytest.raises(ValueError, match="pas encore d'image"):
+        v.demande_image("x", lieu=lieu["id"])
+    v.fiche_poser_image(lieu["id"], "face", PNG)
+    image = v.fiche_lieu_image(lieu["id"])
+    demande, _ = v.demande_image("Wide shot. Leila sits.", lieu=lieu["id"], coupe=True)
+    assert demande["image_reference"] == [image]
+    assert v.CONSIGNE_LIEU % 1 in demande["prompt"] and v.CONSIGNE_COUPE_LIEU in demande["prompt"]
+    assert v.CONSIGNE_COUPE % 1 not in demande["prompt"]   # pas la dernière image : le lieu vient de la fiche
+    seule, _ = v.demande_image("x", lieu=lieu["id"])
+    assert v.CONSIGNE_COUPE_LIEU not in seule["prompt"]
+    personne = v.fiche_creer("Leila", "une adolescente")["id"]
+    v.fiche_poser_image(personne, "face", PNG)
+    with pytest.raises(ValueError, match="pas une fiche de décor"):
+        v.fiche_lieu_image(personne)
+    with pytest.raises(ValueError, match="est un décor"):
+        v.preparer({"mode": "references", "image_paroles": "x", "fiches": [personne, lieu["id"]]})
+
+
+def test_une_coupe_tournee_prend_le_lieu_de_la_fiche_decor_pas_la_derniere_image(h3, monkeypatch, tmp_path,
+                                                                                 sans_regles):
+    """02/10, film 4, plan 2 : refaite depuis la dernière image du plan 1 (un gros plan), la coupe
+    a inventé un autre lieu. Avec la fiche du décor, avant comme pendant le tournage, l'image d'une
+    coupe part de la fiche, change de cadrage, et la dernière image n'est pas jointe."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    fid = v.fiche_creer("Zib", "un martien")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    lieu = v.fiche_creer("le jardin", "un jardin la nuit", genre="decor")["id"]
+
+    async def tenues(commun, plans, a_tourner):
+        return []
+    monkeypatch.setattr(h3, "_scenario_tenues", tenues)
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: image)
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    fils = []
+    vrai = h3.run_scenario_h3
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    plans = [{"image_paroles": "Zib atterrit dans le jardin", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Wide shot. Zib mange un biscuit", "ambiance": "", "enchainement": "coupe"}]
+    corps = {"plans": plans, "fiche": fid, "longueur": 124, "decor": lieu}
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json=corps)
+    assert r.status_code == 400 and "pas encore d'image" in r.text   # un décor sans image : rien ne part
+    v.fiche_poser_image(lieu, "face", PNG)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json=corps)
+    assert r.status_code == 200, r.text
+    image_lieu = v.fiche_lieu_image(lieu)
+    assert all(image_lieu in d["image_reference"] for d in demandes)   # avant le tournage aussi
+    assert v.CONSIGNE_COUPE_LIEU not in demandes[0]["prompt"] and v.CONSIGNE_COUPE_LIEU in demandes[1]["prompt"]
+    sid = r.json()["id"]
+    assert v.scenario_lire(sid)["reglages"]["decor"] == lieu
+    video = tmp_path / "plan.mp4"
+    video.write_bytes(b"mp4")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
+    monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG) + b"FIN-DU-PLAN-1")
+    monkeypatch.setattr(h3, "_controle_derniere_image", lambda s, i, img: None)
+
+    def tourner(jid, code, precedent, retirer, ou="modal"):
+        job = h3.read_job(jid)
+        job["status"] = "succeeded"
+        h3.write_job(jid, job)
+    monkeypatch.setattr(h3, "run_video_h3", tourner)
+    poses = []
+    vrai_poser = v.depart_poser
+    monkeypatch.setattr(v, "depart_poser", lambda img: poses.append(img) or vrai_poser(img))
+    avant = len(demandes)
+    vrai(*fils[0])
+    sc = v.scenario_lire(sid)
+    assert sc["etat"] == "réussi", sc["erreur"]
+    au_tournage = demandes[avant:]
+    assert au_tournage and image_lieu in au_tournage[-1]["image_reference"]
+    assert v.CONSIGNE_COUPE_LIEU in au_tournage[-1]["prompt"] and v.CONSIGNE_COUPE % 1 not in au_tournage[-1]["prompt"]
+    fin = base64.b64encode(base64.b64decode(PNG) + b"FIN-DU-PLAN-1").decode()
+    assert not any(fin in p for p in poses)   # la dernière image ne sert pas

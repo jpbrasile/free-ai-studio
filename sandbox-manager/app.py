@@ -4416,7 +4416,7 @@ async def _creer_depart(corps: dict) -> dict:
         else:
             demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
                                                     corps.get("fiches") or [], corps.get("decor"), tenues,
-                                                    coupe=corps.get("coupe") is True)
+                                                    coupe=corps.get("coupe") is True, lieu=corps.get("lieu"))
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -5896,7 +5896,7 @@ def _histoire(plans: list) -> str:
 
 
 REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine",
-                     "definition")
+                     "definition", "decor")   # `decor` : la fiche du lieu (02/10), jointe aux images des coupes
 
 
 def _scenario_prepare(corps: dict, plans: list) -> tuple:
@@ -5905,6 +5905,8 @@ def _scenario_prepare(corps: dict, plans: list) -> tuple:
     chanson = str(corps.get("musique_chanson") or "")
     if not (commun["fiche"] or commun["fiches"]):
         raise ValueError("Choisissez le personnage du scénario (une fiche de casting).")
+    if commun["decor"]:
+        video_h3.fiche_lieu_image(commun["decor"])   # un décor avec son image, sinon ValueError
     musique = None
     if chanson:
         # Une seule piste posée après coup, du début du plan N à la fin : trois
@@ -6340,7 +6342,10 @@ async def _departs_des_coupes(plans: list, commun: dict) -> bool:
         if p["enchainement"] != "coupe":
             continue
         if not p.get("image_depart"):
-            d = await _creer_depart({"texte": video_h3.texte_depart(p), "fiches": ids, "decor": decor,
+            # Avec la fiche du décor (02/10), elle seule donne le lieu, et chaque coupe change de cadrage.
+            lieu = commun.get("decor")
+            d = await _creer_depart({"texte": video_h3.texte_depart(p), "fiches": ids,
+                                     "decor": None if lieu else decor, "lieu": lieu, "coupe": bool(lieu and k),
                                      "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
             p.update(image_depart=d["id"], description_depart=d["texte"])
             pose = True
@@ -6735,6 +6740,8 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
     except (TypeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     reglages = dict(parent.get("reglages") or {"fiche": parent.get("fiche"), "fiches": parent.get("fiches")})
+    if "decor" in corps:   # la fiche du décor se pose aussi sur un rejeu (02/10)
+        reglages["decor"] = corps.get("decor")
     musique = parent.get("musique") or {}
     commun_corps = dict(reglages, musique_chanson=musique.get("chanson"),
                         musique_a_partir_du_plan=musique.get("a_partir_du_plan"))
@@ -6872,10 +6879,14 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
         chemin = _video_h3_octets(precedent)
         if not chemin:
             raise ValueError("la vidéo du plan précédent est introuvable.")
+        # La fiche du décor (02/10), si le scénario en a une, remplace la dernière image : le lieu
+        # vient d'elle, et la coupe change franchement de cadrage par rapport à la fin du plan.
+        lieu = (sc.get("reglages") or {}).get("decor")
         fin = montage.derniere_image(chemin.read_bytes())
-        decor = video_h3.depart_poser(base64.b64encode(fin).decode())
+        decor = None if lieu else video_h3.depart_poser(base64.b64encode(fin).decode())
         ids = [f for f in (sc.get("fiches") or [sc.get("fiche")]) if f]
         d = asyncio.run(_creer_depart({"texte": video_h3.texte_depart(plan), "fiches": ids, "decor": decor,
+                                       "lieu": lieu,
                                        "coupe": True, "elements": plan.get("elements") or [],
                                        "plans": [x["image_paroles"] for x in sc["plans"]], "plan": i + 1}))
         image = video_h3.depart_lire(d["id"])
