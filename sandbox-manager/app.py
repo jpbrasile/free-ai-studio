@@ -6058,7 +6058,35 @@ async def _controle_image(image: bytes, attendus: list, absents: list, personnes
             ressemblances[f["nom"]] = avis.get("ressemblance")
         except HTTPException:
             ressemblances[f["nom"]] = None
-    return regles.regles_depart(attendus, presence, ressemblances, absents), erreur
+    mains = {}
+    for f, a in personnes:   # règle 16 (02/10) : seulement là où le tableau dit les mains
+        if video_h3.attend_des_mains(a["ou"]):
+            mains[f["nom"]] = await _verifier_mains(image, f, a)
+    return regles.regles_depart(attendus, presence, ressemblances, absents, mains), erreur
+
+
+async def _verifier_mains(image: bytes, fiche: dict, attendu: dict) -> tuple:
+    """(ok True | False | None, pourquoi) : le personnage trouvé et recadré, chaque main
+    décrite sans le texte attendu, puis comparée au tableau sans l'image (règle 16)."""
+    qui = "%s (%s)" % (fiche["nom"], video_h3.sans_age(fiche.get("description") or ""))
+    try:
+        boite = video_h3.lire_visage(await _chat_du_studio(video_h3.consigne_corps(qui, attendu["ou"]),
+                                                           "la recherche des mains", images=[_data_url(image)],
+                                                           modele=video_h3.MODELE_JUGE))
+        if not boite:
+            return None, "personnage introuvable sur l'image"
+        gros = montage.recadrer_zone(image, video_h3.zone_corps(boite), 768)
+        vu = video_h3.lire_mains(await _chat_du_studio(video_h3.CONSIGNE_MAINS, "la lecture des mains",
+                                                       images=[_data_url(gros)], modele=video_h3.MODELE_JUGE))
+        contradiction, pourquoi = video_h3.lire_contradiction(await _chat_du_studio(
+            video_h3.consigne_mains_attendues(fiche["nom"], attendu["ou"], vu), "la comparaison des mains",
+            modele=video_h3.MODELE_JUGE))
+    except (ValueError, HTTPException, montage.MontageImpossible) as exc:
+        return None, str(getattr(exc, "detail", exc))
+    if contradiction:
+        return False, "%s (vu : main droite %s, main gauche %s)" % (pourquoi or "main contraire au tableau",
+                                                                   vu["main_droite"], vu["main_gauche"])
+    return True, ""
 
 
 async def _regles_depart(plan: dict, fiches: list) -> dict:
@@ -6089,7 +6117,9 @@ async def _regles_depart(plan: dict, fiches: list) -> dict:
         pass
     image = video_h3.depart_lire(plan["image_depart"])
     r, _ = await _controle_image(image, attendus, absents, personnes, "le contrôle de l'image de départ")
-    if all(v["ok"] is not None for v in r.values()):   # un contrôle illisible se refait
+    # Un contrôle illisible se refait ; la règle 16 sans aucune main dite est sans objet, pas illisible.
+    sans_mains = not any(video_h3.attend_des_mains(a["ou"]) for _, a in personnes)
+    if all(v["ok"] is not None for n, v in r.items() if not (n == 16 and sans_mains)):
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(json.dumps(r, ensure_ascii=False), encoding="utf-8")
     return r

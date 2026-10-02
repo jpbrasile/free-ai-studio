@@ -3857,7 +3857,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     assert r.status_code == 409 and not fils
     d = r.json()["detail"]
     assert "plan 1, règle 2 : deux actions à la fois" in d["message"] and d["passe_droit"] is True
-    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9)) + [13, 14]
+    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9)) + [13, 14, 16]
     # « Tourner quand même » : parti, et le scénario garde le rapport et le passe-droit.
     r = c.post("/video-h3/scenario/tourner", headers=CLE,
                json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": True})
@@ -3952,6 +3952,60 @@ def test_l_image_de_depart_se_controle_une_fois(h3, monkeypatch):
     # Gardé à part des images (depart_lire prend le premier « <id>.* »), et relu sans modèle.
     assert v.depart_lire(did) == base64.b64decode(PNG)
     assert asyncio.run(h3._regles_depart(plan, fiches)) == r and len(vus) == 1 and len(compares) == 1
+    assert r[16]["ok"] is None   # le tableau ne dit aucune main : sans objet, et gardé quand même
+
+
+def test_regle_16_la_main_qui_tient_l_objet(h3, monkeypatch):
+    """02/10, film 4, plan 5 : la photo dans la main gauche de Leila, le tableau la donnait à la
+    droite. Les mains sont décrites SANS le texte (sur le personnage recadré), puis comparées au
+    tableau sans l'image ; la faute arrête le tournage avec ce qui a été vu."""
+    v = h3.video_h3
+    fid = v.fiche_creer("Leila", "adolescente de 15 ans, sweat jaune")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    did = v.depart_poser(PNG)
+    ou = "foreground, centre, holding the photo in her right hand"
+    plan = {"image_paroles": "Leila shows the photo.", "ambiance": "", "enchainement": "coupe", "image_depart": did,
+            "elements": [{"nom": "Leila", "debut": ou, "mouvement": "none", "fin": "x"}]}
+    vus, recadres = [], []
+    _faux_chat(monkeypatch, h3, {
+        "le contrôle de l'image de départ": '{"comptes": [1], "texte_ajoute": false, "remarque": ""}',
+        "la recherche des mains": '{"x0": 300, "y0": 100, "x1": 700, "y1": 900}',
+        "la lecture des mains": '{"main_droite": "nothing", "main_gauche": "a printed photo"}',
+        "la comparaison des mains": '{"contradiction": true, "pourquoi": "la photo est dans la main gauche"}'}, vus)
+
+    async def comparer(image, f, ou=""):
+        return {"ressemblance": "forte"}
+    monkeypatch.setattr(h3, "_comparer_visage", comparer)
+    monkeypatch.setattr(h3.montage, "recadrer_zone", lambda image, zone, cote: recadres.append((zone, cote)) or base64.b64decode(PNG))
+    assert v.attend_des_mains(ou) and not v.attend_des_mains("foreground, centre, holding the photo")
+    # Le cadrage en tête allonge le départ : il ne coupe plus « right » avant « hand ».
+    long = "wide shot, seen from further back and slightly low, " * 5 + "holding the photo with her right hand"
+    assert v.attend_des_mains(v.lire_tableau([{"nom": "Leila", "debut": long}])[0]["debut"])
+    r = asyncio.run(h3._regles_depart(plan, h3._fiches_du_scenario({"fiche": fid})))
+    assert r[16]["ok"] is False and "Leila : la photo est dans la main gauche" in r[16]["pourquoi"]
+    assert "main gauche a printed photo" in r[16]["pourquoi"] and r[7]["ok"] is True
+    assert recadres == [((0.24, 0.036, 0.76, 0.964), 768)]
+    quoi = {q: c for q, c, _, n in vus}
+    # La lecture ne voit pas le texte attendu ; la comparaison ne voit pas l'image ; aucun âge ne part.
+    assert "photo" not in quoi["la lecture des mains"]
+    assert [n for q, _, _, n in vus if q == "la comparaison des mains"] == [0]
+    assert "15" not in quoi["la recherche des mains"] and ou in quoi["la comparaison des mains"]
+    # Un tableau tenu : rien à redire, et le verdict est gardé.
+    _faux_chat(monkeypatch, h3, {
+        "le contrôle de l'image de départ": '{"comptes": [1], "texte_ajoute": false, "remarque": ""}',
+        "la recherche des mains": '{"x0": 300, "y0": 100, "x1": 700, "y1": 900}',
+        "la lecture des mains": '{"main_droite": "a photo", "main_gauche": "hidden"}',
+        "la comparaison des mains": '{"contradiction": false, "pourquoi": ""}'}, vus)
+    plan["elements"][0]["debut"] = ou + ", smiling"
+    assert asyncio.run(h3._regles_depart(plan, h3._fiches_du_scenario({"fiche": fid})))[16] == \
+        {"ok": True, "pourquoi": ""}
+    # Une réponse illisible : non jugé, jamais une faute.
+    _faux_chat(monkeypatch, h3, {
+        "le contrôle de l'image de départ": '{"comptes": [1], "texte_ajoute": false, "remarque": ""}',
+        "la recherche des mains": "je ne vois personne"}, vus)
+    plan["elements"][0]["debut"] = ou + ", sad"
+    x = asyncio.run(h3._regles_depart(plan, h3._fiches_du_scenario({"fiche": fid})))[16]
+    assert x["ok"] is None and "introuvable" in x["pourquoi"]
 
 
 def test_le_visage_compare_est_celui_de_la_fiche_nommee(h3, monkeypatch):
@@ -5475,6 +5529,8 @@ def test_la_suite_a_tourner_part_de_la_vraie_fin_du_plan_filme(h3, monkeypatch):
     a_cheval = "Tyler is astride the bicycle, both hands on the handlebar. " + ligne
     r = v.lire_depart_reel('{"texte": "%s", "changements": "Tyler est à cheval."}' % a_cheval.replace('"', '\\"'), p3)
     assert r == {"texte": a_cheval, "changements": "Tyler est à cheval."}
+    # Le « Shot 3: » de la consigne recopié en tête (02/10, plan 5) : retiré.
+    assert v.lire_depart_reel(json.dumps({"texte": "Shot 3: " + a_cheval}), p3)["texte"] == a_cheval
     with pytest.raises(ValueError, match="réplique"):
         v.lire_depart_reel(json.dumps({"texte": "Tyler is astride. Leila says: « [French] Regarde ça ! »"}), p3)
     with pytest.raises(ValueError):

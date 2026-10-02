@@ -22,9 +22,9 @@ KITE = {"id": "k1", "nom": "yellow kite", "genre": "objet", "description": "kite
 
 
 def test_les_regles_sont_numerotees_par_etape(r):
-    assert [n for n, _, _ in r.REGLES] == list(range(16))
-    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13, 14], "depart": [6, 7, 8], "clip": [9, 10, 11, 12, 15]}
-    assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 14, 6, 7, 8]
+    assert [n for n, _, _ in r.REGLES] == list(range(17))
+    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13, 14], "depart": [6, 7, 8, 16], "clip": [9, 10, 11, 12, 15]}
+    assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 14, 6, 7, 8, 16]
 
 
 def _ecoute(r, texte, elements=None):
@@ -295,7 +295,23 @@ def test_regles_6_a_8_l_image_de_depart(r):
     assert r.regles_depart(att, presence, {"Leila": "forte"})[7]["ok"] is True
     with pytest.raises(ValueError):
         r.lire_presence('{"comptes": [1], "texte_ajoute": false}', 3)
-    assert set(r.sans_depart({"enchainement": "suite"})) == {6, 7, 8}
+    assert set(r.sans_depart({"enchainement": "suite"})) == {6, 7, 8, 16}
+    assert x[16]["ok"] is None  # aucune main dite par le tableau : non jugé
+
+
+def test_regle_16_les_mains(r):
+    """02/10, film 4, plan 5 : la photo dans la main gauche de Leila, le texte la donnait à la droite.
+    Une main cachée ne se juge pas (banc du 02/10 : au hasard) ; une faute l'emporte sur un non-jugé."""
+    assert r.regle_mains(None)["ok"] is None
+    assert r.regle_mains({"Leila": (True, "")}) == {"ok": True, "pourquoi": ""}
+    x = r.regle_mains({"Leila": (False, "la photo est dans la main gauche"), "Tyler": (None, "main cachée")})
+    assert x["ok"] is False and "Leila : la photo est dans la main gauche" in x["pourquoi"]
+    x = r.regle_mains({"Leila": (True, ""), "Tyler": (None, "main cachée")})
+    assert x["ok"] is None and "Tyler (main cachée)" in x["pourquoi"]
+    att = r.attendus_du_depart({"elements": [el("Leila", "foreground, centre")]}, [])
+    presence = r.lire_presence('{"comptes": [1], "texte_ajoute": false}', 1)
+    x = r.regles_depart(att, presence, {"Leila": "forte"}, mains={"Leila": (False, "")})
+    assert x[6]["ok"] is True and x[16]["ok"] is False and "main contraire au tableau" in x[16]["pourquoi"]
 
 
 def test_l_age_d_un_personnage_ne_part_pas_aux_juges_d_image(r):

@@ -1491,6 +1491,80 @@ def lire_visage(reponse: str):
     return x0, y0, x1, y1
 
 
+# --- Les mains (règle 16, 02/10) ---------------------------------------------------
+# Propriétaire : « on fait quoi dans l'avenir pour les mains ? », puis « point 1 sur modal ».
+# Banc du 02/10 (film 4, hors Studio) : Leila recadrée, chaque main demandée à part, sans le
+# texte attendu : 12 réponses justes sur 12 quand la main se voit, et toutes inversées au
+# miroir ; une main cachée, réponse au hasard (et « unsure » dit 2 fois sur 6 seulement).
+# D'où : la main est décrite sans connaître le texte, puis comparée au texte sans image, et
+# une main cachée ne se juge pas.
+MAINS_MOTS = re.compile(r"\b(?:left|right|both)\s+hands?\b", re.I)
+
+
+def attend_des_mains(ou: str) -> bool:
+    """Le tableau dit-il quelle main tient quoi (« in her right hand », « both hands ») ?"""
+    return bool(MAINS_MOTS.search(ou or ""))
+
+
+def consigne_corps(qui: str, ou: str = "") -> str:
+    return ("Locate ONE person only: %s%s. Several people may be in the image: pick the one that matches this "
+            "description and place, never another one. Answer with JSON only: "
+            '{"x0": ..., "y0": ..., "x1": ..., "y1": ...}, the box around the whole upper body of that person, '
+            "both arms and hands included, and anything they hold, as integers from 0 to 1000 relative to the "
+            "image width (x) and height (y). If the person is not in the image, answer {}."
+            % (qui, (", expected " + ou) if ou else ""))
+
+
+def zone_corps(boite: tuple) -> tuple:
+    """Un peu d'air autour du corps : une main tendue dépasse souvent la boîte."""
+    x0, y0, x1, y1 = boite
+    w, h = x1 - x0, y1 - y0
+    return (round(max(0.0, x0 - 0.15 * w), 4), round(max(0.0, y0 - 0.08 * h), 4),
+            round(min(1.0, x1 + 0.15 * w), 4), round(min(1.0, y1 + 0.08 * h), 4))
+
+
+CONSIGNE_MAINS = ("This is a close-up of one person. Look at each of THEIR OWN hands (their body's right and "
+                  "left, as they would say it, NOT the side of the image). Answer JSON only: {\"main_droite\": "
+                  "\"what their RIGHT hand holds or touches, in 1-6 words, or 'nothing', or 'hidden' if that hand "
+                  "cannot be seen\", \"main_gauche\": \"the same for their LEFT hand\"}.")
+
+
+def lire_mains(reponse: str) -> dict:
+    """{main_droite, main_gauche} ; ValueError si illisible."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or not all(isinstance(d.get(k), str) for k in ("main_droite", "main_gauche")):
+        raise ValueError("Les mains n'ont pas pu être lues.")
+    return {k: " ".join(d[k].split())[:80] for k in ("main_droite", "main_gauche")}
+
+
+def consigne_mains_attendues(nom: str, attendu: str, vu: dict) -> str:
+    return ("The script says where %s is at the start of a shot: \"%s\". On the image, seen on %s's own body: "
+            "RIGHT hand: %s; LEFT hand: %s. Is there a CLEAR contradiction about which of %s's own hands holds "
+            "or touches which object (the object in the other hand, or not held at all)? A hand that is "
+            "'hidden', a hand the script does not mention, or different words for the same object are NOT a "
+            "contradiction. Answer JSON only: {\"contradiction\": true or false, \"pourquoi\": \"in French, one "
+            "short sentence, empty if none\"}."
+            % (nom, attendu, nom, vu["main_droite"], vu["main_gauche"], nom))
+
+
+def lire_contradiction(reponse: str) -> tuple:
+    """(contradiction, pourquoi) ; ValueError si illisible."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or not isinstance(d.get("contradiction"), bool):
+        raise ValueError("La comparaison des mains n'a pas pu être lue.")
+    return d["contradiction"], " ".join(str(d.get("pourquoi") or "").split())[:300]
+
+
 # Sous cette largeur (pixels de l'image), un visage ne se compare pas à une fiche : la règle 7
 # ne conclut pas. Mesuré le 02/10 (film 4) : 93-111 px, « faible » à tort ; 350 px, « forte ».
 VISAGE_MIN_PX = 128
@@ -2132,6 +2206,9 @@ def fiches_au_depart(fiches: list, elements, texte: str = "") -> list:
 
 _SANS_DEPART = ("", "none", "aucun", "aucune", "rien", "n/a", "-", "null")
 TABLEAU_MAX, TABLEAU_CHAMPS = 8, ("nom", "debut", "mouvement", "fin")
+# 02/10, film 4, plan 5 : à 300, le cadrage en tête coupait « …with her right » avant « hand »,
+# et la règle 16 ne voyait plus quelle main tient quoi.
+TABLEAU_CHAMP_MAX = 600
 
 
 def lire_tableau(elements) -> list:
@@ -2140,7 +2217,7 @@ def lire_tableau(elements) -> list:
     for e in elements if isinstance(elements, list) else []:
         if isinstance(e, dict) and all(isinstance(e.get(k, ""), str) for k in TABLEAU_CHAMPS) \
                 and " ".join(str(e.get("nom") or "").split()):
-            propres.append({k: " ".join(str(e.get(k) or "").split())[:300] for k in TABLEAU_CHAMPS})
+            propres.append({k: " ".join(str(e.get(k) or "").split())[:TABLEAU_CHAMP_MAX] for k in TABLEAU_CHAMPS})
     return propres[:TABLEAU_MAX]
 
 
@@ -2893,6 +2970,8 @@ def lire_depart_reel(reponse: str, texte: str) -> dict:
     except ValueError:
         d = None
     nouveau = " ".join(str((d or {}).get("texte") or "").split()) if isinstance(d, dict) else ""
+    # 02/10, plan 5 : le texte rendu commençait par « Shot 5: », recopié de la consigne.
+    nouveau = re.sub(r"^shot\s*\d+\s*:\s*", "", nouveau, flags=re.I)
     if not nouveau:
         raise ValueError("L'adaptation du départ n'a pas pu être lue.")
     if repliques(nouveau) != repliques(texte):

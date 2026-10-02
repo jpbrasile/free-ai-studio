@@ -45,6 +45,8 @@ REGLES = (
                   "qui écoute juste après la réplique (il regarde, se tourne, répond), ou qu'il ne réagit pas."),
     # 02/10, film 4, plan 2 : une suite partie d'un gros plan a sauté en plan moyen au bout de 0,8 s.
     (15, "clip", "Aucune coupe franche dans le plan tourné : le cadre bouge, il ne saute pas."),
+    # 02/10, film 4, plan 5 : la coupe donnait la photo à la main gauche de Leila, le texte à la droite.
+    (16, "depart", "Sur l'image de départ, chaque main tient ce que le tableau des éléments lui donne."),
 )
 NUMEROS = {etape: [n for n, e, _ in REGLES if e == etape] for etape in ("texte", "depart", "clip")}
 # Les règles qui arrêtent le tournage (avant tout sou) : texte et image de départ.
@@ -516,11 +518,27 @@ def lire_presence(reponse: str, nombre: int) -> dict:
             "remarque": " ".join(str(d.get("remarque") or "").split())[:300]}
 
 
-def regles_depart(attendus: list, presence, ressemblances: dict, absents=()) -> dict:
-    """Règles 6 à 8. `presence` : lire_presence(), ou None si illisible ;
+def regle_mains(mains) -> dict:
+    """Règle 16. `mains` : {nom : (ok True | False | None, pourquoi)} des personnages dont le
+    tableau dit les mains ; None (non jugé) pour une main cachée ou une lecture ratée."""
+    if not mains:
+        return resultat(None, "Le tableau ne dit les mains d'aucun personnage présent au début.")
+    fautes = ["%s : %s" % (n, p or "main contraire au tableau") for n, (ok, p) in mains.items() if ok is False]
+    if fautes:
+        return resultat(False, " ; ".join(fautes) + ".")
+    inconnus = [n for n, (ok, _) in mains.items() if ok is None]
+    if inconnus:
+        return resultat(None, "Mains non jugées : %s." % " ; ".join(
+            "%s (%s)" % (n, mains[n][1]) if mains[n][1] else n for n in inconnus))
+    return resultat(True, "")
+
+
+def regles_depart(attendus: list, presence, ressemblances: dict, absents=(), mains=None) -> dict:
+    """Règles 6 à 8 et 16. `presence` : lire_presence(), ou None si illisible ;
     `ressemblances` : {nom : "forte" | "moyenne" | "faible" | None} ;
-    `absents` : les éléments hors champ au début, comptés après les attendus."""
-    r = {}
+    `absents` : les éléments hors champ au début, comptés après les attendus ;
+    `mains` : voir regle_mains."""
+    r = {16: regle_mains(mains)}
     if presence is None:
         r[6] = resultat(None, "Le contrôle de l'image n'a pas pu être lu.")
         r[8] = resultat(None, "Le contrôle de l'image n'a pas pu être lu.")
