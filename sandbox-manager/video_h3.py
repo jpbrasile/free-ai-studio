@@ -703,6 +703,10 @@ def avec_camera(texte: str, phrase: str) -> str:
 
 SILENCE_IMAGE = "Nobody speaks: every person keeps their lips closed."
 SILENCE_SON = "No dialogue, no voiceover, no singing, no individual voices."
+# 02/10, film 4, plan 2 : une seule réplique (Tyler, à 7 s) ; Leila, qui venait de dire
+# « Parfaite ! » dans le raccord, a parlé 4 s d'un anglais sans suite avant lui.
+SEULES_REPLIQUES = ("Only the quoted lines are spoken, each by its speaker: before, between and after them, "
+                    "nobody says anything and every other person keeps their lips closed.")
 
 
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
@@ -727,8 +731,8 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     muet = bool(" ".join(str(image_paroles or "").split())) and "<d>" not in image_paroles
     for texte, prefixe in ((image_paroles, ""), (ambiance, son), (musique, "non_diegetic_music: ")):
         t = " ".join(str(texte or "").split())
-        if muet and prefixe == "" and t:
-            t = (t if t[-1] in ".!?\"»>" else t + ".") + " " + SILENCE_IMAGE
+        if prefixe == "" and t:
+            t = (t if t[-1] in ".!?\"»>" else t + ".") + " " + (SILENCE_IMAGE if muet else SEULES_REPLIQUES)
         if muet and prefixe == son:
             t = (t if not t or t[-1] in ".!?\"»>" else t + ".") + (" " if t else "") + SILENCE_SON
         if t:

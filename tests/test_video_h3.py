@@ -164,7 +164,7 @@ def demande(**autres):
 def test_les_trois_cases_font_une_seule_invite(h3):
     v = h3.video_h3
     assert v.invite("Elle dit : \"Enfin.\"", "pluie", "") == \
-        "Elle dit : (S1) <d>[French] Enfin.</d> Sound: pluie. non_diegetic_music: N/A"
+        "Elle dit : (S1) <d>[French] Enfin.</d> " + v.SEULES_REPLIQUES + " Sound: pluie. non_diegetic_music: N/A"
     assert v.invite("  un phare  ", "", "piano doux") == \
         "un phare. " + v.SILENCE_IMAGE + " Sound: " + v.SILENCE_SON + " non_diegetic_music: piano doux."
     assert v.invite("", "", "") == ""
@@ -194,7 +194,7 @@ def test_les_paroles_sont_balisees_au_format_du_modele(h3):
     # Fiche MiniMaxAI/MiniMax-H3 : `<d>[Language] …</d>`, le locuteur (S1) juste avant.
     v = h3.video_h3
     assert v.invite("Elle dit doucement : « Enfin au sec. »") == \
-        "Elle dit doucement : (S1) <d>[French] Enfin au sec.</d> non_diegetic_music: N/A"
+        "Elle dit doucement : (S1) <d>[French] Enfin au sec.</d> " + v.SEULES_REPLIQUES + " non_diegetic_music: N/A"
     assert v.balises_paroles("Il dit “Bonjour” puis «Au revoir»") == \
         "Il dit (S1) <d>[French] Bonjour</d> puis (S1) <d>[French] Au revoir</d>"
     assert v.invite("Il dit « Hello. »", langue="English").startswith(
@@ -1092,7 +1092,7 @@ def test_en_mode_references_le_clip_part_traduit(h3, monkeypatch):
     assert r.status_code == 200, r.text
     assert vu["url"].endswith("/v1/chat/completions")
     v = r.json()["video"]
-    assert v["invite"].startswith("The camera holds a static shot throughout. In a café she says (S1) <d>[French] Bonjour.</d> Sound: Café chatter.")
+    assert v["invite"].startswith("The camera holds a static shot throughout. In a café she says (S1) <d>[French] Bonjour.</d> " + h3.video_h3.SEULES_REPLIQUES + " Sound: Café chatter.")
     assert v["traduit_en_anglais"] is True
     # Un refus du chat : rien ne part.
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteur(503, {}, {}))
@@ -1920,7 +1920,7 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
         # La caméra en tête quand aucune phrase n'est finie hors réplique (01/10).
         "detailed_description: [Shot 1] The camera holds a static shot throughout. "
         "<Subject 2> (S2) demande <d>[English] Is this seat taken?</d> "
-        "<Subject 1> (S1) répond <d>[French] Oui.</d> non_diegetic_music: N/A")
+        "<Subject 1> (S1) répond <d>[French] Oui.</d> " + v.SEULES_REPLIQUES + " non_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
     for mauvais, message in (({"langues": {lea: "Klingon"}}, "inconnue"), ({"fiches": [lea, lea]}, "illisible")):
