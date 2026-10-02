@@ -5784,6 +5784,44 @@ def test_une_coupe_franche_dans_un_plan_se_voit_pas_un_mouvement(h3):
     assert h3.regles.regle_sans_coupe(None, 24)["ok"] is None
 
 
+def test_une_coupe_au_raccord_d_une_suite_se_voit(h3):
+    # 02/10, film 4, plan 6 prise 2, mesuré : plan large du plan 5 → gros plan de la photo
+    # (62,7), puis un recul rapide (17 à 30), médiane du plan 7,3.
+    ecarts = [62.7, 17.5, 30.1, 28.9, 28.1, 22.3, 17.4] + [7.3] * 200
+    r = h3.regles.regle_sans_coupe(ecarts, 24, raccord=True)
+    assert r["ok"] is False and "raccord" in r["pourquoi"]
+    # Dedans, l'instant reste celui du plan, pas décalé de l'image du plan d'avant.
+    dedans = [3.0] * 25 + [48.2] + [3.0] * 20
+    assert "à 1.0 s (images 24 → 25" in h3.regles.regle_sans_coupe(dedans, 24, raccord=True)["pourquoi"]
+    assert "à 1.0 s (images 24 → 25" in h3.regles.regle_sans_coupe(dedans[1:], 24)["pourquoi"]
+
+
+@pytest.mark.parametrize("enchainement, depuis", [("suite", 99), ("coupe", 100)])
+def test_le_juge_mesure_une_suite_depuis_la_fin_du_plan_d_avant(h3, monkeypatch, tmp_path, enchainement, depuis):
+    film = tmp_path / "film.mp4"
+    film.write_bytes(b"FILM")
+    plans = [{"image_paroles": "a", "enchainement": "suite"}, {"image_paroles": "b", "enchainement": enchainement}]
+    monkeypatch.setattr(h3.video_h3, "scenario_lire", lambda sid: {"plans": plans, "fiches": []})
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: film)
+    monkeypatch.setattr(h3, "read_job", lambda jid: {"video": {"secondes": 200 / 24}})
+    monkeypatch.setattr(h3, "_photos_des_fiches", lambda fiches: ([], []))
+
+    async def regles_clip(*a):
+        return {10: {"ok": True, "pourquoi": ""}}
+
+    async def ecouter(*a):
+        return {"attendu": ["b"], "ok": True}
+    monkeypatch.setattr(h3, "_regles_clip", regles_clip)
+    monkeypatch.setattr(h3, "_ecouter", ecouter)
+    extraits = []
+    monkeypatch.setattr(h3.montage, "extraire", lambda video, a, b: extraits.append((a, b)) or b"M%d" % a)
+    monkeypatch.setattr(h3.montage, "ecarts_d_images", lambda m: [3.0] * 50 if m == b"M100" else [62.7] + [3.0] * 50)
+    note = h3._juger_plan_tourne("s", 1, "j", 100)
+    assert (depuis, 200) in extraits
+    r15 = next(x for x in note["regles"] if x["n"] == 15)
+    assert r15["ok"] is (enchainement == "coupe")
+
+
 def test_une_voix_dans_le_raccord_est_tue_avant_la_suite(h3, monkeypatch):
     # 02/10 : « Parfaite ! » à la fin du plan 1, dans le raccord ; H3 faisait parler Leila 4 à 5 s.
     monkeypatch.setattr(h3.montage, "fin", lambda video, n: b"RACCORD")

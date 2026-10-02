@@ -623,13 +623,22 @@ def regle_paroles(paroles) -> dict:
     return resultat(bool(paroles["ok"]), "" if paroles["ok"] else "Entendu : « %s »." % paroles.get("entendu", ""))
 
 
-def regle_sans_coupe(ecarts, ips: float) -> dict:
-    """Règle 15, depuis les écarts entre images voisines du plan (montage.ecarts_d_images)."""
+def regle_sans_coupe(ecarts, ips: float, raccord: bool = False) -> dict:
+    """Règle 15, depuis les écarts entre images voisines du plan (montage.ecarts_d_images).
+
+    `raccord` : les écarts commencent par la DERNIÈRE image du plan d'avant (une suite).
+    02/10, film 4, plan 6 prise 2 : la suite ouvrait sur un gros plan de la photo après
+    un plan large (écart 62,7 au raccord, 16 fois la médiane) ; la règle ne mesurait que
+    l'intérieur du plan et disait « ok »."""
     if not ecarts:
         return resultat(None, "Les images du plan n'ont pas pu être lues.")
     sauts = montage.sauts_d_image(ecarts)
     if sauts:
         k, x = sauts[0]
+        if raccord and k == 0:
+            return resultat(False, "Coupe franche au raccord avec le plan d'avant (écart %.1f) : la suite "
+                                   "devait le continuer sans coupe." % x)
+        k -= 1 if raccord else 0
         return resultat(False, "Coupe franche dans le plan à %.1f s (images %d → %d, écart %.1f) : le cadre saute "
                                "au lieu de bouger." % ((k + 1) / ips, k, k + 1, x))
     return resultat(True)

@@ -7068,16 +7068,21 @@ def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
         except montage.MontageImpossible as exc:
             morceau, paroles = None, {"erreur": str(exc)}
         try:
-            ecarts = await asyncio.to_thread(montage.ecarts_d_images, morceau) if morceau else None
+            # Une suite se mesure depuis la dernière image du plan d'avant : une coupe au
+            # raccord est la même faute qu'une coupe dedans (02/10, film 4, plan 6).
+            vu = (await asyncio.to_thread(montage.extraire, film, premiere - 1, fin) if raccord
+                  else morceau)
+            ecarts = await asyncio.to_thread(montage.ecarts_d_images, vu) if vu else None
         except montage.MontageImpossible:
             ecarts = None
         return r, paroles, ecarts
+    raccord = i > 0 and premiere > 0 and plan.get("enchainement") == "suite"
     try:
         r, paroles, ecarts = asyncio.run(juger())
     except HTTPException as exc:
         return dict(note, erreur=str(exc.detail))
     r[9] = regles.regle_paroles(paroles)
-    r[15] = regles.regle_sans_coupe(ecarts, ips)
+    r[15] = regles.regle_sans_coupe(ecarts, ips, raccord)
     note["regles"] = regles.en_liste(r)
     note["fautes"] = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in (9, 10, 15)
                       if (r.get(n) or {}).get("ok") is False]
