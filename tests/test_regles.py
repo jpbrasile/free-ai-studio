@@ -363,3 +363,34 @@ def test_regle_5_un_autre_sujet_qui_entre_dans_le_mouvement(r):
     assert r.regle_deux_fois([mila], 1)["ok"] is False
     assert r.mouvement_fait_entrer("Mila", "Mila re-enters the room")
     assert r.mouvement_fait_entrer("Mila", "she enters")
+
+
+def test_ce_qui_nait_pendant_le_plan_part_hors_champ_et_le_pluriel_compte(r):
+    """03/10, « Le jardin de verre » : la pousse « emerging » au début, les papillons nés des
+    éclats « at the centre », « glass butterflies » contre « a glass butterfly », et la fenêtre
+    du tableau absente du texte : refus 409 (règles 1 et 5)."""
+    v = r.video_h3
+    assert r.nomme_dans("glass butterflies", "each shard becomes a glass butterfly")
+    assert r.nomme_dans("the crystal tree", "crystal trees fill the room") and not r.nomme_dans("tree", "a bee")
+    pousse = {"image_paroles": "Close-up: a transparent crystal sprout emerges from the soil and grows.",
+              "ambiance": "", "enchainement": "coupe",
+              "elements": [el("a pot of soil", "at the centre", "at the centre", "none"),
+                           el("a transparent crystal sprout", "emerging from a pot of soil at the centre",
+                              "at the centre, grown", "pierces the soil, grows upwards"),
+                           el("a large window", "in the background at the left", "same", "none")]}
+    (p,) = v.verifier_plans([pousse])
+    assert [e["debut"] for e in p["elements"]] == ["at the centre", "off-frame", "in the background at the left"]
+    assert r.regle_deux_fois([p], 1)["ok"] is True
+    # L'élément immobile que le texte ne nommait pas y est ajouté avec sa place (règle 1).
+    assert p["image_paroles"] == ("Close-up: a transparent crystal sprout emerges from the soil and grows. "
+                                  "A pot of soil : at the centre. A large window : in the background at the left.")
+    # Après la première phrase, jamais après la réplique.
+    assert v.fixes_nommes("Medium shot in a room. Mila says « Pousse. »", [el("a window", "at the left")]) == (
+        "Medium shot in a room. A window : at the left. Mila says « Pousse. »")
+    papillons = {"image_paroles": "Wide shot: the crystal trees split into shards, each shard becomes a glass butterfly.",
+                 "ambiance": "", "enchainement": "coupe",
+                 "elements": [el("the crystal trees", "at the centre", "gone",
+                                 "split into shards, and each shard transforms into a glass butterfly"),
+                              el("glass butterflies", "at the centre", "flying", "beat their wings")]}
+    (p,) = v.verifier_plans([papillons])
+    assert p["elements"][1]["debut"] == "off-frame" and p["elements"][0]["debut"] == "at the centre"

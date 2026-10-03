@@ -320,6 +320,6 @@ la séance, et à écrire ici pour ne pas les décider en voyant le résultat.
    lire la carte est permis, rien d'autre. D'accord ? ______________________
 4. **La porte du portage.** `PLAN.md:811` (`Porte du portage`) pose : aucune friction bloquante
    ouverte avant le portage sur un poste client. Au 26/09, une reste ouverte
-   (`docs/FRICTIONS.md:111` (`24 h sans intervention`), session NotebookLM ; le critère des 24 h
+   (`docs/FRICTIONS.md:112` (`24 h sans intervention`), session NotebookLM ; le critère des 24 h
    a échoué le 26/09, session morte après environ 2 h). NotebookLM n'est dans aucune des six tâches. L'essai attend-il sa levée ?
    ______________________

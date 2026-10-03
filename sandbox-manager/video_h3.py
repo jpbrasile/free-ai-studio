@@ -2444,12 +2444,12 @@ def distribution(fiches) -> str:
     sont toujours avec des images, jamais en texte ». Avec la description de la fiche, le chat
     écrivait la tenue dans les plans, et le texte dérive (« Le jardin de verre » : pull crème
     au lieu du pull rayé) ; la photo de la fiche, jointe à chaque image, porte l'apparence."""
-    lignes = ["- %s (%s)" % (f.get("nom") or "?", f.get("genre") or "personne")
-              for f in fiches or () if isinstance(f, dict) and f.get("genre") != "pose" and f.get("nom")]
-    if not lignes:
+    # Le nom seul : « - Mila (personne) » a été recopié tel quel dans les plans (03/10).
+    noms = [str(f["nom"]) for f in fiches or () if isinstance(f, dict) and f.get("genre") != "pose" and f.get("nom")]
+    if not noms:
         return ""
     return ("The characters and objects of this film have reference pictures, joined to every image: they "
-            "give how each one looks. Name them by these names:\n" + "\n".join(lignes) + "\n"
+            "give how each one looks. Call them exactly: " + ", ".join(noms) + ".\n"
             "Never write their looks: no clothing, hair, face, age, size or colour of a character, nor the "
             "look of an object that has a picture.\n\n")
 
@@ -2554,6 +2554,71 @@ def borner_les_suites(plans):
     return plans
 
 
+def formes_du_mot(mot: str) -> set:
+    """Le mot au singulier et au pluriel."""
+    formes = {mot, mot + "s", mot + "es"}
+    if mot.endswith("ies"):
+        formes.add(mot[:-3] + "y")
+    if mot.endswith("y"):
+        formes.add(mot[:-1] + "ies")
+    if mot.endswith("es"):
+        formes.add(mot[:-2])
+    if mot.endswith("s"):
+        formes.add(mot[:-1])
+    return formes
+
+
+# 03/10, « Le jardin de verre » : la pousse de cristal notée au début « emerging from a pot of
+# soil », les papillons nés des éclats « at the centre » : présents au début pour le tableau,
+# la règle 5 les voyait « déjà à l'image, et le plan les fait entrer », et l'image de départ
+# les aurait dessinés avant l'effet. Ce qui naît pendant le plan part hors champ.
+_NAIT_AU_DEBUT = re.compile(r"\b(?:emerging|sprouting|appearing|forming|materiali[sz]ing|being born|"
+                            r"growing out|bursting out|hatching)\b", re.I)
+_DEVIENT = re.compile(r"\b(?:transforms?|transforming|turns?|turning|changes?|changing|becomes?|becoming|"
+                      r"morphs?|morphing|grows?|growing|branches? out|branching out)\s+(?:in)?to\b"
+                      r"|\b(?:becomes?|becoming)\b", re.I)
+
+
+def naissances(elements: list) -> list:
+    """Le tableau, chaque élément qui naît pendant le plan mis hors champ au début : son début dit
+    qu'il naît, ou le mouvement d'un autre le fait devenir (« transforms into a glass butterfly »)."""
+    suites = []
+    for e in elements:
+        for m in _DEVIENT.finditer(str(e.get("mouvement") or "")):
+            suites.append((e["nom"], " ".join(_mots(e["mouvement"][m.end():])[:6])))
+    sortie = []
+    for e in elements:
+        debut = str(e.get("debut") or "")
+        mots = [m for m in _mots(e["nom"]) if m not in ("the", "a", "an")]
+        ne = bool(_NAIT_AU_DEBUT.search(debut)) or any(
+            autre != e["nom"] and mots and all(formes_du_mot(m) & set(suite.split()) for m in mots)
+            for autre, suite in suites)
+        sortie.append(dict(e, debut="off-frame") if ne and not hors_champ(debut) else e)
+    return sortie
+
+
+def fixes_nommes(texte: str, elements: list) -> str:
+    """Le texte, chaque élément immobile présent au début mais que le texte ne nomme pas ajouté
+    avec sa place (03/10 : la fenêtre du tableau, absente du texte, règle 1)."""
+    ajouts = []
+    for e in elements:
+        debut = str(e.get("debut") or "").strip()
+        immobile = str(e.get("mouvement") or "").strip().lower() in ("", "none", "none.", "static", "still")
+        mots = [m for m in _mots(e["nom"]) if m not in ("the", "a", "an")]
+        nomme = mots and all(formes_du_mot(m) & set(_mots(texte)) for m in mots)
+        if immobile and debut and not hors_champ(debut) and mots and not nomme:
+            nom = e["nom"].strip()
+            ajouts.append("%s%s : %s." % (nom[0].upper(), nom[1:], debut.rstrip(".")))
+    if not ajouts:
+        return texte
+    # Après la première phrase (le cadre), jamais après une réplique.
+    # Jamais en tête : la première phrase est le cadre (`texte_depart`).
+    fin = texte.find(". ")
+    if fin < 0 or fin > texte.find("«") >= 0:
+        return texte.rstrip() + " " + " ".join(ajouts)
+    return texte[:fin + 2] + " ".join(ajouts) + " " + texte[fin + 2:]
+
+
 def verifier_plans(plans) -> list:
     """Les plans relus par le propriétaire : de 1 à SCENARIO_PLANS_MAX, le premier
     en « coupe » (il n'a pas de plan avant lui)."""
@@ -2574,7 +2639,8 @@ def verifier_plans(plans) -> list:
         propre = {"image_paroles": p["image_paroles"].strip(), "ambiance": p.get("ambiance", "").strip(),
                   "enchainement": "coupe" if i == 0 else enchainement}
         if lire_tableau(p.get("elements")):
-            propre["elements"] = lire_tableau(p["elements"])
+            propre["elements"] = naissances(lire_tableau(p["elements"]))
+            propre["image_paroles"] = fixes_nommes(propre["image_paroles"], propre["elements"])
         try:
             propre["camera"] = lire_camera(p.get("camera"))
             if lire_longueur_plan(p.get("longueur")):

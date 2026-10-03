@@ -81,9 +81,10 @@ def mots_du_nom(nom: str) -> list:
 
 
 def nomme_dans(nom: str, texte: str) -> bool:
-    """Tous les mots du nom (sans article) sont dans le texte."""
+    """Tous les mots du nom (sans article) sont dans le texte, au singulier ou au pluriel
+    (03/10 : « glass butterflies » contre « a glass butterfly »)."""
     mots, dans = mots_du_nom(nom), set(video_h3._mots(texte))
-    return bool(mots) and all(m in dans for m in mots)
+    return bool(mots) and all(video_h3.formes_du_mot(m) & dans for m in mots)
 
 
 # Ce qui dit une direction sans dire une place : « facing right », « left hand »…

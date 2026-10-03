@@ -6444,7 +6444,9 @@ def test_le_decoupage_recoit_les_fiches_et_ne_change_pas_la_tenue(h3, monkeypatc
     consigne = consigne if isinstance(consigne, str) else consigne[0]["text"]
     # 03/10, propriétaire : « les attributs sont toujours avec des images, jamais en texte » :
     # le nom seul part, la photo porte l'apparence.
-    assert "- Mila (personne)" in consigne and "rayures" not in consigne and "9 ans" not in consigne
+    # Le nom seul, sans genre : « Mila (personne) » a été recopié dans les plans.
+    assert "Call them exactly: Mila." in consigne and "(personne)" not in consigne
+    assert "rayures" not in consigne and "9 ans" not in consigne
     assert "Never write their looks: no clothing" in consigne
     # Une tenue écrite quand même par le découpage, que l'histoire ne donne pas, est retirée.
     v = h3.video_h3
