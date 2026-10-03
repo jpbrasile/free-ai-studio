@@ -3237,16 +3237,31 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     monkeypatch.setattr(h3, "run_video_h3", lambda j, *a: tournes.append(h3.read_job(j)["video"]))
     r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"definition": "768p"})
     assert r.status_code == 200, r.text
-    assert r.json()["cles"] == [[0, 59], [61, 123]] and pris == [0, 59, 61, 123]
+    # Deux plans séparés par une coupe : chacun part de sa première image seule (« Le phare » n° 4, 04/10).
+    assert r.json()["cles"] == [[0, 59], [61, 123]] and pris == [0, 61]
     for _ in range(50):
         if len(tournes) == 2:
             break
         time.sleep(0.05)
-    assert [t["mode"] for t in tournes] == ["premiere_derniere"] * 2
+    assert [t["mode"] for t in tournes] == ["premiere"] * 2
     # Le plan déplié garde sa réplique et sa caméra ; il sait d'où il vient.
     assert "Voilà." in tournes[1]["invite"] and "pushes in" in tournes[1]["invite"]
-    assert tournes[1]["deplie_de"] == {"maitre": jid, "plan": 2, "images": [61, 123]}
+    assert tournes[1]["deplie_de"] == {"maitre": jid, "plan": 2, "images": [61]}
     assert h3.read_job(jid)["deplie"] == r.json()["clips"]
+    # Une suite : le plan d'avant finit sur l'image dont elle repart (première et dernière).
+    job["video"]["maitre"]["plans"][1]["enchainement"] = "suite"
+    h3.write_job(jid, job)
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [])
+    pris.clear()
+    tournes.clear()
+    r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"definition": "768p"})
+    assert r.status_code == 200, r.text
+    assert r.json()["cles"] == [[0, 62], [62, 123]] and pris == [0, 62, 62]
+    for _ in range(50):
+        if len(tournes) == 2:
+            break
+        time.sleep(0.05)
+    assert [t["mode"] for t in tournes] == ["premiere_derniere", "premiere"]
 
 
 def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):

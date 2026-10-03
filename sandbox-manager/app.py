@@ -7084,16 +7084,22 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
         for k, (a, b) in enumerate(cles):
             if k + 1 not in voulus:
                 continue
+            # La dernière image n'est imposée que si le plan suivant est une suite (il en repart). Avant une
+            # coupe, rien ne s'y raccorde : film « Le phare » n° 4, 04/10, la fin imposée tirait Oscar en
+            # arrière (« il se téléporte en bas des escaliers ») et le bateau d'un bord à l'autre.
+            suite_apres = k + 1 < len(cles) and cles[k + 1][0] == b
+            bornes = (a, b) if suite_apres else (a,)
             images = [base64.b64encode(montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
                                                               *video_h3.DEFINITIONS[definition])).decode()
-                      for n in (a, b)]
-            payload = dict({x: y for x, y in maitre["commun"].items() if y}, mode="premiere_derniere", images=images,
+                      for n in bornes]
+            payload = dict({x: y for x, y in maitre["commun"].items() if y},
+                           mode="premiere_derniere" if suite_apres else "premiere", images=images,
                            image_paroles=plans[k]["image_paroles"], ambiance=plans[k].get("ambiance", ""),
                            camera=plans[k].get("camera"), definition=definition,
                            longueur=plans[k].get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT)
             plan = video_h3.preparer(payload)
             plan["resume_public"].update(texte_client=plans[k]["image_paroles"],
-                                         deplie_de={"maitre": jid, "plan": k + 1, "images": [a, b]})
+                                         deplie_de={"maitre": jid, "plan": k + 1, "images": list(bornes)})
             travaux.append(plan)
     except montage.MontageImpossible as exc:
         raise HTTPException(400, str(exc)) from exc
