@@ -1612,6 +1612,13 @@ def test_la_description_de_depart_suit_le_tableau_sans_les_repliques(h3):
     assert v.texte_depart(plan) == (v.PREFIXE_DEPART + "Medium shot in a garden at night. "
                                     "the saucer : in the background, right of the frame. Zib : in the foreground, centre.")
     assert v.texte_depart({"image_paroles": "Il dit : « Bonjour. » puis sourit"}) == v.PREFIXE_DEPART + "Il puis sourit"
+    # 03/10, « Le jardin de verre » : l'effet tenait dans la première phrase, après « : ».
+    jardin = {"image_paroles": "At twilight, close-up on the pot of soil: a transparent crystal sprout pierces the "
+                               "soil and branches out into a glass shrub.",
+              "elements": [{"nom": "pot of soil", "debut": "in the centre, with wet soil"},
+                           {"nom": "transparent crystal sprout", "debut": "off-frame"}]}
+    assert v.texte_depart(jardin) == (v.PREFIXE_DEPART + "At twilight, close-up on the pot of soil. "
+                                      "pot of soil : in the centre, with wet soil.")
     demande, _ = v.demande_image("x", decor=v.depart_poser(PNG), coupe=True)
     assert v.CONSIGNE_COUPE % 1 in demande["prompt"] and "dernière image du plan précédent" in demande["prompt"]
 
@@ -3730,12 +3737,15 @@ def test_l_image_de_depart_part_de_l_etat_debut_des_elements(sandbox, tmp_path):
 const p = {image_paroles: "Medium shot. Léa enters and puts the red book down. Léa says : « Bonjour. »",
   elements: [{nom: "James", debut: "background, right, holding a book"},
              {nom: "Léa", debut: "off-frame"}, {nom: "le livre rouge", debut: "off-frame"}]};
-console.log(JSON.stringify([texteDepart(p), texteDepart({image_paroles: p.image_paroles})]));
+const j = {image_paroles: "Close-up on the pot: a crystal sprout grows into a glass shrub.",
+  elements: [{nom: "the pot", debut: "centre"}, {nom: "crystal sprout", debut: "off-frame"}]};
+console.log(JSON.stringify([texteDepart(p), texteDepart({image_paroles: p.image_paroles}), texteDepart(j)]));
 """
     f = tmp_path / "t.js"
     f.write_text(programme, encoding="utf-8")
-    avec, sans = json.loads(subprocess.run(["node", str(f)], capture_output=True, text=True, check=True,
-                                           encoding="utf-8").stdout)
+    avec, sans, jardin = json.loads(subprocess.run(["node", str(f)], capture_output=True, text=True, check=True,
+                                                   encoding="utf-8").stdout)
+    assert jardin.endswith("Close-up on the pot. the pot : centre.")   # 03/10 : l'action après « : » reste dehors
     assert avec.endswith("Medium shot. James : background, right, holding a book.")
     assert "Léa" not in avec and "enters" not in avec
     # Sans tableau : le texte du plan, répliques retirées, comme avant.
@@ -6137,6 +6147,9 @@ def test_la_fiche_du_decor_se_fait_d_apres_le_texte_si_le_film_reste_au_meme_end
     v = h3.video_h3
     consigne = v.consigne_decor_du_texte(["Leila sits on the fountain.", "Tyler rides up."])
     assert "[Shot 2] Tyler rides up." in consigne and "un_seul_lieu" in consigne and "water jets" in consigne
+    # 03/10, « Le jardin de verre » : la pousse que le plan 2 fait naître était déjà dans le pot du décor.
+    assert "at the START of the film" in consigne and "an empty pot stays empty" in consigne
+    assert "aucun objet ni plante en plus" in v.CADRE_DECOR
     assert v.lire_decor_du_texte('{"un_seul_lieu": false}') is None
     with pytest.raises(ValueError):
         v.lire_decor_du_texte("pas de JSON")
@@ -6315,3 +6328,35 @@ def test_le_decoupage_recoit_les_fiches_et_ne_change_pas_la_tenue(h3, monkeypatc
                   json={"scenario": "x", "fiche": "inconnue"}).status_code == 400
     assert h3.video_h3.distribution([]) == "" and "reference sheets" not in h3.video_h3.consigne_decoupage("x")
     assert "fiches: fichesDuScenario()})});" in h3.video_h3.PAGE_HTML
+
+
+def test_un_plan_de_scenario_ne_joint_pas_la_personne_qu_il_ne_nomme_pas(h3):
+    """03/10, « Le jardin de verre », plan 2 (gros plan sur le pot) : la photo de Mila partait
+    à H3 avec « wears … in every frame », et Mila a traversé le champ."""
+    v = h3.video_h3
+    mila, pot = v.fiche_creer("Mila", "x")["id"], v.fiche_creer("pot of soil", "y", "objet")["id"]
+    v.fiche_poser_image(mila, "face", PNG)
+    v.fiche_poser_image(pot, "face", PNG)
+    elements = [{"nom": "pot of soil", "debut": "centre"}, {"nom": "crystal sprout", "debut": "off-frame"}]
+    d = demande(mode="references", fiches=[mila, pot], elements=elements,
+                image_paroles="Close-up on the pot of soil: a crystal sprout grows.")
+    invite = v.preparer(d)["resume_public"]["invite"]
+    assert "is the person in" not in invite and "<Subject 1> is the object in <Picture 1>" in invite
+    # Nommée par le texte ou le tableau, elle reste ; un clip sans tableau garde toutes ses fiches.
+    assert v.personnes_du_plan([mila, pot], dict(d, image_paroles="Mila waters the pot of soil.")) == [mila, pot]
+    assert v.personnes_du_plan([mila, pot], {"image_paroles": "She waters it."}) == [mila, pot]
+    # Personne de nommé et aucun objet : la fiche reste, plutôt qu'un plan sans fiche.
+    assert v.personnes_du_plan([mila], d) == [mila]
+
+
+def test_un_objet_clef_avec_ou_sans_article_n_a_qu_une_fiche(h3):
+    """03/10, « Le jardin de verre » : « pot of soil » et « the pot of soil », deux fiches."""
+    v = h3.video_h3
+    plans = [{"image_paroles": "x", "elements": [{"nom": "pot of soil", "debut": "centre", "mouvement": "none"}]},
+             {"image_paroles": "y", "elements": [{"nom": "the pot of soil", "debut": "left", "mouvement": "none"}]}]
+    assert v.objets_clefs(plans, place=3) == ["the pot of soil"]
+    du_chat = [{"nom": "pot of soil", "plans": {0}, "bouge": set()},
+               {"nom": "the pot of soil", "plans": {1}, "bouge": set()}]
+    assert v.objets_clefs([{}, {}], place=3, du_chat=du_chat) == ["the pot of soil"]
+    assert v.objets_clefs(plans, exclus=["Pot of soil"], place=3) == []
+    assert v.fiche_objet_clef("pot of soil")["id"] == v.fiche_objet_clef("the pot of soil")["id"]

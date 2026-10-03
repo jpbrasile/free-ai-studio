@@ -1063,7 +1063,9 @@ CONSIGNE_OBJET_VUES = (
     "aucune personne.")
 CADRE_DECOR = ("Vue d'ensemble large du lieu seul, à hauteur d'homme, cadrage paysage : tout le lieu visible, "
                "vide de personnes et d'animaux, sans texte ni enseigne lisible ; lumière naturelle, photographie "
-               "réaliste.")
+               "réaliste. Rien que ce que la description nomme : aucun objet ni plante en plus.")
+# 03/10, « Le jardin de verre » : le décor tiré du texte montrait une pousse dans le pot que
+# le plan 2 devait voir naître ; la règle 6 a arrêté le film, puis, forcé, l'effet a disparu.
 # --- La fiche du décor D'APRÈS LE FILM (02/10) ---------------------------------------
 # Film 4 : la fiche du décor, faite d'après la seule image de départ du plan 1 (gros plan)
 # et la description « a round stone fountain with a carved central pillar », montrait une
@@ -1154,7 +1156,9 @@ def consigne_decor_du_texte(textes: list) -> str:
             "many water jets, how high compared with a seated person, what material, what colour) and where it "
             "stands relative to the others (left, right, behind, in front). Where the script is vague, choose one "
             "plausible precise form consistent with it. Never describe people, animals, vehicles or anything "
-            "held. Answer JSON only: {\"un_seul_lieu\": true or false, \"nom\": \"a short English name of the "
+            "held. Describe the place as it is at the START of the film: nothing the story later makes appear, "
+            "grow, break or transform (it would be there before its time); a container stays as it starts "
+            "(an empty pot stays empty). Answer JSON only: {\"un_seul_lieu\": true or false, \"nom\": \"a short English name of the "
             "place, 2-5 words\", \"description\": \"the place in English, one paragraph, %d characters at most\"}."
             % (plans, FICHE_DESCRIPTION_MAX - 50))
 
@@ -1215,6 +1219,16 @@ def lire_objets(texte: str, plans: list) -> list:
     return sortie
 
 
+_ARTICLE = re.compile(r"^(?:the|a|an|le|la|les|un|une|des|l)\s+")
+
+
+def cle_objet(nom: str) -> str:
+    """Le nom d'un objet sans son article : 03/10, « Le jardin de verre », « pot of soil » et
+    « the pot of soil » ont eu deux fiches (deux des neuf images de H3, et <Subject 4><Subject 3>
+    dans le texte du plan 2)."""
+    return _ARTICLE.sub("", _norme_replique(nom))
+
+
 def objets_clefs(plans: list, exclus=(), place: int = 0, du_chat=()) -> list:
     """Les noms des objets à mettre en fiche, au plus `place` : ceux que le tableau
     d'au moins deux plans nomme, et ceux que le chat a lus dans les textes (`du_chat`,
@@ -1223,20 +1237,26 @@ def objets_clefs(plans: list, exclus=(), place: int = 0, du_chat=()) -> list:
     présents, puis le premier venu."""
     if place <= 0:
         return []
-    deja = {_norme_replique(str(n)) for n in exclus}
+    deja = {cle_objet(str(n)) for n in exclus}
     vus = {}
     for o in du_chat:
-        cle = _norme_replique(o["nom"])
+        cle = cle_objet(o["nom"])
         if cle not in deja and o["plans"]:
-            vus[cle] = {"nom": o["nom"], "plans": set(o["plans"]), "bouge": set(o["bouge"]),
-                        "premier": min(o["plans"])}
+            v = vus.setdefault(cle, {"nom": o["nom"], "plans": set(), "bouge": set(), "premier": min(o["plans"])})
+            v["plans"] |= set(o["plans"])
+            v["bouge"] |= set(o["bouge"])
+            v["premier"] = min(v["premier"], min(o["plans"]))
+            if len(o["nom"]) > len(v["nom"]):   # la forme longue, avec son article
+                v["nom"] = o["nom"]
     for i, p in enumerate(plans or []):
         for e in (p.get("elements") or []) if isinstance(p, dict) else []:
             nom = " ".join(str((e or {}).get("nom") or "").split()) if isinstance(e, dict) else ""
-            cle = _norme_replique(nom)
+            cle = cle_objet(nom)
             if not nom or cle in deja or (hors_champ(e.get("debut")) and hors_champ(e.get("fin"))):
                 continue
             v = vus.setdefault(cle, {"nom": nom, "plans": set(), "bouge": set(), "premier": i})
+            if len(nom) > len(v["nom"]):
+                v["nom"] = nom
             v["plans"].add(i)
             if str(e.get("mouvement") or "").strip().lower().rstrip(".") not in _IMMOBILE:
                 v["bouge"].add(i)
@@ -1248,14 +1268,14 @@ def objets_clefs(plans: list, exclus=(), place: int = 0, du_chat=()) -> list:
 def fiche_objet_clef(nom: str) -> dict:
     """La fiche d'objet clef de ce nom : celle d'un tournage d'avant si elle existe (même
     objet d'un film à l'autre, rien à refaire), sinon une neuve, encore sans image."""
-    cle = _norme_replique(nom)
+    cle = cle_objet(nom)
     racine = DOSSIER_FICHES
     for dossier in sorted(racine.iterdir()) if racine.is_dir() else []:
         try:
             f = fiche_lire(dossier.name)
         except ValueError:
             continue
-        if f.get("genre") == "objet" and f.get("vues") and _norme_replique(f["nom"]) == cle:
+        if f.get("genre") == "objet" and f.get("vues") and cle_objet(f["nom"]) == cle:
             return f
     fiche = fiche_creer(nom[:FICHE_NOM_MAX], nom[:FICHE_DESCRIPTION_MAX], "objet")
     fiche["vues"] = True
@@ -2275,13 +2295,18 @@ def texte_depart(plan: dict) -> str:
     """La description de l'image de départ d'un plan : son cadre, puis l'état « debut »
     de chaque élément dans le champ — la règle de `texteDepart` (la page), ici pour le
     Studio qui crée l'image seul. 02/10 : depuis le texte entier, Gemini a écrit la
-    réplique « [English, enthusiasm] Delicious! » sur l'image."""
+    réplique « [English, enthusiasm] Delicious! » sur l'image.
+    03/10, « Le jardin de verre », plan 2 : « close-up on the pot of soil: a transparent crystal
+    sprout pierces the soil… into a glass shrub » tient en une phrase ; l'image de départ a
+    dessiné l'arbuste déjà poussé, et l'effet du plan a disparu. Après les deux-points vient
+    l'action : le cadre s'arrête avant, l'état du début vient du tableau."""
     presents = [e for e in (plan.get("elements") or []) if isinstance(e, dict) and e.get("nom")
                 and e.get("debut") and not hors_champ(e.get("debut"))]
     texte = sans_paroles(plan.get("image_paroles") or "")
     if not presents:
         return PREFIXE_DEPART + texte
-    return PREFIXE_DEPART + texte.split(".")[0] + ". " + " ".join(f"{e['nom']} : {e['debut']}." for e in presents)
+    cadre = texte.split(".")[0].split(":")[0].strip()
+    return PREFIXE_DEPART + cadre + ". " + " ".join(f"{e['nom']} : {e['debut']}." for e in presents)
 
 
 def fiches_au_depart(fiches: list, elements, texte: str = "") -> list:
@@ -3548,6 +3573,30 @@ def _image(b64: str, quoi: str) -> str:
     return base64.b64encode(octets).decode()
 
 
+def personnes_du_plan(ids: list, payload: dict) -> list:
+    """Les fiches d'un plan de scénario, sans les personnes qu'il ne nomme nulle part (ni son
+    tableau d'éléments, ni son texte). 03/10, « Le jardin de verre », plan 2 (gros plan sur le
+    pot) : la photo de Mila partait en <Subject 1> avec « wears … in every frame », et H3 l'a
+    fait traverser le champ. Seulement avec un tableau (un plan de scénario) : un clip fait à
+    la main dit souvent « she ». Il reste toujours au moins une fiche."""
+    elements = payload.get("elements")
+    if not isinstance(elements, list) or not elements:
+        return ids
+    nommes = " ".join([_norme_replique(str(e.get("nom") or "")) for e in elements if isinstance(e, dict)]
+                      + [_norme_replique(str(payload.get(c) or "")) for c in ("image_paroles", "ambiance")])
+    gardees = []
+    for fid in ids:
+        try:
+            fiche = fiche_lire(fid)
+        except ValueError:
+            gardees.append(fid)   # illisible : la suite dira pourquoi
+            continue
+        nom = _norme_replique(str(fiche.get("nom") or ""))
+        if fiche_est_objet(fiche) or fiche.get("genre") == "decor" or not nom or f" {nom} " in f" {nommes} ":
+            gardees.append(fid)
+    return gardees or ids
+
+
 def preparer(payload: dict, graine_hasard=None) -> dict:
     """Vérifie la demande de la page et fabrique ce qui part sur la machine.
 
@@ -3565,6 +3614,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     ids = payload.get("fiches") or ([payload["fiche"]] if payload.get("fiche") else [])
     if not isinstance(ids, list) or len(set(map(str, ids))) != len(ids):
         raise ValueError("Liste de fiches illisible.")
+    ids = personnes_du_plan(ids, payload)
     langues = payload.get("langues") or {}
     if not isinstance(langues, dict) or any(v not in LANGUES_PAROLES for v in langues.values()):
         raise ValueError("Langue d'un personnage inconnue.")
@@ -4583,7 +4633,7 @@ function horsChamp(etat){
 function texteDepart(p){
   const presents = (p.elements || []).filter(e => e && e.nom && e.debut && !horsChamp(e.debut));
   if (!presents.length) return PREFIXE.premiere + sansParoles(p.image_paroles);
-  const cadre = sansParoles(p.image_paroles).split(".")[0];
+  const cadre = sansParoles(p.image_paroles).split(".")[0].split(":")[0].trim();   // l'action vient après « : » (03/10)
   return PREFIXE.premiere + cadre + ". " + presents.map(e => e.nom + " : " + e.debut + ".").join(" ");
 }
 
