@@ -1391,6 +1391,8 @@ def test_le_film_se_simule_en_images_debut_et_fin_sans_rien_tourner(h3, monkeypa
             if sum(q == quoi for q, _n in juges) == 1:
                 return '{"ok": false, "fautes": ["une autre bibliothèque"]}'
             return '{"ok": true, "fautes": []}'
+        if sum(q == quoi for q, _n in juges) == 2:   # le redessin de la coupe est pire
+            return '{"ok": false, "fautes": ["le pot a changé de forme", "un autre canapé"]}'
         return '{"ok": false, "fautes": ["le pot a changé de forme"]}'
     monkeypatch.setattr(h3, "_chat_du_studio", chat)
     tournes = []
@@ -1412,8 +1414,10 @@ def test_le_film_se_simule_en_images_debut_et_fin_sans_rien_tourner(h3, monkeypa
     # La suite reprend l'image de fin du plan d'avant ; la coupe en part, autre cadrage, raccord jugé.
     assert lignes[1]["depart"] == lignes[0]["fin"]
     assert lignes[2]["raccord"] == ["le pot a changé de forme"] and ("le contrôle du raccord", 2) in juges
-    # Le faux raccord se redessine une fois, comme au tournage ; les fautes du dernier essai restent.
-    assert lignes[2]["raccord_essais"] == v.RACCORD_ESSAIS == 2
+    # Le faux raccord se redessine une fois, comme au tournage ; le redessin, pire (deux fautes),
+    # est écarté : le premier essai reste, avec ses fautes (03/10, propriétaire : « le meilleur »).
+    assert lignes[2]["raccord_essais"] == v.RACCORD_ESSAIS == 2 and lignes[2]["raccord_garde"] == 1
+    assert [x.get("fin_garde") for x in lignes] == [2, 1, 1]
     assert sum(q == "le contrôle du raccord" for q, _n in juges) == 2
     # L'image de fin se juge contre le début du plan : la fin 1, refusée, est redessinée une fois.
     assert [x["fin_essais"] for x in lignes] == [2, 1, 1] and all(x["controle_fin"] == [] for x in lignes)

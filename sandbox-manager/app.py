@@ -6622,8 +6622,9 @@ async def video_h3_scenario_simuler(request: Request, authorization: Optional[st
                                                        coupe=False, elements=p.get("elements") or [])))
                 ligne["depart"], ligne["description_depart"] = d["id"], d["texte"]
             else:
-                # Un faux raccord se redessine, comme au tournage (RACCORD_ESSAIS) ; les fautes
-                # du dernier essai restent montrées.
+                # Un faux raccord se redessine, comme au tournage (RACCORD_ESSAIS) ; l'essai où le
+                # juge voit le moins de fautes est gardé, avec ses fautes (03/10, propriétaire).
+                meilleur = None
                 for tour in range(video_h3.RACCORD_ESSAIS):
                     d = await _depart_redemande(dict(commun_image, texte=video_h3.texte_depart(p), decor=fin_avant,
                                                      coupe=True, elements=p.get("elements") or [],
@@ -6638,11 +6639,18 @@ async def video_h3_scenario_simuler(request: Request, authorization: Optional[st
                             modele=video_h3.MODELE_JUGE))
                     except (ValueError, HTTPException) as exc:
                         ligne["raccord_erreur"] = str(getattr(exc, "detail", exc))
+                        meilleur = None
                         break
+                    if meilleur is None or len(ligne["raccord"]) <= len(meilleur["raccord"]):
+                        meilleur = {k: ligne[k] for k in ("depart", "description_depart", "raccord")}
+                        meilleur["raccord_garde"] = tour + 1
                     if not ligne["raccord"]:
                         break
+                ligne.update(meilleur or {})
             # L'image de fin se juge contre le début du plan et le décor, et se redessine une fois
             # (03/10 : la fin du plan 3 avait changé de salon, et les coupes suivantes avec elle).
+            # L'essai où le juge voit le moins de fautes est gardé.
+            meilleur = None
             for tour in range(video_h3.RACCORD_ESSAIS):
                 f = await _depart_redemande(dict(commun_image, texte=video_h3.texte_fin(p), decor=None, coupe=False,
                                                  fin_de=ligne["depart"], a_eviter=ligne.get("controle_fin") or [],
@@ -6658,10 +6666,15 @@ async def video_h3_scenario_simuler(request: Request, authorization: Optional[st
                         images=images, modele=video_h3.MODELE_JUGE))
                 except (ValueError, HTTPException) as exc:
                     ligne["controle_fin_erreur"] = str(getattr(exc, "detail", exc))
+                    meilleur = None
                     break
+                if meilleur is None or len(ligne["controle_fin"]) <= len(meilleur["controle_fin"]):
+                    meilleur = {k: ligne[k] for k in ("fin", "description_fin", "controle_fin")}
+                    meilleur["fin_garde"] = tour + 1
                 if not ligne["controle_fin"]:
                     break
-            fin_avant = f["id"]
+            ligne.update(meilleur or {})
+            fin_avant = ligne["fin"]
         except HTTPException as exc:
             ligne["erreur"] = str(exc.detail)
             break
