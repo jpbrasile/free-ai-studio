@@ -43,6 +43,7 @@ import dialogue
 # jour/mois/annee -- des deux cotes : ici en Python, et dans le JavaScript des
 # pages via `format_fr.avec_formateurs`.
 import file_carte
+import film_auto
 import format_fr
 # Le bouton « 🏠 Studio » pose sur chaque page (voir PAGES_HTML).
 import accueil
@@ -4860,8 +4861,11 @@ _FINALISATIONS_VIVANTES: set = set()   # les fils en cours ; un Studio redémarr
 
 def _finaliser_plans(images: int, plans) -> list:
     """Les plans à finaliser, bout à bout de 0 à la fin du film : un trou ou un
-    chevauchement se verrait dans le film recollé. ValueError sinon."""
-    if not isinstance(plans, list) or not plans:
+    chevauchement se verrait dans le film recollé. ValueError sinon. Sans plans, le film
+    entier en un seul, sans visages (03/10 : le film automatique ne fait que l'agrandir)."""
+    if plans is None or plans == []:
+        plans = [{"de": 0, "a": images, "sujets": []}]
+    if not isinstance(plans, list):
         raise ValueError("Donnez les plans du film : [{de, a, sujets}].")
     sortie, attendu = [], 0
     for k, p in enumerate(plans):
@@ -7068,6 +7072,76 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     job["deplie"] = [j for j, _a in lances]
     write_job(jid, job)
     return {"maitre": jid, "clips": job["deplie"], "cles": cles, "coupes_vues_s": coupes}
+
+
+# --- Le film automatique (03/10) : d'un texte simple au film fini (film_auto.py) ---------
+DOSSIER_FILMS_AUTO = budget_modal.CONFIG_DIR / "h3-films-auto"
+# Le fil appelle les routes du Studio comme la page : ce service-ci, dans son conteneur.
+STUDIO_ICI = os.getenv("STUDIO_SELF_URL", "http://127.0.0.1:8000")
+FILM_AUTO_DELAI_S = 1800.0   # une route du maître fait image, règles et traduction avant de rendre
+
+
+def _film_auto_appel(methode: str, chemin: str, corps=None) -> tuple:
+    with httpx.Client(timeout=httpx.Timeout(FILM_AUTO_DELAI_S, connect=15.0)) as c:
+        r = c.request(methode, STUDIO_ICI + chemin, json=corps, headers={"Authorization": "Bearer " + KEY})
+    try:
+        return r.status_code, r.json()
+    except ValueError:
+        return r.status_code, {"detail": r.text[:600]}
+
+
+def _film_auto_chat(consigne: str) -> str:
+    return asyncio.run(_chat_du_studio(consigne, "le film automatique"))
+
+
+def _film_auto_lire(fid: str) -> dict:
+    if not re.fullmatch(r"[0-9a-f]{32}", fid or ""):
+        raise HTTPException(404, "Film inconnu.")
+    try:
+        return json.loads((DOSSIER_FILMS_AUTO / (fid + ".json")).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(404, "Film inconnu.") from exc
+
+
+def _film_auto_lancer(etat: dict) -> dict:
+    film = film_auto.Film(etat, DOSSIER_FILMS_AUTO, _film_auto_appel, _film_auto_chat)
+    film.ecrire()
+    threading.Thread(target=film.derouler, daemon=True).start()
+    return etat
+
+
+@app.post("/video-h3/film/auto")
+async def video_h3_film_auto(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{histoire, titre?, essai?} : le film se fait seul, du texte au film 4K avec musique.
+    `essai` : l'essai à blanc, deux plans courts en 480p (film_auto.REGLAGES_ESSAI)."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    corps = await request.json()
+    try:
+        etat = film_auto.nouvel_etat(corps.get("histoire"), corps.get("titre") or "", corps.get("essai") is True)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _film_auto_lancer(etat)
+
+
+@app.get("/video-h3/film/auto/{fid}")
+def video_h3_film_auto_etat(fid: str, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    return _film_auto_lire(fid)
+
+
+@app.post("/video-h3/film/auto/{fid}/reprendre")
+def video_h3_film_auto_reprendre(fid: str, authorization: Optional[str] = Header(default=None)):
+    """Reprend un film arrêté à l'étape où il s'est arrêté ; les étapes faites sont gardées."""
+    _h3_ou_404()
+    auth(authorization)
+    etat = _film_auto_lire(fid)
+    if etat.get("statut") == "en cours":
+        raise HTTPException(409, "Ce film est déjà en cours.")
+    etat.update(statut="en cours", erreur="")
+    return _film_auto_lancer(etat)
 
 
 DEFAUTS_PAR_PLAN = 3
