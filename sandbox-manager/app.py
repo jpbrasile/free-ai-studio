@@ -6981,7 +6981,9 @@ async def video_h3_maitre(request: Request, authorization: Optional[str] = Heade
     _garde_licence_h3()
     corps = await request.json()
     try:
-        plans = video_h3.verifier_plans(corps.get("plans"))
+        # Avant les règles (film « Le phare » n° 2, 03/10) : la suite qui recadre était refusée par les
+        # règles 2 et 5 comme une suite, alors que le maître la tourne en coupe.
+        plans = video_h3.suites_du_maitre(video_h3.verifier_plans(corps.get("plans")))
         longueur = int(corps.get("longueur_maitre") or video_h3.LONGUEUR_MAITRE)
         commun, musique, a_tourner = _scenario_prepare(corps, plans)
     except (TypeError, ValueError) as exc:
