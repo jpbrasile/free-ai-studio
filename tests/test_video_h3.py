@@ -1387,6 +1387,10 @@ def test_le_film_se_simule_en_images_debut_et_fin_sans_rien_tourner(h3, monkeypa
 
     async def chat(consigne, quoi="", images=None, modele=""):
         juges.append((quoi, len(images or [])))
+        if quoi == "le contrôle de la fin":   # la première fin change de salon, les autres tiennent
+            if sum(q == quoi for q, _n in juges) == 1:
+                return '{"ok": false, "fautes": ["une autre bibliothèque"]}'
+            return '{"ok": true, "fautes": []}'
         return '{"ok": false, "fautes": ["le pot a changé de forme"]}'
     monkeypatch.setattr(h3, "_chat_du_studio", chat)
     tournes = []
@@ -1411,16 +1415,22 @@ def test_le_film_se_simule_en_images_debut_et_fin_sans_rien_tourner(h3, monkeypa
     # Le faux raccord se redessine une fois, comme au tournage ; les fautes du dernier essai restent.
     assert lignes[2]["raccord_essais"] == v.RACCORD_ESSAIS == 2
     assert sum(q == "le contrôle du raccord" for q, _n in juges) == 2
-    # 6 images : début 1, fin 1, fin 2, début 3 (coupe) deux fois, fin 3 ; jamais la réplique sur l'image.
-    assert len(demandes) == 6 and not any("Pousse" in d for d in demandes)
-    assert sum(v.CONSIGNE_FIN.split("%d")[1][:40] in d for d in demandes) == 3
-    assert v.CONSIGNE_COUPE % 2 in demandes[3] and v.CONSIGNE_COUPE % 2 in demandes[4]
-    assert "fin de la scène" in demandes[2] and "a crystal sprout : at the centre, grown." in demandes[2]
+    # L'image de fin se juge contre le début du plan : la fin 1, refusée, est redessinée une fois.
+    assert [x["fin_essais"] for x in lignes] == [2, 1, 1] and all(x["controle_fin"] == [] for x in lignes)
+    assert [n for q, n in juges if q == "le contrôle de la fin"] == [2, 2, 2, 2]
+    # 7 images : début 1, fin 1 deux fois, fin 2, début 3 (coupe) deux fois, fin 3 ; jamais la réplique.
+    assert len(demandes) == 7 and not any("Pousse" in d for d in demandes)
+    assert sum(v.CONSIGNE_FIN.split("%d")[1][:40] in d for d in demandes) == 4
+    assert v.CONSIGNE_COUPE % 2 in demandes[4] and v.CONSIGNE_COUPE % 2 in demandes[5]
+    assert "fin de la scène" in demandes[3] and "a crystal sprout : at the centre, grown." in demandes[3]
     # 03/10, propriétaire : l'image de fin a aussi les photos des fiches présentes à la fin
     # (Mila, l'objet clef), jamais celles des absents (Mila n'est pas au plan 2).
     assert "Mila est la personne" in demandes[1] and "the pot est l'objet" in demandes[1]
-    assert "Mila" not in demandes[2].split(".")[0] and "the pot est l'objet" in demandes[2]
-    assert photos[1] >= 3 and photos[1] > photos[2]
+    assert "Mila" not in demandes[3].split(".")[0] and "the pot est l'objet" in demandes[3]
+    assert photos[1] >= 3 and photos[1] > photos[3]
+    # Le juge de la fin compare au décor quand il y en a un ; un gros plan n'est pas un manque.
+    assert "Image 3 is the empty set" in v.consigne_controle_fin("x", avec_decor=True)
+    assert "Image 3" not in v.consigne_controle_fin("x") and "they are NOT missing" in v.consigne_raccord("x")
     assert tournes == []   # rien n'est tourné
 
 

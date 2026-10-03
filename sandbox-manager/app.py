@@ -6639,10 +6639,26 @@ async def video_h3_scenario_simuler(request: Request, authorization: Optional[st
                         break
                     if not ligne["raccord"]:
                         break
-            f = await _depart_redemande(dict(commun_image, texte=video_h3.texte_fin(p), decor=None, coupe=False,
-                                             fin_de=ligne["depart"],
-                                             elements=video_h3.elements_a_la_fin(p.get("elements") or [])))
-            ligne["fin"], ligne["description_fin"] = f["id"], f["texte"]
+            # L'image de fin se juge contre le début du plan et le décor, et se redessine une fois
+            # (03/10 : la fin du plan 3 avait changé de salon, et les coupes suivantes avec elle).
+            for tour in range(video_h3.RACCORD_ESSAIS):
+                f = await _depart_redemande(dict(commun_image, texte=video_h3.texte_fin(p), decor=None, coupe=False,
+                                                 fin_de=ligne["depart"],
+                                                 elements=video_h3.elements_a_la_fin(p.get("elements") or [])))
+                ligne["fin"], ligne["description_fin"] = f["id"], f["texte"]
+                ligne["fin_essais"] = tour + 1
+                images = [_data_url(video_h3.depart_lire(ligne["depart"])), _data_url(video_h3.depart_lire(f["id"]))]
+                try:
+                    if lieu:
+                        images.append(video_h3.fiche_lieu_image(lieu))
+                    ligne["controle_fin"] = video_h3.lire_raccord(await _chat_du_studio(
+                        video_h3.consigne_controle_fin(f["texte"], avec_decor=bool(lieu)), "le contrôle de la fin",
+                        images=images, modele=video_h3.MODELE_JUGE))
+                except (ValueError, HTTPException) as exc:
+                    ligne["controle_fin_erreur"] = str(getattr(exc, "detail", exc))
+                    break
+                if not ligne["controle_fin"]:
+                    break
             fin_avant = f["id"]
         except HTTPException as exc:
             ligne["erreur"] = str(exc.detail)

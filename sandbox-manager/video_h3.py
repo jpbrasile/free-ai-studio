@@ -842,12 +842,31 @@ def consigne_raccord(description: str) -> str:
     return ("Image 1 is the last frame of a shot. Image 2 is the first frame of the next shot: a CUT to another "
             "framing of the same place at the same instant, described as: %s\n"
             "The framing and the camera angle are SUPPOSED to change: never count that as a fault, nor an element "
-            "that is simply outside the new frame. Check only, for what both images show: (a) the fixed elements "
+            "that is simply outside the new frame (a close-up on an object does not show the people around it: "
+            "they are NOT missing). Check only, for what both images show: (a) the fixed elements "
             "of the place (walls, windows, doors, furniture) are the same ones, in the same positions relative to "
             "each other; (b) each object is the same — same shape, size, colour and content — and stands at the "
             "same place in the room relative to the furniture and the people; (c) nothing is in image 2 that was "
             "not in image 1. Answer JSON only: {\"ok\": true or false, \"fautes\": [\"one short sentence per "
             "fault, naming the element\"]}." % " ".join(str(description or "").split()))
+
+
+# 03/10, story-board du « Jardin de verre » : l'image de fin du plan 3 (l'arbre envahit la
+# pièce) a changé de salon — bibliothèque remplie, lampe chaude, autre fenêtre, un second
+# arbre — et les coupes 4 et 5, parties d'elle, en ont hérité. Seul le début d'une coupe
+# était jugé ; la fin se juge contre le début du même plan, et contre le décor s'il y en a un.
+def consigne_controle_fin(description: str, avec_decor: bool = False) -> str:
+    """Pour le juge : la première image d'un plan (1), sa dernière image (2), le décor vide (3)."""
+    decor = (" Image 3 is the empty set of the film: the walls, windows, doors and furniture of image 2 must "
+             "be the ones of image 3 (same shape, colour and place)." if avec_decor else "")
+    return ("Image 1 is the first frame of a shot and image 2 its LAST frame, same camera, after this action: "
+            "%s\nWhat the action changes is SUPPOSED to change (what grows, appears, moves or leaves as "
+            "described): never count that as a fault, nor a small camera move.%s Check only: (a) the place is the "
+            "same room — same walls, windows, doors, light sources and furniture, same shapes and colours, at the "
+            "same places; (b) every object the action does not change is the same and at the same place; (c) no "
+            "person, animal or object is in image 2 that neither image 1 nor the action brings, and nothing is "
+            "there twice. Answer JSON only: {\"ok\": true or false, \"fautes\": [\"one short sentence per fault, "
+            "naming the element\"]}." % (" ".join(str(description or "").split()), decor))
 
 
 def lire_raccord(reponse: str) -> list:
