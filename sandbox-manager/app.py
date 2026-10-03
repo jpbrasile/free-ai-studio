@@ -6970,7 +6970,7 @@ async def video_h3_clip_juger(jid: str, authorization: Optional[str] = Header(de
         # une fois les trois essais passés. Le juge le dit : l'essai suivant le remplace.
         try:
             video_h3.cles_du_maitre(maitre["plans"], maitre["debuts_s"],
-                                    await asyncio.to_thread(montage.coupes_vues, chemin), maitre["longueur"])
+                                    await asyncio.to_thread(montage.coupes_vues, film), maitre["longueur"])
         except ValueError as exc:
             verdict["verdict"] = "defaut"
             verdict.setdefault("defauts", []).append({"t_s": 0.0, "quoi": str(exc), "cause": "video"})

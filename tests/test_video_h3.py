@@ -3217,7 +3217,7 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     monkeypatch.setattr(h3, "_photos_des_fiches", lambda ids: ([], []))
     monkeypatch.setattr(h3, "_juger_passage", lambda *a: asyncio.sleep(0, {"verdict": "ok", "defauts": []}))
     monkeypatch.setattr(h3, "_ecouter", lambda *a: asyncio.sleep(0, {"attendu": [], "ok": None}))
-    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [])
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [] if isinstance(f, bytes) else 1 / 0)
     r = c.post("/video-h3/jobs/%s/juger" % jid, headers=CLE)
     assert r.status_code == 200 and r.json()["verdict"] == "defaut", r.text
     assert "coupe du plan 2" in r.json()["defauts"][-1]["quoi"]
