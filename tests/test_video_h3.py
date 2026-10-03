@@ -5366,6 +5366,20 @@ def test_un_film_trop_lourd_pour_la_reserve_finit_en_echec(h3, monkeypatch):
     assert rates and all(j["status"] == "failed" and "réserve" in j["error"] for j in rates)
 
 
+def test_une_video_de_la_machine_d_ici_a_la_reserve_des_films(h3, monkeypatch):
+    """03/10, film « Le phare » : la 4K de 15,5 s (106 Mo) dépassait les 100 Mo des envois."""
+    monkeypatch.setattr(h3, "MAX_UPLOAD", 3)
+    jid = "d" * 32
+    sortie = h3.JOBS / jid / "output"
+    sortie.mkdir(parents=True)
+    (sortie / "video.mp4").write_bytes(b"VIDEO-4K-LOURDE")
+    (sortie / "journal.txt").write_bytes(b"TROP-LONG")
+    arts = {a["name"]: a for a in h3.collect_local_artifacts(jid, "maison")}
+    assert not arts["video.mp4"].get("skipped") and arts["journal.txt"]["reason"] == "artifact_too_large"
+    monkeypatch.setattr(h3, "MAX_FILM", 3)
+    assert h3.collect_local_artifacts(jid, "maison")[0]["skipped"]
+
+
 def _encodeur(nom):
     if not shutil.which("ffmpeg"):
         return False

@@ -589,13 +589,20 @@ if os.getenv("SANDBOX_AMORCE_BUDGET", "true").strip().lower() not in ("0", "fals
                      daemon=True).start()
 
 
+# Une vidéo faite par la machine d'ici est un film : elle a la réserve des films (MAX_FILM).
+# 03/10, film « Le phare » : la 4K de 15,5 s (106 Mo, FlashVSR réussi en 529 s) mise de côté à
+# 100 Mo, et la finalisation disait « l'agrandissement a échoué ».
+VIDEOS = (".mp4", ".mkv", ".webm", ".mov")
+
+
 def collect_local_artifacts(jid: str, source: str) -> list[dict]:
     out = JOBS / jid / "output"
     arts: list[dict] = []
     if out.exists():
         for p in out.rglob("*"):
             if p.is_file() and not p.is_symlink():
-                arts.append(add_artifact(jid, p, source))
+                arts.append(add_artifact(jid, p, source,
+                                         limite=MAX_FILM if p.suffix.lower() in VIDEOS else 0))
     return arts
 
 
