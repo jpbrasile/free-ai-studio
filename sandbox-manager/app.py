@@ -5804,13 +5804,20 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
     """Le chat du Studio découpe l'histoire en plans ; rien n'est loué."""
     _h3_ou_404()
     auth(authorization)
-    scenario = str((await request.json()).get("scenario") or "").strip()
+    corps = await request.json()
+    scenario = str(corps.get("scenario") or "").strip()
     if not scenario:
         raise HTTPException(400, "Écrivez d'abord le scénario.")
     if len(scenario) > video_h3.SCENARIO_MAX:
         raise HTTPException(400, "Scénario trop long (2 000 caractères au plus).")
+    # Les fiches choisies (03/10) : sans elles, le découpage inventait la tenue.
+    ids = corps.get("fiches") or [corps.get("fiche")]
+    try:
+        fiches = [video_h3.fiche_lire(f) for f in ids if isinstance(f, str) and f]
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     scenario = await _histoire_en_anglais(scenario)
-    reponse = await _chat_du_studio(video_h3.consigne_decoupage(scenario), "le découpage en plans")
+    reponse = await _chat_du_studio(video_h3.consigne_decoupage(scenario, fiches), "le découpage en plans")
     try:
         plans = video_h3.lire_decoupage(reponse, scenario)
     except ValueError as exc:

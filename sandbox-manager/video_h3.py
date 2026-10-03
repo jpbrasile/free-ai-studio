@@ -2353,7 +2353,20 @@ def apparitions_du_tableau(plans: list) -> list:
     return problemes
 
 
-def consigne_decoupage(scenario: str) -> str:
+def distribution(fiches) -> str:
+    """Les fiches du scénario, lues par le découpage (03/10, « Le jardin de verre » : sans
+    elles, le chat a habillé Mila d'un « cream knit sweater and blue jeans » dans les 7 plans,
+    loin du pull rayé de sa fiche). Sans âge chiffré : le chat le recopierait dans les plans."""
+    lignes = ["- %s (%s): %s" % (f.get("nom") or "?", f.get("genre") or "personne", sans_age(f.get("description")))
+              for f in fiches or () if isinstance(f, dict) and f.get("genre") != "pose" and f.get("description")]
+    if not lignes:
+        return ""
+    return ("The characters and objects of this film have reference sheets; they look exactly as written here, "
+            "in every shot (write their looks in the language of the shots):\n" + "\n".join(lignes) + "\n"
+            "A character wears ONLY the clothes written on its sheet: never invent, add or change clothing.\n\n")
+
+
+def consigne_decoupage(scenario: str, fiches=()) -> str:
     # Une action et une réplique courte par plan : l'essai du 27/09 (clip 2) a
     # montré qu'un plan chargé rend un son incompréhensible.
     return ("Split this short film script into at most %d shots of about 5 seconds each. "
@@ -2433,8 +2446,9 @@ def consigne_decoupage(scenario: str) -> str:
             "scene, or a clearly different viewpoint (from a wide shot to a close-up, the other side of "
             "the scene). The first shot is "
             "\"coupe\"; never more than %d shots in a row without a \"coupe\" (put it where the story "
-            "allows a cut best). Answer with the JSON array only.\n\n%s"
-            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, PLANS_MAX, scenario))
+            "allows a cut best). Answer with the JSON array only.\n\n%s%s"
+            % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, PLANS_MAX, distribution(fiches),
+               scenario))
 
 
 def borner_les_suites(plans):
@@ -6229,7 +6243,7 @@ function dessinerPlans(){
 document.getElementById("scenario_decouper").addEventListener("click", async () => {
   scenarioEtat("Le chat du Studio découpe le scénario…");
   const r = await fetch("/video-h3/scenario/decouper", {method: "POST", headers: H,
-    body: JSON.stringify({scenario: document.getElementById("scenario").value})});
+    body: JSON.stringify({scenario: document.getElementById("scenario").value, fiches: fichesDuScenario()})});
   const d = await r.json();
   if (!r.ok){ scenarioEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
   PLANS = d.plans;

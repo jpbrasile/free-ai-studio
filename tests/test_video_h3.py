@@ -4831,7 +4831,7 @@ def test_agrandir_ici_flashvsr_amorce_dans_un_plan_jamais_a_travers_une_coupe(sa
     """03/10 : FlashVSR lit le film en flux. Un morceau qui continue un plan reçoit les
     8 images d'avant (jetées ensuite) ; un morceau qui ouvre un plan n'en reçoit pas."""
     ag = sandbox.agrandir
-    coupes = ag.bornes(370, [243, 370], ag.MORCEAU_MAX_MAISON)
+    coupes = ag.bornes(370, [243, 370], 128)   # morceaux de 128 : la règle, pas le réglage (32 depuis le 03/10)
     assert coupes == [0, 122, 243, 370]
     d = ag.demande_maison(b"v", coupes, [243, 370], 1344, 768, 1800)
     assert d["amorces"] == [0, ag.AMORCE_MAISON, 0]
@@ -6287,3 +6287,31 @@ def test_l_ambiance_se_fait_de_la_piste_du_lieu(h3, tmp_path):
     assert rapport["nappe_depuis_s"] is None
     apres = m._niveaux(m._pcm(sortie, m.AMB_BANDE, 1, m.AMB_TAUX), m.AMB_PAS)
     assert abs(m._mediane(apres[5:25]) - m._mediane(apres[35:55])) < 3
+
+
+def test_le_decoupage_recoit_les_fiches_et_ne_change_pas_la_tenue(h3, monkeypatch, sans_traduction):
+    """03/10, « Le jardin de verre » : le découpage, sans les fiches, a habillé Mila d'un
+    pull crème et d'un jean ; sa fiche dit pull rayé et salopette jaune. Propriétaire :
+    « corrige le découpage pour qu'il reçoive les fiches »."""
+    monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
+    c = client(h3)
+    mila = c.post("/video-h3/fiches", headers=CLE, json={
+        "nom": "Mila", "description": "Fillette de 9 ans, pull à rayures blanches et bleu marine, "
+                                     "salopette en velours jaune moutarde"}).json()["id"]
+    decoupe = '[{"image_paroles": "Mila arrose le pot.", "ambiance": "", "enchainement": "coupe"}]'
+    vus = []
+    monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
+        [decoupe, '{"etats": [], "problemes": []}', "[]", "[]"], vus))
+    r = c.post("/video-h3/scenario/decouper", headers=CLE,
+               json={"scenario": "Mila arrose le pot.", "fiches": [mila, ""]})
+    assert r.status_code == 200, r.text
+    consigne = vus[0]["messages"][0]["content"]
+    consigne = consigne if isinstance(consigne, str) else consigne[0]["text"]
+    assert "- Mila (personne): Fillette, pull à rayures blanches et bleu marine" in consigne
+    assert "9 ans" not in consigne
+    assert "never invent, add or change clothing" in consigne
+    # Une fiche inconnue est refusée avant tout appel au chat ; sans fiche, rien n'est ajouté.
+    assert c.post("/video-h3/scenario/decouper", headers=CLE,
+                  json={"scenario": "x", "fiche": "inconnue"}).status_code == 400
+    assert h3.video_h3.distribution([]) == "" and "reference sheets" not in h3.video_h3.consigne_decoupage("x")
+    assert "fiches: fichesDuScenario()})});" in h3.video_h3.PAGE_HTML
