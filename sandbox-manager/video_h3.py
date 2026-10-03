@@ -815,6 +815,42 @@ CONSIGNE_LIEU_PLANCHE = ("L'image jointe %d montre ce même décor sous quatre v
                          "le lieu est celui de la vue qui lui correspond. ")
 CONSIGNE_COUPE_LIEU = ("Ceci est une COUPE : le cadrage et l'angle de la caméra sont NETTEMENT différents de ceux du "
                        "plan précédent (une autre valeur de plan ou un autre côté), comme la description le dit. ")
+# 03/10, « Le jardin de verre », plan 2 : avec la fiche du décor, la coupe n'avait plus la
+# dernière image du plan 1 ; le pot, haut et cylindrique près de Mila, est revenu en coupe
+# basse devant un autre canapé. Propriétaire : une coupe part « des fiches et du plan final,
+# mais avec un autre angle de vue ». Le décor donne le lieu, la dernière image l'instant.
+CONSIGNE_ETAT_COUPE = ("L'image jointe %d est la dernière image du plan précédent : elle donne l'ÉTAT du lieu à cet "
+                       "instant — où est chaque objet dans la pièce par rapport aux meubles et aux murs, sa forme, sa "
+                       "taille, sa couleur, ce qu'il contient, et où sont les personnes. La nouvelle image montre ce "
+                       "même instant, tout cela inchangé ; seuls le cadrage et l'angle de la caméra changent. ")
+RACCORD_ESSAIS = 2   # une image de coupe au faux raccord est redessinée une fois, puis le film s'arrête
+
+
+def consigne_raccord(description: str) -> str:
+    """Pour le juge : la dernière image d'un plan (1) et l'image de départ de la coupe qui suit (2)."""
+    return ("Image 1 is the last frame of a shot. Image 2 is the first frame of the next shot: a CUT to another "
+            "framing of the same place at the same instant, described as: %s\n"
+            "The framing and the camera angle are SUPPOSED to change: never count that as a fault, nor an element "
+            "that is simply outside the new frame. Check only, for what both images show: (a) the fixed elements "
+            "of the place (walls, windows, doors, furniture) are the same ones, in the same positions relative to "
+            "each other; (b) each object is the same — same shape, size, colour and content — and stands at the "
+            "same place in the room relative to the furniture and the people; (c) nothing is in image 2 that was "
+            "not in image 1. Answer JSON only: {\"ok\": true or false, \"fautes\": [\"one short sentence per "
+            "fault, naming the element\"]}." % " ".join(str(description or "").split()))
+
+
+def lire_raccord(reponse: str) -> list:
+    """Les fautes de raccord ([] si tout va) ; ValueError si la réponse est illisible."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or not isinstance(d.get("ok"), bool):
+        raise ValueError("réponse du juge illisible pour le raccord")
+    fautes = [" ".join(str(f).split()) for f in d.get("fautes") or [] if str(f).strip()]
+    return [] if d["ok"] else (fautes or ["faux raccord (sans détail)"])
 
 
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False,
@@ -868,6 +904,11 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
         if planche_lieu:   # la planche du décor (02/10) : le même lieu sous quatre vues
             photos.append(planche_lieu)
             tete += CONSIGNE_LIEU_PLANCHE % len(photos)
+        if decor and coupe:   # et l'instant : la dernière image du plan d'avant (03/10)
+            octets = depart_lire(decor)
+            genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
+            photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
+            tete += CONSIGNE_ETAT_COUPE % len(photos)
     elif decor:
         octets = depart_lire(decor)
         genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))

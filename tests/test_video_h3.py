@@ -5554,11 +5554,13 @@ def test_le_decor_a_sa_fiche_et_ne_part_pas_a_h3(h3):
         v.preparer({"mode": "references", "image_paroles": "x", "fiches": [personne, lieu["id"]]})
 
 
-def test_une_coupe_tournee_prend_le_lieu_de_la_fiche_decor_pas_la_derniere_image(h3, monkeypatch, tmp_path,
-                                                                                 sans_regles):
+def test_une_coupe_tournee_prend_le_lieu_de_la_fiche_decor_et_l_instant_de_la_derniere_image(
+        h3, monkeypatch, tmp_path, sans_regles):
     """02/10, film 4, plan 2 : refaite depuis la dernière image du plan 1 (un gros plan), la coupe
-    a inventé un autre lieu. Avec la fiche du décor, avant comme pendant le tournage, l'image d'une
-    coupe part de la fiche, change de cadrage, et la dernière image n'est pas jointe."""
+    a inventé un autre lieu. Avec la fiche du décor, l'image d'une coupe part de la fiche et
+    change de cadrage. 03/10, « Le jardin de verre » : sans la dernière image, le pot a changé de
+    forme et de place ; propriétaire : « des fiches et du plan final, mais avec un autre angle de
+    vue ». Au tournage, la dernière image est jointe aussi, comme l'état de l'instant."""
     v = h3.video_h3
     _autoriser(h3)
     v.poids_noter(True)
@@ -5616,7 +5618,9 @@ def test_une_coupe_tournee_prend_le_lieu_de_la_fiche_decor_pas_la_derniere_image
     assert au_tournage and image_lieu in au_tournage[-1]["image_reference"]
     assert v.CONSIGNE_COUPE_LIEU in au_tournage[-1]["prompt"] and v.CONSIGNE_COUPE % 1 not in au_tournage[-1]["prompt"]
     fin = base64.b64encode(base64.b64decode(PNG) + b"FIN-DU-PLAN-1").decode()
-    assert not any(fin in p for p in poses)   # la dernière image ne sert pas
+    assert any(fin in p for p in poses)   # la dernière image sert : l'instant
+    assert v.CONSIGNE_ETAT_COUPE % len(au_tournage[-1]["image_reference"]) in au_tournage[-1]["prompt"]
+    assert au_tournage[-1]["image_reference"][-1].endswith(fin)
 
 
 def test_un_rejeu_de_rejeu_prend_le_dernier_travail_reussi(h3):
@@ -6360,3 +6364,60 @@ def test_un_objet_clef_avec_ou_sans_article_n_a_qu_une_fiche(h3):
     assert v.objets_clefs([{}, {}], place=3, du_chat=du_chat) == ["the pot of soil"]
     assert v.objets_clefs(plans, exclus=["Pot of soil"], place=3) == []
     assert v.fiche_objet_clef("pot of soil")["id"] == v.fiche_objet_clef("the pot of soil")["id"]
+
+
+def test_le_raccord_d_une_coupe_est_controle_redessine_une_fois_puis_arrete(h3, monkeypatch, tmp_path):
+    """03/10, « Le jardin de verre », plan 2 : le pot haut et cylindrique de la fin du plan 1 est
+    revenu en coupe basse, devant un autre canapé ; rien ne comparait les deux images."""
+    v = h3.video_h3
+    assert v.lire_raccord('{"ok": true, "fautes": []}') == []
+    assert v.lire_raccord('x {"ok": false, "fautes": ["the pot is now a low bowl"]} y') == ["the pot is now a low bowl"]
+    assert v.lire_raccord('{"ok": false}') == ["faux raccord (sans détail)"]
+    with pytest.raises(ValueError):
+        v.lire_raccord("pas de JSON")
+    c = v.consigne_raccord("Close-up on the pot of soil.")
+    assert "SUPPOSED to change" in c and "same shape, size, colour and content" in c and "Close-up on the pot" in c
+    fid = v.fiche_creer("Mila", "girl")["id"]
+    plans = [{"image_paroles": "a", "ambiance": "", "enchainement": "coupe", "elements": []},
+             {"image_paroles": "Close-up on the pot of soil.", "ambiance": "", "enchainement": "coupe",
+              "elements": [{"nom": "pot of soil", "debut": "centre", "mouvement": "none", "fin": "centre"}]}]
+
+    def scenario(sid, force=False):
+        return v.scenario_ecrire({"id": sid, "etat": "en cours", "erreur": "", "plans": plans, "travaux": [],
+                                  "fiche": fid, "fiches": [], "force": force,
+                                  "reglages": {"fiche": fid, "fiches": None}})
+    video = tmp_path / "plan.mp4"
+    video.write_bytes(b"mp4")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: video)
+    monkeypatch.setattr(h3.montage, "derniere_image", lambda octets: base64.b64decode(PNG))
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: image)
+    monkeypatch.setattr(h3, "_controle_derniere_image", lambda s, i, img: None)
+    dessins = []
+
+    async def creer(corps):
+        dessins.append(corps)
+        return {"id": v.depart_poser(PNG), "texte": "Close-up on the pot of soil."}
+    monkeypatch.setattr(h3, "_creer_depart", creer)
+    vus = []
+    # Faux raccord, puis bon : redessinée une fois, l'image neuve part.
+    _faux_chat(monkeypatch, h3, {"le contrôle du raccord": [
+        '{"ok": false, "fautes": ["the pot is now a low bowl"]}', '{"ok": true, "fautes": []}']}, vus)
+    sc = scenario("b" * 32)
+    payload = {}
+    assert h3._depart_de_coupe(sc["id"], 1, "j" * 32, payload) is True
+    assert len(dessins) == 2 and payload.get("depart_reference")
+    assert [x for x in vus if x[0] == "le contrôle du raccord"][0][3] == 2   # deux images au juge
+    assert v.scenario_lire(sc["id"])["raccords"][0]["fautes"] == ["the pot is now a low bowl"]
+    # Faux raccord deux fois : le film s'arrête, sans partir d'une image au faux raccord.
+    dessins.clear()
+    _faux_chat(monkeypatch, h3, {"le contrôle du raccord": ['{"ok": false, "fautes": ["sofa moved"]}'] * 2}, vus)
+    sc = scenario("c" * 32)
+    with pytest.raises(ValueError, match="contrôle du raccord.*sofa moved"):
+        h3._depart_de_coupe(sc["id"], 1, "j" * 32, {})
+    assert len(dessins) == 2
+    # « Tourner quand même » : noté, pas bloquant ; un juge illisible n'arrête rien non plus.
+    _faux_chat(monkeypatch, h3, {"le contrôle du raccord": ['{"ok": false, "fautes": ["sofa moved"]}']}, vus)
+    assert h3._depart_de_coupe(scenario("d" * 32, force=True)["id"], 1, "j" * 32, {}) is True
+    _faux_chat(monkeypatch, h3, {"le contrôle du raccord": ["illisible"]}, vus)
+    assert h3._depart_de_coupe(scenario("e" * 32)["id"], 1, "j" * 32, {}) is True
+    assert v.scenario_lire("e" * 32)["raccords"][0]["erreur"]

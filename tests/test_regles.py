@@ -345,3 +345,21 @@ def test_regles_9_a_12_le_plan_tourne(r):
     rapport = [{"plan": 1, "regles": r.en_liste({9: r.resultat(True), 10: r.resultat(False, "deux Marc")})}]
     assert rapport[0]["regles"][1]["regle"].startswith("Aucun personnage")
     assert r.non_suivies(rapport) == [(1, 10, "deux Marc")] and r.non_suivies(rapport, [9]) == []
+
+
+def test_regle_5_un_autre_sujet_qui_entre_dans_le_mouvement(r):
+    """03/10, « Le jardin de verre » : « a breeze enters » (mouvement des arbres) et « a single
+    glass butterfly comes back » (mouvement de Mila) refusaient le tournage."""
+    arbres = {"image_paroles": "Wide shot: crystal trees fill the room.", "ambiance": "", "enchainement": "coupe",
+              "elements": [el("crystal trees", "filling the room", "gone",
+                              "a breeze enters through the open window, the crystal trees crack into shards")]}
+    assert r.regle_deux_fois([arbres], 1)["ok"] is True
+    mila = {"image_paroles": "Mila stands at the window.", "ambiance": "", "enchainement": "coupe",
+            "elements": [el("Mila", "in front of the window, right", "same",
+                            "watches the butterflies, a single glass butterfly comes back, lands on her hand")]}
+    assert r.regle_deux_fois([mila], 1)["ok"] is True
+    # Sans autre sujet, le mouvement est celui de l'élément : « comes back into the room » compte.
+    mila["elements"][0]["mouvement"] = "turns away, then comes back into the room"
+    assert r.regle_deux_fois([mila], 1)["ok"] is False
+    assert r.mouvement_fait_entrer("Mila", "Mila re-enters the room")
+    assert r.mouvement_fait_entrer("Mila", "she enters")

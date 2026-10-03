@@ -282,6 +282,26 @@ def _entre(nom: str, texte: str) -> bool:
     return nom in entrants(texte, [nom])
 
 
+_AUTRE_SUJET = re.compile(r"(?:a|an|the|another|some|one|each|every)\b", re.I)
+
+
+def mouvement_fait_entrer(nom: str, mouvement: str) -> bool:
+    """Le mouvement de l'élément `nom` le fait entrer. Sujet sous-entendu : l'élément lui-même,
+    sauf si la proposition en nomme un autre avant le verbe. 03/10, « Le jardin de verre » :
+    « a breeze enters through the open window » (mouvement des arbres de cristal) et « a single
+    glass butterfly comes back » (mouvement de Mila) refusaient le tournage."""
+    for proposition in re.split(r"[,;]|\bthen\b", str(mouvement or "")):
+        m = _ENTREE.search(proposition)
+        if not m:
+            continue
+        avant = proposition[:m.start()].strip()
+        if avant and not nomme_dans(nom, avant) and not _PRONOMS.fullmatch(avant) \
+                and _AUTRE_SUJET.match(avant):
+            continue   # « a breeze enters » : un autre entre, pas l'élément
+        return True
+    return False
+
+
 def _meme_mouvement(a: str, b: str) -> bool:
     """Deux mouvements qui disent la même action (mots pleins en commun, 70 % au moins)."""
     vides = {"none", "the", "a", "an", "and", "then", "his", "her", "their", "its", "with", "to", "of",
@@ -308,7 +328,7 @@ def regle_deux_fois(plans: list, k: int) -> dict:
     noms = [e["nom"] for e in elements]
     entres = entrants(plan.get("image_paroles", ""), noms)
     for e in elements:
-        if present_au_debut(e) and (e["nom"] in entres or _ENTREE.search(str(e.get("mouvement", "")))):
+        if present_au_debut(e) and (e["nom"] in entres or mouvement_fait_entrer(e["nom"], e.get("mouvement", ""))):
             fautes.append("%s est déjà à l'image au début, et le plan le fait entrer" % e["nom"])
         # « A second Lea », « another kite » : le texte demande lui-même un double.
         motif = r"\b(?:a second|another|a copy of|a double of|two|both)\s+" + video_h3._motif_nom(e["nom"])

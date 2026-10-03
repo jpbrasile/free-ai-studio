@@ -7105,6 +7105,24 @@ def _fins_vues(film, fins: list, repris: list) -> dict:
     return {i + 1: v for i, v in zip(garder, images)}
 
 
+def _controle_raccord(sid: str, i: int, fin: bytes, image: bytes, description: str) -> list:
+    """Le raccord d'une coupe (03/10, « Le jardin de verre », plan 2 : le pot haut et cylindrique
+    revenu en coupe basse, devant un autre canapé) : le juge compare la dernière image du plan
+    d'avant et l'image de départ refaite. Rend les fautes ; [] si tout va, si la réponse est
+    illisible (une aide, notée) ou avec « tourner quand même »."""
+    try:
+        fautes = video_h3.lire_raccord(asyncio.run(_chat_du_studio(
+            video_h3.consigne_raccord(description), "le contrôle du raccord",
+            images=[_data_url(fin), _data_url(image)], modele=video_h3.MODELE_JUGE)))
+        erreur = ""
+    except (ValueError, HTTPException) as exc:
+        fautes, erreur = [], str(getattr(exc, "detail", exc))
+    sc = video_h3.scenario_lire(sid)
+    video_h3.scenario_noter(sid, raccords=(sc.get("raccords") or []) + [
+        {"plan": i + 1, "fautes": fautes, "erreur": erreur}])
+    return [] if sc.get("force") else fautes
+
+
 def _controle_derniere_image(sid: str, i: int, image: bytes):
     """Avant un plan « suite » : la dernière image VRAIE du plan d'avant est son image de
     départ ; la règle 6 s'y vérifie comme sur une image de départ (gratuit). Audit du
@@ -7249,31 +7267,39 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
         chemin = _video_h3_octets(precedent)
         if not chemin:
             raise ValueError("la vidéo du plan précédent est introuvable.")
-        # La fiche du décor (02/10), si le scénario en a une, remplace la dernière image : le lieu
-        # vient d'elle, et la coupe change franchement de cadrage par rapport à la fin du plan.
+        # La fiche du décor (02/10), si le scénario en a une, donne le lieu, et la coupe change
+        # franchement de cadrage par rapport à la fin du plan ; la dernière image donne l'instant.
         lieu = (sc.get("reglages") or {}).get("decor")
         fin = montage.derniere_image(chemin.read_bytes())
-        decor = None if lieu else video_h3.depart_poser(base64.b64encode(fin).decode())
+        # Avec la fiche du décor aussi (03/10) : le décor donne le lieu, la dernière image l'instant.
+        decor = video_h3.depart_poser(base64.b64encode(fin).decode())
         ids = [f for f in (sc.get("fiches") or [sc.get("fiche")]) if f]
         corps = {"texte": video_h3.texte_depart(plan), "fiches": ids, "decor": decor, "lieu": lieu,
                  "coupe": True, "elements": plan.get("elements") or [],
                  "plans": [x["image_paroles"] for x in sc["plans"]], "plan": i + 1}
-        # 02/10, film 4, plan 5 : « Google a refusé la demande d'image (HTTP 503) », une panne
-        # passagère, et la coupe est partie de l'image du découpage (Tyler debout, d'avant les
-        # corrections). Une panne passagère se redemande.
-        for essai in range(COUPE_ESSAIS):
-            try:
-                d = asyncio.run(_creer_depart(dict(corps)))
+        for tour in range(video_h3.RACCORD_ESSAIS):
+            # 02/10, film 4, plan 5 : « Google a refusé la demande d'image (HTTP 503) », une panne
+            # passagère, et la coupe est partie de l'image du découpage (Tyler debout, d'avant les
+            # corrections). Une panne passagère se redemande.
+            for essai in range(COUPE_ESSAIS):
+                try:
+                    d = asyncio.run(_creer_depart(dict(corps)))
+                    break
+                except HTTPException as exc:
+                    if exc.status_code not in (429, 500, 502, 503, 504) or essai == COUPE_ESSAIS - 1:
+                        raise
+                    time.sleep(COUPE_PAUSE_S)
+            image = video_h3.depart_lire(d["id"])
+            note["depart"] = d["id"]
+            arret = _controle_derniere_image(sid, i, image)
+            if arret:
+                raise ValueError("image refusée par le contrôle : " + arret)
+            fautes = _controle_raccord(sid, i, fin, image, d.get("texte") or corps["texte"])
+            if not fautes:
                 break
-            except HTTPException as exc:
-                if exc.status_code not in (429, 500, 502, 503, 504) or essai == COUPE_ESSAIS - 1:
-                    raise
-                time.sleep(COUPE_PAUSE_S)
-        image = video_h3.depart_lire(d["id"])
-        note["depart"] = d["id"]
-        arret = _controle_derniere_image(sid, i, image)
-        if arret:
-            raise ValueError("image refusée par le contrôle : " + arret)
+            if tour == video_h3.RACCORD_ESSAIS - 1:
+                raise ValueError("image refusée par le contrôle du raccord (redessinée %d fois) : %s"
+                                 % (video_h3.RACCORD_ESSAIS, " ; ".join(fautes)))
         definition = str(payload.get("definition") or video_h3.DEFINITION_PAR_DEFAUT)
         recadree = base64.b64encode(montage.recadrer_image(image, *video_h3.DEFINITIONS[definition])).decode()
     except HTTPException as exc:
