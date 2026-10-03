@@ -17,6 +17,7 @@ class FauxStudio:
         self.appels, self.jobs, self.n = [], {}, 0
         self.verdicts_maitre, self.refus_regles = list(verdicts_maitre), refus_regles
         self.verdicts_clips = list(verdicts_clips)
+        self.sans_coupe = set()   # les maîtres que le Studio refuse de déplier
 
     def job(self, statut="succeeded"):
         self.n += 1
@@ -45,6 +46,8 @@ class FauxStudio:
             v = self.verdicts_clips.pop(0) if self.verdicts_clips else "ok"
             return 200, {"verdict": v, "defauts": [] if v == "ok" else [{"quoi": "geste manquant"}]}
         if chemin.endswith("/deplier"):
+            if chemin.split("/")[-2] in self.sans_coupe:
+                return 409, {"detail": "Le clip maître n'a pas fait la coupe du plan 2 : rejouez-le avant de le déplier."}
             if corps.get("plans"):
                 return 200, {"clips": [self.job()["id"]], "cles": [[62, 123]], "plans": corps["plans"]}
             return 200, {"clips": [self.job()["id"], self.job()["id"]], "cles": [[0, 60], [62, 123]]}
@@ -136,3 +139,32 @@ def test_un_plan_toujours_refuse_garde_le_moins_fautif(fa, tmp_path):
     assert etat["statut"] == "fini", etat["erreur"]
     premier = etat["clips"][0]
     assert premier["essais"] == fa.ESSAIS_PLAN and premier["verdict"] == "defaut"
+
+
+def test_un_maitre_qui_ne_se_deplie_pas_laisse_la_place_au_suivant(fa, tmp_path):
+    """Film « Le phare », 03/10 : le moins fautif des trois maîtres n'avait pas fait deux coupes."""
+    studio = FauxStudio(verdicts_maitre=("defaut", "defaut", "defaut"))
+    etat = fa.nouvel_etat("Oscar allume le phare.")
+    film = fa.Film(etat, tmp_path, studio, chat, dormir=lambda s: None)
+    film.deplier_vrai = film.deplier
+
+    def deplier():
+        studio.sans_coupe.add(etat["maitres"][0]["job"])
+        film.deplier_vrai()
+    film.deplier = deplier
+    film.derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    assert etat["maitre"]["job"] == etat["maitres"][1]["job"]
+    assert any(j["etape"] == "maitre_non_depliable" for j in etat["journal"])
+    # Aucun ne se déplie : le film s'arrête et dit pourquoi.
+    studio = FauxStudio(verdicts_maitre=("defaut", "defaut", "defaut"))
+    etat = fa.nouvel_etat("Oscar allume le phare.")
+    film = fa.Film(etat, tmp_path, studio, chat, dormir=lambda s: None)
+    film.deplier_vrai = film.deplier
+
+    def aucun():
+        studio.sans_coupe.update(m["job"] for m in etat["maitres"])
+        film.deplier_vrai()
+    film.deplier = aucun
+    film.derouler()
+    assert etat["statut"] == "arrete" and "Aucun clip maître ne se déplie" in etat["erreur"]

@@ -195,10 +195,26 @@ class Film:
         self.ecrire()
 
     def deplier(self):
-        m = self.etat["maitre"]
-        d = self.route("POST", "/video-h3/maitre/%s/deplier" % m["job"],
-                       {"definition": self.etat["reglages"]["definition"], "ou": "maison",
-                        "forcer": m["verdict"] != "ok"})
+        # Film « Le phare », 03/10 : le maître le moins fautif n'avait pas fait deux coupes, et le
+        # Studio refusait de le déplier ; les autres essais le pouvaient. Du moins fautif au plus
+        # fautif, le premier qui se déplie.
+        candidats = sorted(self.etat.get("maitres") or [self.etat["maitre"]],
+                           key=lambda e: (e["verdict"] != "ok", len(e["defauts"])))
+        refus = []
+        for m in candidats:
+            code, d = self.appel("POST", "/video-h3/maitre/%s/deplier" % m["job"],
+                                 {"definition": self.etat["reglages"]["definition"], "ou": "maison",
+                                  "forcer": m["verdict"] != "ok"})
+            if code == 200:
+                break
+            detail = str((d or {}).get("detail") if isinstance(d, dict) else d)[:600]
+            if code != 409:
+                raise Arret("POST /video-h3/maitre/%s/deplier : %s %s" % (m["job"], code, detail))
+            refus.append(detail)
+            self.noter("maitre_non_depliable", job=m["job"], refus=detail)
+        else:
+            raise Arret("Aucun clip maître ne se déplie : " + " | ".join(refus))
+        self.etat["maitre"] = m
         self.etat["clips"] = [{"job": j} for j in d["clips"]]
         self.noter("deplier", clips=d["clips"], cles=d.get("cles"))
         for k, c in enumerate(self.etat["clips"]):
