@@ -5942,7 +5942,7 @@ def test_le_scenario_fini_egalise_son_ambiance_et_garde_le_film_brut(h3, monkeyp
     monkeypatch.setattr(h3, "read_job", lambda jid: {"titre": "Leila", "video": {"plans": 2}})
     vus, faits = [], []
     rapport = {"reference_db": -33.9, "plans": []}
-    monkeypatch.setattr(h3.montage, "egaliser_ambiance", lambda f, b, aj=None: vus.append((f, b)) or (b"EGAL", rapport))
+    monkeypatch.setattr(h3.montage, "egaliser_ambiance", lambda f, b, aj=None, piste=None: vus.append((f, b)) or (b"EGAL", rapport))
     monkeypatch.setattr(h3, "_film_h3", lambda film, video, titre, moteur="": faits.append((film, video)) or "c" * 32)
     assert h3._egaliser_scenario(sid, "b" * 32, [124, 248], 24.0) == "c" * 32
     assert vus == [(b"BRUT", [124 / 24, 248 / 24])]
@@ -5952,7 +5952,7 @@ def test_le_scenario_fini_egalise_son_ambiance_et_garde_le_film_brut(h3, monkeyp
     # Un rejeu reprend ses plans sur le film brut : l'ambiance ne s'égalise qu'une fois.
     assert h3._film_du_scenario(dict(sc, film="c" * 32, film_sans_musique="c" * 32)) == "b" * 32
     # Un échec n'arrête pas le film : le brut reste, l'erreur est notée.
-    def rate(f, b, aj=None):
+    def rate(f, b, aj=None, piste=None):
         raise h3.montage.MontageImpossible("La lecture du son du film a échoué.")
     monkeypatch.setattr(h3.montage, "egaliser_ambiance", rate)
     assert h3._egaliser_scenario(sid, "b" * 32, [124], 24.0) == "b" * 32
@@ -5971,7 +5971,7 @@ def test_le_fond_se_refait_a_la_main_depuis_le_film_brut_et_la_musique_revient(h
     monkeypatch.setattr(h3, "read_job", lambda jid: {"titre": "Film", "video": {}})
     rapport = {"reference_db": -40.0, "plans": []}
     monkeypatch.setattr(h3.montage, "egaliser_ambiance",
-                        lambda f, b, aj=None: egalises.append(aj) or (b"EGAL", rapport))
+                        lambda f, b, aj=None, piste=None: egalises.append(aj) or (b"EGAL", rapport))
     monkeypatch.setattr(h3, "_film_h3", lambda *a, **k: "a" * 32)
     monkeypatch.setattr(h3, "_mettre_musique", lambda jid, *a: musiques.append(jid) or "m" * 32)
     c = client(h3)
@@ -6066,3 +6066,198 @@ def test_une_suite_trop_longue_est_refusee_avant_le_premier_sou(h3):
     v.preparer(dict(long, depart_reference=JPG))
     with pytest.raises(ValueError, match=r"Invite trop longue : \d+ caractères, 4 000 au plus"):
         v.controler_suite(long)
+
+
+# --- Le décor tenu d'un plan à l'autre (03/10) --------------------------------------
+# Propriétaire, 03/10 : « corrige la fontaine qui change entre les plans de façon générique,
+# probablement avec une id card meilleure et un son track id along the clip » ; « oui, pour tout ».
+
+def _decor_et_leila(v):
+    lieu = v.fiche_creer("la place", "petite place pavée, fontaine de pierre à deux vasques", genre="decor")["id"]
+    v.fiche_poser_image(lieu, "face", PNG)
+    leila = v.fiche_creer("Leila", "une adolescente")["id"]
+    v.fiche_poser_image(leila, "face", PNG)
+    return lieu, leila
+
+
+def test_le_decor_part_a_h3_avant_l_image_de_depart_quand_on_le_demande(h3):
+    v = h3.video_h3
+    lieu, leila = _decor_et_leila(v)
+    base = {"mode": "references", "image_paroles": "Leila sits on the fountain.", "fiches": [leila],
+            "decor": lieu, "depart_reference": PNG}
+    sans = v.preparer(dict(base))
+    assert not sans["resume_public"]["decor_video"] and "setting" not in sans["resume_public"]["invite"]
+    avec = v.preparer(dict(base, decor_video=True))
+    invite = avec["resume_public"]["invite"]
+    assert avec["resume_public"]["decor_video"]
+    # Leila en <Picture 1>, le décor en <Picture 2>, l'image de départ en dernier, épinglée.
+    assert "<Picture 2> is the setting of [Shot 1]" in invite and "<Picture 2> (setting): fully_preserved" in invite
+    assert "<Picture 3> is the first frame of [Shot 1]" in invite and "begins from <Picture 3>" in invite
+    assert len(avec["demande"]["images"]) == len(sans["demande"]["images"]) + 1
+    legere = v.preparer(dict(base, decor_video=True, invite_legere=True))["resume_public"]["invite"]
+    assert "<Picture 2>: fully_preserved - same place and fixed elements" in legere
+
+
+def test_le_decor_ne_prend_pas_une_place_qui_manque(h3, monkeypatch):
+    v = h3.video_h3
+    lieu, leila = _decor_et_leila(v)
+    monkeypatch.setitem(v.MODES["references"], "images_max", 2)   # Leila + le départ : complet
+    r = v.preparer({"mode": "references", "image_paroles": "Leila sits.", "fiches": [leila], "decor": lieu,
+                    "depart_reference": PNG, "decor_video": True})
+    assert not r["resume_public"]["decor_video"] and len(r["demande"]["images"]) == 2
+
+
+def test_la_fiche_du_decor_se_fait_d_apres_le_texte_si_le_film_reste_au_meme_endroit(h3, monkeypatch):
+    v = h3.video_h3
+    consigne = v.consigne_decor_du_texte(["Leila sits on the fountain.", "Tyler rides up."])
+    assert "[Shot 2] Tyler rides up." in consigne and "un_seul_lieu" in consigne and "water jets" in consigne
+    assert v.lire_decor_du_texte('{"un_seul_lieu": false}') is None
+    with pytest.raises(ValueError):
+        v.lire_decor_du_texte("pas de JSON")
+    description = ("A small cobbled square with a round stone fountain: a basin at seat height, two tiers, "
+                   "four water jets, beige stone buildings behind it.")
+    reponse = json.dumps({"un_seul_lieu": True, "nom": "the cobbled square", "description": description})
+    assert v.lire_decor_du_texte(reponse)["nom"] == "the cobbled square"
+    demandes = []
+
+    async def chat(consigne, quoi, images=None, modele=None):
+        return reponse
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    plans = [{"image_paroles": "Leila sits on the fountain."}, {"image_paroles": "Tyler rides up."}]
+    d = asyncio.run(h3._decor_du_texte(plans))
+    fiche = v.fiche_lire(d["fiche"])
+    assert fiche["genre"] == "decor" and fiche["description"] == description and fiche["planche"]
+    # La vue vide d'abord, d'après le texte seul ; puis la planche, faite de cette vue.
+    assert "image_reference" not in demandes[0] and v.CADRE_DECOR in demandes[0]["prompt"]
+    assert demandes[1]["image_reference"] == ["data:image/png;base64," + PNG] and "Quatre vues" in demandes[1]["prompt"]
+
+    async def ailleurs(consigne, quoi, images=None, modele=None):
+        return '{"un_seul_lieu": false}'
+    monkeypatch.setattr(h3, "_chat_du_studio", ailleurs)
+    assert asyncio.run(h3._decor_du_texte(plans)) == {"fiche": None, "pourquoi": "le scénario change de lieu"}
+
+    async def panne(consigne, quoi, images=None, modele=None):
+        raise h3.HTTPException(503, "Le chat du Studio ne répond pas.")
+    monkeypatch.setattr(h3, "_chat_du_studio", panne)
+    assert asyncio.run(h3._decor_du_texte(plans))["fiche"] is None   # rien ne bloque : le film part sans
+
+
+def test_le_tournage_fait_la_fiche_du_decor_quand_le_scenario_n_en_a_pas(h3, monkeypatch, tmp_path, sans_regles,
+                                                                         sans_objets_clefs):
+    """Avant la première image, une seule fois : chaque coupe en garde le lieu."""
+    v = h3.video_h3
+    lieu, leila = _decor_et_leila(v)
+    vus = []
+
+    async def decor(plans):
+        vus.append(len(plans))
+        return {"fiche": lieu, "nom": "la place"}
+    monkeypatch.setattr(h3, "_decor_du_texte", decor)
+    monkeypatch.setenv("STUDIO_DECOR_AUTO", "true")
+    poses = []
+
+    async def departs(plans, commun):
+        poses.append(commun.get("decor"))
+        raise h3.HTTPException(418, "arrêt du test")
+    monkeypatch.setattr(h3, "_departs_des_coupes", departs)
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    fid = leila
+    plans = [{"image_paroles": "Leila sits.", "ambiance": "", "enchainement": "coupe"}]
+    c = client(h3)
+    r = c.post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid})
+    assert r.status_code == 418 and vus == [1] and poses == [lieu]
+    # Un décor déjà choisi, ou `decor_auto: false` : rien n'est refait.
+    for corps in ({"decor": lieu}, {"decor_auto": False}):
+        c.post("/video-h3/scenario/tourner", headers=CLE, json=dict({"plans": plans, "fiche": fid}, **corps))
+    assert vus == [1] and poses == [lieu, lieu, None]
+
+
+def test_la_regle_17_lit_le_decor_du_plan_contre_sa_fiche(h3):
+    r = h3.regles
+    assert 17 in r.NUMEROS["clip"] and 17 not in h3.REGLES_QUI_REPRENNENT   # notée, pas encore reprise
+    assert "Images 2 to 4" in r.consigne_decor_constant(3) and "water jets" in r.consigne_decor_constant(3)
+    assert r.lire_decor_constant('{"ok": true, "differences": []}')["ok"] is True
+    faux = r.lire_decor_constant('{"ok": false, "differences": ["fontaine : trois jets au lieu de quatre"]}')
+    assert faux["ok"] is False and "trois jets" in faux["pourquoi"]
+    assert r.lire_decor_constant('{"ok": false, "differences": []}')["ok"] is None
+    assert r.lire_decor_constant("illisible")["ok"] is None
+
+
+def test_le_decor_du_plan_tourne_se_juge_sur_trois_images(h3, monkeypatch):
+    v = h3.video_h3
+    lieu, _ = _decor_et_leila(v)
+    lues, vues = [], []
+    monkeypatch.setattr(h3.montage, "vignettes", lambda film, numeros, largeur: lues.append(numeros) or
+                        [base64.b64decode(PNG)] * len(numeros))
+
+    async def chat(consigne, quoi, images=None, modele=None):
+        vues.append(images)
+        return '{"ok": false, "differences": ["fontaine : une seule vasque"]}'
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    assert asyncio.run(h3._decor_constant(b"film", 0, 121, None)) is None   # sans fiche : rien
+    r = asyncio.run(h3._decor_constant(b"film", 121, 241, lieu))
+    assert r["ok"] is False and "une seule vasque" in r["pourquoi"]
+    assert lues == [[121, 180, 239]] and vues[0][0] == v.fiche_lieu_image(lieu) and len(vues[0]) == 4
+
+
+def test_la_piste_son_du_lieu_sert_de_nappe(h3):
+    m = h3.montage
+    amb, voix, bornes = _trois_plans()
+    d = m.regler_ambiance(amb, voix, bornes, nappe_db=-50.0)
+    assert d["source"] == "fiche"
+    # Le plan muet est comblé ; la nappe, 12 dB plus bas que sa piste, est relevée d'autant.
+    assert d["nappe"][70] == pytest.approx(min(10 ** ((d["reference_db"] + 50.0) / 20), m.AMB_NAPPE_MAX), abs=0.05)
+    # Une piste sans son ne compte pas : la nappe se reprend dans le film.
+    assert m.regler_ambiance(amb, voix, bornes, nappe_db=-90.0)["source"] == (80, 130)
+
+
+def test_la_piste_son_du_lieu_se_garde_sur_la_fiche_puis_resert(h3, monkeypatch, tmp_path):
+    v = h3.video_h3
+    lieu, _ = _decor_et_leila(v)
+    sid = "a" * 32
+    v.scenario_ecrire({"id": sid, "etat": "en cours", "erreur": "", "plans": [], "travaux": ["b" * 32],
+                       "reglages": {"decor": lieu}})
+    brut = tmp_path / "brut.mp4"
+    brut.write_bytes(b"BRUT")
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: brut)
+    monkeypatch.setattr(h3, "read_job", lambda jid: {"titre": "Leila", "video": {"plans": 1}})
+    monkeypatch.setattr(h3, "_film_h3", lambda *a, **k: "c" * 32)
+    wav = b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 64
+    pistes, coupes = [], []
+    monkeypatch.setattr(h3.montage, "egaliser_ambiance", lambda f, b, aj=None, piste=None: pistes.append(piste) or
+                        (b"EGAL", {"reference_db": -38.0, "plans": [], "nappe_depuis_s": [8.0, 13.0]}))
+    monkeypatch.setattr(h3.montage, "piste_du_lieu", lambda film, depuis: coupes.append(depuis) or wav)
+    h3._egaliser_scenario(sid, "b" * 32, [124], 24.0)
+    assert pistes == [None] and coupes == [[8.0, 13.0]] and v.fiche_son_lieu(lieu) == wav
+    assert v.scenario_lire(sid)["ambiance"]["piste_gardee_sur_la_fiche"] == lieu
+    h3._egaliser_scenario(sid, "b" * 32, [124], 24.0)   # le film suivant au même endroit
+    assert pistes == [None, wav] and coupes == [[8.0, 13.0]]
+    with pytest.raises(ValueError, match="WAV"):
+        v.fiche_poser_son_lieu(lieu, b"pas un son")
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_l_ambiance_se_fait_de_la_piste_du_lieu(h3, tmp_path):
+    m = h3.montage
+    film = tmp_path / "film.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=24:d=6",
+                    "-f", "lavfi", "-i", "anoisesrc=a=0.2:d=3:seed=1", "-f", "lavfi",
+                    "-i", "anoisesrc=a=0.002:d=3:seed=2", "-filter_complex", "[1:a][2:a]concat=n=2:v=0:a=1[a]",
+                    "-map", "0:v", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac", "-ar", "48000", "-ac", "2",
+                    str(film)], check=True)
+    piste = m.piste_du_lieu(film.read_bytes(), [0.5, 2.8])
+    assert piste[:4] == b"RIFF" and piste[8:12] == b"WAVE"
+    egal, rapport = m.egaliser_ambiance(film.read_bytes(), [3.0, 6.0], None, piste)
+    sortie = tmp_path / "egal.mp4"
+    sortie.write_bytes(egal)
+    assert m.images(sortie) == m.images(film) and rapport["nappe_de"] == "fiche du décor"
+    assert rapport["nappe_depuis_s"] is None
+    apres = m._niveaux(m._pcm(sortie, m.AMB_BANDE, 1, m.AMB_TAUX), m.AMB_PAS)
+    assert abs(m._mediane(apres[5:25]) - m._mediane(apres[35:55])) < 3

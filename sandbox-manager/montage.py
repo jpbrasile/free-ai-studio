@@ -347,13 +347,15 @@ def ajustements_valides(ajustements_db, plans: int) -> list:
     return [round(x, 1) for x in ajustements] + [0.0] * (plans - len(ajustements))
 
 
-def regler_ambiance(amb_db: list, voix_db: list, bornes: list, ajustements_db=None) -> dict:
+def regler_ambiance(amb_db: list, voix_db: list, bornes: list, ajustements_db=None, nappe_db=None) -> dict:
     """La décision, sans rien lire ni écrire (100 ms par mesure).
 
     `amb_db`, `voix_db` : niveau de la bande d'ambiance et de la bande voix par pas ;
     `bornes` : la fin de chaque plan, en pas ; `ajustements_db` : le réglage à la main de
-    chaque plan (son fond visé = référence + réglage). Rend {parole, plans: [{niveau_db, gain_db}],
-    reference_db, source: (k0, k1) ou None, nappe: [gain par pas]}."""
+    chaque plan (son fond visé = référence + réglage). `nappe_db` : le niveau (bande
+    d'ambiance) de la piste son du lieu, gardée sur la fiche du décor (03/10) ; elle sert
+    alors de nappe à la place d'un passage du film. Rend {parole, plans: [{niveau_db,
+    gain_db}], reference_db, source: (k0, k1), « fiche » ou None, nappe: [gain par pas]}."""
     n = min(len(amb_db), len(voix_db))
     plancher = sorted(voix_db[:n])[n // 10] if n else -180.0
     brut = [voix_db[k] > max(amb_db[k] + AMB_EAU_DANS_VOIX_DB, plancher) + AMB_VOIX_DB for k in range(n)]
@@ -379,30 +381,34 @@ def regler_ambiance(amb_db: list, voix_db: list, bornes: list, ajustements_db=No
     for p, a, b in zip(plans, debuts, fins):
         for k in range(a, b):
             gain_pas[k], vise_pas[k] = p["gain_db"], p["vise_db"]
-    # La source : le plus long passage sans paroles d'un plan au niveau de référence.
-    source, longueur = None, 0
-    min_pas, max_pas = round(AMB_SOURCE_MIN_S * 10), round(AMB_SOURCE_MAX_S * 10)
-    for p, a, b in zip(plans, debuts, fins):
-        lv = p["niveau_db"]
-        if lv is None or abs(lv + p["gain_db"] - p["vise_db"]) > 3.0:
-            continue
-        k = a
-        while k < b:
-            if parole[k]:
-                k += 1
+    if nappe_db is not None and nappe_db > AMB_SANS_DB:
+        # La piste son du lieu (fiche du décor, 03/10) : la même eau d'un film à l'autre.
+        source, niveau_source = "fiche", nappe_db
+    else:
+        # La source : le plus long passage sans paroles d'un plan au niveau de référence.
+        source, longueur = None, 0
+        min_pas, max_pas = round(AMB_SOURCE_MIN_S * 10), round(AMB_SOURCE_MAX_S * 10)
+        for p, a, b in zip(plans, debuts, fins):
+            lv = p["niveau_db"]
+            if lv is None or abs(lv + p["gain_db"] - p["vise_db"]) > 3.0:
                 continue
-            j = k
-            while j < b and not parole[j]:
-                j += 1
-            if j - k > longueur:
-                source, longueur = (k, min(j, k + max_pas)), j - k
-            k = j
-    if source is None or longueur < min_pas:
-        return {"parole": parole, "plans": plans, "reference_db": round(ref, 1), "source": None,
-                "nappe": [0.0] * n}
-    k0, k1 = source
-    # La nappe est le son BRUT de la source : le réglage de son propre plan ne l'affaiblit pas ailleurs.
-    niveau_source = _mediane([amb_db[k] for k in range(k0, k1)])
+            k = a
+            while k < b:
+                if parole[k]:
+                    k += 1
+                    continue
+                j = k
+                while j < b and not parole[j]:
+                    j += 1
+                if j - k > longueur:
+                    source, longueur = (k, min(j, k + max_pas)), j - k
+                k = j
+        if source is None or longueur < min_pas:
+            return {"parole": parole, "plans": plans, "reference_db": round(ref, 1), "source": None,
+                    "nappe": [0.0] * n}
+        k0, k1 = source
+        # La nappe est le son BRUT de la source : le réglage de son propre plan ne l'affaiblit pas ailleurs.
+        niveau_source = _mediane([amb_db[k] for k in range(k0, k1)])
     unite = 10 ** (niveau_source / 20)
     nappe = []
     for k in range(n):
@@ -431,17 +437,26 @@ def _niveaux(ech: array.array, pas: int) -> list:
             for i in range(0, len(ech) - pas + 1, pas)]
 
 
-def egaliser_ambiance(film: bytes, bornes_s: list, ajustements_db=None) -> tuple:
+def egaliser_ambiance(film: bytes, bornes_s: list, ajustements_db=None, nappe_wav=None) -> tuple:
     """Le film, son ambiance égalisée d'un plan à l'autre (voir AMB_*), et le rapport.
     Les images ne sont pas réencodées. `bornes_s` : la fin de chaque plan, en secondes ;
-    `ajustements_db` : le réglage à la main du fond de chaque plan."""
+    `ajustements_db` : le réglage à la main du fond de chaque plan ; `nappe_wav` : la piste
+    son du lieu (fiche du décor), nappe à la place d'un passage du film."""
     with tempfile.TemporaryDirectory() as dossier:
         a, son, sortie = Path(dossier, "film.mp4"), Path(dossier, "son.wav"), Path(dossier, "egal.mp4")
         a.write_bytes(film)
         amb = _niveaux(_pcm(a, AMB_BANDE, 1, AMB_TAUX), AMB_PAS)
         voix = _niveaux(_pcm(a, VOIX_BANDE.rstrip(","), 1, AMB_TAUX), AMB_PAS)
         bornes = [round(b * 10) for b in bornes_s]
-        d = regler_ambiance(amb, voix, bornes, ajustements_db)
+        src_fiche, nappe_db = None, None
+        if nappe_wav:
+            piste = Path(dossier, "lieu.wav")
+            piste.write_bytes(nappe_wav)
+            src_fiche = _pcm(piste, "highpass=f=%d" % AMB_COUPE_BAS_HZ, 2, AMB_MIX_TAUX)
+            nappe_db = _mediane(_niveaux(_pcm(piste, AMB_BANDE, 1, AMB_TAUX), AMB_PAS))
+            if len(src_fiche) < 2 * AMB_SOURCE_MIN_S * AMB_MIX_TAUX:
+                src_fiche, nappe_db = None, None   # trop courte pour boucler : le film donne la sienne
+        d = regler_ambiance(amb, voix, bornes, ajustements_db, nappe_db)
         orig = _pcm(a, "highpass=f=%d" % AMB_COUPE_BAS_HZ, 2, AMB_MIX_TAUX)
         cadres = len(orig) // 2
         par_pas = AMB_MIX_TAUX // 10
@@ -456,7 +471,10 @@ def egaliser_ambiance(film: bytes, bornes_s: list, ajustements_db=None) -> tuple
         lin = [sum(lin[max(0, k - f // 2):k + f // 2 + 1]) / len(lin[max(0, k - f // 2):k + f // 2 + 1])
                for k in range(len(lin))]
         nappe = d["nappe"]
-        if d["source"]:
+        if d["source"] == "fiche":
+            src = src_fiche
+            fondu = min(round(AMB_FONDU_S * AMB_MIX_TAUX), len(src) // 6)
+        elif d["source"]:
             s0, s1 = d["source"][0] * par_pas, d["source"][1] * par_pas
             src = orig[2 * s0:2 * s1]
             fondu = min(round(AMB_FONDU_S * AMB_MIX_TAUX), (s1 - s0) // 3)
@@ -498,8 +516,20 @@ def _rapport_ambiance(d: dict) -> dict:
                        "ajustement_db": p["ajustement_db"], "vise_db": p.get("vise_db")}
                       for i, p in enumerate(d["plans"])],
             "nappe_depuis_s": [round(d["source"][0] / 10, 1), round(d["source"][1] / 10, 1)]
-            if d["source"] else None,
+            if d["source"] and d["source"] != "fiche" else None,
+            "nappe_de": "fiche du décor" if d["source"] == "fiche" else "film" if d["source"] else None,
             "parole_s": round(sum(d["parole"]) / 10, 1)}
+
+
+def piste_du_lieu(film: bytes, depuis_s: list) -> bytes:
+    """Le passage sans paroles choisi comme nappe (`nappe_depuis_s` du rapport), en WAV
+    stéréo 48 kHz : la piste son du lieu, gardée sur la fiche du décor (03/10)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "film.mp4"), Path(dossier, "lieu.wav")
+        a.write_bytes(film)
+        _lancer(["-i", str(a), "-ss", "%.2f" % depuis_s[0], "-to", "%.2f" % depuis_s[1], "-vn", "-ac", "2",
+                 "-ar", str(AMB_MIX_TAUX), "-c:a", "pcm_s16le", str(sortie)], "La piste son du lieu")
+        return sortie.read_bytes()
 
 
 PASSAGES_MAX = 8

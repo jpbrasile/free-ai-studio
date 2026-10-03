@@ -997,6 +997,38 @@ def fiche_lieu_image(fid) -> str:
     return fiche_image_data_url(fid, ANGLE_DEPART)
 
 
+SON_LIEU_MAX_OCTETS = 4 * 1024 * 1024   # ~20 s de WAV stéréo 48 kHz
+
+
+def fiche_poser_son_lieu(fid, wav: bytes) -> dict:
+    """La piste son d'un décor (03/10, propriétaire : « un son track id along the clip ») :
+    un passage sans paroles du premier film tourné dans ce lieu ; le fond sonore des films
+    suivants en est fait (montage.egaliser_ambiance)."""
+    fiche = fiche_lire(fid)
+    if fiche.get("genre") != "decor":
+        raise ValueError(f"« {fiche['nom']} » n'est pas une fiche de décor.")
+    if not (wav[:4] == b"RIFF" and wav[8:12] == b"WAVE") or len(wav) > SON_LIEU_MAX_OCTETS:
+        raise ValueError("La piste son du lieu doit être un WAV de 4 Mo au plus.")
+    (_dossier_fiche(fid) / "lieu.wav").write_bytes(wav)
+    fiche["son_lieu"] = "lieu.wav"
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiche_son_lieu(fid):
+    """La piste son d'un décor (WAV), ou None."""
+    try:
+        fiche = fiche_lire(fid)
+    except ValueError:
+        return None
+    if fiche.get("genre") != "decor" or not fiche.get("son_lieu"):
+        return None
+    try:
+        return (_dossier_fiche(fid) / fiche["son_lieu"]).read_bytes()
+    except OSError:
+        return None
+
+
 def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
     if genre not in GENRES_FICHE:
         raise ValueError("Une fiche est une personne, un objet, une pose ou un décor.")
@@ -1101,6 +1133,51 @@ def demandes_decor_du_film(description: str, images: list) -> tuple:
     planche = {"prompt": CONSIGNE_PLANCHE_DECOR % n + f" Description : {description}", "n": 1,
                "size": TAILLE_PLANCHE, "image_reference": list(images)}
     return vue, planche
+
+
+# --- La fiche du décor D'APRÈS LE TEXTE (03/10) ---------------------------------------
+# Propriétaire, 03/10 : « corrige la fontaine qui change entre les plans de façon
+# générique ». Film 4 : sa fiche de décor n'est venue qu'au plan 5, faite d'après le film ;
+# avant, chaque coupe redessinait le lieu d'après la fin du plan d'avant (un gros plan :
+# fontaine hors champ, réinventée). Et H3 ne la recevait jamais (`decor_video`). Un
+# scénario tourné dans un seul lieu reçoit donc sa fiche AVANT la première image, faite
+# du texte : une vue vide large, puis la planche à quatre vues tirée de cette vue. Pas
+# d'après l'image de départ du plan 1 : souvent un gros plan (le 02/10, colonne sur un
+# bassin bas au lieu d'une vasque à deux étages).
+def consigne_decor_du_texte(textes: list) -> str:
+    plans = " ".join("[Shot %d] %s" % (k + 1, " ".join(str(t).split())) for k, t in enumerate(textes))
+    return ("Here is the script of a short film, shot by shot: %s\n"
+            "Does the whole film happen in ONE single place (the camera may move inside it)? If so, describe "
+            "THE PLACE ONLY, for an image model that must draw it empty of people, so that every shot shows the "
+            "same place: every fixed element the script names or implies (fountains, statues, benches, steps, "
+            "doors, windows, lamps, trees, ground), each with ONE precise shape (how many tiers or levels, how "
+            "many water jets, how high compared with a seated person, what material, what colour) and where it "
+            "stands relative to the others (left, right, behind, in front). Where the script is vague, choose one "
+            "plausible precise form consistent with it. Never describe people, animals, vehicles or anything "
+            "held. Answer JSON only: {\"un_seul_lieu\": true or false, \"nom\": \"a short English name of the "
+            "place, 2-5 words\", \"description\": \"the place in English, one paragraph, %d characters at most\"}."
+            % (plans, FICHE_DESCRIPTION_MAX - 50))
+
+
+def lire_decor_du_texte(reponse: str):
+    """{nom, description}, ou None si le film change de lieu ; ValueError si illisible."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if isinstance(d, dict) and d.get("un_seul_lieu") is False:
+        return None
+    if not isinstance(d, dict) or d.get("un_seul_lieu") is not True:
+        raise ValueError("La description du décor n'a pas pu être lue : rien n'est créé.")
+    return lire_decor_du_film(t)
+
+
+def demandes_decor_du_texte(description: str) -> dict:
+    """La demande de la vue d'ensemble vide ; la planche se fait ensuite d'elle
+    (`demandes_decor_du_film(description, [vue])`)."""
+    return {"prompt": f"{description}. {CADRE_DECOR}", "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
 
 
 OBJETS_CLEFS_PLANS_MIN = 2   # un objet d'un seul plan n'a pas de continuité à tenir
@@ -1743,7 +1820,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
                       presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
-                      planches=(), vues=(), legere=False) -> str:
+                      planches=(), vues=(), legere=False, lieu=None) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -1760,7 +1837,8 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     « <Audio 1> is the voice-timbre reference for <Subject 1> (S1). »), sans en créer.
     `suite` : le plan continue <Video 1>, la fin du plan précédent (voie « raccord »).
     `au_depart` : les rangs que l'image de départ montre ; ils y sont nommés (« showing
-    <Subject 1> »), sans quoi la personne de l'image n'est liée à aucune fiche."""
+    <Subject 1> »), sans quoi la personne de l'image n'est liée à aucune fiche.
+    `lieu` : le numéro de <Picture N> de la vue vide du décor du scénario (03/10)."""
     definitions, garde, premiere, voix_dites, garde_sons = [], [], 1, [], []
     presents = set(range(len(nombres))) if presents is None else set(presents)
     for k, nombre in enumerate(nombres):
@@ -1828,6 +1906,13 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
             continue
         garde.append(f"{ou}: fully_preserved - the face, hair and clothing of the person in "
                      f"{images} are retained, as one single person." + porte)
+    if lieu:   # 03/10, film 4 : la fontaine changeait de jets et de statue d'un plan à l'autre
+        definitions.append(f"<Picture {lieu}> is the setting of [Shot 1], shown empty of people.")
+        garde.append(f"<Picture {lieu}>: fully_preserved - same place and fixed elements; no person from it."
+                     if legere else
+                     f"<Picture {lieu}> (setting): fully_preserved - the buildings, the ground and each fixed "
+                     f"element keep the shape, size, number of parts and place they have in <Picture {lieu}>; "
+                     "no person and no object is taken from it.")
     if depart:   # ref-en.txt, 2.2 et 4.1 : l'image elle-même est une ancre de plan
         # « <Picture 2> is the first frame of [Shot 1], showing a woman seated beside a café
         # window » (ref-en.txt, 2.2) ; « …, showing <Subject 1> holding… » (modèle Comfy-Org
@@ -3563,6 +3648,14 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     # comme le guide de MiniMax l'écrit (ref-en.txt, 2.2).
     depart = payload.get("depart_reference") if refs and fiches else None
     suite = bool(payload.get("suite_video")) and refs and bool(fiches)
+    # Le décor du scénario part aussi à H3 (03/10, propriétaire : « corrige la fontaine qui
+    # change entre les plans ») : sa vue vide en <Picture N>, juste avant l'image de départ.
+    # Seulement s'il reste une place parmi les neuf images ; sinon le plan part sans.
+    lieu = None
+    if refs and fiches and payload.get("decor") and payload.get("decor_video") is True:
+        utilisees = len(de_la_fiche) + len(payload.get("images") or []) + (1 if depart else 0)
+        if utilisees < MODES["references"]["images_max"]:
+            lieu = fiche_lieu_image(payload["decor"])
     if refs and fiches:
         # Le plan ne nomme pas toujours toutes les fiches du scénario : « (appears in
         # [Shot 1]) » n'est écrit que pour celles qu'il nomme (ref-en.txt, 4.1).
@@ -3571,7 +3664,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         parleurs = {}
         for s, x in _LOCUTEUR_NUMERO.findall(nommes):
             parleurs.setdefault(int(s) - 1, int(x))
-        numero = sum(nombres) + 1 if depart else None
+        numero_lieu = sum(nombres) + 1 if lieu else None
+        numero = sum(nombres) + 1 + (1 if lieu else 0) if depart else None
         # Qui l'image de départ montre : les fiches que le plan nomme, sauf celles que son
         # tableau d'éléments met hors champ au début (même règle que fiches_au_depart).
         elements = payload.get("elements") if isinstance(payload.get("elements"), list) else []
@@ -3581,7 +3675,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs,
                                    suite, au_depart, avec_planche,
                                    {k for k, f in enumerate(fiches) if f.get("vues")},
-                                   legere=payload.get("invite_legere") is True)
+                                   legere=payload.get("invite_legere") is True, lieu=numero_lieu)
                  + " detailed_description: [Shot 1] "
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
@@ -3624,7 +3718,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     brutes = payload.get("images") or []
     if not isinstance(brutes, list):
         raise ValueError("Images illisibles.")
-    brutes = de_la_fiche + brutes + ([depart] if depart else [])
+    brutes = de_la_fiche + brutes + ([lieu] if lieu else []) + ([depart] if depart else [])
     m = MODES[mode]
     if not m["images_min"] <= len(brutes) <= m["images_max"]:
         if m["images_max"] == 0:
@@ -3665,6 +3759,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             "langue": langue,
             "fiche": {"id": fiches[0]["id"], "nom": fiches[0]["nom"]} if fiches else None,
             "fiches": [{"id": f["id"], "nom": f["nom"]} for f in fiches],
+            "decor_video": bool(lieu),   # la vue du décor est partie à H3 (03/10)
             "images": longueur,
             "secondes": secondes_de(longueur),
             "coupe_s": coupe,

@@ -5423,10 +5423,20 @@ def _egaliser_scenario(sid: str, film_jid: str, fins: list, ips: float, ajusteme
         if not brut:
             raise ValueError("Ce film n'est plus sur ce Studio.")
         octets = brut.read_bytes()
-        egal, rapport = montage.egaliser_ambiance(octets, [f / ips for f in fins], ajustements)
+        # La piste son du lieu (03/10) : celle de la fiche du décor, sinon un passage du film,
+        # gardé ensuite sur la fiche pour les films suivants tournés au même endroit.
+        lieu = (video_h3.scenario_lire(sid).get("reglages") or {}).get("decor")
+        piste = video_h3.fiche_son_lieu(lieu) if lieu else None
+        egal, rapport = montage.egaliser_ambiance(octets, [f / ips for f in fins], ajustements, piste)
     except (OSError, ValueError, HTTPException, montage.MontageImpossible, subprocess.SubprocessError) as exc:
         video_h3.scenario_noter(sid, ambiance={"erreur": str(getattr(exc, "detail", exc))[:300]})
         return film_jid
+    if lieu and not piste and rapport.get("nappe_depuis_s"):
+        try:
+            video_h3.fiche_poser_son_lieu(lieu, montage.piste_du_lieu(octets, rapport["nappe_depuis_s"]))
+            rapport = dict(rapport, piste_gardee_sur_la_fiche=lieu)
+        except (OSError, ValueError, montage.MontageImpossible, subprocess.SubprocessError) as exc:
+            rapport = dict(rapport, piste_non_gardee=str(exc)[:200])
     if egal is octets:
         video_h3.scenario_noter(sid, ambiance=rapport)
         return film_jid
@@ -5971,7 +5981,8 @@ def _histoire(plans: list) -> str:
 REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueur", "graine",
                      "definition", "decor",   # `decor` : la fiche du lieu (02/10), jointe aux images des coupes
                      "plan_par_plan",         # 02/10 : arrêt après chaque plan neuf, pour le valider
-                     "invite_legere")         # 02/10 : invite H3 sans redites (sujets_des_fiches), à l'essai
+                     "invite_legere",         # 02/10 : invite H3 sans redites (sujets_des_fiches), à l'essai
+                     "decor_video")           # 03/10 : la vue du décor part aussi à H3 (preparer)
 
 
 def _scenario_prepare(corps: dict, plans: list) -> tuple:
@@ -6483,6 +6494,18 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
         raise HTTPException(400, str(exc)) from exc
     ou = _ou_h3(corps)
     _h3_peut(ou)
+    # Sans fiche de décor, le Studio en fait une d'après le texte (03/10), avant la première
+    # image : chaque coupe en garde le lieu. `decor_auto: false` la coupe.
+    decor_auto = None
+    if (not commun.get("decor") and corps.get("decor_auto") is not False
+            and os.getenv("STUDIO_DECOR_AUTO", "true").strip().lower() != "false"):
+        decor_auto = await _decor_du_texte(plans)
+        if decor_auto["fiche"]:
+            corps["decor"] = decor_auto["fiche"]
+            try:
+                commun, musique, a_tourner = _scenario_prepare(corps, plans)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
     if await _departs_des_coupes(plans, commun):
         try:
             commun, musique, a_tourner = _scenario_prepare(corps, plans)
@@ -6492,6 +6515,8 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     # bloquantes vues, puis tournées quand même.
     forcer = corps.get("forcer") is True
     rapport, refus = None, {}
+    if decor_auto and decor_auto["fiche"]:   # un refus la rend : relancée avec `decor`, elle n'est pas refaite
+        refus["decor"] = decor_auto["fiche"]
     if not forcer:
         # Une correction gratuite AVANT de refuser (01/10) ; « tourner quand même » n'en fait pas.
         rapport = await _verifier_scenario(plans, commun)
@@ -6510,7 +6535,7 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
         raise HTTPException(400, str(exc)) from exc
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer, ou=ou,
-                            correction=refus.get("correction"), objets_clefs=objets)
+                            correction=refus.get("correction"), objets_clefs=objets, decor_auto=decor_auto)
 
 
 def _fins_images(sc: dict) -> list:
@@ -6874,7 +6899,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
                                                 parent["plans"], [dict(p) for p in plans])
     plans = video_h3.plans_avec_coupes_refaites(plans, parent["plans"], parent.get("departs_de_coupe"))
     reglages = dict(parent.get("reglages") or {"fiche": parent.get("fiche"), "fiches": parent.get("fiches")})
-    for cle in ("decor", "plan_par_plan", "invite_legere"):   # se posent aussi sur un rejeu (02/10)
+    for cle in ("decor", "plan_par_plan", "invite_legere", "decor_video"):   # se posent aussi sur un rejeu (02/10)
         if cle in corps:
             reglages[cle] = corps.get(cle)
     musique = parent.get("musique") or {}
@@ -6989,6 +7014,29 @@ async def _image_redemandee(demande: dict) -> str:
             await asyncio.sleep(COUPE_PAUSE_S)
 
 
+async def _decor_du_texte(plans: list) -> dict:
+    """La fiche du décor d'après le TEXTE du scénario (03/10), avant la première image :
+    {"fiche": id} ; {"fiche": None, "pourquoi": …} si le film change de lieu ou si une étape
+    échoue. Gratuit (chat et image du Studio). Un échec ne bloque rien : le film part comme
+    avant, la coupe gardant le lieu d'après la fin du plan d'avant."""
+    try:
+        lu = video_h3.lire_decor_du_texte(await _chat_du_studio(
+            video_h3.consigne_decor_du_texte([p["image_paroles"] for p in plans]), "la description du décor",
+            modele=video_h3.MODELE_JUGE))
+        if lu is None:
+            return {"fiche": None, "pourquoi": "le scénario change de lieu"}
+        vue = await _image_redemandee(video_h3.demandes_decor_du_texte(lu["description"]))
+        ref = vue if str(vue).startswith("data:") else _data_url(base64.b64decode(vue))
+        _vue, planche = video_h3.demandes_decor_du_film(lu["description"], [ref])
+        image_planche = await _image_redemandee(planche)
+        fiche = video_h3.fiche_creer(lu["nom"], lu["description"], "decor")
+        video_h3.fiche_poser_image(fiche["id"], video_h3.ANGLE_DEPART, vue)
+        video_h3.fiche_poser_planche(fiche["id"], image_planche)
+    except (ValueError, HTTPException) as exc:
+        return {"fiche": None, "pourquoi": str(getattr(exc, "detail", exc))}
+    return {"fiche": fiche["id"], "nom": lu["nom"]}
+
+
 @app.post("/video-h3/scenario/{sid}/decor")
 async def video_h3_scenario_decor(sid: str, request: Request, authorization: Optional[str] = Header(default=None)):
     """La fiche du décor D'APRÈS LE FILM (02/10) : les dernières images des plans tournés,
@@ -7087,6 +7135,27 @@ def _controle_derniere_image(sid: str, i: int, image: bytes):
 # Remarque du propriétaire : « le rerun plan2 aurait dû être fait avant plan 3 par
 # studio ». Ici, une prise ne coûte que du temps : une reprise, pas plus.
 REPRISES_AUTO_MAX = 1
+# Les règles du plan tourné qui font reprendre une prise. La 17 (décor constant, 03/10) est
+# notée seulement, tant que son juge n'est pas mesuré sur des plans au décor connu.
+REGLES_QUI_REPRENNENT = (9, 10, 15)
+DECOR_IMAGES_JUGEES = 3   # début, milieu et fin du plan
+
+
+async def _decor_constant(film: bytes, premiere: int, fin: int, lieu):
+    """Règle 17 (03/10) : le plan tourné contre la vue vide de la fiche du décor. None sans
+    fiche de décor ; « non jugé » (ok None) si une image ou le juge manque."""
+    if not lieu:
+        return None
+    try:
+        vue = video_h3.fiche_lieu_image(lieu)
+        pas = max(1, (fin - 1 - premiere) // (DECOR_IMAGES_JUGEES - 1))
+        numeros = sorted({min(fin - 1, premiere + k * pas) for k in range(DECOR_IMAGES_JUGEES)})
+        images = await asyncio.to_thread(montage.vignettes, film, numeros, largeur=768)
+        return regles.lire_decor_constant(await _chat_du_studio(
+            regles.consigne_decor_constant(len(images)), "le contrôle du décor",
+            images=[vue] + [_data_url(x) for x in images], modele=video_h3.MODELE_JUGE))
+    except (ValueError, HTTPException, montage.MontageImpossible) as exc:
+        return regles.resultat(None, "Décor non contrôlé : %s" % getattr(exc, "detail", exc))
 
 
 def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
@@ -7126,16 +7195,19 @@ def _juger_plan_tourne(sid: str, i: int, jid: str, premiere: int) -> dict:
             ecarts = await asyncio.to_thread(montage.ecarts_d_images, vu) if vu else None
         except montage.MontageImpossible:
             ecarts = None
-        return r, paroles, ecarts
+        return r, paroles, ecarts, await _decor_constant(film, premiere, fin, lieu)
     raccord = i > 0 and premiere > 0 and plan.get("enchainement") == "suite"
+    lieu = (sc.get("reglages") or {}).get("decor")
     try:
-        r, paroles, ecarts = asyncio.run(juger())
+        r, paroles, ecarts, decor = asyncio.run(juger())
     except HTTPException as exc:
         return dict(note, erreur=str(exc.detail))
     r[9] = regles.regle_paroles(paroles)
     r[15] = regles.regle_sans_coupe(ecarts, ips, raccord)
+    if decor is not None:
+        r[17] = decor
     note["regles"] = regles.en_liste(r)
-    note["fautes"] = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in (9, 10, 15)
+    note["fautes"] = ["règle %d : %s" % (n, r[n]["pourquoi"]) for n in REGLES_QUI_REPRENNENT
                       if (r.get(n) or {}).get("ok") is False]
     if (r.get(10) or {}).get("ok") is None:
         # Gardée faute de mieux (une prise fautive vaut moins qu'une inconnue), mais dite.

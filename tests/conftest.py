@@ -38,6 +38,10 @@ os.environ["SANDBOX_REPRISE_AU_DEMARRAGE"] = "false"
 # les VRAIS services avec les cles factices des tests. test_fumee.py appelle
 # faire_la_fumee() lui-meme, sur un faux reseau.
 os.environ["ROUTEUR_FUMEE"] = "false"
+# La fiche du decor faite d'apres le texte (03/10) appelle le chat du Studio avant
+# la premiere image : les tests du tournage comptent les reponses du chat qu'ils
+# simulent. Ceux du decor automatique la remettent eux-memes.
+os.environ["STUDIO_DECOR_AUTO"] = "false"
 # La cle du coffre vit hors de config/ ; son defaut est /secrets/coffre.cle, qui
 # sous Windows voudrait dire C:\secrets. Une suite de tests ne cree pas un
 # dossier a la racine du disque. UNE seule cle pour toute la suite : deux tests

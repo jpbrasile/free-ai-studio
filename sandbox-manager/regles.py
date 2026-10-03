@@ -47,6 +47,9 @@ REGLES = (
     (15, "clip", "Aucune coupe franche dans le plan tourné : le cadre bouge, il ne saute pas."),
     # 02/10, film 4, plan 5 : la coupe donnait la photo à la main gauche de Leila, le texte à la droite.
     (16, "depart", "Sur l'image de départ, chaque main tient ce que le tableau des éléments lui donne."),
+    # 03/10, film 4 : la fontaine changeait de jets, de vasques et de statue d'un plan à l'autre.
+    (17, "clip", "Le décor du plan est celui de la fiche du décor : chaque élément fixe visible garde sa forme, "
+                 "son nombre de parties et sa place."),
 )
 NUMEROS = {etape: [n for n, e, _ in REGLES if e == etape] for etape in ("texte", "depart", "clip")}
 # Les règles qui arrêtent le tournage (avant tout sou) : texte et image de départ.
@@ -642,6 +645,38 @@ def regle_sans_coupe(ecarts, ips: float, raccord: bool = False) -> dict:
         return resultat(False, "Coupe franche dans le plan à %.1f s (images %d → %d, écart %.1f) : le cadre saute "
                                "au lieu de bouger." % ((k + 1) / ips, k, k + 1, x))
     return resultat(True)
+
+
+def consigne_decor_constant(nombre: int) -> str:
+    """Règle 17 : image 1, la vue vide de la fiche du décor ; images 2 à `nombre` + 1,
+    des images du plan tourné (début, milieu, fin)."""
+    return ("Image 1 is the reference picture of a place, shown empty. Images 2 to %d are frames of one video "
+            "shot that must take place in this same place. Compare the FIXED elements of the place (fountains, "
+            "statues, buildings, doors, windows, steps, benches, lamps, trees, ground) that are visible both in "
+            "image 1 and in a frame: does any of them have a different shape, a different number of parts (tiers, "
+            "basins, water jets, columns, windows), a different material or colour, or a different place relative "
+            "to the others? Ignore people, animals, vehicles and anything held; ignore light, framing, camera "
+            "angle and distance; ignore elements hidden or out of frame. Answer in French, JSON only: "
+            "{\"ok\": true if every visible fixed element matches, false otherwise, \"differences\": [\"element: "
+            "what differs\", ...]}." % (nombre + 1))
+
+
+def lire_decor_constant(reponse: str) -> dict:
+    """Règle 17, depuis la réponse du juge."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    if not isinstance(d, dict) or not isinstance(d.get("ok"), bool):
+        return resultat(None, "Le contrôle du décor n'a pas pu être lu.")
+    ecarts = [" ".join(str(x).split()) for x in d.get("differences") or [] if str(x).strip()]
+    if d["ok"]:
+        return resultat(True)
+    if not ecarts:
+        return resultat(None, "Décor jugé différent, sans dire en quoi.")
+    return resultat(False, "Le décor change : " + " ; ".join(ecarts[:4]) + ".")
 
 
 def en_liste(r: dict) -> list:
