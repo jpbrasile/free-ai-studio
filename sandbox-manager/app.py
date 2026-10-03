@@ -4448,7 +4448,8 @@ async def _creer_depart(corps: dict) -> dict:
             demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
                                                     corps.get("fiches") or [], corps.get("decor"), tenues,
                                                     coupe=corps.get("coupe") is True, lieu=corps.get("lieu"),
-                                                    fin_de=corps.get("fin_de"), meubles=corps.get("meubles"))
+                                                    fin_de=corps.get("fin_de"), meubles=corps.get("meubles"),
+                                                    a_eviter=corps.get("a_eviter") or [])
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -6625,7 +6626,8 @@ async def video_h3_scenario_simuler(request: Request, authorization: Optional[st
                 # du dernier essai restent montrées.
                 for tour in range(video_h3.RACCORD_ESSAIS):
                     d = await _depart_redemande(dict(commun_image, texte=video_h3.texte_depart(p), decor=fin_avant,
-                                                     coupe=True, elements=p.get("elements") or []))
+                                                     coupe=True, elements=p.get("elements") or [],
+                                                     a_eviter=ligne.get("raccord") or []))
                     ligne["depart"], ligne["description_depart"] = d["id"], d["texte"]
                     ligne["raccord_essais"] = tour + 1
                     try:
@@ -6643,7 +6645,7 @@ async def video_h3_scenario_simuler(request: Request, authorization: Optional[st
             # (03/10 : la fin du plan 3 avait changé de salon, et les coupes suivantes avec elle).
             for tour in range(video_h3.RACCORD_ESSAIS):
                 f = await _depart_redemande(dict(commun_image, texte=video_h3.texte_fin(p), decor=None, coupe=False,
-                                                 fin_de=ligne["depart"],
+                                                 fin_de=ligne["depart"], a_eviter=ligne.get("controle_fin") or [],
                                                  elements=video_h3.elements_a_la_fin(p.get("elements") or [])))
                 ligne["fin"], ligne["description_fin"] = f["id"], f["texte"]
                 ligne["fin_essais"] = tour + 1
@@ -7405,6 +7407,7 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
             if tour == video_h3.RACCORD_ESSAIS - 1:
                 raise ValueError("image refusée par le contrôle du raccord (redessinée %d fois) : %s"
                                  % (video_h3.RACCORD_ESSAIS, " ; ".join(fautes)))
+            corps["a_eviter"] = fautes   # le redessin sait ce que le juge a vu (03/10)
         definition = str(payload.get("definition") or video_h3.DEFINITION_PAR_DEFAUT)
         recadree = base64.b64encode(montage.recadrer_image(image, *video_h3.DEFINITIONS[definition])).decode()
     except HTTPException as exc:

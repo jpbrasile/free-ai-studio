@@ -1428,6 +1428,13 @@ def test_le_film_se_simule_en_images_debut_et_fin_sans_rien_tourner(h3, monkeypa
     assert "Mila est la personne" in demandes[1] and "the pot est l'objet" in demandes[1]
     assert "Mila" not in demandes[3].split(".")[0] and "the pot est l'objet" in demandes[3]
     assert photos[1] >= 3 and photos[1] > photos[3]
+    # 03/10, quatrième story-board : le redessin reçoit les fautes du juge, pas le premier dessin ;
+    # la description de l'image (celle qui passe à H3 et au juge) n'en garde rien.
+    assert v.CONSIGNE_A_EVITER % "une autre bibliothèque" in demandes[2]
+    assert v.CONSIGNE_A_EVITER % "le pot a changé de forme" in demandes[5]
+    assert not any("à ne pas refaire" in demandes[k] for k in (0, 1, 3, 4, 6))
+    assert not any("à ne pas refaire" in (x.get("description_fin", "") + x.get("description_depart", ""))
+                   for x in lignes)
     # Le juge de la fin compare au décor quand il y en a un ; un gros plan n'est pas un manque.
     assert "Image 3 is the empty set" in v.consigne_controle_fin("x", avec_decor=True)
     assert "Image 3" not in v.consigne_controle_fin("x") and "they are NOT missing" in v.consigne_raccord("x")
@@ -6627,6 +6634,8 @@ def test_le_raccord_d_une_coupe_est_controle_redessine_une_fois_puis_arrete(h3, 
     payload = {}
     assert h3._depart_de_coupe(sc["id"], 1, "j" * 32, payload) is True
     assert len(dessins) == 2 and payload.get("depart_reference")
+    # Le redessin sait ce que le juge a vu (03/10) ; le premier dessin n'a rien à éviter.
+    assert not dessins[0].get("a_eviter") and dessins[1]["a_eviter"] == ["the pot is now a low bowl"]
     assert [x for x in vus if x[0] == "le contrôle du raccord"][0][3] == 2   # deux images au juge
     assert v.scenario_lire(sc["id"])["raccords"][0]["fautes"] == ["the pot is now a low bowl"]
     # Faux raccord deux fois : le film s'arrête, sans partir d'une image au faux raccord.

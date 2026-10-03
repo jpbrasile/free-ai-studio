@@ -784,6 +784,11 @@ PHOTOS_IMAGE_MAX = 14   # le routeur (Gemini 3.1 Flash Lite Image) n'en prend pa
 FIGURANTS_IMAGE = ("S'il y a d'autres personnes que celles décrites (passants, clients), elles restent à distance, "
                    "au second plan, jamais au premier plan, au bord de l'image ou à moitié cachées ; "
                    "peu d'objets au premier plan.")
+# 03/10, quatrième story-board du « Jardin de verre » : le juge voyait le défaut (un meuble ajouté
+# au plan 7, Mila disparue à la fin du plan 5), mais le second dessin, demandé à l'identique, le
+# refaisait. Le redessin reçoit les fautes du juge ; la description de l'image n'en garde rien.
+CONSIGNE_A_EVITER = "Un premier dessin de cette image avait ces fautes, à ne pas refaire : %s. "
+A_EVITER_MAX = 6
 
 
 def _data_url(b64: str) -> str:
@@ -909,7 +914,7 @@ def reformuler_depart(texte: str, reponse: str) -> str:
 
 
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False,
-                  lieu=None, fin_de=None, meubles=None) -> tuple:
+                  lieu=None, fin_de=None, meubles=None, a_eviter=()) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
     l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
 
@@ -923,8 +928,13 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
     auvent et une autre rue (remarque du propriétaire).
 
     `lieu` : la fiche « décor » du film ; son image remplace `decor` comme référence du
-    lieu, et une coupe change alors franchement de cadrage (CONSIGNE_COUPE_LIEU)."""
+    lieu, et une coupe change alors franchement de cadrage (CONSIGNE_COUPE_LIEU).
+
+    `a_eviter` : les fautes que le juge a trouvées au dessin précédent (CONSIGNE_A_EVITER)."""
     description = texte_image(texte, ameliorations)
+    if not isinstance(a_eviter, (list, tuple)):
+        raise ValueError("Fautes à éviter illisibles.")
+    fautes = [f for f in (" ".join(str(x or "").split()).rstrip(".") for x in a_eviter) if f][:A_EVITER_MAX]
     if not isinstance(fiches, (list, tuple)) or len(set(map(str, fiches))) != len(fiches):
         raise ValueError("Liste de fiches illisible.")
     photos, presentation = [], []
@@ -984,6 +994,8 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
         tete += CONSIGNE_FIN % len(photos)
     if len(photos) > PHOTOS_IMAGE_MAX:
         raise ValueError("Quatorze photos au plus sur une image (fiches et plan précédent) : retirez un personnage.")
+    if fautes:
+        tete += CONSIGNE_A_EVITER % " ; ".join(fautes)
     demande = {"prompt": tete + description + " " + FIGURANTS_IMAGE, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
     if photos:
         demande["image_reference"] = photos
