@@ -6463,6 +6463,29 @@ def _scenario_lancer(plans: list, commun: dict, musique, a_tourner: list, **autr
     return sc
 
 
+async def _depart_redemande(corps: dict) -> dict:
+    """`_creer_depart`, redemandé sur panne passagère (COUPE_ESSAIS) ; « aucune image » (refus
+    probable de Google) : le dernier essai part de la description redite par le chat. L'échec
+    final nomme le plan (03/10, « Le jardin de verre » : le refus ne disait pas lequel)."""
+    corps = dict(corps)
+    for essai in range(COUPE_ESSAIS):
+        try:
+            return await _creer_depart(dict(corps))
+        except HTTPException as exc:
+            if exc.status_code not in (429, 500, 502, 503, 504) or essai == COUPE_ESSAIS - 1:
+                if corps.get("plan"):
+                    raise HTTPException(exc.status_code, "Image de départ du plan %s : %s"
+                                        % (corps["plan"], exc.detail)) from exc
+                raise
+            if essai == COUPE_ESSAIS - 2 and "aucune image" in str(exc.detail) and corps.get("texte"):
+                try:
+                    corps["texte"] = video_h3.reformuler_depart(corps["texte"], await _chat_du_studio(
+                        video_h3.CONSIGNE_REFORMULER_DEPART % corps["texte"], "la description redite"))
+                except HTTPException:
+                    pass   # le chat muet : la même description, redemandée
+            await asyncio.sleep(COUPE_PAUSE_S)
+
+
 async def _departs_des_coupes(plans: list, commun: dict) -> bool:
     """01/10, propriétaire : « le premier clip doit démarrer à partir d'une image », puis
     « une coupure démarre par une image créée par un text to image ». Elle ne se faisait
@@ -6480,9 +6503,9 @@ async def _departs_des_coupes(plans: list, commun: dict) -> bool:
         if not p.get("image_depart"):
             # Avec la fiche du décor (02/10), elle seule donne le lieu, et chaque coupe change de cadrage.
             lieu = commun.get("decor")
-            d = await _creer_depart({"texte": video_h3.texte_depart(p), "fiches": ids,
-                                     "decor": None if lieu else decor, "lieu": lieu, "coupe": bool(lieu and k),
-                                     "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
+            d = await _depart_redemande({"texte": video_h3.texte_depart(p), "fiches": ids,
+                                         "decor": None if lieu else decor, "lieu": lieu, "coupe": bool(lieu and k),
+                                         "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
             p.update(image_depart=d["id"], description_depart=d["texte"])
             pose = True
         decor = p["image_depart"]
@@ -7281,14 +7304,7 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
             # 02/10, film 4, plan 5 : « Google a refusé la demande d'image (HTTP 503) », une panne
             # passagère, et la coupe est partie de l'image du découpage (Tyler debout, d'avant les
             # corrections). Une panne passagère se redemande.
-            for essai in range(COUPE_ESSAIS):
-                try:
-                    d = asyncio.run(_creer_depart(dict(corps)))
-                    break
-                except HTTPException as exc:
-                    if exc.status_code not in (429, 500, 502, 503, 504) or essai == COUPE_ESSAIS - 1:
-                        raise
-                    time.sleep(COUPE_PAUSE_S)
+            d = asyncio.run(_depart_redemande(dict(corps)))
             image = video_h3.depart_lire(d["id"])
             note["depart"] = d["id"]
             arret = _controle_derniere_image(sid, i, image)

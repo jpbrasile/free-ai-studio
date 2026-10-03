@@ -1598,8 +1598,71 @@ def test_chaque_coupe_part_d_une_image_que_le_studio_cree_sinon_rien_ne_part(h3,
     async def panne(demande):
         raise h3.HTTPException(502, "L'image du Studio n'a rendu aucune image.")
     monkeypatch.setattr(h3, "_image_du_studio", panne)
+    monkeypatch.setattr(h3, "COUPE_PAUSE_S", 0)
     r = client(h3).post("/video-h3/scenario/tourner", headers=CLE, json={"plans": plans, "fiche": fid, "longueur": 124})
     assert r.status_code == 502 and len(fils) == 1
+    # 03/10, « Le jardin de verre » : le refus nomme le plan.
+    assert "plan 1" in r.json()["detail"] and "aucune image" in r.json()["detail"], r.text
+
+
+def test_un_refus_d_image_de_depart_est_redemande_puis_la_description_redite(h3, monkeypatch, sans_regles):
+    """03/10, « Le jardin de verre » : « Google n'a renvoyé aucune image » sur le plan 3, et le
+    film s'arrêtait avant le premier plan, sans dire lequel."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    monkeypatch.setattr(h3, "COUPE_PAUSE_S", 0)
+    fid = v.fiche_creer("Mila", "une fillette")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+
+    async def tenues(commun, plans, a_tourner):
+        return []
+    monkeypatch.setattr(h3, "_scenario_tenues", tenues)
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: image)
+    fils = []
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: fils.append(a))
+    plans = [{"image_paroles": "Mila arrose le pot", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Des troncs de cristal jaillissent du parquet", "ambiance": "", "enchainement": "coupe"}]
+    demandes, refus = [], {"n": 2}
+
+    async def image(demande):
+        demandes.append(demande["prompt"])
+        if "jaillissent" in demande["prompt"] and refus["n"]:
+            refus["n"] -= 1
+            raise h3.HTTPException(502, "L'image du Studio a refusé : Google n'a renvoye aucune image : "
+                                        "la description a probablement ete refusee.")
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    chats = []
+
+    async def chat(consigne, quoi="", images=None, modele=""):
+        if consigne.startswith("An image generator returned no image"):
+            chats.append(consigne)
+            return "Des troncs de verre s'élèvent lentement au milieu du salon"
+        return ""
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE,
+                        json={"plans": plans, "fiche": fid, "longueur": 124, "decor_auto": False})
+    assert r.status_code == 200, r.text
+    # Plan 1 ; plan 2 refusé deux fois (la description redite après le 1er refus), puis dessiné.
+    assert len(demandes) == 1 + h3.COUPE_ESSAIS and len(chats) == 1 and "jaillissent" in chats[0]
+    assert "s'élèvent lentement" in demandes[-1] and demandes[-1].count(v.PREFIXE_DEPART) == 1
+    assert r.json()["plans"][1]["description_depart"].startswith(v.PREFIXE_DEPART)
+    # Le chat hors sujet ou vide : la même description.
+    assert v.reformuler_depart(v.PREFIXE_DEPART + "x", "") == v.PREFIXE_DEPART + "x"
+    assert v.reformuler_depart(v.PREFIXE_DEPART + "x", v.PREFIXE_DEPART + "y") == v.PREFIXE_DEPART + "y"
+    # Un refus qui n'est pas une panne passagère (400) : pas redemandé, le plan nommé.
+    demandes.clear()
+
+    async def interdit(demande):
+        demandes.append(1)
+        raise h3.HTTPException(400, "Description vide.")
+    monkeypatch.setattr(h3, "_image_du_studio", interdit)
+    r = client(h3).post("/video-h3/scenario/tourner", headers=CLE,
+                        json={"plans": plans, "fiche": fid, "longueur": 124, "decor_auto": False})
+    assert r.status_code == 400 and "plan 1" in r.json()["detail"] and len(demandes) == 1 and len(fils) == 1
 
 
 def test_la_description_de_depart_suit_le_tableau_sans_les_repliques(h3):

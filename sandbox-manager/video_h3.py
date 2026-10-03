@@ -853,6 +853,26 @@ def lire_raccord(reponse: str) -> list:
     return [] if d["ok"] else (fautes or ["faux raccord (sans détail)"])
 
 
+# 03/10, « Le jardin de verre » : « Google n'a renvoyé aucune image » sur l'image de départ du
+# plan 3 (« Crystal trunks burst from the parquet… »), et le film s'arrêtait avant le premier
+# plan, sans dire lequel. Un refus se redemande ; au dernier essai, la description est redite.
+CONSIGNE_REFORMULER_DEPART = (
+    "An image generator returned no image for this description (probably refused). Rewrite it so that it "
+    "is accepted: same place, same framing, same characters and objects in the same positions, same "
+    "action; plain, calm, concrete words; nothing violent or bodily, no ages. Keep the language of the "
+    "description. Answer with the rewritten description only, one paragraph.\n\nDescription:\n%s")
+
+
+def reformuler_depart(texte: str, reponse: str) -> str:
+    """La description redite par le chat, préfixe de départ gardé ; `texte` si la réponse est vide ou hors sujet."""
+    corps = str(texte or "")
+    prefixe = PREFIXE_DEPART if corps.startswith(PREFIXE_DEPART) else ""
+    redite = " ".join(str(reponse or "").split()).strip("\"'« »")
+    if not redite or len(redite) > 3 * max(len(corps), 200):
+        return corps
+    return prefixe + (redite[len(prefixe):] if prefixe and redite.startswith(prefixe) else redite)
+
+
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False,
                   lieu=None) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
