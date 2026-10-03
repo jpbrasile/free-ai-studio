@@ -7026,8 +7026,8 @@ async def video_h3_maitre(request: Request, authorization: Optional[str] = Heade
          for p, t in zip(plans, a_tourner)])
     try:
         m = video_h3.texte_maitre(anglais, longueur)
-        payload = dict(a_tourner[0]["payload"], image_paroles=m["texte"], ambiance=m["ambiance"],
-                       longueur=longueur, camera=None)
+        payload = dict(video_h3.payload_maitre(a_tourner[0]["payload"], plans[0].get("description_depart", "")),
+                       image_paroles=m["texte"], ambiance=m["ambiance"], longueur=longueur, camera=None)
         plan = video_h3.preparer(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

@@ -222,6 +222,11 @@ def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
     assert v.cles_du_maitre(plans, m["debuts_s"], [3.65, 9.9], 362) == [(0, 87), (89, 181), (181, 361)]
     with pytest.raises(ValueError, match="coupe du plan 2"):
         v.cles_du_maitre(plans, m["debuts_s"], [9.9], 362)
+    # Le maître part de son image en « Première image » (coupes franches) ; sans image, rien ne change.
+    p = v.payload_maitre({"mode": "references", "depart_reference": "QUJD", "fiches": ["f1"]}, "Oscar.")
+    assert p["mode"] == "premiere" and p["images"] == ["QUJD"] and p["depart_reference"] is None
+    assert p["fiches"] == ["f1"] and p["description_premiere"] == "Oscar."
+    assert v.payload_maitre({"mode": "references", "fiches": ["f1"]})["mode"] == "references"
     # « Le phare », 03/10 : une suite qui change de valeur de plan devient une coupe ; sinon elle reste.
     phare = [{"image_paroles": "At dusk, wide shot, Oscar stands left.", "enchainement": "coupe"},
              {"image_paroles": "At dusk, medium shot, Oscar stands at the top.", "enchainement": "suite"},

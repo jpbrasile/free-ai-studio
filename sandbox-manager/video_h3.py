@@ -835,6 +835,18 @@ def suites_du_maitre(plans: list) -> list:
     return rendu
 
 
+def payload_maitre(payload: dict, description_depart: str = "") -> dict:
+    """Le maître part de son image de départ en « Première image », pas en « Références ».
+    Mesuré le 03/10 (ffmpeg, scene > 0,3) : en Références (fiches + image de départ), 5 coupes
+    franches sur 15 demandées, les autres fondues (le fondu montre Oscar deux fois) ; en Première
+    image (« Le jardin de verre »), 5 sur 5. Les fiches ne donnent plus que les voix ; le visage
+    vient de l'image de départ, faite d'après les fiches, et le juge le compare aux fiches."""
+    if payload.get("mode") != "references" or not payload.get("depart_reference"):
+        return payload
+    return dict(payload, mode="premiere", images=[payload["depart_reference"]], depart_reference=None,
+                visages_seuls=None, description_premiere=description_depart)
+
+
 def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
     """Le texte du clip maître : {texte, ambiance, debuts_s, longueur}. Chaque plan prend du maître
     la part de sa propre durée ; une « coupe » est un [Shot N] daté, une « suite » continue le plan
