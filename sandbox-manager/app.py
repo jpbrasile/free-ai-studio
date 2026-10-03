@@ -4634,7 +4634,7 @@ def run_agrandir(jid: str, code: str, delai: int):
 
 def run_agrandir_maison(jid: str, code: str):
     """L'agrandissement sur la carte d'ici (01/10) : la file de la carte, puis la machine
-    H3 d'ici (même ComfyUI, mêmes nœuds SeedVR2). Rien à encaisser."""
+    H3 d'ici, avec FlashVSR depuis le 03/10 (agrandir._SCRIPT_MAISON). Rien à encaisser."""
     if not attendre_la_carte(jid):
         return
     try:
@@ -4990,7 +4990,7 @@ async def video_h3_finaliser(request: Request, authorization: Optional[str] = He
     if ou == "maison":
         ici = h3_ici({"fichiers": list(agrandir.FICHIERS_MAISON)})
         if not ici["possible"]:
-            raise HTTPException(409, ici["motif"].replace("de H3", "de SeedVR2") + " Rien n'est parti ; "
+            raise HTTPException(409, ici["motif"].replace("de H3", "de FlashVSR") + " Rien n'est parti ; "
                                      "choisissez Modal pour l'agrandir tout de suite (payant).")
     else:
         _modal_ou_refus()
@@ -5232,7 +5232,8 @@ def run_finaliser(fid: str):
             job["avertissements"] = (job.get("avertissements") or []) + dits
             write_job(fid, job)
 
-        # 3. L'agrandissement : SeedVR2 traite déjà plusieurs morceaux en une location.
+        # 3. L'agrandissement : plusieurs morceaux en une location (SeedVR2 chez Modal),
+        # ou en une fois sur la carte d'ici (FlashVSR, 03/10).
         if echelle:
             ici = job["video"].get("ou") == "maison"
             a_faire = [(k, p["a"] - p["de"], 0) for k, p in enumerate(plans) if not _reussi(p["agrandi"])]
@@ -5254,7 +5255,8 @@ def run_finaliser(fid: str):
                              "secondes_estimees": round(agrandir.estimation_maison_s(n)),
                              "delai_s": video_h3.MAISON_DUREE_MAX_S}
                     coupes = agrandir.bornes(n, fins, agrandir.MORCEAU_MAX_MAISON)
-                    code = agrandir.construire_script(video, echelle, coupes, video_h3.MAISON_DUREE_MAX_S)
+                    code = agrandir.construire_script_maison(video, coupes, fins, *montage.taille(video),
+                                                             delai_s=video_h3.MAISON_DUREE_MAX_S)
                 else:
                     devis = agrandir.prix(n, echelle)
                     coupes = agrandir.bornes(n, fins)
@@ -5267,6 +5269,8 @@ def run_finaliser(fid: str):
                     "gpu": True, "internet": not ici, "status": "queued", "created_at": time.time(),
                     "artifacts": [], **({"machine": "comfy", "attente_carte": True} if ici else {}),
                     "video": {"moteur": "SeedVR2 (agrandissement)", "source": source, "echelle": echelle,
+                              # « moteur » reste la catégorie (agrandissement) ; le modèle qui a tourné :
+                              "modele": agrandir.MOTEUR_MAISON if ici else "SeedVR2",
                               "passages": [[plans[k]["de"], plans[k]["a"]] for k in ks],
                               "morceaux": len(coupes) - 1, "devis": devis, "finalisation": fid,
                               "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},

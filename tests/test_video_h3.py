@@ -4743,9 +4743,9 @@ def test_finaliser_fait_les_visages_puis_la_4k_en_une_location_chacun(h3, monkey
 
 
 def test_finaliser_la_4k_ici_en_morceaux_courts_sans_rien_louer(h3, monkeypatch, tmp_path):
-    """01/10, « 4k compressé en local » : la 4K sur la carte d'ici, mesurée sur la 4090.
-    Morceaux de 32 images au plus (mémoire vive), une fois par plafond de la machine,
-    ni Modal ni budget."""
+    """01/10, « 4k compressé en local » : la 4K sur la carte d'ici, mesurée sur la 4090 ;
+    FlashVSR depuis le 03/10. Morceaux de 32 images au plus (mémoire vive), une fois par
+    plafond de la machine, ni Modal ni budget."""
     loues, plans = _finaliser_monte(h3, monkeypatch, tmp_path)
     plans = [dict(p, sujets=[]) for p in plans]
     _ici(h3, monkeypatch, fichiers={f: 1 for f in h3.agrandir.FICHIERS_MAISON})
@@ -4763,32 +4763,39 @@ def test_finaliser_la_4k_ici_en_morceaux_courts_sans_rien_louer(h3, monkeypatch,
     monkeypatch.setattr(h3.montage, "coller_sans_reencoder", lambda videos, **k: b"".join(videos))
     monkeypatch.setattr(h3, "_extrait", lambda jid, p: b"x")
     monkeypatch.setattr(h3, "_film_h3", lambda *a, **k: "f" * 32)
+    monkeypatch.setattr(h3.montage, "taille", lambda video: (1344, 768))
     p = client(h3).post("/video-h3/finaliser/prix", headers=CLE,
                         json={"job": "b" * 32, "plans": plans, "echelle": "4k", "ou": "maison"}).json()
-    assert p["ici"]["possible"] and p["devis"]["ici"] and p["devis"]["locations"] == 3 and p["devis"]["pire_usd"] == 0
+    assert p["ici"]["possible"] and p["devis"]["ici"] and p["devis"]["locations"] == 1 and p["devis"]["pire_usd"] == 0
     r = client(h3).post("/video-h3/finaliser", headers=CLE,
                         json={"job": "b" * 32, "plans": plans, "echelle": "4k", "ou": "maison"})
     assert r.status_code == 200, r.text
     job = h3.read_job(r.json()["id"])
     assert job["status"] == "succeeded", job.get("error")
     assert loues == [] and job["video"]["devis"]["pire_usd"] == 0 and job["video"]["ou"] == "maison"
-    # ~6,4 s l'image : deux plans de 124 images dépassent les 1 440 s permises (1 800 s moins
-    # un cinquième) ; un passage par fois.
-    assert [d["coupes"][-1] for _, d in ici] == [124, 123, 123]
+    # SeedVR2 (6,4 s l'image) faisait trois fois ; FlashVSR (~1,5 s) fait les trois plans en une.
+    # Coupes aux fins de plans (124, 247), sans amorce là, 8 images d'amorce ailleurs ; le
+    # script est celui de FlashVSR.
+    assert [d["coupes"] for _, d in ici] == [[0, 31, 62, 93, 124, 155, 186, 216, 247, 278, 309, 339, 370]]
     for jid, d in ici:
         c = d["coupes"]
         assert max(b - a for a, b in zip(c, c[1:])) <= h3.agrandir.MORCEAU_MAX_MAISON
-        assert d["delai_s"] == h3.video_h3.MAISON_DUREE_MAX_S and d["multiple"] == 4
+        assert d["delai_s"] == h3.video_h3.MAISON_DUREE_MAX_S
+        assert d["amorces"] == [0 if x in (0, 124, 247) else 8 for x in c[:-1]]
+        assert d["fichiers"] == list(h3.agrandir.FICHIERS_MAISON) and "graphes" not in d
+        assert d["entree"] == [960, 550] and d["canevas"] == [3840, 2176] and d["finale"] == [3780, 2160]
         etape = h3.read_job(jid)
         assert etape["provider"] == "maison" and etape["machine"] == "comfy"
+        assert etape["video"]["modele"] == h3.agrandir.MOTEUR_MAISON
 
 
 def test_ici_un_plan_trop_long_est_partage_au_lieu_d_etre_refuse(h3):
-    """01/10 : le plan 6 (243 images) faisait refuser la 4K ici ; coupé à la main."""
-    assert not h3.agrandir.tient_maison(243)
-    plans = [{"de": 0, "a": 124, "sujets": []}, {"de": 124, "a": 367, "sujets": []}]
+    """01/10 : le plan 6 (243 images) faisait refuser la 4K ici ; coupé à la main. Depuis
+    FlashVSR (03/10) il passe d'une fois ; un plan de 1 200 images (50 s) ne passe pas."""
+    assert h3.agrandir.tient_maison(243) and not h3.agrandir.tient_maison(1200)
+    plans = [{"de": 0, "a": 124, "sujets": []}, {"de": 124, "a": 1324, "sujets": []}]
     coupes = h3._couper_pour_ici(plans)
-    assert coupes[0] == plans[0] and coupes[1]["de"] == 124 and coupes[-1]["a"] == 367
+    assert coupes[0] == plans[0] and coupes[1]["de"] == 124 and coupes[-1]["a"] == 1324 and len(coupes) == 3
     assert all(x["a"] == y["de"] for x, y in zip(coupes, coupes[1:]))
     assert all(h3.agrandir.tient_maison(p["a"] - p["de"]) for p in coupes)
     # Un plan avec visages n'est pas touché (ici, il est refusé plus loin, avec sa phrase).
@@ -4805,9 +4812,9 @@ def test_finaliser_ici_refuse_les_visages_le_x2_et_les_poids_absents(h3, monkeyp
     sans = [dict(p, sujets=[]) for p in plans]
     r = c.post("/video-h3/finaliser", headers=CLE, json={"job": "b" * 32, "plans": sans, "echelle": "x2", "ou": "maison"})
     assert r.status_code == 422
-    _ici(h3, monkeypatch)   # les poids de H3, pas ceux de SeedVR2
+    _ici(h3, monkeypatch)   # les poids de H3, pas ceux de FlashVSR
     r = c.post("/video-h3/finaliser", headers=CLE, json={"job": "b" * 32, "plans": sans, "echelle": "4k", "ou": "maison"})
-    assert r.status_code == 409 and "SeedVR2" in r.json()["detail"]
+    assert r.status_code == 409 and "FlashVSR" in r.json()["detail"]
     assert loues == []
 
 
@@ -4817,7 +4824,26 @@ def test_agrandir_complete_chaque_morceau_au_multiple_de_4_puis_le_retire(sandbo
     assert "tpad=stop_mode=clone:stop=%d" in s and '-(c[k + 1] - c[k]) % D["multiple"]' in s
     assert '"-frames:v", str(c[k + 1] - c[k])' in s
     assert sandbox.agrandir.bornes(124, None, 32) == [0, 31, 62, 93, 124]
-    assert sandbox.agrandir.tient_maison(124) and not sandbox.agrandir.tient_maison(400)
+    assert sandbox.agrandir.tient_maison(124) and not sandbox.agrandir.tient_maison(1200)
+
+
+def test_agrandir_ici_flashvsr_amorce_dans_un_plan_jamais_a_travers_une_coupe(sandbox):
+    """03/10 : FlashVSR lit le film en flux. Un morceau qui continue un plan reçoit les
+    8 images d'avant (jetées ensuite) ; un morceau qui ouvre un plan n'en reçoit pas."""
+    ag = sandbox.agrandir
+    coupes = ag.bornes(370, [243, 370], ag.MORCEAU_MAX_MAISON)
+    assert coupes == [0, 122, 243, 370]
+    d = ag.demande_maison(b"v", coupes, [243, 370], 1344, 768, 1800)
+    assert d["amorces"] == [0, ag.AMORCE_MAISON, 0]
+    # Les dimensions de l'essai du 03/10 : 3840x2176 rendu, 3780x2160 rendu au film.
+    assert ag.dimensions_maison(1344, 768) == {"entree": [960, 550], "canevas": [3840, 2176],
+                                               "finale": [3780, 2160]}
+    x = ag.dimensions_maison(832, 480)
+    assert x["finale"] == [3744, 2160] and x["canevas"][0] % 128 == 0
+    # Le canevas ramené à 2160 de haut couvre la largeur du film ; l'entrée x4 couvre le canevas.
+    assert x["canevas"][0] * 2160 / 2176 >= 3744 and 4 * x["entree"][0] >= x["canevas"][0]
+    s = ag.construire_script_maison(b"v", coupes, [243, 370], 1344, 768, 1800)
+    assert "expandable_segments" in s and "render_tiled" in s and "__DEMANDE_B64__" not in s
 
 
 def test_finaliser_attend_le_budget_puis_reprend_sans_relouer(h3, monkeypatch, tmp_path):

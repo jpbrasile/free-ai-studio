@@ -1033,6 +1033,17 @@ def largeur_image(image: bytes) -> int:
             raise MontageImpossible("La largeur de l'image est illisible.") from exc
 
 
+def taille(video: bytes) -> tuple[int, int]:
+    """La largeur et la hauteur d'une vidéo (ou d'une image), en pixels."""
+    with tempfile.TemporaryDirectory() as dossier:
+        chemin = Path(dossier, "video")
+        chemin.write_bytes(video)
+        try:
+            return int(_sonde(chemin, "width")), int(_sonde(chemin, "height"))
+        except ValueError as exc:
+            raise MontageImpossible("La taille de la vidéo est illisible.") from exc
+
+
 def _cadence(chemin: Path) -> tuple[int, int]:
     num, _, den = _sonde(chemin, "r_frame_rate").partition("/")
     try:

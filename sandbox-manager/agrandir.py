@@ -16,6 +16,7 @@ d'origine reposé. Les poids (3,5 Go) sont posés sur le disque Modal de H3 au
 premier agrandissement, et y restent.
 """
 import base64
+import math
 
 import budget_modal
 import video_h3
@@ -49,12 +50,24 @@ DEMARRAGE_S = 150
 MORCEAU_MAX = 125
 VIDEO_MAX_OCTETS = 60 * 1024 * 1024
 
-# Ici, sur la carte de cet ordinateur (01/10, mesuré sur la 4090, WSL à 48 Go) : un plan
-# 768p de 124 images d'un seul morceau a tué ComfyUI au décodage (46 438 Mio de mémoire
-# vive sur 47 Go) ; en 4 morceaux de 31 images, 28 180 Mio au plus, 15 365 Mio de carte,
-# 796,4 s de calcul. Le gestionnaire coupe donc en morceaux de 32 images au plus.
+# Ici, sur la carte de cet ordinateur : FlashVSR v1.1 Tiny, plus SeedVR2 (03/10/2026, demande
+# du propriétaire). SeedVR2 4K vieillissait les visages des films du Studio (rides inventées,
+# peau dure : ses auteurs le disent trop fort sur la vidéo IA propre) et coûtait 6,4 s l'image
+# sur la 4090 (01/10). FlashVSR, même plan (fin du 6b, 120 images 960x548 -> 3840x2176), sur
+# la 4090 : 160,8 s de calcul, pic 14,7 Go, visage gardé jeune. Morceaux de 32 images au plus
+# (demande du propriétaire, 03/10) : le film 4 en morceaux de 128 a fait tuer le conteneur à
+# 28 Go et laissé 0,6 Go de mémoire virtuelle à Windows ; en 32, 41 morceaux de 33 à 37 s,
+# pic carte 18,5 Go, 7,5 Go de mémoire virtuelle libres au plus bas.
+# Chez Modal, l'agrandissement reste SeedVR2 (rien d'essayé là-bas avec FlashVSR Tiny).
 MORCEAU_MAX_MAISON = 32
-S_PAR_IMAGE_MAISON = 796.4 / 124
+S_PAR_IMAGE_MAISON = 160.8 / 120
+# Un morceau qui continue un plan reçoit les images d'avant en amorce (jetées ensuite) :
+# FlashVSR lit le film en flux, son début de morceau n'a pas d'images passées.
+AMORCE_MAISON = 8
+FLASHVSR = {"depot": "JunhaoZhuang/FlashVSR-v1.1", "revision": "27561b186ded3402d7c975f4fd722e2885b6135f",
+            "fichiers": ("diffusion_pytorch_model_streaming_dmd.safetensors", "LQ_proj_in.ckpt", "TCDecoder.ckpt"),
+            "wanvsr": "/opt/flashvsr/examples/WanVSR", "chemins": ["/opt/flashvsr-sm89", "/opt/flashvsr"]}
+MOTEUR_MAISON = "FlashVSR v1.1"
 # SeedVR2 perd des images d'un morceau qui n'en a pas un multiple de 4 (01/10 : 31 images
 # rendues 30, et le film recollé passé à 24,8 images par seconde) ; 124 et 724 ont été
 # rendues entières. Le script complète chaque morceau jusqu'au multiple de 4 en répétant
@@ -79,8 +92,9 @@ def estimation_s(images: int, echelle: str) -> float:
 
 
 def estimation_maison_s(images: int) -> float:
-    """La 4K sur la carte d'ici : poids déjà sur le disque, ComfyUI démarré en ~15 s."""
-    return 30 + images * S_PAR_IMAGE_MAISON
+    """La 4K sur la carte d'ici : poids déjà sur le disque, chargés en ~15 s ; plus
+    l'amorce d'un morceau sur deux et l'encodage."""
+    return 60 + images * S_PAR_IMAGE_MAISON * 1.1
 
 
 def delai_s(images: int, echelle: str) -> int:
@@ -165,8 +179,41 @@ def construire_script(video: bytes, echelle: str, coupes: list, delai_s: int = D
     return video_h3._emballer(_SCRIPT, demande(video, echelle, coupes, delai_s))
 
 
-# Les poids lus par la carte d'ici : le même dossier que le disque Modal (/poids/seedvr2).
-FICHIERS_MAISON = tuple("seedvr2/" + f for f in FICHIERS)
+# Les poids lus par la carte d'ici : ceux de FlashVSR, dans le dossier des poids (/poids).
+DOSSIER_MAISON = "flashvsr/FlashVSR-v1.1"
+FICHIERS_MAISON = tuple(DOSSIER_MAISON + "/" + f for f in FLASHVSR["fichiers"])
+
+
+def dimensions_maison(largeur: int, hauteur: int) -> dict:
+    """La 4K d'ici : hauteur 2160, largeur du film gardée (paire). FlashVSR agrandit x4 sur
+    un canevas multiple de 128 : l'entrée est réduite juste assez pour le couvrir, puis le
+    canevas est ramené à 2160 de haut et rogné au centre. 1344x768 -> entrée 960x550,
+    canevas 3840x2176, film 3780x2160 (l'essai du 03/10 : 960x548, même canevas)."""
+    finale_l = int(round(2160 * largeur / hauteur / 2)) * 2
+    tw, th = math.ceil(finale_l * 2176 / 2160 / 128) * 128, 2176
+    k = max(tw / (4 * largeur), th / (4 * hauteur))
+    return {"entree": [2 * math.ceil(largeur * k / 2 - 1e-6), 2 * math.ceil(hauteur * k / 2 - 1e-6)],
+            "canevas": [tw, th], "finale": [finale_l, 2160]}
+
+
+def demande_maison(video: bytes, coupes: list, fins: list, largeur: int, hauteur: int,
+                   delai_s: int) -> dict:
+    if len(video) > VIDEO_MAX_OCTETS:
+        raise ValueError("Vidéo trop lourde pour être agrandie ici.")
+    # Pas d'amorce à un changement de plan : les images d'avant sont un autre plan.
+    plans = set(int(f) for f in fins or [])
+    amorces = [0 if (k == 0 or c in plans) else min(AMORCE_MAISON, c - coupes[k - 1])
+               for k, c in enumerate(coupes[:-1])]
+    return {"video": base64.b64encode(video).decode(), "coupes": coupes, "amorces": amorces,
+            "images_par_seconde": video_h3.IMAGES_PAR_SECONDE, "delai_s": delai_s, "echelle": "4k",
+            "base_poids": video_h3.POINT_DE_MONTAGE, "fichiers": list(FICHIERS_MAISON),
+            "wanvsr": FLASHVSR["wanvsr"], "chemins": FLASHVSR["chemins"],
+            **dimensions_maison(largeur, hauteur)}
+
+
+def construire_script_maison(video: bytes, coupes: list, fins: list, largeur: int, hauteur: int,
+                             delai_s: int = DUREE_MAX_S) -> str:
+    return video_h3._emballer(_SCRIPT_MAISON, demande_maison(video, coupes, fins, largeur, hauteur, delai_s))
 
 
 def tient_maison(images: int) -> bool:
@@ -178,6 +225,10 @@ def phrase_d_echec(stderr: str) -> str:
     s = stderr or ""
     for mot, phrase in (
             ("POIDS_ABSENTS", "Les poids de SeedVR2 n'ont pas pu être posés sur le disque Modal."),
+            ("FLASHVSR_ABSENT", "La machine de la carte d'ici n'a pas FlashVSR ou ses poids : relancez "
+                                "le Studio par demarrer.cmd (ou ./start.sh) pour la reconstruire."),
+            ("MEMOIRE_CARTE", "La carte d'ici a manqué de mémoire pendant l'agrandissement (un autre "
+                              "programme s'en sert ?). Le détail est dans le journal."),
             ("NOEUD_ABSENT", "Ce ComfyUI n'a pas les nœuds de SeedVR2."),
             ("GRAPHE_REFUSE", "ComfyUI a refusé le graphe avant tout calcul. Le détail est dans le journal."),
             ("COMFY_ARRETE", "ComfyUI s'est arrêté pendant le calcul (mémoire ?). Le détail est dans le journal."),
@@ -335,6 +386,136 @@ if r.returncode:
 resume = {"echelle": D["echelle"], "morceaux": len(morceaux), "calcul_s": round(sum(calculs), 1),
           "calcul_par_morceau_s": calculs, "poids_s": poids_s, "total_s": round(time.time() - t0, 1),
           "pic_vram_go": round(pic, 1)}
+(OUT / "resume.json").write_text(json.dumps(resume))
+print("AGRANDI " + json.dumps(resume), flush=True)
+'''
+
+
+# --- Le script de la carte d'ici : FlashVSR v1.1 Tiny (03/10/2026) -------------------
+
+_SCRIPT_MAISON = r'''
+# Agrandissement 4K du Free AI Studio sur la carte d'ici : FlashVSR v1.1 Tiny avec
+# flashvsr-sm89-ops (Triton, FP8, rendu en tuiles à la mémoire libre), morceau par morceau.
+# Le chemin du script officiel (infer_flashvsr_v1.1_tiny.py) : entrée réduite, bicubique x4,
+# rognée au multiple de 128, 1 pas. Repris de l'essai du 03/10 sur la 4090.
+import base64, importlib.util, json, os, subprocess, sys, time
+from pathlib import Path
+
+D = json.loads(base64.b64decode("__DEMANDE_B64__").decode())
+OUT = Path(os.environ.get("FREE_AI_OUTPUT_DIR", "/tmp/free_ai_output"))
+OUT.mkdir(parents=True, exist_ok=True)
+# 03/10, film 4 sur la 4090 avec 15 Go déjà pris par un autre programme : mort au décodage
+# (« 2,31 GiB reserved but unallocated », 960 Mio demandés). Avant le premier import de torch.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+t0 = time.time()
+limite = t0 + D["delai_s"] - 60
+BASE = Path(D["base_poids"])
+manque = [f for f in D["fichiers"] if not (BASE / f).is_file()]
+manque += [c for c in D["chemins"] + [D["wanvsr"]] if not Path(c).is_dir()]
+if manque:
+    print("FLASHVSR_ABSENT " + ", ".join(manque), file=sys.stderr)
+    sys.exit(3)
+sys.path[:0] = D["chemins"] + [D["wanvsr"]]
+
+
+def echouer(code, mot, detail=""):
+    print(mot + " " + str(detail)[-3000:], file=sys.stderr)
+    sys.exit(code)
+
+
+(w_in, h_in), (tw, th), (wf, hf) = D["entree"], D["canevas"], D["finale"]
+ips, c, amorces = D["images_par_seconde"], D["coupes"], D["amorces"]
+film = Path("/tmp/film_fv.mp4")
+film.write_bytes(base64.b64decode(D["video"]))
+# Toutes les images, réduites, en mémoire (1,6 Mo l'image en 960x550).
+r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(film), "-vf", "scale=%d:%d:flags=lanczos" % (w_in, h_in),
+                    "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True)
+if r.returncode:
+    echouer(9, "MONTAGE_ECHOUE", r.stderr.decode(errors="replace"))
+
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from PIL import Image  # noqa: E402
+
+tout = np.frombuffer(r.stdout, np.uint8).reshape(-1, h_in, w_in, 3)
+if len(tout) < c[-1]:
+    echouer(9, "MONTAGE_ECHOUE", "%d images lues, %d attendues" % (len(tout), c[-1]))
+try:
+    import flashvsr_sm89_ops  # avant diffsynth : le remplaçant Triton de block_sparse_attn
+    from flashvsr_sm89_ops.tiling import auto_tile_limits, render_tiled
+    os.chdir(D["wanvsr"])   # le script officiel lit ses poids et son invite en chemins relatifs
+    spec = importlib.util.spec_from_file_location("flashvsr_tiny", "infer_flashvsr_v1.1_tiny.py")
+    officiel = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(officiel)
+    t = time.time()
+    pipe = officiel.init_pipeline()
+    ops = flashvsr_sm89_ops.enable(pipe)
+except torch.cuda.OutOfMemoryError as exc:
+    echouer(6, "MEMOIRE_CARTE au chargement", exc)
+except Exception as exc:
+    echouer(3, "FLASHVSR_ABSENT", repr(exc))
+charge_s = round(time.time() - t, 1)
+print("FlashVSR chargé en %.1f s (%s)" % (charge_s, flashvsr_sm89_ops.active_backend()), flush=True)
+
+gauche, haut = (4 * w_in - tw) // 2, (4 * h_in - th) // 2
+calculs, pic, morceaux = [], 0.0, []
+for k in range(len(c) - 1):
+    if time.time() > limite:
+        echouer(8, "DELAI", "au morceau %d" % (k + 1))
+    a, b = c[k], c[k + 1]
+    d = a - amorces[k]
+    n = b - d
+    F = n + 4                       # le script officiel : 8n+1 images, la dernière répétée
+    while (F - 1) % 8:
+        F += 1
+    cadres = []
+    for i in list(range(d, b)) + [b - 1] * (F - n):
+        up = Image.fromarray(tout[i]).resize((4 * w_in, 4 * h_in), Image.BICUBIC)
+        x = torch.from_numpy(np.asarray(up.crop((gauche, haut, gauche + tw, haut + th)), np.uint8))
+        cadres.append(x.to(torch.float32).div_(255.0).mul_(2.0).sub_(1.0).to(torch.bfloat16).permute(2, 0, 1))
+    lq = torch.stack(cadres, 0).permute(1, 0, 2, 3).unsqueeze(0)
+    del cadres
+    seuil, cible = auto_tile_limits(num_frames=F)
+    torch.cuda.reset_peak_memory_stats()
+    t = time.time()
+    try:
+        v = render_tiled(pipe, lq, prompt="", negative_prompt="", cfg_scale=1.0, num_inference_steps=1, seed=0,
+                         is_full_block=False, if_buffer=True, topk_ratio=2.0 * 768 * 1280 / (th * tw),
+                         kv_ratio=3.0, local_range=11, color_fix=True, tile_threshold=seuil, tile_target=cible)
+        torch.cuda.synchronize()
+    except torch.cuda.OutOfMemoryError as exc:
+        echouer(6, "MEMOIRE_CARTE morceau %d" % (k + 1), exc)
+    calculs.append(round(time.time() - t, 1))
+    pic = max(pic, torch.cuda.max_memory_reserved() / 2**30)
+    del lq
+    v = v[:, a - d:n].clamp_(-1, 1).add_(1.0).mul_(127.5).permute(1, 2, 3, 0).to(torch.uint8).cpu().numpy()
+    m = Path("/tmp/fv_m%02d.mp4" % k)
+    # Ramené à 2160 de haut et rogné au centre à la largeur du film.
+    p = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
+                          "-s", "%dx%d" % (tw, th), "-r", str(ips), "-i", "-",
+                          "-vf", "scale=-2:%d:flags=lanczos,crop=%d:%d" % (hf, wf, hf),
+                          "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p", str(m)],
+                         stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    for im in v:
+        p.stdin.write(im.tobytes())
+    p.stdin.close()
+    err = p.stderr.read().decode(errors="replace")
+    if p.wait() or len(v) != b - a:
+        echouer(9, "MONTAGE_ECHOUE morceau %d" % (k + 1), err or "%d images rendues sur %d" % (len(v), b - a))
+    del v
+    torch.cuda.empty_cache()
+    morceaux.append(m)
+    print("morceau %d/%d : %.1f s" % (k + 1, len(c) - 1, calculs[-1]), flush=True)
+
+Path("/tmp/liste_fv.txt").write_text("".join("file '%s'\n" % m for m in morceaux))
+r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", "/tmp/liste_fv.txt",
+                    "-i", str(film), "-map", "0:v", "-map", "1:a?", "-c:v", "copy", "-c:a", "copy", "-shortest",
+                    str(OUT / "video.mp4")], capture_output=True, text=True)
+if r.returncode:
+    echouer(9, "MONTAGE_ECHOUE", r.stderr)
+resume = {"echelle": D["echelle"], "modele": "FlashVSR v1.1 Tiny", "morceaux": len(morceaux),
+          "calcul_s": round(sum(calculs), 1), "calcul_par_morceau_s": calculs, "poids_s": charge_s,
+          "total_s": round(time.time() - t0, 1), "pic_vram_go": round(pic, 1), "ops": str(ops)[:300]}
 (OUT / "resume.json").write_text(json.dumps(resume))
 print("AGRANDI " + json.dumps(resume), flush=True)
 '''

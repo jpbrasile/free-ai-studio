@@ -28,6 +28,24 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends gcc libc6-dev \
  && rm -rf /var/lib/apt/lists/*
 
+# L'agrandissement d'ici : FlashVSR v1.1 (OpenImagingLab, Apache-2.0) remplace SeedVR2 sur la
+# carte de ce PC (demande du propriétaire, 03/10/2026 : SeedVR2 vieillissait les visages).
+# Version « Tiny » avec flashvsr-sm89-ops (aireet, Apache-2.0) : Triton à la place de
+# block_sparse_attn (rien à compiler), FP8 et rendu en tuiles pour tenir en 24 Go. Mesuré le
+# 03/10 sur la 4090 : 120 images 960x548 -> 3840x2176 en 160,8 s, pic 14,7 Go. Les deux dépôts
+# épinglés ; ni l'un ni l'autre n'est installé par pip (le script les met dans son chemin).
+# Les poids (3 fichiers) sont lus sur /poids/flashvsr/FlashVSR-v1.1, en lecture seule.
+ARG FLASHVSR_COMMIT=cf910c61a60733e610e9c6e8b607f80c3a6c202b
+ARG SM89_COMMIT=59c74311b715b0f038854365b799707636236e73
+RUN git clone https://github.com/OpenImagingLab/FlashVSR /opt/flashvsr \
+ && git -C /opt/flashvsr checkout ${FLASHVSR_COMMIT} \
+ && git clone https://github.com/aireet/flashvsr-sm89-ops /opt/flashvsr-sm89 \
+ && git -C /opt/flashvsr-sm89 checkout ${SM89_COMMIT} \
+ && rm -rf /opt/flashvsr/.git /opt/flashvsr-sm89/.git /opt/flashvsr-sm89/assets \
+ && ln -s /poids/flashvsr/FlashVSR-v1.1 /opt/flashvsr/examples/WanVSR/FlashVSR-v1.1 \
+ && pip install --no-cache-dir --no-deps imageio==2.37.0 imageio-ffmpeg==0.6.0 \
+    opencv-python-headless==4.11.0.86 ftfy==6.3.1 peft==0.16.0 wcwidth==0.9.1
+
 # Le petit serveur des bacs à sable (sandbox-worker/app.py, sans changement) : le Studio
 # lui envoie le script d'un plan comme au bac à sable de la carte, sans aucun crochet de
 # la machine hôte (« le client débutant n'aura aucun hook installé », 01/10). Construit
