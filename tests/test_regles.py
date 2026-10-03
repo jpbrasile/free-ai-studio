@@ -314,6 +314,20 @@ def test_regle_16_les_mains(r):
     assert x[6]["ok"] is True and x[16]["ok"] is False and "main contraire au tableau" in x[16]["pourquoi"]
 
 
+def test_regle_6_une_silhouette_que_le_texte_ne_nomme_pas_est_une_faute(r):
+    """03/10, « Le phare » : une silhouette floue au fond de l'image de départ, comptée par
+    personne, est devenue un second Oscar dans le clip maître."""
+    att = r.attendus_du_depart({"elements": [el("Oscar", "foreground, left")]}, [("Oscar", "old man", "personne")])
+    assert "autres_personnes" in r.consigne_presence(att) and "silhouette" in r.consigne_presence(att)
+    presence = r.lire_presence('{"comptes": [1], "autres_personnes": 1, "texte_ajoute": false}', 1)
+    x = r.regles_depart(att, presence, {"Oscar": "forte"})
+    assert x[6] == {"ok": False, "pourquoi": "Compté : 1 personne(s) que le texte ne nomme pas."}
+    # Une réponse sans le compte (ancien juge) ne dit pas de faute.
+    assert r.lire_presence('{"comptes": [1], "texte_ajoute": false}', 1)["autres_personnes"] == 0
+    assert r.lire_presence('{"comptes": [1], "autres_personnes": "?", "texte_ajoute": false}', 1)[
+        "autres_personnes"] == 0
+
+
 def test_l_age_d_un_personnage_ne_part_pas_aux_juges_d_image(r):
     """02/10, Leila : « adolescente de 15 ans » à côté de l'image, et Gemini refusait tout
     (PROHIBITED_CONTENT) ; sans le chiffre, le même contrôle répondait."""

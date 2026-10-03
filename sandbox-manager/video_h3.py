@@ -1098,7 +1098,11 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
     # Les photos d'une fiche peuvent montrer plusieurs tenues : celle de la
     # description l'emporte (essai du 28/09 : photos en sweat et en débardeur).
     tete = ("; ".join(presentation) + " (mêmes visage et coiffure ; même tenue, sauf si la description en "
-            "donne une). Chaque personne apparaît une seule fois. ") if photos else ""
+            "donne une). Chaque personne apparaît une seule fois. "
+            # 03/10, « Le phare » : deux images de départ sur deux avaient une silhouette floue au
+            # fond, que H3 a faite second Oscar (le juge : « Oscar apparaît dédoublé »).
+            "Personne d'autre à l'image : ni passant, ni figurant, ni silhouette au fond, sauf si la "
+            "description en demande. ") if photos else ""
     if lieu:
         photos.append(fiche_lieu_image(lieu))
         tete += CONSIGNE_LIEU % len(photos) + (CONSIGNE_COUPE_LIEU if coupe else "")

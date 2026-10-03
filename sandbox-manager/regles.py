@@ -522,8 +522,10 @@ def consigne_presence(attendus: list, absents=()) -> str:
             "For each numbered item, count how many times it appears in the image (0 if absent, 2 or more if "
             "the same person or the same object is shown twice). Then say whether a speech bubble, a caption, "
             "subtitles or any text was ADDED over the picture (text that belongs to the scene, like a sign or "
-            "a book cover, does not count). Answer with JSON only: {\"comptes\": [one integer per item, in "
-            "order], \"texte_ajoute\": true or false, \"remarque\": \"in French, what is wrong, empty if "
+            "a book cover, does not count). Count also the OTHER people visible who are none of the items "
+            "(passers-by, extras, a blurred figure or silhouette in the background), 0 if none. Answer with "
+            "JSON only: {\"comptes\": [one integer per item, in order], \"autres_personnes\": integer, "
+            "\"texte_ajoute\": true or false, \"remarque\": \"in French, what is wrong, empty if "
             "nothing\"}.")
 
 
@@ -538,7 +540,11 @@ def lire_presence(reponse: str, nombre: int) -> dict:
         raise ValueError("Le contrôle de l'image de départ n'a pas pu être lu.")
     if len(comptes) != nombre or not isinstance(d.get("texte_ajoute"), bool):
         raise ValueError("Le contrôle de l'image de départ n'a pas pu être lu.")
-    return {"comptes": comptes, "texte_ajoute": d["texte_ajoute"],
+    try:   # absent d'une réponse : personne en trop n'a été vu
+        autres = max(0, int(d.get("autres_personnes") or 0))
+    except (ValueError, TypeError):
+        autres = 0
+    return {"comptes": comptes, "texte_ajoute": d["texte_ajoute"], "autres_personnes": autres,
             "remarque": " ".join(str(d.get("remarque") or "").split())[:300]}
 
 
@@ -571,6 +577,9 @@ def regles_depart(attendus: list, presence, ressemblances: dict, absents=(), mai
         faux = ["%s ×%d" % (a["nom"], c) for a, c in zip(attendus, comptes) if c != 1]
         faux += ["%s ×%d (doit être hors champ)" % (a["nom"], c)
                  for a, c in zip(absents, comptes[len(attendus):]) if c != 0]
+        # 03/10, « Le phare » : la silhouette floue au fond devient un double dans le plan tourné.
+        if presence.get("autres_personnes"):
+            faux.append("%d personne(s) que le texte ne nomme pas" % presence["autres_personnes"])
         r[6] = resultat(not faux, ("Compté : " + ", ".join(faux) + ".") if faux else "")
         r[8] = resultat(not presence["texte_ajoute"], "Texte ou bulle ajouté sur l'image."
                         if presence["texte_ajoute"] else "")
