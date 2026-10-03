@@ -822,8 +822,11 @@ CONSIGNE_LIEU = ("L'image jointe %d est le DÉCOR du film, vide de personnes : c
 CONSIGNE_MEUBLES = ("L'image jointe %d est une image antérieure du même film, dans ce lieu : les murs, les fenêtres, "
                     "les portes et les MEUBLES y sont tels qu'ils doivent rester (même forme, taille, couleur et "
                     "place) ; les personnes et les objets, eux, suivent la description, pas cette image. ")
-CONSIGNE_LIEU_PLANCHE = ("L'image jointe %d montre ce même décor sous quatre vues : pour un cadrage d'un autre côté, "
-                         "le lieu est celui de la vue qui lui correspond. ")
+CONSIGNE_LIEU_PLANCHE = ("L'image jointe %d montre ce même décor sous quatre vues : en haut à gauche, la vue "
+                         "d'ensemble ; en haut à droite, le contrechamp (le côté qui était derrière la caméra de la "
+                         "vue d'ensemble) ; en bas à gauche, le côté gauche ; en bas à droite, le côté droit. Pour un "
+                         "cadrage vers l'un de ces côtés, le lieu est exactement celui de sa vue : rien d'autre n'y "
+                         "est. ")
 CONSIGNE_COUPE_LIEU = ("Ceci est une COUPE : le cadrage et l'angle de la caméra sont NETTEMENT différents de ceux du "
                        "plan précédent (une autre valeur de plan ou un autre côté), comme la description le dit. ")
 # 03/10, « Le jardin de verre », plan 2 : avec la fiche du décor, la coupe n'avait plus la
@@ -1030,6 +1033,7 @@ ANGLES = {   # l'ordre est celui des <Picture N>
 }
 ANGLE_DEPART = "face"
 FICHE_NOM_MAX, FICHE_DESCRIPTION_MAX = 60, 800
+DECOR_DESCRIPTION_MAX = 1400   # un décor décrit ses quatre côtés (03/10, COTES_DU_LIEU)
 TAILLE_IMAGE_FICHE = "1024x1024"
 _ID_FICHE = re.compile(r"[0-9a-f]{12}")
 _EXTENSIONS = {b"\x89PNG": ".png", b"\xff\xd8\xff": ".jpg", b"RIFF": ".webp"}
@@ -1136,8 +1140,9 @@ def fiche_creer(nom: str, description: str, genre: str = "personne") -> dict:
     nom, description = " ".join(str(nom or "").split()), " ".join(str(description or "").split())
     if not nom or len(nom) > FICHE_NOM_MAX:
         raise ValueError(f"Donnez un nom à la fiche ({FICHE_NOM_MAX} caractères au plus).")
-    if not description or len(description) > FICHE_DESCRIPTION_MAX:
-        raise ValueError(f"Décrivez-la ({FICHE_DESCRIPTION_MAX} caractères au plus) : "
+    plafond = DECOR_DESCRIPTION_MAX if genre == "decor" else FICHE_DESCRIPTION_MAX
+    if not description or len(description) > plafond:
+        raise ValueError(f"Décrivez-la ({plafond} caractères au plus) : "
                          + ("âge, visage, coiffure, tenue." if genre == "personne" else
                             "forme, couleur, matière." if genre == "objet" else
                             "le lieu : bâtiments, sol, éléments fixes, lumière." if genre == "decor" else
@@ -1188,17 +1193,25 @@ def images_pour_decor(fins: list) -> list:
     return sorted({dernieres[round(k * pas)] for k in range(DECOR_IMAGES_MAX)})
 
 
+# Les quatre côtés du lieu (03/10, « la multiview est fausse ») : la planche montre chacun ; ce
+# que la description n'en dit pas, chaque vue l'inventait autrement.
+COTES_DU_LIEU = ("Then describe the place side by side, as seen from its main viewpoint: the FAR side (facing "
+                 "that viewpoint), the LEFT side, the RIGHT side, and the NEAR side behind that viewpoint (an "
+                 "entrance, a door, a wall…): for each, what stands along it, or that it is bare. ")
+
+
 def consigne_decor_du_film(nombre: int) -> str:
     return ("The %d attached images are frames of one short film, all shot in the same place. Describe THE PLACE "
             "ONLY, for an image model that must redraw it empty of people: every fixed element you can see "
             "(fountains, statues, benches, steps, doors, windows, lamps, signs, trees, ground; indoors, every "
             "piece of furniture: sofa, armchair, table, shelf, rug), with its exact "
             "shape (how many tiers or levels, how high compared with a seated person, what material, what "
-            "colour), and where it stands relative to the others (left, right, behind, in front). Prefer what "
-            "several images agree on. Never describe people, animals, vehicles or anything held; never invent "
-            "what no image shows. Answer JSON only: {\"nom\": \"a short English name of the place, 2-5 words\", "
+            "colour), and where it stands relative to the others (left, right, behind, in front). %s"
+            "Prefer what several images agree on. Never describe people, animals, vehicles or anything held; "
+            "never invent an element no image shows (a side no image shows is plain, consistent with the "
+            "rest). Answer JSON only: {\"nom\": \"a short English name of the place, 2-5 words\", "
             "\"description\": \"the place in English, one paragraph, %d characters at most\"}."
-            % (nombre, FICHE_DESCRIPTION_MAX - 50))
+            % (nombre, COTES_DU_LIEU, DECOR_DESCRIPTION_MAX - 50))
 
 
 def lire_decor_du_film(reponse: str) -> dict:
@@ -1213,31 +1226,46 @@ def lire_decor_du_film(reponse: str) -> dict:
     description = " ".join(str((d or {}).get("description") or "").split()) if isinstance(d, dict) else ""
     if not nom or len(description) < 80:
         raise ValueError("La description du décor n'a pas pu être lue : rien n'est créé.")
-    return {"nom": nom, "description": description[:FICHE_DESCRIPTION_MAX]}
+    return {"nom": nom, "description": description[:DECOR_DESCRIPTION_MAX]}
 
 
 CONSIGNE_DECOR_DU_FILM = ("Les images jointes 1 à %d sont des images d'un film tourné dans ce lieu. Fais la vue "
                           "d'ensemble de CE lieu, exactement : chaque élément fixe avec sa forme, son nombre "
                           "d'étages, sa hauteur, sa matière et sa place, comme sur les images jointes et dans la "
                           "description ; sans aucune personne, aucun animal, aucun vélo ni objet tenu. ")
-CONSIGNE_PLANCHE_DECOR = ("Planche de référence d'un LIEU, photo réaliste, sans aucune personne, aucun animal, aucun "
-                          "vélo ni objet tenu : le lieu des images jointes 1 à %d, exactement (mêmes éléments fixes, "
-                          "mêmes formes, mêmes matières, même lumière). Quatre vues sur une grille 2x2 : en haut à "
-                          "gauche, vue d'ensemble de face ; en haut à droite, le même lieu vu depuis la gauche ; en "
-                          "bas à gauche, vu depuis la droite ; en bas à droite, plus près de l'élément principal. "
-                          "Chaque élément et chaque meuble (même forme, même couleur) garde sa place dans le lieu "
-                          "d'une vue à l'autre ; aucun meuble n'est ajouté ni retiré. Aucun texte, aucune "
-                          "légende.")
+# La planche du décor (03/10, propriétaire : « la multiview est fausse ») : demandée d'un coup,
+# ses quatre vues étaient le même angle depuis la porte, une légende écrite dessus ; rien ne
+# montrait les autres côtés, et chaque coupe d'un autre angle les inventait (figurants, lampadaire
+# qui va et vient, lumière qui change). Chaque vue est maintenant une image à part, d'un vrai
+# point de vue, faite de la vue d'ensemble et des vues déjà faites ; le code les assemble.
+VUES_DECOR = (
+    "le CONTRECHAMP : la caméra est au fond, contre le côté que montre la vue d'ensemble, et regarde vers "
+    "l'endroit d'où la vue d'ensemble a été prise — on voit le côté qui était derrière cette caméra",
+    "le CÔTÉ GAUCHE : la caméra, au milieu du lieu, regarde droit vers le côté qui est à gauche sur la vue "
+    "d'ensemble",
+    "le CÔTÉ DROIT : la caméra, au milieu du lieu, regarde droit vers le côté qui est à droite sur la vue "
+    "d'ensemble",
+)
+CONSIGNE_VUE_DECOR = ("Les images jointes 1 à %d montrent un même LIEU (la 1 est la vue d'ensemble). Fais une autre "
+                      "photo de CE lieu, %s. Mêmes murs, sol, plafond, fenêtres, portes et meubles, de même forme, "
+                      "matière, couleur et taille, chacun à sa place dans le lieu (ce qui est à gauche sur la vue "
+                      "d'ensemble est à droite vu depuis le fond) ; la même heure et la même lumière. Ce côté "
+                      "montre ce que la description y met, et rien d'autre. Vide de personnes et d'animaux, sans "
+                      "aucun texte ni légende ; photographie réaliste, cadrage paysage, à hauteur d'homme. ")
 
 
-def demandes_decor_du_film(description: str, images: list) -> tuple:
-    """(demande de la vue d'ensemble, demande de la planche), les images vraies jointes."""
+def demande_vue_decor(description: str, k: int, images: list) -> dict:
+    """La demande de la vue `k` (0 à 2) de VUES_DECOR, les vues déjà faites jointes."""
+    return {"prompt": CONSIGNE_VUE_DECOR % (len(images), VUES_DECOR[k]) + f"Description : {description}",
+            "n": 1, "size": TAILLE_IMAGE_DEMANDEE, "image_reference": list(images)}
+
+
+def demandes_decor_du_film(description: str, images: list) -> dict:
+    """La demande de la vue d'ensemble, les images vraies jointes ; les autres vues suivent
+    (`demande_vue_decor`)."""
     n = len(images)
-    vue = {"prompt": CONSIGNE_DECOR_DU_FILM % n + f"Description : {description}. {CADRE_DECOR}", "n": 1,
-           "size": TAILLE_IMAGE_DEMANDEE, "image_reference": list(images)}
-    planche = {"prompt": CONSIGNE_PLANCHE_DECOR % n + f" Description : {description}", "n": 1,
-               "size": TAILLE_PLANCHE, "image_reference": list(images)}
-    return vue, planche
+    return {"prompt": CONSIGNE_DECOR_DU_FILM % n + f"Description : {description}. {CADRE_DECOR}", "n": 1,
+            "size": TAILLE_IMAGE_DEMANDEE, "image_reference": list(images)}
 
 
 # --- La fiche du décor D'APRÈS LE TEXTE (03/10) ---------------------------------------
@@ -1260,14 +1288,14 @@ def consigne_decor_du_texte(textes: list) -> str:
             "stands relative to the others (left, right, behind, in front). Indoors, also EVERY piece of "
             "furniture the room has, even if the script does not name it (sofa, armchair, table, shelf, rug, "
             "lamp), each with its shape, size, colour and the wall it stands against, and say there is no other "
-            "furniture. Where the script is vague, choose one "
+            "furniture. %sWhere the script is vague, choose one "
             "plausible precise form consistent with it. Never describe people, animals, vehicles or anything "
             "held, nor the props the characters use or that the story is about (they have their own pictures "
             "and would be drawn twice). Describe the place as it is at the START of the film: nothing the story later makes appear, "
             "grow, break or transform (it would be there before its time); a container stays as it starts "
             "(an empty pot stays empty). Answer JSON only: {\"un_seul_lieu\": true or false, \"nom\": \"a short English name of the "
             "place, 2-5 words\", \"description\": \"the place in English, one paragraph, %d characters at most\"}."
-            % (plans, FICHE_DESCRIPTION_MAX - 50))
+            % (plans, COTES_DU_LIEU, DECOR_DESCRIPTION_MAX - 50))
 
 
 def lire_decor_du_texte(reponse: str):

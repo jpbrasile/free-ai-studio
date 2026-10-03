@@ -7142,6 +7142,26 @@ async def _image_redemandee(demande: dict) -> str:
             await asyncio.sleep(COUPE_PAUSE_S)
 
 
+def _en_data_url(image: str) -> str:
+    return image if str(image).startswith("data:") else _data_url(base64.b64decode(image))
+
+
+async def _planche_du_decor(description: str, vue: str, images=()) -> str:
+    """La planche du décor (03/10, « la multiview est fausse ») : la vue d'ensemble, puis le
+    contrechamp, le côté gauche et le côté droit, chacun demandé à part avec la vue d'ensemble,
+    les vues déjà faites et `images` (les vraies images du film) ; assemblées en grille 2x2 par
+    le code (aucune légende). Rend l'image en base64."""
+    vues = [_en_data_url(vue)]
+    for k in range(len(video_h3.VUES_DECOR)):
+        vues.append(_en_data_url(await _image_redemandee(
+            video_h3.demande_vue_decor(description, k, vues + list(images)))))
+    try:
+        grille = montage.grille_2x2([base64.b64decode(v.split(",", 1)[1]) for v in vues])
+    except montage.MontageImpossible as exc:
+        raise HTTPException(500, str(exc)) from exc
+    return base64.b64encode(grille).decode()
+
+
 async def _decor_du_texte(plans: list) -> dict:
     """La fiche du décor d'après le TEXTE du scénario (03/10), avant la première image :
     {"fiche": id} ; {"fiche": None, "pourquoi": …} si le film change de lieu ou si une étape
@@ -7154,9 +7174,7 @@ async def _decor_du_texte(plans: list) -> dict:
         if lu is None:
             return {"fiche": None, "pourquoi": "le scénario change de lieu"}
         vue = await _image_redemandee(video_h3.demandes_decor_du_texte(lu["description"]))
-        ref = vue if str(vue).startswith("data:") else _data_url(base64.b64decode(vue))
-        _vue, planche = video_h3.demandes_decor_du_film(lu["description"], [ref])
-        image_planche = await _image_redemandee(planche)
+        image_planche = await _planche_du_decor(lu["description"], vue)
         fiche = video_h3.fiche_creer(lu["nom"], lu["description"], "decor")
         video_h3.fiche_poser_image(fiche["id"], video_h3.ANGLE_DEPART, vue)
         video_h3.fiche_poser_planche(fiche["id"], image_planche)
@@ -7197,9 +7215,8 @@ async def video_h3_scenario_decor(sid: str, request: Request, authorization: Opt
             modele=video_h3.MODELE_JUGE))
     except ValueError as exc:
         raise HTTPException(502, str(exc)) from exc
-    vue, planche = video_h3.demandes_decor_du_film(lu["description"], urls)
-    image_vue = await _image_redemandee(vue)
-    image_planche = await _image_redemandee(planche)
+    image_vue = await _image_redemandee(video_h3.demandes_decor_du_film(lu["description"], urls))
+    image_planche = await _planche_du_decor(lu["description"], image_vue, urls)
     nom = " ".join(str((corps or {}).get("nom") or "").split()) if isinstance(corps, dict) else ""
     fiche = _fiche_ou_400(lambda: video_h3.fiche_creer(nom or lu["nom"], lu["description"], "decor"))
     _fiche_ou_400(lambda: video_h3.fiche_poser_image(fiche["id"], video_h3.ANGLE_DEPART, image_vue))
