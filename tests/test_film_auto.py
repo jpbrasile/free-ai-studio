@@ -98,6 +98,8 @@ def test_le_maitre_fautif_est_rejoue_et_le_moins_fautif_deplie(fa, tmp_path):
     assert len(etat["maitres"]) == 3 and any(j["etape"] == "maitre_regles" for j in etat["journal"])
     deplier = next(x for m, c, x in studio.appels if c.endswith("/deplier"))
     assert deplier["forcer"] is True and deplier["definition"] == "768p"
+    # Le maître en 480p (ses coupes franches), les plans dépliés en 768p.
+    assert {x["definition"] for x in maitres} == {"480p"}
 
 
 def test_une_etape_impossible_arrete_le_film_et_dit_pourquoi(fa, tmp_path):

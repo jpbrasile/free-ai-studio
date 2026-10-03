@@ -30,15 +30,21 @@ ESSAIS_MAITRE = 3
 ESSAIS_PLAN = 2          # un plan déplié que le juge refuse est retourné une fois ; le moins fautif reste
 PERSONNAGES_MAX = 2
 PLANS_MAX = 8            # 15 s de maître : au-delà, des plans de moins de 2 s
-DEFINITION = "768p"      # maître et plans dépliés : le maître 768p tient sur la carte de 24 Go (03/10)
+DEFINITION = "768p"      # les plans dépliés
+# Le maître est un story-board : 480p. Mesuré le 03/10 (ffmpeg, scene > 0,3) : en 768p, 1 coupe
+# franche sur 8 demandées (quatre maîtres « Le phare ») — H3 fond les plans l'un dans l'autre, et le
+# fondu montre Oscar deux fois ; en 480p, 6 sur 6 (« Le jardin de verre » 5/5, essai à blanc 1/1).
+DEFINITION_MAITRE = "480p"
 ATTENTE_PAS_S = 15
 ATTENTE_MAX_S = 4 * 3600
 HISTOIRE_MAX = 2000
 # L'essai à blanc (propriétaire, 03/10 : « un dry run deux clips de 2 s end to end (mvp) pour
 # valider ») : deux plans, le maître le plus court de la grille (124 images, 5,2 s : H3 ne fait
 # pas moins), 480p, un seul essai du maître ; toutes les étapes, jusqu'à la 4K et la musique.
-REGLAGES = {"plans_max": PLANS_MAX, "longueur_maitre": 362, "definition": DEFINITION, "essais_maitre": ESSAIS_MAITRE}
-REGLAGES_ESSAI = {"plans_max": 2, "longueur_maitre": 124, "definition": "480p", "essais_maitre": 1}
+REGLAGES = {"plans_max": PLANS_MAX, "longueur_maitre": 362, "definition": DEFINITION,
+            "definition_maitre": DEFINITION_MAITRE, "essais_maitre": ESSAIS_MAITRE}
+REGLAGES_ESSAI = {"plans_max": 2, "longueur_maitre": 124, "definition": "480p", "definition_maitre": "480p",
+                  "essais_maitre": 1}
 
 CONSIGNE_PERSONNAGES = (
     "Here is a short film story. List its characters who appear on screen (people or animals), at most %d, "
@@ -170,7 +176,8 @@ class Film:
         essais, forcer = [], False
         r = self.etat["reglages"]
         for k in range(r["essais_maitre"]):
-            corps = dict(self._commun(), plans=self.etat["plans"], definition=r["definition"], ou="maison",
+            corps = dict(self._commun(), plans=self.etat["plans"], ou="maison",
+                         definition=r.get("definition_maitre") or r["definition"],
                          longueur_maitre=r["longueur_maitre"], forcer=forcer)
             code, rendu = self.appel("POST", "/video-h3/maitre", corps)
             if code == 409 and not forcer:
