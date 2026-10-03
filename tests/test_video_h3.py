@@ -3213,6 +3213,14 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     c = client(h3)
     r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={})
     assert r.status_code == 409 and "Jugez d'abord" in r.json()["detail"]
+    # Le juge dit la coupe que le maître n'a pas faite (« Le phare », 03/10).
+    monkeypatch.setattr(h3, "_photos_des_fiches", lambda ids: ([], []))
+    monkeypatch.setattr(h3, "_juger_passage", lambda *a: asyncio.sleep(0, {"verdict": "ok", "defauts": []}))
+    monkeypatch.setattr(h3, "_ecouter", lambda *a: asyncio.sleep(0, {"attendu": [], "ok": None}))
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [])
+    r = c.post("/video-h3/jobs/%s/juger" % jid, headers=CLE)
+    assert r.status_code == 200 and r.json()["verdict"] == "defaut", r.text
+    assert "coupe du plan 2" in r.json()["defauts"][-1]["quoi"]
 
     job["jugement"] = {"verdict": "ok", "defauts": []}
     h3.write_job(jid, job)

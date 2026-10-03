@@ -6964,6 +6964,16 @@ async def video_h3_clip_juger(jid: str, authorization: Optional[str] = Header(de
     verdict = await _juger_passage(film, 0.0, float(v.get("secondes") or 0) or 5.0, noms, refs, texte)
     verdict["paroles"] = await _ecouter(film, texte)
     _ajouter_defaut_de_paroles(verdict, 0.0)
+    maitre = v.get("maitre")
+    if maitre:
+        # Film « Le phare », 03/10 : trois maîtres sans une coupe demandée, vus seulement au dépliage,
+        # une fois les trois essais passés. Le juge le dit : l'essai suivant le remplace.
+        try:
+            video_h3.cles_du_maitre(maitre["plans"], maitre["debuts_s"],
+                                    await asyncio.to_thread(montage.coupes_vues, chemin), maitre["longueur"])
+        except ValueError as exc:
+            verdict["verdict"] = "defaut"
+            verdict.setdefault("defauts", []).append({"t_s": 0.0, "quoi": str(exc), "cause": "video"})
     job["jugement"] = verdict
     write_job(jid, job)
     return verdict

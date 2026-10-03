@@ -779,7 +779,10 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
 # Sans paroles (propriétaire : « on évite de mettre des paroles pour le clip maître ») :
 # elles se disent dans les clips dépliés.
 LONGUEUR_MAITRE = LONGUEURS[-1]
-MAITRE_ECART_COUPE_S = 0.4      # une coupe vue à plus de 0,4 s de sa date n'est pas la sienne
+# Une coupe vue à plus de 0,6 s de sa date n'est pas la sienne. « Le jardin de verre » : 0,13 s au
+# plus ; « Le phare », 03/10 : 0,44 s (11,75 s pour 11,312 s), refusée à 0,4. Les plans d'un maître de
+# 15 s en 8 plans sont à 1,9 s l'un de l'autre : 0,6 s ne prend pas la coupe du voisin.
+MAITRE_ECART_COUPE_S = 0.6
 _MULTIPLAN = re.compile(r"\[Shot \d+\]")
 # Ni « the girl » ni autre nom pour une personne que celui du plan : le 03/10, « the same … girl
 # in every shot » en tête et « Mila » dans les plans, le dernier plan a montré deux fillettes.
