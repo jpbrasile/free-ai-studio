@@ -807,6 +807,31 @@ def _horodatage(s: float) -> str:
     return "%02d:%02d.%03d" % (ms // 60000, ms // 1000 % 60, ms % 1000)
 
 
+# La valeur de plan, dite dans la première phrase de chaque plan (consigne du découpage).
+_VALEUR_DE_PLAN = re.compile(r"\b(extreme close-up|medium close-up|close-up|medium long shot|medium shot|"
+                             r"full shot|long shot|wide shot|extreme wide shot)\b", re.IGNORECASE)
+
+
+def valeur_de_plan(texte: str):
+    m = _VALEUR_DE_PLAN.search(str(texte or "").split(".")[0])
+    return m.group(1).lower() if m else None
+
+
+def suites_du_maitre(plans: list) -> list:
+    """03/10, film « Le phare » : le plan 2, « suite » du plan 1, passait d'un plan large à un plan
+    moyen et posait Oscar en haut de l'escalier ; sans coupe, H3 a fondu l'un dans l'autre (deux
+    Oscar en transparence, refusé deux fois par le juge). Dans le maître, une suite qui change de
+    valeur de plan devient une coupe ; les autres restent des suites."""
+    rendu, avant = [], None
+    for k, p in enumerate(plans):
+        valeur = valeur_de_plan(p.get("image_paroles"))
+        if k and p.get("enchainement") == "suite" and valeur and avant and valeur != avant:
+            p = dict(p, enchainement="coupe")
+        rendu.append(p)
+        avant = valeur or avant
+    return rendu
+
+
 def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
     """Le texte du clip maître : {texte, ambiance, debuts_s, longueur}. Chaque plan prend du maître
     la part de sa propre durée ; une « coupe » est un [Shot N] daté, une « suite » continue le plan

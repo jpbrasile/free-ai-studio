@@ -7009,8 +7009,9 @@ async def video_h3_maitre(request: Request, authorization: Optional[str] = Heade
                 raise HTTPException(400, str(exc)) from exc
     regles = await _garde_des_regles(plans, commun, forcer, rapport=rapport)
     await _scenario_traduire(a_tourner, musique)
-    anglais = [dict(p, image_paroles=t["payload"]["image_paroles"], ambiance=t["payload"].get("ambiance", ""))
-               for p, t in zip(plans, a_tourner)]
+    anglais = video_h3.suites_du_maitre(
+        [dict(p, image_paroles=t["payload"]["image_paroles"], ambiance=t["payload"].get("ambiance", ""))
+         for p, t in zip(plans, a_tourner)])
     try:
         m = video_h3.texte_maitre(anglais, longueur)
         payload = dict(a_tourner[0]["payload"], image_paroles=m["texte"], ambiance=m["ambiance"],

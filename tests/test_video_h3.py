@@ -222,6 +222,13 @@ def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
     assert v.cles_du_maitre(plans, m["debuts_s"], [3.65, 9.9], 362) == [(0, 87), (89, 181), (181, 361)]
     with pytest.raises(ValueError, match="coupe du plan 2"):
         v.cles_du_maitre(plans, m["debuts_s"], [9.9], 362)
+    # « Le phare », 03/10 : une suite qui change de valeur de plan devient une coupe ; sinon elle reste.
+    phare = [{"image_paroles": "At dusk, wide shot, Oscar stands left.", "enchainement": "coupe"},
+             {"image_paroles": "At dusk, medium shot, Oscar stands at the top.", "enchainement": "suite"},
+             {"image_paroles": "Medium shot, Oscar presses the switch.", "enchainement": "suite"},
+             {"image_paroles": "Oscar smiles.", "enchainement": "suite"}]
+    assert [p["enchainement"] for p in v.suites_du_maitre(phare)] == ["coupe", "coupe", "suite", "suite"]
+    assert phare[1]["enchainement"] == "suite"   # les plans reçus ne changent pas
     # Une suite où H3 a coupé quand même (« Le phare », 03/10) se traite en coupe.
     assert v.cles_du_maitre(plans, m["debuts_s"], [3.65, 7.6], 362) == [(0, 87), (89, 181), (183, 361)]
 
