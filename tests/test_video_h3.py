@@ -1333,6 +1333,31 @@ def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(
     assert d["relecture"]["corrige"] is False
 
 
+def test_la_correction_n_invente_pas_de_tenue(h3):
+    """03/10, « Le jardin de verre » : le relecteur a noté « la tenue de Mila n'est décrite dans
+    aucun plan », et la correction l'a habillée d'un pull crème, loin du pull rayé de sa fiche."""
+    v = h3.video_h3
+    assert "Clothing that the text does not give is NEVER a fault" in v.consigne_continuite(
+        [{"image_paroles": "x", "enchainement": "coupe"}], "x")
+    plans = [{"image_paroles": "Close-up. Mila kneels near the pot.", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Wide shot. Mila stands up.", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Mila, in her red coat, waves.", "ambiance": "", "enchainement": "coupe"},
+             {"image_paroles": "Mila looks at the tree.", "ambiance": "", "enchainement": "coupe"}]
+    nouveaux = [dict(plans[0], image_paroles="Close-up. Mila, wearing a cream sweater and dark trousers, kneels "
+                                             "on the left near the pot."),
+                dict(plans[1], image_paroles="Wide shot. Mila stands up on the right, wearing a cream sweater."),
+                dict(plans[2], image_paroles="Mila, in her red coat, waves from the right."),
+                dict(plans[3], image_paroles="Mila in a blue dress looks at the tree.")]
+    sortie, touches = v.sans_tenue_inventee(nouveaux, plans, "Mila plants a seed.")
+    # La tenue ajoutée part, le reste de la correction reste.
+    assert sortie[0]["image_paroles"] == "Close-up. Mila kneels on the left near the pot."
+    assert sortie[1]["image_paroles"] == "Wide shot. Mila stands up on the right."
+    # Une tenue déjà dans le plan d'origine (ou l'histoire) reste.
+    assert sortie[2]["image_paroles"] == "Mila, in her red coat, waves from the right."
+    # Un vêtement ajouté que le code ne sait pas couper : le plan garde son texte d'origine.
+    assert sortie[3]["image_paroles"] == "Mila looks at the tree." and touches == [1, 2, 4]
+
+
 def test_une_correction_n_est_jugee_que_sur_les_plans_qu_elle_change(h3, monkeypatch, sans_traduction):
     """29/09, 3 essais : le plan 3 réparé les trois fois, puis la seconde relecture
     ajoutait des remarques mineures sur les plans 1 et 2, restés tels quels."""

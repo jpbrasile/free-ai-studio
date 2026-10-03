@@ -3037,6 +3037,9 @@ def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=()) -
             "its own. For each shot, write the state at its start and at its end: who and what is there, where "
             "in the frame (left, centre, right; foreground or background), which way each character faces, "
             "standing or sitting, what they wear, what they hold. "
+            # 03/10, « Le jardin de verre » : « la tenue de Mila n'est décrite dans aucun plan »,
+            # et la correction, sans la fiche, l'a habillée d'un pull crème.
+            "Clothing that the text does not give is NEVER a fault: the characters' reference sheets give it. "
             "Then review the whole film like a careful script supervisor: "
             "(1) does each shot start in the state where the previous one ends (a cut may move on in time or "
             "place, but nothing may be undone without being shown), does every action come after what causes "
@@ -3219,6 +3222,45 @@ def lire_continuite(reponse: str, nombre: int, textes: list | None = None, deja_
         (details if str(x.get("gravite") or "").strip().lower() in ("detail", "détail") else problemes).append(probleme)
     etats = [e for e in d.get("etats") or [] if isinstance(e, dict)][:nombre]
     return {"ok": not problemes, "problemes": problemes, "details": details, "etats": etats}
+
+
+# 03/10, « Le jardin de verre » : le relecteur a noté « la tenue de Mila n'est décrite dans
+# aucun plan », et la correction, malgré sa consigne, l'a habillée d'un « cream sweater and
+# dark trousers » dans tous les plans : l'image de départ a suivi, loin du pull rayé de sa
+# fiche. Une tenue que ni l'histoire ni le plan d'origine ne donnent est retirée par le code.
+_VETEMENT = re.compile(r"\b(?:wear(?:s|ing)?|dressed|sweaters?|jumpers?|pullovers?|cardigans?|hoodies?|"
+                       r"sweatshirts?|t-shirts?|shirts?|blouses?|trousers|pants|jeans|shorts|skirts?|dress(?:es)?|"
+                       r"overalls|dungarees|jackets?|coats?|scarf|scarves|socks|slippers|uniform)\b", re.I)
+_PORTE_ENTRE = re.compile(r",\s*(?:wearing|dressed in)\b[^,.;:«]*,\s*", re.I)
+_PORTE_FIN = re.compile(r",?\s*\b(?:wearing|dressed in)\b[^,.;:«]*", re.I)
+
+
+def vetements(texte: str) -> set:
+    return {m.lower() for m in _VETEMENT.findall(str(texte or ""))}
+
+
+def sans_tenue_inventee(nouveaux: list, plans: list, histoire: str = "") -> tuple:
+    """(plans, numéros retouchés) : dans chaque plan réécrit, la tenue qu'il ajoute sans que
+    l'histoire ou le plan d'origine en parlent est retirée ; s'il reste un vêtement ajouté, le
+    plan garde son texte d'origine."""
+    sortie, touches = [], []
+    for k, (n, p) in enumerate(zip(nouveaux, plans), 1):
+        connus = vetements(p["image_paroles"] + " " + p.get("ambiance", "") + " " + histoire)
+        champs = {}
+        for c in ("image_paroles", "ambiance"):
+            t = str(n.get(c) or "")
+            if vetements(t) - connus:
+                t = _PORTE_FIN.sub("", _PORTE_ENTRE.sub(" ", t))
+            champs[c] = t
+        if vetements(champs["image_paroles"] + " " + champs["ambiance"]) - connus:
+            sortie.append(dict(n, image_paroles=p["image_paroles"], ambiance=p.get("ambiance", ""),
+                               elements=p.get("elements", n.get("elements"))))
+            touches.append(k)
+        else:
+            if champs["image_paroles"] != n["image_paroles"] or champs["ambiance"] != n.get("ambiance", ""):
+                touches.append(k)
+            sortie.append(dict(n, **champs))
+    return sortie, touches
 
 
 def lire_correction(reponse: str, plans: list) -> list:

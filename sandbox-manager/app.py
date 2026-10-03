@@ -5937,10 +5937,13 @@ async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> t
                          "shots, the same shots in the same order, rewritten; never split or add a shot." % len(plans))
         except HTTPException as exc:
             return plans, continuite, {"trouves": trouves, "corrige": False, "erreur": str(exc.detail)}
+    # 03/10 : une tenue que ni l'histoire ni le plan ne donnaient (la fiche la donne) est retirée.
+    corriges, tenues = video_h3.sans_tenue_inventee(corriges, plans, histoire)
     if all(n["image_paroles"] == p["image_paroles"] and n.get("ambiance") == p.get("ambiance")
            for n, p in zip(corriges, plans)):
-        return plans, continuite, {"trouves": trouves, "corrige": False,
-                                   "erreur": "La correction n'a rien changé au texte."}
+        return plans, continuite, dict({"trouves": trouves, "corrige": False,
+                                         "erreur": "La correction n'a rien changé au texte."},
+                                        **({"tenue_retiree": tenues} if tenues else {}))
     apres = await _continuite(corriges, histoire)
     # Mesuré le 29/09 : la correction retirait bien « facing the camera » (2 fois sur 2),
     # mais la seconde relecture, qui varie d'un appel à l'autre, relevait un AUTRE petit
@@ -5961,7 +5964,7 @@ async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> t
     if apres.get("ok") is None or len(restent) > len(avant) or (len(restent) == len(avant) and not partis):
         return plans, continuite, {"trouves": trouves, "corrige": False,
                                    "erreur": "La correction n'a pas fait mieux : le texte d'origine est gardé."}
-    return corriges, apres, {"trouves": trouves, "corrige": True}
+    return corriges, apres, dict({"trouves": trouves, "corrige": True}, **({"tenue_retiree": tenues} if tenues else {}))
 
 
 async def _continuite(plans: list, histoire: str, deja_filmes=None, fins_vues=None) -> dict:
