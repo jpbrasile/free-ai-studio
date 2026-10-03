@@ -6799,20 +6799,30 @@ def _photos_des_fiches(ids) -> tuple:
 
 async def _juger_passage(film: bytes, debut: float, duree: float, noms: list, refs: list, texte: str,
                          raccord: int = 0) -> dict:
-    try:
-        png, nombre = await asyncio.to_thread(montage.planche, film, debut, duree)
-    except montage.MontageImpossible as exc:
-        raise HTTPException(400, str(exc)) from exc
-    # Free AI Max : le 28/09, sur la même planche du plan 2, « Auto » (Gemini
-    # flash-lite) a dit « rien à signaler » quatre fois ; « Max » (Gemini
-    # 3.8 flash) a vu deux fois l'homme en trop et la veste grise de Léa.
-    reponse = await _chat_du_studio(video_h3.consigne_jugement(noms, texte, raccord), "le jugement des plans",
-                                    images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
-                                    modele=video_h3.MODELE_JUGE)
-    try:
-        verdict = video_h3.lire_jugement(reponse, debut, nombre)
-    except ValueError as exc:
-        raise HTTPException(502, str(exc)) from exc
+    # Tout le passage est vu (03/10) : une planche par tranche de 18 s au plus, chacune jugée.
+    fenetre = montage.PLANCHE_IMAGES_MAX * 0.5
+    verdict, t, premiere = {"verdict": "ok", "defauts": []}, debut, True
+    while premiere or t < debut + duree - 1e-6:
+        morceau = min(fenetre, debut + duree - t) if duree > 0 else duree
+        try:
+            png, nombre = await asyncio.to_thread(montage.planche, film, t, morceau)
+        except montage.MontageImpossible as exc:
+            raise HTTPException(400, str(exc)) from exc
+        # Free AI Max : le 28/09, sur la même planche du plan 2, « Auto » (Gemini
+        # flash-lite) a dit « rien à signaler » quatre fois ; « Max » (Gemini
+        # 3.8 flash) a vu deux fois l'homme en trop et la veste grise de Léa.
+        reponse = await _chat_du_studio(video_h3.consigne_jugement(noms, texte, raccord if premiere else 0, t - debut),
+                                        "le jugement des plans",
+                                        images=refs + ["data:image/png;base64," + base64.b64encode(png).decode()],
+                                        modele=video_h3.MODELE_JUGE)
+        try:
+            vu = video_h3.lire_jugement(reponse, t, nombre)
+        except ValueError as exc:
+            raise HTTPException(502, str(exc)) from exc
+        verdict["defauts"] += vu["defauts"]
+        if vu["verdict"] == "defaut":
+            verdict["verdict"] = "defaut"
+        premiere, t = False, t + max(morceau, 0.5)
     # Second regard, serré, sur la première seconde et demie du plan lui-même (29/09).
     depart = debut + raccord * 0.5
     serre = min(video_h3.DEBUT_SERRE_S, max(0.0, debut + duree - depart))
@@ -6953,6 +6963,111 @@ async def video_h3_clip_juger(jid: str, authorization: Optional[str] = Header(de
     job["jugement"] = verdict
     write_job(jid, job)
     return verdict
+
+
+# --- Le clip maître, puis déplié (03/10, « Le jardin de verre ») ---------------------
+# Toute l'histoire en un clip de 15 s, un [Shot N] daté par coupe, sans paroles (video_h3,
+# texte_maitre) ; puis chaque plan tourné seul entre ses deux images du maître. Le maître
+# passe par le Studio comme un scénario : plans contrôlés, image de départ du plan 1, règles
+# d'avant tournage, traduction ; le dépliage attend le juge (règle 10 : pas de double).
+@app.post("/video-h3/maitre")
+async def video_h3_maitre(request: Request, authorization: Optional[str] = Header(default=None)):
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    corps = await request.json()
+    try:
+        plans = video_h3.verifier_plans(corps.get("plans"))
+        longueur = int(corps.get("longueur_maitre") or video_h3.LONGUEUR_MAITRE)
+        commun, musique, a_tourner = _scenario_prepare(corps, plans)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    ou = _ou_h3(corps)
+    _h3_peut(ou)
+    # Le maître part de l'image du plan 1 ; les autres plans n'en ont pas besoin (leurs images
+    # sont celles du maître).
+    if await _departs_des_coupes(plans[:1], commun):
+        try:
+            commun, musique, a_tourner = _scenario_prepare(corps, plans)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    forcer = corps.get("forcer") is True
+    regles = await _garde_des_regles(plans, commun, forcer)
+    await _scenario_traduire(a_tourner, musique)
+    anglais = [dict(p, image_paroles=t["payload"]["image_paroles"], ambiance=t["payload"].get("ambiance", ""))
+               for p, t in zip(plans, a_tourner)]
+    try:
+        m = video_h3.texte_maitre(anglais, longueur)
+        payload = dict(a_tourner[0]["payload"], image_paroles=m["texte"], ambiance=m["ambiance"],
+                       longueur=longueur, camera=None)
+        plan = video_h3.preparer(payload)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    plan["resume_public"].update(texte_client=m["texte"], traduit_en_anglais=any(t.get("traduit") for t in a_tourner),
+                                 maitre={"plans": anglais, "debuts_s": m["debuts_s"], "longueur": longueur,
+                                         "commun": {k: commun.get(k) for k in ("fiche", "fiches", "langue",
+                                                                               "langues", "definition")},
+                                         "regles": regles})
+    return _lancer_h3(plan, ou=ou)
+
+
+@app.post("/video-h3/maitre/{jid}/deplier")
+async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """Chaque plan du maître tourné seul (premiere_derniere), de sa première à sa dernière image
+    dans le maître, à la définition voulue (768p par défaut) ; les plans partent l'un après l'autre."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    if not re.fullmatch(r"[0-9a-f]{32}", jid):
+        raise HTTPException(404, "Clip maître inconnu.")
+    corps = await request.json()
+    job = read_job(jid)
+    maitre = ((job or {}).get("video") or {}).get("maitre")
+    chemin = _video_h3_octets(jid) if job and job.get("status") == "succeeded" else None
+    if not maitre or not chemin:
+        raise HTTPException(404, "Ce clip maître n'est pas (ou plus) sur ce Studio.")
+    jugement = job.get("jugement") or {}
+    if corps.get("forcer") is not True and jugement.get("verdict") != "ok":
+        raise HTTPException(409, "Jugez d'abord le clip maître (/video-h3/jobs/%s/juger) : un défaut du maître "
+                                 "passerait dans chaque plan déplié." % jid if not jugement else
+                            "Le juge a vu des défauts dans le clip maître : %s. Rejouez-le, ou dépliez quand même."
+                            % "; ".join(d["quoi"] for d in jugement.get("defauts") or [])[:600])
+    definition = str(corps.get("definition") or "768p")
+    if definition not in video_h3.DEFINITIONS:
+        raise HTTPException(400, "Définition non proposée.")
+    ou = _ou_h3(corps)
+    film = chemin.read_bytes()
+    plans = maitre["plans"]
+    try:
+        coupes = await asyncio.to_thread(montage.coupes_vues, film)
+        cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"])
+        travaux = []
+        for k, (a, b) in enumerate(cles):
+            images = [base64.b64encode(montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
+                                                              *video_h3.DEFINITIONS[definition])).decode()
+                      for n in (a, b)]
+            payload = dict({x: y for x, y in maitre["commun"].items() if y}, mode="premiere_derniere", images=images,
+                           image_paroles=plans[k]["image_paroles"], ambiance=plans[k].get("ambiance", ""),
+                           camera=plans[k].get("camera"), definition=definition,
+                           longueur=plans[k].get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT)
+            plan = video_h3.preparer(payload)
+            plan["resume_public"].update(texte_client=plans[k]["image_paroles"],
+                                         deplie_de={"maitre": jid, "plan": k + 1, "images": [a, b]})
+            travaux.append(plan)
+    except montage.MontageImpossible as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    _h3_peut(ou)
+    lances = [_travail_h3(plan, ou=ou) for plan in travaux]
+
+    def un_par_un():
+        for _jid, args in lances:
+            run_video_h3(*args)
+    threading.Thread(target=un_par_un, daemon=True).start()
+    job["deplie"] = [j for j, _a in lances]
+    write_job(jid, job)
+    return {"maitre": jid, "clips": job["deplie"], "cles": cles, "coupes_vues_s": coupes}
 
 
 DEFAUTS_PAR_PLAN = 3

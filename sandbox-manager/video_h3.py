@@ -767,6 +767,115 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     return " ".join(morceaux)
 
 
+# --- Le clip maître (03/10/2026, « Le jardin de verre ») -----------------------------
+# Propriétaire : « l'erreur vient de l'inconsistance temporelle des images, l'image de fin
+# n'est donc pas une bonne idée », puis « tu concentres l'histoire en un seul clip de 15 s,
+# puis tu extrais les images intermédiaires pour une vidéo plus longue ». Toute l'histoire
+# en UN clip de 362 images, un [Shot N] daté par coupe du scénario (format du guide MiniMax,
+# « [Shot 2] At 00:02.500, the camera cuts to … », une caméra par plan) ; mesuré le même
+# soir en mode « première image », 480p : 5 coupes demandées, 5 vues par ffmpeg, à 0,13 s
+# près au plus. Puis chaque plan se tourne seul, de sa première à sa dernière image dans le
+# maître (premiere_derniere) : deux images d'un même clip, cohérentes entre elles.
+# Sans paroles (propriétaire : « on évite de mettre des paroles pour le clip maître ») :
+# elles se disent dans les clips dépliés.
+LONGUEUR_MAITRE = LONGUEURS[-1]
+MAITRE_ECART_COUPE_S = 0.4      # une coupe vue à plus de 0,4 s de sa date n'est pas la sienne
+_MULTIPLAN = re.compile(r"\[Shot \d+\]")
+# Ni « the girl » ni autre nom pour une personne que celui du plan : le 03/10, « the same … girl
+# in every shot » en tête et « Mila » dans les plans, le dernier plan a montré deux fillettes.
+MAITRE_TETE = "The same place, the same light and the same people in every shot."
+_VERBES_DE_PAROLE = re.compile(
+    r"(?:,\s*|\s+)(?:and\s+|et\s+)?(?:says|said|murmurs|whispers|asks|replies|answers|shouts|calls|exclaims|"
+    r"sings|adds|dit|murmure|chuchote|demande|répond|crie|chante|ajoute|s'exclame)\b[^.!?;«»<¶]*?(?=\s*[.!?;¶]|\s*$)",
+    re.I)
+
+
+def sans_repliques(texte: str) -> str:
+    """Le plan sans ce qui est dit : répliques et verbes qui les annoncent ôtés ; une phrase
+    qui n'avait que sa réplique (« Elle dit « Bonjour. » ») disparaît."""
+    # La réplique ôtée finit sa phrase (¶) : le verbe qui l'annonce s'arrête là.
+    t = _REPLIQUE_OU_BALISE.sub(" ¶ ", str(texte or ""))
+    t = _VERBES_DE_PAROLE.sub("", t)
+    t = re.sub(r"[\s:,]*¶[\s.!?;]*", ". ", t)
+    phrases = [p.strip() for p in re.split(r"(?<=[.!?;])\s+", " ".join(t.split()))]
+    t = " ".join(p for p in phrases if len(re.findall(r"\w+", p)) >= 2).strip()
+    return t + "." if t and t[-1] not in ".!?;" else t
+
+
+def _horodatage(s: float) -> str:
+    ms = round(s * 1000)
+    return "%02d:%02d.%03d" % (ms // 60000, ms // 1000 % 60, ms % 1000)
+
+
+def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
+    """Le texte du clip maître : {texte, ambiance, debuts_s, longueur}. Chaque plan prend du maître
+    la part de sa propre durée ; une « coupe » est un [Shot N] daté, une « suite » continue le plan
+    d'avant sans coupe."""
+    if longueur not in LONGUEURS:
+        raise ValueError("Durée hors de la grille du modèle.")
+    durees = [p.get("longueur") or LONGUEUR_PAR_DEFAUT for p in plans]
+    total, duree_s = sum(durees), longueur / IMAGES_PAR_SECONDE
+    debuts, morceaux, n, cumul = [], [MAITRE_TETE], 0, 0
+    for k, p in enumerate(plans):
+        debut = round(cumul / total * duree_s, 3)
+        cumul += durees[k]
+        debuts.append(debut)
+        camera = lire_camera(p.get("camera"))
+        # « throughout » dirait tout le clip : ici, ce plan seulement.
+        phrase = "The camera holds a static shot." if camera["mouvement"] == "fixe" else phrase_camera(camera)
+        t = avec_camera(sans_repliques(p.get("image_paroles")), phrase)
+        if k == 0:
+            n = 1
+            morceaux.append("[Shot 1] " + t)
+        elif p.get("enchainement", "coupe") == "coupe":
+            n += 1
+            morceaux.append("[Shot %d] At %s, the camera cuts to a new shot. %s" % (n, _horodatage(debut), t))
+        else:
+            morceaux.append("From %s, without a cut: %s" % (_horodatage(debut), t))
+    ambiances = []
+    for p in plans:
+        a = " ".join(str(p.get("ambiance") or "").split()).rstrip(".")
+        if a and a not in ambiances:
+            ambiances.append(a)
+    return {"texte": " ".join(morceaux), "ambiance": "; ".join(ambiances), "debuts_s": debuts,
+            "longueur": longueur}
+
+
+def cles_du_maitre(plans: list, debuts_s: list, coupes_vues_s: list, images: int) -> list:
+    """La première et la dernière image de chaque plan dans le maître : [(premiere, derniere)].
+    Une coupe prend la date où ffmpeg l'a vue, plus une image (pas de mélange des deux cadrages) ;
+    une suite partage l'image de fin du plan d'avant, sans saut. ValueError si le maître n'a pas
+    fait une coupe demandée : déplié, ce plan mélangerait deux cadrages."""
+    debuts, manquees = [], []
+    for k, (p, d) in enumerate(zip(plans, debuts_s)):
+        if k == 0:
+            debuts.append(0)
+        elif p.get("enchainement", "coupe") != "coupe":
+            debuts.append(round(d * IMAGES_PAR_SECONDE))
+        else:
+            vues = [c for c in coupes_vues_s if abs(c - d) <= MAITRE_ECART_COUPE_S]
+            if vues:
+                debuts.append(round(min(vues, key=lambda c: abs(c - d)) * IMAGES_PAR_SECONDE) + 1)
+            else:
+                manquees.append(k + 1)
+                debuts.append(None)
+    if manquees:
+        raise ValueError("Le clip maître n'a pas fait la coupe du plan %s : rejouez-le avant de le déplier."
+                         % ", ".join(map(str, manquees)))
+    cles = []
+    for k, debut in enumerate(debuts):
+        if k + 1 == len(debuts):
+            fin = images - 1
+        elif plans[k + 1].get("enchainement", "coupe") == "coupe":
+            fin = debuts[k + 1] - 2
+        else:
+            fin = debuts[k + 1]
+        if fin <= debut:
+            raise ValueError("Le plan %d est trop court dans le clip maître pour être déplié." % (k + 1))
+        cles.append((debut, fin))
+    return cles
+
+
 # --- La première et la dernière image, par l'image du Studio ------------------------
 
 # Une taille paysage : le routeur la traduit en 16:9 pour Google (aspect_ratio
@@ -2893,11 +3002,19 @@ PAS_UN_DEFAUT = ("These are NOT problems: the camera panning, tilting or moving,
                  "hidden. ")
 
 
-def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
+def consigne_jugement(noms: list, texte: str = "", raccord: int = 0, depuis_s: float = 0.0) -> str:
     """`raccord` : le nombre de premières images de la planche qui sont la fin du
     plan d'avant. Le 29/09, jugé plan par plan, le juge n'a pas vu un personnage
-    retourné de 180° ni un ballon disparu d'un plan à l'autre (remarque du propriétaire)."""
+    retourné de 180° ni un ballon disparu d'un plan à l'autre (remarque du propriétaire).
+    `depuis_s` : l'heure, dans le clip, de la première image de cette planche (un clip
+    plus long qu'une planche se juge en plusieurs, 03/10)."""
     refs = " ".join(f"Image {k + 1} shows {nom}, a reference picture." for k, nom in enumerate(noms))
+    # 03/10, clip maître : coupes voulues ([Shot N] At …) ; une coupe n'est pas une apparition.
+    plans = bool(re.search(r"\[Shot \d+\]", str(texte or "")))
+    quoi = ("ONE video made of several shots joined by the planned cuts its text dates ([Shot N] At MM:SS); a "
+            "change of framing at those times is NOT a fault, but the same people and places must remain "
+            "across them" if plans else "ONE video shot")
+    depuis = (" Frame 1 of this sheet is at %s s into the video." % ("%g" % round(depuis_s, 1))) if depuis_s else ""
     avant = (f" Frames 1 to {raccord} are the END OF THE PREVIOUS SHOT, the shot itself starts at frame "
              f"{raccord + 1}: also report any jump across that cut — a character suddenly elsewhere or "
              "facing another way, the camera jumping to the other side, an object held or present before "
@@ -2907,8 +3024,9 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
              "this order." % " ".join(sans_age(texte).split()) + CAUSE) if texte.strip() else ""
     # Le modèle rend le NUMÉRO de l'image, le Studio en fait l'heure : le 28/09,
     # un départ mal annoncé dans la consigne a décalé sa réponse d'une seconde.
-    return (refs + f" Image {len(noms) + 1} is a contact sheet of ONE video shot: frames numbered from 1, "
-            "one every 0.5 s, read left to right then top to bottom; black cells after the end are empty. "
+    return (refs + f" Image {len(noms) + 1} is a contact sheet of {quoi}: frames numbered from 1, "
+            "one every 0.5 s, read left to right then top to bottom; black cells after the end are empty."
+            + depuis + " "
             # Neutre, sans questions qui cherchent la faute : le 28/09, la consigne
             # d'avant faisait trouver un défaut même au plan repris tel quel.
             + ("Say whether the characters stay consistent with their reference pictures throughout the shot."
@@ -2917,6 +3035,10 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0) -> str:
             # sortir du cadre ; le juge ne regardait que les personnages des fiches.
             + " Also report any person or object that disappears or appears without leaving or entering "
             "the frame."
+            # Règle 10 (« aucun personnage ni objet en double ») : le 03/10, une fillette dédoublée dans
+            # le dernier plan du maître ; rien ne demandait au juge de compter.
+            + " Report any person or object shown twice at the same time (a double or twin the text does not ask "
+            "for)."
             # Le 29/09, un ballon est parti tout seul, au-dessus des mains, sans geste de lancer.
             + " Objects obey physics: report an object that moves, floats or flies away without something "
             "pushing it, or an action aimed at a target that is not where the action goes."
@@ -3981,7 +4103,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     if inconnues:
         raise ValueError("Marque de réplique inconnue : « [%s] ». Une marque donne la langue et/ou "
                          "l'émotion (menu « Langue et émotion d'une réplique »)." % inconnues[0])
-    image_paroles = avec_camera(image_paroles, phrase_camera(payload.get("camera")))
+    # Un texte en plans ([Shot N]) porte sa caméra plan par plan : la caméra fixe par défaut
+    # la contredisait (03/10, clip maître, « The camera holds a static shot throughout »).
+    camera = payload.get("camera") or ({"mouvement": "auto"} if _MULTIPLAN.search(image_paroles) else None)
+    image_paroles = avec_camera(image_paroles, phrase_camera(camera))
     vivants = phrases_vivants(payload.get("elements"), [f["nom"] for f in fiches if not fiche_est_objet(f)])
     if vivants:
         image_paroles = (image_paroles.rstrip() + " " + vivants).strip()

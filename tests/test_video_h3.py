@@ -194,6 +194,36 @@ def test_sans_replique_ecrite_le_silence_se_dit(h3):
     assert v.SILENCE_IMAGE not in parle and v.SILENCE_SON not in parle
 
 
+def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
+    """03/10, « Le jardin de verre » : toute l'histoire en un clip de 15 s, un [Shot N] par coupe,
+    une caméra par plan, sans paroles (propriétaire : « on évite de mettre des paroles »)."""
+    v = h3.video_h3
+    assert v.sans_repliques("Mila waters the pot and murmurs : « Pousse, petite graine. »") == "Mila waters the pot."
+    assert v.sans_repliques("She smiles. She says « Bonjour. » Then she sits.") == "She smiles. Then she sits."
+    plans = [{"image_paroles": "Mila kneels by the pot and murmurs « Pousse. »", "enchainement": "coupe",
+              "camera": {"mouvement": "avance", "amplitude": "petite", "vitesse": "lente"}, "ambiance": "Birds."},
+             {"image_paroles": "Close-up of the pot: a shoot grows.", "enchainement": "coupe",
+              "camera": v.lire_camera(None), "ambiance": "Birds"},
+             {"image_paroles": "The shoot becomes a shrub.", "enchainement": "suite", "longueur": 248,
+              "ambiance": "Crystal chimes."}]
+    m = v.texte_maitre(plans)
+    assert m["debuts_s"] == [0.0, 3.771, 7.542]
+    assert m["texte"] == (v.MAITRE_TETE + " [Shot 1] Mila kneels by the pot. The camera pushes in with small "
+                          "amplitude at slow speed. [Shot 2] At 00:03.771, the camera cuts to a new shot. Close-up "
+                          "of the pot: a shoot grows. The camera holds a static shot. From 00:07.542, without a "
+                          "cut: The shoot becomes a shrub. The camera holds a static shot.")
+    assert m["ambiance"] == "Birds; Crystal chimes" and "girl" not in m["texte"]
+    # Le texte en plans part sans la caméra fixe par défaut, qui le contredisait.
+    plan = v.preparer({"mode": "texte", "image_paroles": m["texte"], "longueur": v.LONGUEUR_MAITRE})
+    assert "static shot throughout" not in plan["resume_public"]["invite"]
+    assert "static shot throughout" in v.preparer({"mode": "texte", "image_paroles": "Mila smiles."}
+                                                  )["resume_public"]["invite"]
+    # Les clés : la coupe vue (à 0,13 s près), plus une image ; la suite partage son image.
+    assert v.cles_du_maitre(plans, m["debuts_s"], [3.65, 9.9], 362) == [(0, 87), (89, 181), (181, 361)]
+    with pytest.raises(ValueError, match="coupe du plan 2"):
+        v.cles_du_maitre(plans, m["debuts_s"], [9.9], 362)
+
+
 def test_sans_replique_un_rire_demande_reste_permis_sans_mots(h3):
     """03/10, « Le jardin de verre », clip 4 : « she laughs », « gentle laughter » ET « lips closed »,
     « no individual voices » ; la consigne se contredisait et H3 a fait dire « I'll be done! »."""
@@ -3153,6 +3183,38 @@ def test_2_le_juge_regarde_et_ecoute_un_clip_seul(h3, monkeypatch, tmp_path):
     assert ecrits[jid]["jugement"] == d
     assert client(h3).post("/video-h3/jobs/" + "b" * 32 + "/juger", headers=CLE).status_code == 404
     assert client(h3).post("/video-h3/jobs/pas-un-numero/juger", headers=CLE).status_code == 404
+
+
+def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):
+    """03/10, clip maître de 15 s : la planche 4 x 3 n'en montrait que 6 s, et le juge a dit « ok »
+    à une fillette dédoublée à 12,5 s. Tout le clip est vu, en planches de 18 s au plus."""
+    v = h3.video_h3
+    lances = []
+    monkeypatch.setattr(h3.montage, "_lancer", lambda args, quoi: lances.append(args))
+    for duree in (15.08, 5.2):
+        with pytest.raises(h3.montage.MontageImpossible):   # le faux ffmpeg n'écrit rien
+            h3.montage.planche(b"mp4", 0.0, duree)
+    assert "fps=2,scale=416:-1,tile=6x6" in lances[0]
+    assert "fps=2,scale=416:-1,tile=4x3" in lances[1]   # un plan de 5 s : la planche d'avant
+
+    planches = []
+    monkeypatch.setattr(h3.montage, "planche", lambda f, debut, duree: planches.append((debut, round(duree, 2)))
+                        or (b"\x89PNG", int(duree * 2 + 0.999)))
+    monkeypatch.setattr(h3.montage, "planche_serree", lambda *a: (b"\x89PNG", 12))
+    consignes = []
+
+    async def chat(consigne, quoi="", images=None, modele=""):
+        consignes.append(consigne)
+        return ('{"verdict": "defaut", "defauts": [{"image": 2, "quoi": "deux fillettes"}]}'
+                if len(consignes) == 2 else '{"verdict": "ok", "defauts": []}')
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    texte = "[Shot 1] Mila waters the pot. [Shot 2] At 00:12.500, the camera cuts to a new shot. Mila smiles."
+    verdict = asyncio.run(h3._juger_passage(b"mp4", 0.0, 20.0, [], [], texte))
+    assert planches == [(0.0, 18.0), (18.0, 2.0)]
+    assert verdict["verdict"] == "defaut" and verdict["defauts"] == [{"t_s": 18.5, "quoi": "deux fillettes"}]
+    assert "shown twice at the same time" in consignes[0] and "planned cuts" in consignes[0]
+    assert "Frame 1 of this sheet" not in consignes[0] and "Frame 1 of this sheet is at 18 s" in consignes[1]
+    assert "ONE video shot:" in v.consigne_jugement([], "Mila waters the pot.")
 
 
 def test_3_l_ecoute_compare_les_repliques_attendues():

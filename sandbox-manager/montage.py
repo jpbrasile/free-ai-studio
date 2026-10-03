@@ -927,19 +927,53 @@ def son_du_passage(video: bytes, debut_s: float, fin_s: float) -> bytes:
         return sortie.read_bytes()
 
 
+COUPE_SEUIL = 0.3   # changement de scène vu par ffmpeg (03/10 : les 5 coupes du maître, rien d'autre)
+
+
+def coupes_vues(video: bytes, seuil: float = COUPE_SEUIL) -> list:
+    """Les heures (s) où l'image change de plan, vues par ffmpeg (filtre scene)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a = Path(dossier, "a.mp4")
+        a.write_bytes(video)
+        fini = subprocess.run([_ffmpeg(), "-loglevel", "info", "-i", str(a), "-vf",
+                               "select='gt(scene,%g)',showinfo" % seuil, "-f", "null", "-"],
+                              capture_output=True, text=True, timeout=DELAI_S)
+    if fini.returncode != 0:
+        raise MontageImpossible("La recherche des coupes a échoué : %s" % (fini.stderr or "").strip()[-300:])
+    return [float(m) for m in re.findall(r"pts_time:([0-9.]+)", fini.stderr or "")]
+
+
+def image_numero(video: bytes, numero: int) -> bytes:
+    """L'image n° `numero` (à partir de 0) d'une vidéo, en PNG."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "a.mp4"), Path(dossier, "image.png")
+        a.write_bytes(video)
+        _lancer(["-i", str(a), "-vf", "select=eq(n\\,%d)" % numero, "-frames:v", "1", str(sortie)],
+                "L'extraction d'une image du clip")
+        if not sortie.is_file() or not sortie.stat().st_size:
+            raise MontageImpossible("Le clip n'a pas d'image n° %d." % numero)
+        return sortie.read_bytes()
+
+
 PLANCHE_IMAGES = 12   # 4 x 3, une image toutes les 0,5 s : un plan de 5 s y tient
+# 03/10, clip maître de 15 s : la planche 4 x 3 n'en montrait que les 6 premières secondes, et le
+# juge a dit « ok » à une fillette dédoublée à 12,5 s. Jusqu'à 36 images (18 s, au-delà des 15,1 s
+# d'un clip H3), 6 de front passé 12 ; un passage plus long se juge en plusieurs planches.
+PLANCHE_IMAGES_MAX = 36
 
 
 def planche(video: bytes, debut_s: float, duree_s: float) -> tuple[bytes, int]:
     """Une planche PNG du passage [debut_s, debut_s + duree_s) : une image toutes
     les 0,5 s, numérotées de gauche à droite puis de haut en bas (28/09/2026,
     pour faire juger un plan par un modèle qui voit). Rend (png, nombre d'images)."""
-    nombre = max(1, min(PLANCHE_IMAGES, int(-(-duree_s * 2 // 1))))
+    nombre = max(1, min(PLANCHE_IMAGES_MAX, int(-(-duree_s * 2 // 1))))
+    colonnes = 4 if nombre <= PLANCHE_IMAGES else 6
+    lignes = max(3, -(-nombre // colonnes))
     with tempfile.TemporaryDirectory() as dossier:
         a, sortie = Path(dossier, "a.mp4"), Path(dossier, "planche.png")
         a.write_bytes(video)
         _lancer(["-ss", "%.3f" % debut_s, "-t", "%.3f" % duree_s, "-i", str(a),
-                 "-vf", "fps=2,scale=416:-1,tile=4x3", "-frames:v", "1", str(sortie)],
+                 "-vf", "fps=2,scale=416:-1,tile=%dx%d" % (colonnes, lignes), "-frames:v", "1", str(sortie)],
                 "La planche du plan")
         if not sortie.is_file() or not sortie.stat().st_size:
             raise MontageImpossible("La planche du plan n'a pas pu être faite.")
