@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Callable
 
 ESSAIS_MAITRE = 3
+ESSAIS_PLAN = 2          # un plan déplié que le juge refuse est retourné une fois ; le moins fautif reste
 PERSONNAGES_MAX = 2
 PLANS_MAX = 8            # 15 s de maître : au-delà, des plans de moins de 2 s
 DEFINITION = "768p"      # maître et plans dépliés : le maître 768p tient sur la carte de 24 Go (03/10)
@@ -200,11 +201,26 @@ class Film:
                         "forcer": m["verdict"] != "ok"})
         self.etat["clips"] = [{"job": j} for j in d["clips"]]
         self.noter("deplier", clips=d["clips"], cles=d.get("cles"))
-        for c in self.etat["clips"]:
-            self.reussi(c["job"], "Un plan déplié")
-            verdict = self.route("POST", "/video-h3/jobs/%s/juger" % c["job"], {})
-            c.update(verdict=verdict.get("verdict"), defauts=[x.get("quoi") for x in verdict.get("defauts") or []])
-            self.noter("clip", job=c["job"], verdict=c["verdict"])
+        for k, c in enumerate(self.etat["clips"]):
+            c.update(self._juge(c["job"]), essais=1)
+            self.noter("clip", plan=k + 1, job=c["job"], verdict=c["verdict"], defauts=c["defauts"])
+            # Essai à blanc du 03/10 : les deux plans refusés (geste manquant) étaient gardés tels quels.
+            while c["verdict"] != "ok" and c["essais"] < ESSAIS_PLAN:
+                r = self.route("POST", "/video-h3/maitre/%s/deplier" % m["job"],
+                               {"definition": self.etat["reglages"]["definition"], "ou": "maison",
+                                "forcer": m["verdict"] != "ok", "plans": [k + 1]})
+                autre = dict(self._juge(r["clips"][0]), job=r["clips"][0])
+                c["essais"] += 1
+                self.noter("clip_rejoue", plan=k + 1, job=autre["job"], verdict=autre["verdict"],
+                           defauts=autre["defauts"])
+                if (autre["verdict"] != "ok", len(autre["defauts"])) < (True, len(c["defauts"])):
+                    c.update(job=autre["job"], verdict=autre["verdict"], defauts=autre["defauts"])
+                self.ecrire()
+
+    def _juge(self, jid: str) -> dict:
+        self.reussi(jid, "Un plan déplié")
+        verdict = self.route("POST", "/video-h3/jobs/%s/juger" % jid, {})
+        return {"verdict": verdict.get("verdict"), "defauts": [x.get("quoi") for x in verdict.get("defauts") or []]}
 
     def montage(self):
         film = self.route("POST", "/video-h3/montage", {"clips": [c["job"] for c in self.etat["clips"]],
@@ -216,9 +232,14 @@ class Film:
     def agrandir(self):
         fin = self.route("POST", "/video-h3/finaliser", {"job": self.etat["film_monte"], "echelle": "4k",
                                                          "ou": "maison"})
-        self.reussi(fin["id"], "L'agrandissement 4K")
-        self.etat["film_4k"] = fin["id"]
-        self.noter("agrandir", job=fin["id"])
+        job = self.reussi(fin["id"], "L'agrandissement 4K")
+        # Le film 4K est un travail à part, que la finalisation nomme (essai à blanc du 03/10 : la
+        # finalisation elle-même n'a pas de fichier, et la musique disait « ce film n'est plus là »).
+        film = (job.get("finalisation") or {}).get("film")
+        if not film:
+            raise Arret("La finalisation a réussi sans nommer son film.")
+        self.etat["film_4k"] = film
+        self.noter("agrandir", job=fin["id"], film=film)
 
     def musique(self):
         chanson = self.reussi(self.etat["musique"]["job"], "La musique")

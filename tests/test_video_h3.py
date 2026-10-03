@@ -222,6 +222,8 @@ def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
     assert v.cles_du_maitre(plans, m["debuts_s"], [3.65, 9.9], 362) == [(0, 87), (89, 181), (181, 361)]
     with pytest.raises(ValueError, match="coupe du plan 2"):
         v.cles_du_maitre(plans, m["debuts_s"], [9.9], 362)
+    # Une suite où H3 a coupé quand même (« Le phare », 03/10) se traite en coupe.
+    assert v.cles_du_maitre(plans, m["debuts_s"], [3.65, 7.6], 362) == [(0, 87), (89, 181), (183, 361)]
 
 
 def test_sans_replique_un_rire_demande_reste_permis_sans_mots(h3):
@@ -3183,6 +3185,48 @@ def test_2_le_juge_regarde_et_ecoute_un_clip_seul(h3, monkeypatch, tmp_path):
     assert ecrits[jid]["jugement"] == d
     assert client(h3).post("/video-h3/jobs/" + "b" * 32 + "/juger", headers=CLE).status_code == 404
     assert client(h3).post("/video-h3/jobs/pas-un-numero/juger", headers=CLE).status_code == 404
+
+
+def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_path):
+    """03/10 : chaque plan du maître tourné seul entre ses deux images du maître ; pas avant le juge."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    film = tmp_path / "maitre.mp4"
+    film.write_bytes(b"MAITRE")
+    plans = [{"image_paroles": "Oscar climbs the stairs.", "enchainement": "coupe", "camera": v.lire_camera(None)},
+             {"image_paroles": "Oscar lights the lantern and says « Voilà. »", "enchainement": "coupe",
+              "camera": v.lire_camera({"mouvement": "avance"})}]
+    jid = "c" * 32
+    job = {"id": jid, "status": "succeeded", "video": {"moteur": "MiniMax H3 (ComfyUI)", "maitre": {
+        "plans": plans, "debuts_s": [0.0, 2.583], "longueur": 124, "commun": {"fiche": None, "definition": "480p"}}}}
+    h3.write_job(jid, job)
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda j: film if j == jid else None)
+    c = client(h3)
+    r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={})
+    assert r.status_code == 409 and "Jugez d'abord" in r.json()["detail"]
+
+    job["jugement"] = {"verdict": "ok", "defauts": []}
+    h3.write_job(jid, job)
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [2.5])
+    pris = []
+    monkeypatch.setattr(h3.montage, "image_numero", lambda f, n: pris.append(n) or base64.b64decode(PNG))
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: base64.b64decode(PNG))
+    tournes = []
+    monkeypatch.setattr(h3, "run_video_h3", lambda j, *a: tournes.append(h3.read_job(j)["video"]))
+    r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"definition": "768p"})
+    assert r.status_code == 200, r.text
+    assert r.json()["cles"] == [[0, 59], [61, 123]] and pris == [0, 59, 61, 123]
+    for _ in range(50):
+        if len(tournes) == 2:
+            break
+        time.sleep(0.05)
+    assert [t["mode"] for t in tournes] == ["premiere_derniere"] * 2
+    # Le plan déplié garde sa réplique et sa caméra ; il sait d'où il vient.
+    assert "Voilà." in tournes[1]["invite"] and "pushes in" in tournes[1]["invite"]
+    assert tournes[1]["deplie_de"] == {"maitre": jid, "plan": 2, "images": [61, 123]}
+    assert h3.read_job(jid)["deplie"] == r.json()["clips"]
 
 
 def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):

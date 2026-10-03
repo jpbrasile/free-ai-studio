@@ -846,14 +846,19 @@ def cles_du_maitre(plans: list, debuts_s: list, coupes_vues_s: list, images: int
     Une coupe prend la date où ffmpeg l'a vue, plus une image (pas de mélange des deux cadrages) ;
     une suite partage l'image de fin du plan d'avant, sans saut. ValueError si le maître n'a pas
     fait une coupe demandée : déplié, ce plan mélangerait deux cadrages."""
-    debuts, manquees = [], []
+    debuts, manquees, coupes = [], [], []
     for k, (p, d) in enumerate(zip(plans, debuts_s)):
+        vues = [c for c in coupes_vues_s if abs(c - d) <= MAITRE_ECART_COUPE_S]
+        # Une « suite » qui change de valeur de plan (« Medium shot ») : H3 y coupe quand même
+        # (essai à blanc du 03/10, « Le phare », plan 2). Vue, elle se traite en coupe : l'image
+        # partagée serait celle du changement de cadre.
+        coupe = k > 0 and (p.get("enchainement", "coupe") == "coupe" or bool(vues))
+        coupes.append(coupe)
         if k == 0:
             debuts.append(0)
-        elif p.get("enchainement", "coupe") != "coupe":
+        elif not coupe:
             debuts.append(round(d * IMAGES_PAR_SECONDE))
         else:
-            vues = [c for c in coupes_vues_s if abs(c - d) <= MAITRE_ECART_COUPE_S]
             if vues:
                 debuts.append(round(min(vues, key=lambda c: abs(c - d)) * IMAGES_PAR_SECONDE) + 1)
             else:
@@ -866,7 +871,7 @@ def cles_du_maitre(plans: list, debuts_s: list, coupes_vues_s: list, images: int
     for k, debut in enumerate(debuts):
         if k + 1 == len(debuts):
             fin = images - 1
-        elif plans[k + 1].get("enchainement", "coupe") == "coupe":
+        elif coupes[k + 1]:
             fin = debuts[k + 1] - 2
         else:
             fin = debuts[k + 1]
@@ -2093,7 +2098,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
                       presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
-                      planches=(), vues=(), legere=False, lieu=None) -> str:
+                      planches=(), vues=(), legere=False, lieu=None, nb_plans=1) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -2205,13 +2210,15 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     types = (["video continuation"] if suite else []) + ["reference generation"] \
         + (["keyframe completion"] if depart else []) + (["audio reference"] if voix_dites else [])
     if legere:   # 02/10 : les voix et le raccord sont déjà dits plus haut ; une ligne pour tous les sons
-        resume = f"[{' + '.join(types)}] One single shot."
+        resume = f"[{' + '.join(types)}] " + (f"{nb_plans} shots joined by cuts." if nb_plans > 1 else "One single shot.")
         if garde_sons:
             garde_sons = ["Each <Audio> gives only a voice timbre; its words are never said."]
         return ("subject_definitions: " + " ".join(definitions) + " summary: " + resume
                 + " retention_analysis: " + " ".join(garde + garde_sons))
     vus = [f"<Subject {k + 1}>" for k in range(len(nombres)) if k in presents]
-    resume = (f"[{' + '.join(types)}] The target video is a single shot"
+    # Un texte en plans (clip maître, 03/10) : « a single shot » le contredisait.
+    resume = (f"[{' + '.join(types)}] The target video "
+              + (f"has {nb_plans} shots joined by cuts" if nb_plans > 1 else "is a single shot")
               + (" with " + _liste_anglaise(vus) if vus else "")
               + (f", beginning from <Picture {depart}>" if depart else "")
               + (", continuing <Video 1> without a cut" if suite else "") + "."
@@ -4173,8 +4180,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         texte = (sujets_des_fiches(nombres, avec_tenue, ecrites_k, objets, voix_k, presents, numero, parleurs,
                                    suite, au_depart, avec_planche,
                                    {k for k, f in enumerate(fiches) if f.get("vues")},
-                                   legere=payload.get("invite_legere") is True, lieu=numero_lieu)
-                 + " detailed_description: [Shot 1] "
+                                   legere=payload.get("invite_legere") is True, lieu=numero_lieu,
+                                   nb_plans=len(_MULTIPLAN.findall(texte)) or 1)
+                 # Un texte en plans porte déjà ses [Shot N] : pas un second [Shot 1] devant.
+                 + (" detailed_description: " if _MULTIPLAN.search(texte) else " detailed_description: [Shot 1] ")
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
     # Ce que montrent la première et la dernière image, quand le Studio les a

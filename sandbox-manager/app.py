@@ -6996,7 +6996,18 @@ async def video_h3_maitre(request: Request, authorization: Optional[str] = Heade
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
     forcer = corps.get("forcer") is True
-    regles = await _garde_des_regles(plans, commun, forcer)
+    # Comme au tournage : une correction gratuite AVANT de refuser (essai à blanc du 03/10, « Le phare » :
+    # la règle 2 refusée, le maître parti en « tourner quand même » sans qu'on ait rien corrigé).
+    rapport = None
+    if not forcer:
+        rapport = await _verifier_scenario(plans, commun)
+        plans, rapport, correction = await _corriger_avant_tournage(plans, commun, rapport)
+        if correction and correction["corrige"]:
+            try:
+                commun, musique, a_tourner = _scenario_prepare(corps, plans)
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+    regles = await _garde_des_regles(plans, commun, forcer, rapport=rapport)
     await _scenario_traduire(a_tourner, musique)
     anglais = [dict(p, image_paroles=t["payload"]["image_paroles"], ambiance=t["payload"].get("ambiance", ""))
                for p, t in zip(plans, a_tourner)]
@@ -7042,11 +7053,17 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     ou = _ou_h3(corps)
     film = chemin.read_bytes()
     plans = maitre["plans"]
+    # `plans` : les numéros à (re)tourner seulement (un plan que le juge a refusé) ; tous sinon.
+    voulus = corps.get("plans") or list(range(1, len(plans) + 1))
+    if not isinstance(voulus, list) or not all(isinstance(n, int) and 1 <= n <= len(plans) for n in voulus):
+        raise HTTPException(400, "Numéros de plans illisibles.")
     try:
         coupes = await asyncio.to_thread(montage.coupes_vues, film)
         cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"])
         travaux = []
         for k, (a, b) in enumerate(cles):
+            if k + 1 not in voulus:
+                continue
             images = [base64.b64encode(montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
                                                               *video_h3.DEFINITIONS[definition])).decode()
                       for n in (a, b)]
@@ -7069,9 +7086,11 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
         for _jid, args in lances:
             run_video_h3(*args)
     threading.Thread(target=un_par_un, daemon=True).start()
-    job["deplie"] = [j for j, _a in lances]
-    write_job(jid, job)
-    return {"maitre": jid, "clips": job["deplie"], "cles": cles, "coupes_vues_s": coupes}
+    clips = [j for j, _a in lances]
+    if len(voulus) == len(plans):
+        job["deplie"] = clips
+        write_job(jid, job)
+    return {"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes}
 
 
 # --- Le film automatique (03/10) : d'un texte simple au film fini (film_auto.py) ---------
