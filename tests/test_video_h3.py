@@ -1333,6 +1333,36 @@ def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(
     assert d["relecture"]["corrige"] is False
 
 
+def test_le_relecteur_d_avant_tournage_voit_les_images_de_depart(h3, monkeypatch):
+    """03/10, « Le jardin de verre » : refus « l'arrosoir doit être visible dès le début », alors
+    qu'il l'était sur l'image de départ ; le relecteur ne lisait que le texte."""
+    v = h3.video_h3
+    fid = v.fiche_creer("Mila", "x")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    d1, d3 = v.depart_poser(PNG), v.depart_poser(PNG)
+    plans = [{"image_paroles": "Mila waters the pot.", "ambiance": "", "enchainement": "coupe", "image_depart": d1},
+             {"image_paroles": "The sprout grows.", "ambiance": "", "enchainement": "suite"},
+             {"image_paroles": "Mila steps back.", "ambiance": "", "enchainement": "coupe", "image_depart": d3}]
+    vus = []
+
+    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None, departs_vus=None):
+        vus.append(departs_vus)
+        return {"ok": True, "problemes": [], "details": [], "etats": []}
+
+    async def rien(plan, fiches):
+        return {}
+    monkeypatch.setattr(h3, "_continuite", continuite)
+    monkeypatch.setattr(h3, "_regles_depart", rien)
+    asyncio.run(h3._verifier_scenario(plans, {"fiche": fid, "fiches": None}))
+    assert sorted(vus[0]) == [1, 3] and vus[0][1] == base64.b64decode(PNG)
+    # Un plan déjà filmé (rejeu) garde sa vraie dernière image, pas son image de départ.
+    asyncio.run(h3._verifier_scenario(plans, {"fiche": fid, "fiches": None}, deja_filmes=[1]))
+    assert sorted(vus[1]) == [3]
+    consigne = v.consigne_continuite(plans, "x", vues=[], departs=[1, 3])
+    assert "The attached images 1 to 2 are the START images of shots 1, 3" in consigne
+    assert "START images" not in v.consigne_continuite(plans, "x")
+
+
 def test_la_correction_n_invente_pas_de_tenue(h3):
     """03/10, « Le jardin de verre » : le relecteur a noté « la tenue de Mila n'est décrite dans
     aucun plan », et la correction l'a habillée d'un pull crème, loin du pull rayé de sa fiche."""
@@ -1526,7 +1556,7 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     # Chaque plan part traduit, la suite aussi (28/09) : deux réponses du chat.
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([
         '{"tenues": [{"nom": "Léa", "tenue": ""}]}',   # le relevé des tenues : celle de la fiche
-        '{"tenue": "a red coat"}',                      # lue sur sa photo, écrite dans le plan
+        # 03/10 : la tenue de la fiche n'est plus lue sur sa photo pour être écrite (« jamais en texte »).
         '{"image_paroles": "Lea walks into the café", "ambiance": "Chatter", "musique": ""}',
         '{"image_paroles": "She says « Bonjour. »", "ambiance": "", "musique": ""}'], []))
     fid = v.fiche_creer("Léa", "femme de 35 ans")["id"]
@@ -1564,8 +1594,8 @@ def test_un_scenario_se_tourne_plan_par_plan_et_se_recolle(h3, monkeypatch, tmp_
     assert p1 is None and v1["mode"] == "references" and v1["traduit_en_anglais"] is True
     # Le nom, même traduit sans accent, devient <Subject 1> : dit tel quel, il a été récité.
     assert v1["invite"].startswith("subject_definitions:") and "<Subject 1> walks" in v1["invite"]
-    assert "<Subject 1> wears a red coat in every frame, also when seen from behind" in v1["invite"]
-    assert v.fiche_tenue_de_base(fid) == "a red coat"
+    # Propriétaire, 03/10 : « les attributs sont toujours avec des images, jamais en texte ».
+    assert " wears " not in v1["invite"] and v.fiche_tenue_de_base(fid) is None
     # Suite avec fiche : le raccord natif (30/09), 22 images reprises puis retirées au recollage.
     assert (p2, r2) == (j1, 22) and v2["mode"] == "prolonger" and v2["plans"] == 2
     assert v2["voie"] == "raccord" and v2["images"] == 141
@@ -3950,7 +3980,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     fils = _tourner_sans_louer(h3, monkeypatch)
     probleme = {"ok": False, "problemes": [{"plan": 1, "quoi": "deux actions à la fois", "gravite": "bloquant"}]}
 
-    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None):
+    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None, departs_vus=None):
         return probleme
     monkeypatch.setattr(h3, "_continuite", continuite)
     plans = [{"image_paroles": "Léa says « Bonjour. »", "ambiance": "", "enchainement": "coupe"}]
@@ -3977,7 +4007,7 @@ def test_avant_de_refuser_le_studio_corrige_une_fois_le_texte(h3, monkeypatch, s
     fid = _scenario_pret(h3, avec_voix=True)
     fils = _tourner_sans_louer(h3, monkeypatch)
 
-    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None):
+    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None, departs_vus=None):
         if "telescope" in plans[0]["image_paroles"]:
             return {"ok": True, "problemes": []}
         return {"ok": False, "problemes": [{"plan": 1, "quoi": "le télescope disparaît", "gravite": "bloquant"}]}
@@ -4015,7 +4045,7 @@ def test_la_voix_du_locuteur_n_a_pas_de_passe_droit(h3, monkeypatch, sans_depart
     fid = _scenario_pret(h3, avec_voix=False)
     fils = _tourner_sans_louer(h3, monkeypatch)
 
-    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None):
+    async def continuite(plans, histoire, deja_filmes=None, fins_vues=None, departs_vus=None):
         return {"ok": True, "problemes": []}
     monkeypatch.setattr(h3, "_continuite", continuite)
     plans = [{"image_paroles": "Léa says « Bonjour. »", "ambiance": "", "enchainement": "coupe"}]

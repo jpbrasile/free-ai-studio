@@ -5969,16 +5969,18 @@ async def _relire_et_corriger(plans: list, continuite: dict, histoire: str) -> t
     return corriges, apres, dict({"trouves": trouves, "corrige": True}, **({"tenue_retiree": tenues} if tenues else {}))
 
 
-async def _continuite(plans: list, histoire: str, deja_filmes=None, fins_vues=None) -> dict:
+async def _continuite(plans: list, histoire: str, deja_filmes=None, fins_vues=None, departs_vus=None) -> dict:
     """Le contrôle de continuité du texte (gratuit) ; illisible, il le dit sans
     rien bloquer : c'est une aide, le propriétaire relit. `deja_filmes` : les plans
     repris d'un rejeu, dont le film fait foi, pas le texte (02/10) ; `fins_vues` :
-    {numéro: JPEG} de la vraie dernière image de certains d'entre eux, jointe."""
-    vues = sorted(fins_vues or {})
+    {numéro: JPEG} de la vraie dernière image de certains d'entre eux, jointe ;
+    `departs_vus` : {numéro: image} de l'image de départ des coupes, jointe (03/10)."""
+    vues, departs = sorted(fins_vues or {}), sorted(departs_vus or {})
+    images = [_data_url(fins_vues[n]) for n in vues] + [_data_url(departs_vus[n]) for n in departs]
     try:
         c = video_h3.lire_continuite(await _chat_du_studio(
-            video_h3.consigne_continuite(plans, histoire, deja_filmes, vues), "le contrôle de continuité",
-            images=[_data_url(fins_vues[n]) for n in vues] or None, modele=video_h3.MODELE_JUGE), len(plans),
+            video_h3.consigne_continuite(plans, histoire, deja_filmes, vues, departs), "le contrôle de continuité",
+            images=images or None, modele=video_h3.MODELE_JUGE), len(plans),
             [p["image_paroles"] + " " + p.get("ambiance", "") for p in plans], deja_filmes)
     except (ValueError, HTTPException) as exc:
         return {"ok": None, "problemes": [], "details": [], "etats": [], "erreur": str(getattr(exc, "detail", exc))}
@@ -6219,7 +6221,17 @@ async def _verifier_scenario(plans: list, commun: dict, continuite=None, deja_fi
     Gratuit (chat du Studio et modèle qui voit)."""
     fiches = _fiches_du_scenario(commun)
     if continuite is None:
-        continuite = await _continuite(plans, _histoire(plans), deja_filmes, fins_vues)
+        # Le relecteur voit l'image de départ de chaque coupe qui en a une (03/10) : elle fait foi
+        # sur le texte pour le début du plan. Un plan déjà filmé garde sa vraie dernière image.
+        repris = set(deja_filmes or ()) | set(fins_vues or {})
+        departs = {}
+        for k, p in enumerate(plans, 1):
+            if p.get("enchainement") == "coupe" and p.get("image_depart") and k not in repris:
+                try:
+                    departs[k] = video_h3.depart_lire(p["image_depart"])
+                except ValueError:
+                    pass
+        continuite = await _continuite(plans, _histoire(plans), deja_filmes, fins_vues, departs)
     texte = regles.regles_texte(plans, continuite, fiches, commun.get("langues") or {},
                                 commun.get("langue") or video_h3.LANGUE_PAROLES,
                                 [_voix_envoyees(p, fiches, commun.get("langues") or {},
@@ -6362,19 +6374,9 @@ async def _scenario_tenues(commun: dict, plans: list, a_tourner: list) -> list:
     ids = [f for f in ids if not video_h3.fiche_est_objet(video_h3.fiche_lire(f))]
     faites = []
     releve = await _tenues_des_plans(ids, plans)
-    # Chaque plan ÉCRIT aussi la tenue de chaque personnage : celle que le scénario
-    # donne à ce plan, sinon celle de la fiche, lue sur sa photo (29/09 : de dos,
-    # H3 a inventé un sweat gris). Rien de lisible : les photos seules, comme avant.
-    for fid in ids:
-        par_plan = releve.get(fid) or [None] * len(plans)
-        base = None if all(par_plan) else await _tenue_de_base(fid)
-        for p in a_tourner:
-            ecrite = par_plan[p["numero"] - 1] or base
-            if ecrite and p["payload"].get("mode") == "references":
-                p["payload"].setdefault("tenues_ecrites", {})[fid] = ecrite
-                # Invite toujours sous 4 000 caractères, avant le premier sou ; une suite, telle
-                # que le tournage la fabriquera (bug 20 du 02/10).
-                (video_h3.controler_suite if p["enchainement"] == "suite" else video_h3.preparer)(p["payload"])
+    # La tenue n'est plus ÉCRITE dans l'invite (29/09 : celle du plan, sinon celle de la fiche lue
+    # sur sa photo). Propriétaire, 03/10 : « les attributs sont toujours avec des images, jamais
+    # en texte » ; les photos de la fiche, et celle d'une tenue changée, la portent seules.
     for fid, par_plan in releve.items():
         nom = video_h3.fiche_lire(fid)["nom"]
         for tenue in dict.fromkeys(t for t in par_plan if t):

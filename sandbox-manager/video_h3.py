@@ -3017,18 +3017,28 @@ DEJA_FILMES = (
     "what is there, and what they do. ")
 
 
-def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=()) -> str:
+def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=(), departs=()) -> str:
     """Le texte des plans se tient-il ? Un état au début et à la fin de chaque
     plan (28/09/2026) : un plan part de l'état où le précédent s'arrête, et
     aucune action ne vient avant ce qui la cause. Rien n'est loué.
     `deja_filmes` : les numéros (1…) des plans repris d'un film (rejeu) ; `vues` :
-    ceux dont la vraie dernière image est jointe, dans cet ordre."""
+    ceux dont la vraie dernière image est jointe, dans cet ordre ; `departs` : ceux dont
+    l'image de départ est jointe, après les dernières images."""
     deja = set(deja_filmes or ())
     # Banc du 02/10 (texte du film 4, 4 relectures) : la marque seule laissait encore une
     # remarque sur le recul du plan 2, lue dans le « Medium shot » du texte du plan 1.
     jointes = ("The attached images, in order, are the REAL last images of shots %s, already filmed: they "
                "are the truth over those shots' text, and the next shot starts exactly from each of them. "
                % ", ".join(str(n) for n in vues)) if vues else ""
+    # 03/10, « Le jardin de verre » : refus avant tournage, « l'arrosoir doit être visible dès le
+    # début », alors qu'il l'était sur l'image de départ, que le relecteur ne voyait pas.
+    # Propriétaire : « les attributs sont toujours avec des images, jamais en texte ».
+    images_depart = ("The attached images %d to %d are the START images of shots %s, in this order, already made: "
+                     "each shot is filmed from its image, which is the truth over that shot's text for what is "
+                     "in the frame at its start (who and what is there, where, posture, what each hand holds, how "
+                     "they look). Never report that something must be shown, placed or said at the start of such "
+                     "a shot when its image shows it. "
+                     % (len(vues) + 1, len(vues) + len(departs), ", ".join(str(n) for n in departs))) if departs else ""
     plans_json = [dict({k: p[k] for k in ("image_paroles", "enchainement")}, **({"deja_filme": True} if k in deja else {}))
                   for k, p in enumerate(plans, 1)]
     # Le 29/09, le relecteur du scénario complet (demande du propriétaire : « rajoute
@@ -3108,7 +3118,8 @@ def consigne_continuite(plans: list, histoire: str, deja_filmes=None, vues=()) -
             "\"debut\": \"...\", \"fin\": \"...\"}], \"problemes\": [{\"plan\": number, \"citation\": \"...\", "
             "\"quoi\": \"...\", \"gravite\": \"bloquant|detail\"}]}; "
             "an empty \"problemes\" list if the shots hold together.\n\n%sStory: %s\n\nShots: %s"
-            % ((DEJA_FILMES + jointes) if deja else "", histoire, json.dumps(plans_json, ensure_ascii=False)))
+            % (((DEJA_FILMES + jointes) if deja else "") + images_depart, histoire,
+               json.dumps(plans_json, ensure_ascii=False)))
 
 
 # 02/10, film 4, demande du propriétaire : « faire relire la vidéo précédente pour améliorer si
