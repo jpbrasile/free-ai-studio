@@ -1408,10 +1408,13 @@ def test_le_film_se_simule_en_images_debut_et_fin_sans_rien_tourner(h3, monkeypa
     # La suite reprend l'image de fin du plan d'avant ; la coupe en part, autre cadrage, raccord jugé.
     assert lignes[1]["depart"] == lignes[0]["fin"]
     assert lignes[2]["raccord"] == ["le pot a changé de forme"] and ("le contrôle du raccord", 2) in juges
-    # 5 images : début 1, fin 1, fin 2, début 3 (coupe), fin 3 ; jamais la réplique sur l'image.
-    assert len(demandes) == 5 and not any("Pousse" in d for d in demandes)
+    # Le faux raccord se redessine une fois, comme au tournage ; les fautes du dernier essai restent.
+    assert lignes[2]["raccord_essais"] == v.RACCORD_ESSAIS == 2
+    assert sum(q == "le contrôle du raccord" for q, _n in juges) == 2
+    # 6 images : début 1, fin 1, fin 2, début 3 (coupe) deux fois, fin 3 ; jamais la réplique sur l'image.
+    assert len(demandes) == 6 and not any("Pousse" in d for d in demandes)
     assert sum(v.CONSIGNE_FIN.split("%d")[1][:40] in d for d in demandes) == 3
-    assert v.CONSIGNE_COUPE % 2 in demandes[3]
+    assert v.CONSIGNE_COUPE % 2 in demandes[3] and v.CONSIGNE_COUPE % 2 in demandes[4]
     assert "fin de la scène" in demandes[2] and "a crystal sprout : at the centre, grown." in demandes[2]
     # 03/10, propriétaire : l'image de fin a aussi les photos des fiches présentes à la fin
     # (Mila, l'objet clef), jamais celles des absents (Mila n'est pas au plan 2).
@@ -5720,6 +5723,13 @@ def test_le_decor_a_sa_fiche_et_ne_part_pas_a_h3(h3):
     assert demande["image_reference"] == [image]
     assert v.CONSIGNE_LIEU % 1 in demande["prompt"] and v.CONSIGNE_COUPE_LIEU in demande["prompt"]
     assert v.CONSIGNE_COUPE % 1 not in demande["prompt"]   # pas la dernière image : le lieu vient de la fiche
+    # 03/10, « le fauteuil se balade » : les meubles du décor sont nommés et ne bougent pas.
+    assert "MEUBLES (canapé, fauteuil" in v.CONSIGNE_LIEU and "déplacé ni remplacé" in v.CONSIGNE_LIEU
+    # Une image antérieure du film tient aussi les meubles, sans imposer ses objets.
+    avant = v.depart_poser(PNG)
+    avec, _ = v.demande_image("Wide shot. Leila sits.", lieu=lieu["id"], coupe=True, meubles=avant)
+    assert len(avec["image_reference"]) == 2 and v.CONSIGNE_MEUBLES % 2 in avec["prompt"]
+    assert v.CONSIGNE_ETAT_COUPE % 2 not in avec["prompt"]
     seule, _ = v.demande_image("x", lieu=lieu["id"])
     assert v.CONSIGNE_COUPE_LIEU not in seule["prompt"]
     personne = v.fiche_creer("Leila", "une adolescente")["id"]
@@ -6330,6 +6340,11 @@ def test_la_fiche_du_decor_se_fait_d_apres_le_texte_si_le_film_reste_au_meme_end
     # 03/10, « Le jardin de verre » : la pousse que le plan 2 fait naître était déjà dans le pot du décor.
     assert "at the START of the film" in consigne and "an empty pot stays empty" in consigne
     assert "aucun objet ni plante en plus" in v.CADRE_DECOR
+    # 03/10, « le canapé aurait dû faire partie du décor id » : les meubles y sont décrits, pas les accessoires.
+    assert "EVERY piece of furniture" in consigne and "say there is no other furniture" in consigne
+    assert "nor the props the characters use" in consigne
+    assert "every piece of furniture" in v.consigne_decor_du_film(3)
+    assert "aucun meuble n'est ajouté ni retiré" in v.CONSIGNE_PLANCHE_DECOR
     assert v.lire_decor_du_texte('{"un_seul_lieu": false}') is None
     with pytest.raises(ValueError):
         v.lire_decor_du_texte("pas de JSON")
@@ -6607,3 +6622,25 @@ def test_le_raccord_d_une_coupe_est_controle_redessine_une_fois_puis_arrete(h3, 
     _faux_chat(monkeypatch, h3, {"le contrôle du raccord": ["illisible"]}, vus)
     assert h3._depart_de_coupe(scenario("e" * 32)["id"], 1, "j" * 32, {}) is True
     assert v.scenario_lire("e" * 32)["raccords"][0]["erreur"]
+
+
+def test_avec_la_fiche_du_decor_une_coupe_d_avant_tournage_tient_les_meubles_de_la_precedente(h3, monkeypatch):
+    """03/10, « Le jardin de verre » : « le fauteuil se balade » d'une image de départ à l'autre ;
+    avec la fiche du décor, la coupe ne recevait plus l'image de la coupe d'avant."""
+    vus = []
+
+    async def depart(corps):
+        vus.append(corps)
+        return {"id": "d%d" % len(vus), "texte": "x"}
+    monkeypatch.setattr(h3, "_depart_redemande", depart)
+    plans = [{"image_paroles": "Wide shot. Mila kneels.", "enchainement": "coupe"},
+             {"image_paroles": "Close-up. The pot.", "enchainement": "suite"},
+             {"image_paroles": "Wide shot. Mila stands.", "enchainement": "coupe"}]
+    assert asyncio.run(h3._departs_des_coupes(plans, {"fiches": ["f"], "decor": "lieu1"}))
+    assert [(x["decor"], x["meubles"], x["coupe"]) for x in vus] == [(None, None, False), (None, "d1", True)]
+    vus.clear()
+    plans = [dict(p) for p in plans]
+    for p in plans:
+        p.pop("image_depart", None)
+    asyncio.run(h3._departs_des_coupes(plans, {"fiches": ["f"]}))   # sans décor : comme avant
+    assert [(x["decor"], x["meubles"]) for x in vus] == [(None, None), ("d1", None)]

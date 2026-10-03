@@ -4448,7 +4448,7 @@ async def _creer_depart(corps: dict) -> dict:
             demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
                                                     corps.get("fiches") or [], corps.get("decor"), tenues,
                                                     coupe=corps.get("coupe") is True, lieu=corps.get("lieu"),
-                                                    fin_de=corps.get("fin_de"))
+                                                    fin_de=corps.get("fin_de"), meubles=corps.get("meubles"))
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -6509,10 +6509,12 @@ async def _departs_des_coupes(plans: list, commun: dict) -> bool:
         if p["enchainement"] != "coupe":
             continue
         if not p.get("image_depart"):
-            # Avec la fiche du décor (02/10), elle seule donne le lieu, et chaque coupe change de cadrage.
+            # Avec la fiche du décor (02/10), elle donne le lieu, et chaque coupe change de cadrage ;
+            # l'image de la coupe d'avant tient les meubles en place (03/10, « le fauteuil se balade »).
             lieu = commun.get("decor")
             d = await _depart_redemande({"texte": video_h3.texte_depart(p), "fiches": ids,
-                                         "decor": None if lieu else decor, "lieu": lieu, "coupe": bool(lieu and k),
+                                         "decor": None if lieu else decor, "meubles": decor if lieu else None,
+                                         "lieu": lieu, "coupe": bool(lieu and k),
                                          "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
             p.update(image_depart=d["id"], description_depart=d["texte"])
             pose = True
@@ -6619,16 +6621,24 @@ async def video_h3_scenario_simuler(request: Request, authorization: Optional[st
                                                        coupe=False, elements=p.get("elements") or [])))
                 ligne["depart"], ligne["description_depart"] = d["id"], d["texte"]
             else:
-                d = await _depart_redemande(dict(commun_image, texte=video_h3.texte_depart(p), decor=fin_avant,
-                                                 coupe=True, elements=p.get("elements") or []))
-                ligne["depart"], ligne["description_depart"] = d["id"], d["texte"]
-                try:
-                    ligne["raccord"] = video_h3.lire_raccord(await _chat_du_studio(
-                        video_h3.consigne_raccord(d["texte"]), "le contrôle du raccord",
-                        images=[_data_url(video_h3.depart_lire(fin_avant)), _data_url(video_h3.depart_lire(d["id"]))],
-                        modele=video_h3.MODELE_JUGE))
-                except (ValueError, HTTPException) as exc:
-                    ligne["raccord_erreur"] = str(getattr(exc, "detail", exc))
+                # Un faux raccord se redessine, comme au tournage (RACCORD_ESSAIS) ; les fautes
+                # du dernier essai restent montrées.
+                for tour in range(video_h3.RACCORD_ESSAIS):
+                    d = await _depart_redemande(dict(commun_image, texte=video_h3.texte_depart(p), decor=fin_avant,
+                                                     coupe=True, elements=p.get("elements") or []))
+                    ligne["depart"], ligne["description_depart"] = d["id"], d["texte"]
+                    ligne["raccord_essais"] = tour + 1
+                    try:
+                        ligne["raccord"] = video_h3.lire_raccord(await _chat_du_studio(
+                            video_h3.consigne_raccord(d["texte"]), "le contrôle du raccord",
+                            images=[_data_url(video_h3.depart_lire(fin_avant)),
+                                    _data_url(video_h3.depart_lire(d["id"]))],
+                            modele=video_h3.MODELE_JUGE))
+                    except (ValueError, HTTPException) as exc:
+                        ligne["raccord_erreur"] = str(getattr(exc, "detail", exc))
+                        break
+                    if not ligne["raccord"]:
+                        break
             f = await _depart_redemande(dict(commun_image, texte=video_h3.texte_fin(p), decor=None, coupe=False,
                                              fin_de=ligne["depart"],
                                              elements=video_h3.elements_a_la_fin(p.get("elements") or [])))

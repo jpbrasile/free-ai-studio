@@ -807,10 +807,21 @@ CONSIGNE_COUPE = ("L'image jointe %d est la dernière image du plan précédent 
 # l'image par rapport à celle de fin […] le décor doit avoir son id image pour la
 # consistance »). Film 4, plan 2 : refait depuis la dernière image du plan 1, un gros
 # plan, le lieu est sorti inventé (brique et terrasse de café au lieu de pierre beige).
+# 03/10, « Le jardin de verre » : le canapé beige du décor est revenu en fauteuil à droite
+# (plan 1), contre un autre mur ou au premier plan (plans 3, 4, 6) — « le fauteuil se
+# balade », « le canapé aurait dû faire partie du décor id » (propriétaire). Les meubles
+# sont nommés ici, et décrits dans la fiche (consigne_decor_du_texte).
 CONSIGNE_LIEU = ("L'image jointe %d est le DÉCOR du film, vide de personnes : c'est le même lieu, avec les mêmes "
                  "bâtiments, le même sol, la même lumière et chaque élément fixe à la même place (ce qui est à "
-                 "gauche reste à gauche, rien n'apparaît ni ne disparaît) ; les personnes et les objets se placent "
-                 "comme la description le dit. ")
+                 "gauche reste à gauche, rien n'apparaît ni ne disparaît) ; les MEUBLES (canapé, fauteuil, table, "
+                 "étagère…) sont exactement ceux du décor, même forme, même taille, même couleur, à la même place "
+                 "contre les mêmes murs : aucun n'est ajouté, retiré, déplacé ni remplacé. Les personnes et les "
+                 "objets se placent comme la description le dit. ")
+# Les images de départ faites avant le tournage (03/10) : une coupe reçoit aussi l'image de la
+# coupe d'avant, pour le lieu seulement — l'action a pu changer les objets entre les deux.
+CONSIGNE_MEUBLES = ("L'image jointe %d est une image antérieure du même film, dans ce lieu : les murs, les fenêtres, "
+                    "les portes et les MEUBLES y sont tels qu'ils doivent rester (même forme, taille, couleur et "
+                    "place) ; les personnes et les objets, eux, suivent la description, pas cette image. ")
 CONSIGNE_LIEU_PLANCHE = ("L'image jointe %d montre ce même décor sous quatre vues : pour un cadrage d'un autre côté, "
                          "le lieu est celui de la vue qui lui correspond. ")
 CONSIGNE_COUPE_LIEU = ("Ceci est une COUPE : le cadrage et l'angle de la caméra sont NETTEMENT différents de ceux du "
@@ -874,7 +885,7 @@ def reformuler_depart(texte: str, reponse: str) -> str:
 
 
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False,
-                  lieu=None, fin_de=None) -> tuple:
+                  lieu=None, fin_de=None, meubles=None) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
     l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
 
@@ -929,6 +940,11 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
             genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
             photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
             tete += CONSIGNE_ETAT_COUPE % len(photos)
+        elif meubles:   # une image antérieure du film : ses meubles, pas ses objets (03/10)
+            octets = depart_lire(meubles)
+            genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
+            photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
+            tete += CONSIGNE_MEUBLES % len(photos)
     elif decor:
         octets = depart_lire(decor)
         genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
@@ -1156,7 +1172,8 @@ def images_pour_decor(fins: list) -> list:
 def consigne_decor_du_film(nombre: int) -> str:
     return ("The %d attached images are frames of one short film, all shot in the same place. Describe THE PLACE "
             "ONLY, for an image model that must redraw it empty of people: every fixed element you can see "
-            "(fountains, statues, benches, steps, doors, windows, lamps, signs, trees, ground), with its exact "
+            "(fountains, statues, benches, steps, doors, windows, lamps, signs, trees, ground; indoors, every "
+            "piece of furniture: sofa, armchair, table, shelf, rug), with its exact "
             "shape (how many tiers or levels, how high compared with a seated person, what material, what "
             "colour), and where it stands relative to the others (left, right, behind, in front). Prefer what "
             "several images agree on. Never describe people, animals, vehicles or anything held; never invent "
@@ -1189,7 +1206,8 @@ CONSIGNE_PLANCHE_DECOR = ("Planche de référence d'un LIEU, photo réaliste, sa
                           "mêmes formes, mêmes matières, même lumière). Quatre vues sur une grille 2x2 : en haut à "
                           "gauche, vue d'ensemble de face ; en haut à droite, le même lieu vu depuis la gauche ; en "
                           "bas à gauche, vu depuis la droite ; en bas à droite, plus près de l'élément principal. "
-                          "Chaque élément garde sa place dans le lieu d'une vue à l'autre. Aucun texte, aucune "
+                          "Chaque élément et chaque meuble (même forme, même couleur) garde sa place dans le lieu "
+                          "d'une vue à l'autre ; aucun meuble n'est ajouté ni retiré. Aucun texte, aucune "
                           "légende.")
 
 
@@ -1220,9 +1238,13 @@ def consigne_decor_du_texte(textes: list) -> str:
             "same place: every fixed element the script names or implies (fountains, statues, benches, steps, "
             "doors, windows, lamps, trees, ground), each with ONE precise shape (how many tiers or levels, how "
             "many water jets, how high compared with a seated person, what material, what colour) and where it "
-            "stands relative to the others (left, right, behind, in front). Where the script is vague, choose one "
+            "stands relative to the others (left, right, behind, in front). Indoors, also EVERY piece of "
+            "furniture the room has, even if the script does not name it (sofa, armchair, table, shelf, rug, "
+            "lamp), each with its shape, size, colour and the wall it stands against, and say there is no other "
+            "furniture. Where the script is vague, choose one "
             "plausible precise form consistent with it. Never describe people, animals, vehicles or anything "
-            "held. Describe the place as it is at the START of the film: nothing the story later makes appear, "
+            "held, nor the props the characters use or that the story is about (they have their own pictures "
+            "and would be drawn twice). Describe the place as it is at the START of the film: nothing the story later makes appear, "
             "grow, break or transform (it would be there before its time); a container stays as it starts "
             "(an empty pot stays empty). Answer JSON only: {\"un_seul_lieu\": true or false, \"nom\": \"a short English name of the "
             "place, 2-5 words\", \"description\": \"the place in English, one paragraph, %d characters at most\"}."
