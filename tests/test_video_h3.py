@@ -1363,6 +1363,64 @@ def test_le_relecteur_d_avant_tournage_voit_les_images_de_depart(h3, monkeypatch
     assert "START images" not in v.consigne_continuite(plans, "x")
 
 
+def test_le_film_se_simule_en_images_debut_et_fin_sans_rien_tourner(h3, monkeypatch, sans_regles):
+    """03/10, propriétaire : « simule tous les clips sans les lancer, seulement en images » et
+    « image de début + script = image de fin »."""
+    v = h3.video_h3
+    _autoriser(h3)
+    monkeypatch.setattr(v, "a_traduire", lambda p: False)
+    fid = v.fiche_creer("Mila", "x")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+
+    async def tenues(ids, plans):
+        return {}
+    monkeypatch.setattr(h3, "_tenues_des_plans", tenues)
+    demandes, juges = [], []
+
+    async def image(demande):
+        if not demande["prompt"].startswith("Planche de référence"):   # la fiche de l'objet clef
+            demandes.append(demande["prompt"])
+            photos.append(len(demande.get("image_reference") or []))
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    photos = []
+
+    async def chat(consigne, quoi="", images=None, modele=""):
+        juges.append((quoi, len(images or [])))
+        return '{"ok": false, "fautes": ["le pot a changé de forme"]}'
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    tournes = []
+    monkeypatch.setattr(h3, "run_scenario_h3", lambda *a: tournes.append(a))
+    el = lambda nom, debut, fin, mvt="none": {"nom": nom, "debut": debut, "fin": fin, "mouvement": mvt}
+    plans = [{"image_paroles": "Medium shot. Mila waters the pot and says « Pousse. »", "ambiance": "",
+              "enchainement": "coupe", "elements": [el("Mila", "on the left", "on the left", "waters the pot"),
+                                                    el("the pot", "at the centre", "at the centre")]},
+             {"image_paroles": "Close-up. A crystal sprout grows from the pot.", "ambiance": "", "enchainement": "suite",
+              "elements": [el("the pot", "at the centre", "at the centre"),
+                           el("a crystal sprout", "off-frame", "at the centre, grown", "grows from the pot")]},
+             {"image_paroles": "Wide shot. Mila looks at the shrub.", "ambiance": "", "enchainement": "coupe",
+              "elements": [el("Mila", "on the right", "on the right", "looks at the shrub")]}]
+    r = client(h3).post("/video-h3/scenario/simuler", headers=CLE,
+                        json={"plans": plans, "fiche": fid, "longueur": 124, "decor_auto": False})
+    assert r.status_code == 200, r.text
+    lignes = r.json()["plans"]
+    assert [x["plan"] for x in lignes] == [1, 2, 3] and all(x["depart"] and x["fin"] for x in lignes)
+    # La suite reprend l'image de fin du plan d'avant ; la coupe en part, autre cadrage, raccord jugé.
+    assert lignes[1]["depart"] == lignes[0]["fin"]
+    assert lignes[2]["raccord"] == ["le pot a changé de forme"] and ("le contrôle du raccord", 2) in juges
+    # 5 images : début 1, fin 1, fin 2, début 3 (coupe), fin 3 ; jamais la réplique sur l'image.
+    assert len(demandes) == 5 and not any("Pousse" in d for d in demandes)
+    assert sum(v.CONSIGNE_FIN.split("%d")[1][:40] in d for d in demandes) == 3
+    assert v.CONSIGNE_COUPE % 2 in demandes[3]
+    assert "fin de la scène" in demandes[2] and "a crystal sprout : at the centre, grown." in demandes[2]
+    # 03/10, propriétaire : l'image de fin a aussi les photos des fiches présentes à la fin
+    # (Mila, l'objet clef), jamais celles des absents (Mila n'est pas au plan 2).
+    assert "Mila est la personne" in demandes[1] and "the pot est l'objet" in demandes[1]
+    assert "Mila" not in demandes[2].split(".")[0] and "the pot est l'objet" in demandes[2]
+    assert photos[1] >= 3 and photos[1] > photos[2]
+    assert tournes == []   # rien n'est tourné
+
+
 def test_la_correction_n_invente_pas_de_tenue(h3):
     """03/10, « Le jardin de verre » : le relecteur a noté « la tenue de Mila n'est décrite dans
     aucun plan », et la correction l'a habillée d'un pull crème, loin du pull rayé de sa fiche."""

@@ -874,7 +874,7 @@ def reformuler_depart(texte: str, reponse: str) -> str:
 
 
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False,
-                  lieu=None) -> tuple:
+                  lieu=None, fin_de=None) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
     l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
 
@@ -941,6 +941,11 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
             tete += ("L'image jointe %d est le plan précédent : garder le même univers, la même lumière et le même "
                      "style ; l'endroit précis, le cadrage et la place des personnes suivent la description, et si "
                      "elle dit le même endroit, garder aussi le même décor et les mêmes enseignes. " % len(photos))
+    if fin_de:   # l'image de fin (03/10) : l'image de début du même plan, jointe en dernier
+        octets = depart_lire(fin_de)
+        genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
+        photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
+        tete += CONSIGNE_FIN % len(photos)
     if len(photos) > PHOTOS_IMAGE_MAX:
         raise ValueError("Quatorze photos au plus sur une image (fiches et plan précédent) : retirez un personnage.")
     demande = {"prompt": tete + description + " " + FIGURANTS_IMAGE, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
@@ -2368,6 +2373,32 @@ def texte_depart(plan: dict) -> str:
         return PREFIXE_DEPART + texte
     cadre = texte.split(".")[0].split(":")[0].strip()
     return PREFIXE_DEPART + cadre + ". " + " ".join(f"{e['nom']} : {e['debut']}." for e in presents)
+
+
+# L'image de FIN d'un plan (03/10, propriétaire : « image de début + script = image de fin ») :
+# l'image de début jointe, le texte du plan sans ses répliques, et l'état « fin » du tableau.
+PREFIXE_FIN = "Photo réaliste, cadrage paysage 16:9, image nette, fin de la scène : "
+CONSIGNE_FIN = ("L'image jointe %d est la PREMIÈRE image de ce plan. Dessine sa DERNIÈRE image, une fois faite "
+                "l'action décrite : même lieu, même caméra, même cadrage, même lumière ; mêmes personnes et mêmes "
+                "objets aux mêmes places, sauf ce que l'action change (ce qui naît pendant le plan est là, ce qui "
+                "part n'y est plus, chacun dans la pose et à la place de la fin). ")
+
+
+def texte_fin(plan: dict) -> str:
+    """La description de l'image de fin d'un plan : son texte sans les répliques, puis l'état « fin »
+    de chaque élément resté dans le champ."""
+    restes = [e for e in (plan.get("elements") or []) if isinstance(e, dict) and e.get("nom")
+              and e.get("fin") and not hors_champ(e.get("fin"))]
+    texte = sans_paroles(plan.get("image_paroles") or "").strip()
+    if not restes:
+        return PREFIXE_FIN + texte
+    return PREFIXE_FIN + texte + " À la fin : " + " ".join(f"{e['nom']} : {e['fin']}." for e in restes)
+
+
+def elements_a_la_fin(elements) -> list:
+    """Le tableau vu depuis la fin du plan (le « debut » de chacun devient sa « fin ») : pour
+    `fiches_au_depart`, qui retire alors ceux qui sont partis."""
+    return [dict(e, debut=e.get("fin") or e.get("debut")) for e in elements or () if isinstance(e, dict)]
 
 
 def fiches_au_depart(fiches: list, elements, texte: str = "") -> list:

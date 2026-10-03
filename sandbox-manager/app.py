@@ -4447,7 +4447,8 @@ async def _creer_depart(corps: dict) -> dict:
         else:
             demande, texte = video_h3.demande_image(corps.get("texte", ""), corps.get("ameliorations") or [],
                                                     corps.get("fiches") or [], corps.get("decor"), tenues,
-                                                    coupe=corps.get("coupe") is True, lieu=corps.get("lieu"))
+                                                    coupe=corps.get("coupe") is True, lieu=corps.get("lieu"),
+                                                    fin_de=corps.get("fin_de"))
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -6577,6 +6578,66 @@ async def video_h3_scenario_tourner(request: Request, authorization: Optional[st
     await _scenario_traduire(a_tourner, musique)
     return _scenario_lancer(plans, commun, musique, a_tourner, tenues=tenues, regles=rapport, force=forcer, ou=ou,
                             correction=refus.get("correction"), objets_clefs=objets, decor_auto=decor_auto)
+
+
+@app.post("/video-h3/scenario/simuler")
+async def video_h3_scenario_simuler(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Le film en images seules, rien de tourné (03/10, propriétaire : « simule tous les clips sans
+    les lancer, seulement en images », et « image de début + script = image de fin »). Pour chaque
+    plan, dans l'ordre : l'image de début (le plan 1 comme au tournage ; une coupe depuis l'image de
+    fin du plan d'avant, autre cadrage, son raccord jugé ; une suite reprend l'image de fin du plan
+    d'avant), puis l'image de fin (l'image de début et le texte du plan). Gratuit (image et juge du
+    Studio). Une image impossible s'arrête là et le dit ; ce qui est fait est rendu."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    try:
+        plans = video_h3.verifier_plans(corps.get("plans"))
+        objets = await _avec_objets_clefs(plans, corps)
+        commun, _musique, _a_tourner = _scenario_prepare(corps, plans)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    decor_auto = None
+    if (not commun.get("decor") and corps.get("decor_auto") is not False
+            and os.getenv("STUDIO_DECOR_AUTO", "true").strip().lower() != "false"):
+        decor_auto = await _decor_du_texte(plans)
+        commun["decor"] = decor_auto["fiche"] or None
+    lieu = commun.get("decor")
+    ids = [f for f in (commun.get("fiches") or [commun.get("fiche")]) if f]
+    textes = [p["image_paroles"] for p in plans]
+    sortie, fin_avant = [], None
+    for k, p in enumerate(plans):
+        ligne = {"plan": k + 1, "enchainement": p["enchainement"], "depart": None, "fin": None}
+        sortie.append(ligne)
+        commun_image = {"fiches": ids, "plans": textes, "plan": k + 1, "lieu": lieu}
+        try:
+            if p["enchainement"] == "suite" and fin_avant:
+                ligne["depart"], ligne["description_depart"] = fin_avant, "fin du plan d'avant"
+            elif k == 0 or not fin_avant:
+                d = ({"id": p["image_depart"], "texte": p.get("description_depart", "")} if p.get("image_depart")
+                     else await _depart_redemande(dict(commun_image, texte=video_h3.texte_depart(p), decor=None,
+                                                       coupe=False, elements=p.get("elements") or [])))
+                ligne["depart"], ligne["description_depart"] = d["id"], d["texte"]
+            else:
+                d = await _depart_redemande(dict(commun_image, texte=video_h3.texte_depart(p), decor=fin_avant,
+                                                 coupe=True, elements=p.get("elements") or []))
+                ligne["depart"], ligne["description_depart"] = d["id"], d["texte"]
+                try:
+                    ligne["raccord"] = video_h3.lire_raccord(await _chat_du_studio(
+                        video_h3.consigne_raccord(d["texte"]), "le contrôle du raccord",
+                        images=[_data_url(video_h3.depart_lire(fin_avant)), _data_url(video_h3.depart_lire(d["id"]))],
+                        modele=video_h3.MODELE_JUGE))
+                except (ValueError, HTTPException) as exc:
+                    ligne["raccord_erreur"] = str(getattr(exc, "detail", exc))
+            f = await _depart_redemande(dict(commun_image, texte=video_h3.texte_fin(p), decor=None, coupe=False,
+                                             fin_de=ligne["depart"],
+                                             elements=video_h3.elements_a_la_fin(p.get("elements") or [])))
+            ligne["fin"], ligne["description_fin"] = f["id"], f["texte"]
+            fin_avant = f["id"]
+        except HTTPException as exc:
+            ligne["erreur"] = str(exc.detail)
+            break
+    return {"plans": sortie, "decor": lieu, "decor_auto": decor_auto, "objets_clefs": objets}
 
 
 def _fins_images(sc: dict) -> list:
