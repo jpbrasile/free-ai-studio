@@ -2440,16 +2440,18 @@ def apparitions_du_tableau(plans: list) -> list:
 
 
 def distribution(fiches) -> str:
-    """Les fiches du scénario, lues par le découpage (03/10, « Le jardin de verre » : sans
-    elles, le chat a habillé Mila d'un « cream knit sweater and blue jeans » dans les 7 plans,
-    loin du pull rayé de sa fiche). Sans âge chiffré : le chat le recopierait dans les plans."""
-    lignes = ["- %s (%s): %s" % (f.get("nom") or "?", f.get("genre") or "personne", sans_age(f.get("description")))
-              for f in fiches or () if isinstance(f, dict) and f.get("genre") != "pose" and f.get("description")]
+    """Les noms des fiches du scénario, lus par le découpage. Propriétaire, 03/10 : « les attributs
+    sont toujours avec des images, jamais en texte ». Avec la description de la fiche, le chat
+    écrivait la tenue dans les plans, et le texte dérive (« Le jardin de verre » : pull crème
+    au lieu du pull rayé) ; la photo de la fiche, jointe à chaque image, porte l'apparence."""
+    lignes = ["- %s (%s)" % (f.get("nom") or "?", f.get("genre") or "personne")
+              for f in fiches or () if isinstance(f, dict) and f.get("genre") != "pose" and f.get("nom")]
     if not lignes:
         return ""
-    return ("The characters and objects of this film have reference sheets; they look exactly as written here, "
-            "in every shot (write their looks in the language of the shots):\n" + "\n".join(lignes) + "\n"
-            "A character wears ONLY the clothes written on its sheet: never invent, add or change clothing.\n\n")
+    return ("The characters and objects of this film have reference pictures, joined to every image: they "
+            "give how each one looks. Name them by these names:\n" + "\n".join(lignes) + "\n"
+            "Never write their looks: no clothing, hair, face, age, size or colour of a character, nor the "
+            "look of an object that has a picture.\n\n")
 
 
 def consigne_decoupage(scenario: str, fiches=()) -> str:
@@ -2937,8 +2939,8 @@ def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
     return (reference + "Here are the shots of a short film (JSON) and the feedback after shooting them. Rewrite the shots "
             # 29/09 : la correction inventait des vêtements (t-shirt blanc sur une fiche en sweat) ;
             # une tenue ne vient que de l'histoire ou des plans, la même partout.
-            "so that the feedback is fixed: be explicit about who is in the frame. Name clothing only when "
-            "the story or the shots already give it, and then the same clothing in every shot. Keep the "
+            "so that the feedback is fixed: be explicit about who is in the frame. Never write a character's "
+            "clothing or looks (reference pictures give them), unless the story itself gives them. Keep the "
             "same number of shots in the same order, keep each \"enchainement\", and copy every line of "
             "dialogue between « » EXACTLY in its own shot; never add, move or remove dialogue. " + MARQUES
             + "Change only what "
@@ -3260,6 +3262,24 @@ def sans_tenue_inventee(nouveaux: list, plans: list, histoire: str = "") -> tupl
             if champs["image_paroles"] != n["image_paroles"] or champs["ambiance"] != n.get("ambiance", ""):
                 touches.append(k)
             sortie.append(dict(n, **champs))
+    return sortie, touches
+
+
+def sans_tenue_du_texte(plans: list, histoire: str = "") -> tuple:
+    """(plans, numéros retouchés) : la tenue qu'un plan écrit sans que l'histoire la donne est
+    retirée (« les attributs sont toujours avec des images, jamais en texte », 03/10)."""
+    connus, sortie, touches = vetements(histoire), [], []
+    for k, p in enumerate(plans, 1):
+        champs = {}
+        for c in ("image_paroles", "ambiance"):
+            t = str(p.get(c) or "")
+            if vetements(t) - connus:
+                t = _PORTE_FIN.sub("", _PORTE_ENTRE.sub(" ", t))
+            champs[c] = t
+        if champs["image_paroles"] != p["image_paroles"] or champs["ambiance"] != p.get("ambiance", ""):
+            touches.append(k)
+            p = dict(p, **champs)
+        sortie.append(p)
     return sortie, touches
 
 

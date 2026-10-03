@@ -6412,9 +6412,17 @@ def test_le_decoupage_recoit_les_fiches_et_ne_change_pas_la_tenue(h3, monkeypatc
     assert r.status_code == 200, r.text
     consigne = vus[0]["messages"][0]["content"]
     consigne = consigne if isinstance(consigne, str) else consigne[0]["text"]
-    assert "- Mila (personne): Fillette, pull à rayures blanches et bleu marine" in consigne
-    assert "9 ans" not in consigne
-    assert "never invent, add or change clothing" in consigne
+    # 03/10, propriétaire : « les attributs sont toujours avec des images, jamais en texte » :
+    # le nom seul part, la photo porte l'apparence.
+    assert "- Mila (personne)" in consigne and "rayures" not in consigne and "9 ans" not in consigne
+    assert "Never write their looks: no clothing" in consigne
+    # Une tenue écrite quand même par le découpage, que l'histoire ne donne pas, est retirée.
+    v = h3.video_h3
+    sortie, touches = v.sans_tenue_du_texte(
+        [{"image_paroles": "Mila, wearing a cream sweater, waters the pot.", "ambiance": ""},
+         {"image_paroles": "Mila waters the pot, in her red coat.", "ambiance": ""}], "Mila, in her red coat, waters.")
+    assert [s["image_paroles"] for s in sortie] == ["Mila waters the pot.", "Mila waters the pot, in her red coat."]
+    assert touches == [1]
     # Une fiche inconnue est refusée avant tout appel au chat ; sans fiche, rien n'est ajouté.
     assert c.post("/video-h3/scenario/decouper", headers=CLE,
                   json={"scenario": "x", "fiche": "inconnue"}).status_code == 400

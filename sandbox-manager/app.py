@@ -5833,8 +5833,10 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
         relecture["second_tour"] = second
     plans, marques = await _marquer_repliques(plans)
     plans, scissions = await _scinder_repliques(plans)
-    return {"plans": plans, "continuite": continuite, "relecture": relecture, "histoire_anglais": scenario,
-            "marques": marques, "scissions": scissions}
+    # 03/10, propriétaire : « les attributs sont toujours avec des images, jamais en texte ».
+    plans, tenues = video_h3.sans_tenue_du_texte(plans, scenario)
+    return dict({"plans": plans, "continuite": continuite, "relecture": relecture, "histoire_anglais": scenario,
+                 "marques": marques, "scissions": scissions}, **({"tenue_retiree": tenues} if tenues else {}))
 
 
 async def _scinder_repliques(plans: list) -> tuple:
