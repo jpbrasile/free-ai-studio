@@ -5936,8 +5936,6 @@ def test_la_fiche_du_decor_se_fait_d_apres_le_film(h3, monkeypatch):
     monkeypatch.setattr(h3, "_video_h3_octets", lambda jid: Path(__file__))
     monkeypatch.setattr(h3.montage, "vignettes", lambda video, numeros, largeur: lues.append(numeros) or
                         [base64.b64decode(PNG)] * len(numeros))
-    grilles = []
-    monkeypatch.setattr(h3.montage, "grille_2x2", lambda images: grilles.append(len(images)) or base64.b64decode(PNG))
 
     async def chat(consigne, quoi, images=None, modele=None):
         vues.append(len(images))
@@ -5955,17 +5953,17 @@ def test_la_fiche_du_decor_se_fait_d_apres_le_film(h3, monkeypatch):
     assert r.status_code == 200, r.text
     f = r.json()
     assert f["nom"] == "the cobbled square" and f["genre"] == "decor" and f["description"] == description
-    assert f["images"] and f["planche"] and lues == [[242, 480, 599]] and vues == [3]
-    # 03/10, « la multiview est fausse » : chaque vue est demandée à part, d'un vrai point de vue,
-    # avec la vue d'ensemble, les vues déjà faites et les images du film ; le code les assemble.
-    assert len(demandes) == 5 and [len(d["image_reference"]) for d in demandes] == [3, 3, 4, 5, 6]
+    # 03/10, « la multiview est fausse » puis « on construira un décor 3d plus tard » : la vue
+    # d'ensemble seule, plus de planche à vues d'autres côtés.
+    assert f["images"] and not f.get("planche") and lues == [[242, 480, 599]] and vues == [3]
+    assert len(demandes) == 2 and [len(d["image_reference"]) for d in demandes] == [3, 3]
     assert "two-tier bowl" in demandes[1]["prompt"]
-    assert [v.VUES_DECOR[k] in demandes[2 + k]["prompt"] for k in range(3)] == [True] * 3
-    assert all("two-tier bowl" in d["prompt"] and "sans aucun texte ni légende" in d["prompt"] for d in demandes[2:])
-    assert "CONTRECHAMP" in v.VUES_DECOR[0] and "derrière" in v.CONSIGNE_LIEU_PLANCHE and grilles == [4]
-    # Les coupes reçoivent la vue d'ensemble ET la planche.
+    # Les coupes reçoivent la vue d'ensemble seule, même d'une fiche ancienne qui a une planche ;
+    # la caméra reste du côté du décor (règle des 180°).
+    v.fiche_poser_planche(f["id"], PNG)
     demande, _ = v.demande_image("Wide shot of the square.", lieu=f["id"], coupe=True)
-    assert len(demande["image_reference"]) == 2 and v.CONSIGNE_LIEU_PLANCHE % 2 in demande["prompt"]
+    assert len(demande["image_reference"]) == 1 and "règle des 180°" in demande["prompt"]
+    assert "un autre angle du même côté" in v.CONSIGNE_COUPE_LIEU
     # Rien de tourné : refus.
     monkeypatch.setattr(h3, "_fins_images", lambda sc: [])
     assert client(h3).post("/video-h3/scenario/" + "a" * 32 + "/decor", headers=CLE, json={}).status_code == 409
@@ -6363,7 +6361,10 @@ def test_la_fiche_du_decor_se_fait_d_apres_le_texte_si_le_film_reste_au_meme_end
     assert "every piece of furniture" in v.consigne_decor_du_film(3)
     # Les quatre côtés du lieu sont décrits : chaque vue de la planche montre ce que la description y met.
     assert v.COTES_DU_LIEU in consigne and v.COTES_DU_LIEU in v.consigne_decor_du_film(3)
-    assert "NEAR side behind that viewpoint" in v.COTES_DU_LIEU
+    assert "the camera never goes behind it" in v.COTES_DU_LIEU and "NEAR side" not in v.COTES_DU_LIEU
+    # La lumière fait partie du décor (03/10 : un décor en plein jour pour un film au coucher du soleil).
+    assert "the time of day and the light" in v.COTES_DU_LIEU and "l'heure et la lumière" in v.CADRE_DECOR
+    assert "the camera never crosses to the side behind it, 180-degree rule" in v.consigne_decoupage("x")
     assert "%d characters" not in consigne and str(v.DECOR_DESCRIPTION_MAX - 50) in consigne
     assert v.lire_decor_du_texte('{"un_seul_lieu": false}') is None
     with pytest.raises(ValueError):
@@ -6382,20 +6383,12 @@ def test_la_fiche_du_decor_se_fait_d_apres_le_texte_si_le_film_reste_au_meme_end
         return "data:image/png;base64," + PNG
     monkeypatch.setattr(h3, "_chat_du_studio", chat)
     monkeypatch.setattr(h3, "_image_du_studio", image)
-    grilles = []
-    monkeypatch.setattr(h3.montage, "grille_2x2", lambda images: grilles.append(images) or base64.b64decode(PNG))
     plans = [{"image_paroles": "Leila sits on the fountain."}, {"image_paroles": "Tyler rides up."}]
     d = asyncio.run(h3._decor_du_texte(plans))
     fiche = v.fiche_lire(d["fiche"])
-    assert fiche["genre"] == "decor" and fiche["description"] == description and fiche["planche"]
-    # La vue vide d'abord, d'après le texte seul ; puis le contrechamp et les deux côtés, chacun à
-    # part, la vue d'ensemble et les vues déjà faites jointes ; la grille 2x2 est faite par le code.
-    assert "image_reference" not in demandes[0] and v.CADRE_DECOR in demandes[0]["prompt"]
-    assert len(demandes) == 4 and [len(d["image_reference"]) for d in demandes[1:]] == [1, 2, 3]
-    assert demandes[1]["image_reference"] == ["data:image/png;base64," + PNG]
-    assert v.VUES_DECOR[0] in demandes[1]["prompt"] and v.VUES_DECOR[2] in demandes[3]["prompt"]
-    planche = base64.b64decode(v.fiche_planche_data_url(d["fiche"]).split(",", 1)[1])
-    assert planche == base64.b64decode(PNG) and len(grilles) == 1 and len(grilles[0]) == 4
+    assert fiche["genre"] == "decor" and fiche["description"] == description and not fiche.get("planche")
+    # La vue vide seule, d'après le texte (03/10 : plus de planche, règle des 180°).
+    assert len(demandes) == 1 and "image_reference" not in demandes[0] and v.CADRE_DECOR in demandes[0]["prompt"]
 
     async def ailleurs(consigne, quoi, images=None, modele=None):
         return '{"un_seul_lieu": false}'
@@ -6671,22 +6664,3 @@ def test_avec_la_fiche_du_decor_une_coupe_d_avant_tournage_tient_les_meubles_de_
         p.pop("image_depart", None)
     asyncio.run(h3._departs_des_coupes(plans, {"fiches": ["f"]}))   # sans décor : comme avant
     assert [(x["decor"], x["meubles"]) for x in vus] == [(None, None), ("d1", None)]
-
-
-def test_la_planche_du_decor_est_une_grille_2x2_faite_par_le_code(h3, tmp_path):
-    """03/10, « la multiview est fausse » : quatre vraies vues, assemblées sans légende."""
-    m = h3.montage
-    images = []
-    for i, couleur in enumerate(("red", "green", "blue", "white")):
-        f = tmp_path / ("v%d.png" % i)
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=%s:s=320x180" % couleur,
-                        "-frames:v", "1", str(f)], check=True)
-        images.append(f.read_bytes())
-    grille = tmp_path / "g.png"
-    grille.write_bytes(m.grille_2x2(images, 160, 90))
-    taille = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                             "stream=width,height", "-of", "csv=p=0", str(grille)],
-                            capture_output=True, text=True, check=True).stdout.strip()
-    assert taille == "320,180"
-    with pytest.raises(m.MontageImpossible):
-        m.grille_2x2(images[:3])

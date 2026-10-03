@@ -816,19 +816,21 @@ CONSIGNE_LIEU = ("L'image jointe %d est le DÉCOR du film, vide de personnes : c
                  "gauche reste à gauche, rien n'apparaît ni ne disparaît) ; les MEUBLES (canapé, fauteuil, table, "
                  "étagère…) sont exactement ceux du décor, même forme, même taille, même couleur, à la même place "
                  "contre les mêmes murs : aucun n'est ajouté, retiré, déplacé ni remplacé. Les personnes et les "
-                 "objets se placent comme la description le dit. ")
+                 "objets se placent comme la description le dit. La caméra reste du côté d'où le décor est vu "
+                 "(règle des 180°) : seul ce que le décor montre peut être à l'image, jamais le côté qui est "
+                 "derrière elle. ")
 # Les images de départ faites avant le tournage (03/10) : une coupe reçoit aussi l'image de la
 # coupe d'avant, pour le lieu seulement — l'action a pu changer les objets entre les deux.
 CONSIGNE_MEUBLES = ("L'image jointe %d est une image antérieure du même film, dans ce lieu : les murs, les fenêtres, "
                     "les portes et les MEUBLES y sont tels qu'ils doivent rester (même forme, taille, couleur et "
                     "place) ; les personnes et les objets, eux, suivent la description, pas cette image. ")
-CONSIGNE_LIEU_PLANCHE = ("L'image jointe %d montre ce même décor sous quatre vues : en haut à gauche, la vue "
-                         "d'ensemble ; en haut à droite, le contrechamp (le côté qui était derrière la caméra de la "
-                         "vue d'ensemble) ; en bas à gauche, le côté gauche ; en bas à droite, le côté droit. Pour un "
-                         "cadrage vers l'un de ces côtés, le lieu est exactement celui de sa vue : rien d'autre n'y "
-                         "est. ")
+# 03/10, « la multiview est fausse », puis « on construira un décor 3d plus tard » (propriétaire) :
+# l'image du Studio ne sait pas tourner autour d'un lieu (vues demandées une à une : trois fois le
+# même mur). Plus de planche du décor ; la coupe change de valeur de plan ou d'angle sans passer
+# derrière la caméra de la vue d'ensemble (règle des 180°).
 CONSIGNE_COUPE_LIEU = ("Ceci est une COUPE : le cadrage et l'angle de la caméra sont NETTEMENT différents de ceux du "
-                       "plan précédent (une autre valeur de plan ou un autre côté), comme la description le dit. ")
+                       "plan précédent (une autre valeur de plan, un autre angle du même côté), comme la description "
+                       "le dit. ")
 # 03/10, « Le jardin de verre », plan 2 : avec la fiche du décor, la coupe n'avait plus la
 # dernière image du plan 1 ; le pot, haut et cylindrique près de Mila, est revenu en coupe
 # basse devant un autre canapé. Propriétaire : une coupe part « des fiches et du plan final,
@@ -953,10 +955,6 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
     if lieu:
         photos.append(fiche_lieu_image(lieu))
         tete += CONSIGNE_LIEU % len(photos) + (CONSIGNE_COUPE_LIEU if coupe else "")
-        planche_lieu = fiche_planche_data_url(lieu)
-        if planche_lieu:   # la planche du décor (02/10) : le même lieu sous quatre vues
-            photos.append(planche_lieu)
-            tete += CONSIGNE_LIEU_PLANCHE % len(photos)
         if decor and coupe:   # et l'instant : la dernière image du plan d'avant (03/10)
             octets = depart_lire(decor)
             genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
@@ -1033,7 +1031,7 @@ ANGLES = {   # l'ordre est celui des <Picture N>
 }
 ANGLE_DEPART = "face"
 FICHE_NOM_MAX, FICHE_DESCRIPTION_MAX = 60, 800
-DECOR_DESCRIPTION_MAX = 1400   # un décor décrit ses quatre côtés (03/10, COTES_DU_LIEU)
+DECOR_DESCRIPTION_MAX = 1400   # un décor décrit ses côtés et sa lumière (03/10, COTES_DU_LIEU)
 TAILLE_IMAGE_FICHE = "1024x1024"
 _ID_FICHE = re.compile(r"[0-9a-f]{12}")
 _EXTENSIONS = {b"\x89PNG": ".png", b"\xff\xd8\xff": ".jpg", b"RIFF": ".webp"}
@@ -1168,8 +1166,9 @@ CONSIGNE_OBJET_VUES = (
     "trois-quarts au-dessus. Le même modèle exactement sur les quatre vues ; sans marque, logo ni texte, "
     "aucune personne.")
 CADRE_DECOR = ("Vue d'ensemble large du lieu seul, à hauteur d'homme, cadrage paysage : tout le lieu visible, "
-               "vide de personnes et d'animaux, sans texte ni enseigne lisible ; lumière naturelle, photographie "
-               "réaliste. Rien que ce que la description nomme : aucun objet ni plante en plus.")
+               "vide de personnes et d'animaux, sans texte ni enseigne lisible ; l'heure et la lumière de la "
+               "description, photographie réaliste. Rien que ce que la description nomme : aucun objet ni plante "
+               "en plus.")
 # 03/10, « Le jardin de verre » : le décor tiré du texte montrait une pousse dans le pot que
 # le plan 2 devait voir naître ; la règle 6 a arrêté le film, puis, forcé, l'effet a disparu.
 # --- La fiche du décor D'APRÈS LE FILM (02/10) ---------------------------------------
@@ -1193,11 +1192,13 @@ def images_pour_decor(fins: list) -> list:
     return sorted({dernieres[round(k * pas)] for k in range(DECOR_IMAGES_MAX)})
 
 
-# Les quatre côtés du lieu (03/10, « la multiview est fausse ») : la planche montre chacun ; ce
-# que la description n'en dit pas, chaque vue l'inventait autrement.
-COTES_DU_LIEU = ("Then describe the place side by side, as seen from its main viewpoint: the FAR side (facing "
-                 "that viewpoint), the LEFT side, the RIGHT side, and the NEAR side behind that viewpoint (an "
-                 "entrance, a door, a wall…): for each, what stands along it, or that it is bare. ")
+# Les côtés vus du lieu et sa lumière (03/10, « Le jardin de verre ») : ce que la description
+# n'en disait pas, chaque coupe l'inventait autrement ; le décor était en plein jour pour un
+# film au coucher du soleil, et les images passaient du jour blanc à l'orange d'un plan à l'autre.
+COTES_DU_LIEU = ("Then describe the place side by side, as seen from its main viewpoint (the camera never goes "
+                 "behind it): the FAR side facing it, the LEFT side and the RIGHT side; for each, what stands "
+                 "along it, or that it is bare. Then the time of day and the light, as the script gives them at "
+                 "its start (or one plausible light): where it comes from, its colour, how strong. ")
 
 
 def consigne_decor_du_film(nombre: int) -> str:
@@ -1233,36 +1234,9 @@ CONSIGNE_DECOR_DU_FILM = ("Les images jointes 1 à %d sont des images d'un film 
                           "d'ensemble de CE lieu, exactement : chaque élément fixe avec sa forme, son nombre "
                           "d'étages, sa hauteur, sa matière et sa place, comme sur les images jointes et dans la "
                           "description ; sans aucune personne, aucun animal, aucun vélo ni objet tenu. ")
-# La planche du décor (03/10, propriétaire : « la multiview est fausse ») : demandée d'un coup,
-# ses quatre vues étaient le même angle depuis la porte, une légende écrite dessus ; rien ne
-# montrait les autres côtés, et chaque coupe d'un autre angle les inventait (figurants, lampadaire
-# qui va et vient, lumière qui change). Chaque vue est maintenant une image à part, d'un vrai
-# point de vue, faite de la vue d'ensemble et des vues déjà faites ; le code les assemble.
-VUES_DECOR = (
-    "le CONTRECHAMP : la caméra est au fond, contre le côté que montre la vue d'ensemble, et regarde vers "
-    "l'endroit d'où la vue d'ensemble a été prise — on voit le côté qui était derrière cette caméra",
-    "le CÔTÉ GAUCHE : la caméra, au milieu du lieu, regarde droit vers le côté qui est à gauche sur la vue "
-    "d'ensemble",
-    "le CÔTÉ DROIT : la caméra, au milieu du lieu, regarde droit vers le côté qui est à droite sur la vue "
-    "d'ensemble",
-)
-CONSIGNE_VUE_DECOR = ("Les images jointes 1 à %d montrent un même LIEU (la 1 est la vue d'ensemble). Fais une autre "
-                      "photo de CE lieu, %s. Mêmes murs, sol, plafond, fenêtres, portes et meubles, de même forme, "
-                      "matière, couleur et taille, chacun à sa place dans le lieu (ce qui est à gauche sur la vue "
-                      "d'ensemble est à droite vu depuis le fond) ; la même heure et la même lumière. Ce côté "
-                      "montre ce que la description y met, et rien d'autre. Vide de personnes et d'animaux, sans "
-                      "aucun texte ni légende ; photographie réaliste, cadrage paysage, à hauteur d'homme. ")
-
-
-def demande_vue_decor(description: str, k: int, images: list) -> dict:
-    """La demande de la vue `k` (0 à 2) de VUES_DECOR, les vues déjà faites jointes."""
-    return {"prompt": CONSIGNE_VUE_DECOR % (len(images), VUES_DECOR[k]) + f"Description : {description}",
-            "n": 1, "size": TAILLE_IMAGE_DEMANDEE, "image_reference": list(images)}
-
-
 def demandes_decor_du_film(description: str, images: list) -> dict:
-    """La demande de la vue d'ensemble, les images vraies jointes ; les autres vues suivent
-    (`demande_vue_decor`)."""
+    """La demande de la vue d'ensemble, les images vraies jointes. Plus de planche du décor
+    (03/10 : ses vues d'autres côtés étaient fausses, voir CONSIGNE_COUPE_LIEU)."""
     n = len(images)
     return {"prompt": CONSIGNE_DECOR_DU_FILM % n + f"Description : {description}. {CADRE_DECOR}", "n": 1,
             "size": TAILLE_IMAGE_DEMANDEE, "image_reference": list(images)}
@@ -2631,8 +2605,8 @@ def consigne_decoupage(scenario: str, fiches=()) -> str:
             "for a cut. \"coupe\" only when the script wants a cut: another place, a jump in time, a new "
             # 02/10, propriétaire : la coupe sert aux changements de point de vue
             # significatifs ; sinon, le bout de vidéo d'avant (plans 3 → 4 recadrés).
-            "scene, or a clearly different viewpoint (from a wide shot to a close-up, the other side of "
-            "the scene). The first shot is "
+            "scene, or a clearly different viewpoint (from a wide shot to a close-up, another angle from "
+            "the same side: the camera never crosses to the side behind it, 180-degree rule). The first shot is "
             "\"coupe\"; never more than %d shots in a row without a \"coupe\" (put it where the story "
             "allows a cut best). Answer with the JSON array only.\n\n%s%s"
             % (SCENARIO_PLANS_MAX, CADRAGE + PHYSIQUE + TABLEAU, MARQUES, PLANS_MAX, distribution(fiches),

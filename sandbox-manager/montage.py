@@ -107,27 +107,6 @@ def recadrer_zone(image: bytes, zone: tuple, largeur_min: int = 512) -> bytes:
         return sortie.read_bytes()
 
 
-def grille_2x2(images: list, largeur: int = 768, hauteur: int = 432) -> bytes:
-    """Quatre images en grille 2x2 (dans l'ordre : haut gauche, haut droite, bas gauche, bas
-    droite), chacune dans une case de `largeur` x `hauteur` sans déformer. 03/10 : la planche
-    du décor demandée d'un coup montrait quatre fois le même angle, avec des légendes."""
-    if len(images) != 4:
-        raise MontageImpossible("La grille du décor attend quatre vues.")
-    with tempfile.TemporaryDirectory() as dossier:
-        entrees = []
-        for i, octets in enumerate(images):
-            p = Path(dossier, "g%d" % i)
-            p.write_bytes(octets)
-            entrees += ["-i", str(p)]
-        cases = "".join("[%d:v]scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:"
-                        "color=white,setsar=1[c%d];" % (i, largeur, hauteur, largeur, hauteur, i) for i in range(4))
-        pile = "[c0][c1][c2][c3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[p]"
-        sortie = Path(dossier, "grille.png")
-        _lancer([*entrees, "-filter_complex", cases + pile, "-map", "[p]", "-frames:v", "1", str(sortie)],
-                "La planche du décor")
-        return sortie.read_bytes()
-
-
 def planche_visages(images: list, cote: int = 320) -> bytes:
     """Des images côte à côte, chacune dans un carré de `cote` (sans déformer) :
     les photos de la fiche, puis le visage de l'image générée."""
