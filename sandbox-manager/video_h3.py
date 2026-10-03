@@ -703,6 +703,26 @@ def avec_camera(texte: str, phrase: str) -> str:
 
 SILENCE_IMAGE = "Nobody speaks: every person keeps their lips closed."
 SILENCE_SON = "No dialogue, no voiceover, no singing, no individual voices."
+# 03/10, « Le jardin de verre », clip 4 : « she laughs » et « gentle laughter » avec « lips closed » et
+# « no individual voices » ; la consigne se contredisait, et H3 a fait dire « I'll be done! » (Whisper).
+# Un son de voix sans paroles demandé (rire, soupir…) reste permis ; seuls les mots sont interdits.
+# « hum » n'en est pas : un frigo, la ville, un néon bourdonnent aussi (« humming fridge »).
+_SONS_DE_VOIX = re.compile(r"\b(laugh\w*|giggl\w*|chuckl\w*|sigh\w*|gasp\w*|scream\w*|sob\w*|"
+                           r"cr(y|ies|ying)|yawn\w*|whimper\w*|squeal\w*|shriek\w*)\b", re.I)
+SILENCE_SANS_MOTS_IMAGE = ("Nobody says a single word: the only voice sound is the wordless %s described; "
+                           "no speech before or after it.")
+SILENCE_SANS_MOTS_SON = "No dialogue, no words, no voiceover, no singing; only the wordless %s described."
+
+
+def sons_de_voix(*textes) -> list:
+    """Les sons de voix sans paroles (rire, soupir…) que demandent ces textes, dans l'ordre, sans doublon."""
+    vus = []
+    for t in textes:
+        for m in _SONS_DE_VOIX.finditer(str(t or "")):
+            mot = m.group(0).lower()
+            if mot not in vus:
+                vus.append(mot)
+    return vus
 # 02/10, film 4, plan 2 : une seule réplique (Tyler, à 7 s) ; Leila, qui venait de dire
 # « Parfaite ! » dans le raccord, a parlé 4 s d'un anglais sans suite avant lui.
 SEULES_REPLIQUES = ("Only the quoted lines are spoken, each by its speaker: before, between and after them, "
@@ -729,12 +749,15 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     # (« You come, fakie… », « Anna come on peace »), en écho de la fin du plan 3
     # reprise par le raccord. « silent » seul ne suffit pas (guides de dialogue H3).
     muet = bool(" ".join(str(image_paroles or "").split())) and "<d>" not in image_paroles
+    voix = " / ".join(sons_de_voix(image_paroles, ambiance)) if muet else ""
+    silence_image = SILENCE_SANS_MOTS_IMAGE % voix if voix else SILENCE_IMAGE
+    silence_son = SILENCE_SANS_MOTS_SON % voix if voix else SILENCE_SON
     for texte, prefixe in ((image_paroles, ""), (ambiance, son), (musique, "non_diegetic_music: ")):
         t = " ".join(str(texte or "").split())
         if prefixe == "" and t:
-            t = (t if t[-1] in ".!?\"»>" else t + ".") + " " + (SILENCE_IMAGE if muet else SEULES_REPLIQUES)
+            t = (t if t[-1] in ".!?\"»>" else t + ".") + " " + (silence_image if muet else SEULES_REPLIQUES)
         if muet and prefixe == son:
-            t = (t if not t or t[-1] in ".!?\"»>" else t + ".") + (" " if t else "") + SILENCE_SON
+            t = (t if not t or t[-1] in ".!?\"»>" else t + ".") + (" " if t else "") + silence_son
         if t:
             if t[-1] not in ".!?\"»>":
                 t += "."

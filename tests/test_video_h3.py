@@ -194,6 +194,21 @@ def test_sans_replique_ecrite_le_silence_se_dit(h3):
     assert v.SILENCE_IMAGE not in parle and v.SILENCE_SON not in parle
 
 
+def test_sans_replique_un_rire_demande_reste_permis_sans_mots(h3):
+    """03/10, « Le jardin de verre », clip 4 : « she laughs », « gentle laughter » ET « lips closed »,
+    « no individual voices » ; la consigne se contredisait et H3 a fait dire « I'll be done! »."""
+    v = h3.video_h3
+    assert v.sons_de_voix("Mila touches a leaf and she laughs.", "shimmer, gentle laughter, a sigh") == [
+        "laughs", "laughter", "sigh"]
+    assert v.sons_de_voix("A humming fridge? no: a hummingbird.", "") == []   # pas un mot dans un autre
+    i = v.invite("Mila touches a crystal leaf, and she laughs.", "soft shimmer, gentle laughter", "")
+    assert v.SILENCE_IMAGE not in i and "lips closed" not in i and "no individual voices" not in i
+    assert v.SILENCE_SANS_MOTS_IMAGE % "laughs / laughter" in i
+    assert "Sound: soft shimmer, gentle laughter. " + v.SILENCE_SANS_MOTS_SON % "laughs / laughter" in i
+    # Sans son de voix, le silence complet reste.
+    assert v.SILENCE_IMAGE in v.invite("Zib prend le biscuit", "grillons", "")
+
+
 def test_les_paroles_sont_balisees_au_format_du_modele(h3):
     # Fiche MiniMaxAI/MiniMax-H3 : `<d>[Language] …</d>`, le locuteur (S1) juste avant.
     v = h3.video_h3
