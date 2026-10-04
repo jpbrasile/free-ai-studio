@@ -315,10 +315,12 @@ class Film:
             raise Arret("Le découpage de la séquence %d n'a rendu aucun plan." % (k + 1))
         joint = " ".join(" ".join(str(p.get("image_paroles") or "").split()) for p in plans).strip()
         part = TEXTES_MAITRE_MAX // self.etat["reglages"]["sequences"]
-        for _ in range(2):
+        # Le chat vise à peu près (film 5, séquence 6 : 280 caractères deux fois pour 275) : on lui
+        # demande les 4/5 de la part.
+        for _ in range(3):
             if len(joint) <= part:
                 break
-            court = " ".join(str(self.chat(CONSIGNE_CONDENSER % (part, joint)) or "").split()).strip('"')
+            court = " ".join(str(self.chat(CONSIGNE_CONDENSER % (part * 4 // 5, joint)) or "").split()).strip('"')
             if court:
                 joint = court
         if len(joint) > part:

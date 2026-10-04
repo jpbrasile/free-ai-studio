@@ -136,7 +136,7 @@ def test_une_sequence_trop_longue_pour_le_maitre_est_condensee_par_le_chat(fa, t
     etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
     fa.Film(etat, tmp_path, studio, chat_court, dormir=lambda s: None).derouler()
     assert etat["statut"] == "fini", etat["erreur"]
-    assert condenses == [fa.TEXTES_MAITRE_MAX // 8] * 8
+    assert condenses == [fa.TEXTES_MAITRE_MAX // 8 * 4 // 5] * 8
     assert {p["image_paroles"] for p in etat["plans"]} == {"Wide shot at night: Leila walks uphill."}
     # Le chat qui ne condense pas : le film s'arrête et dit pourquoi, plutôt qu'un maître refusé.
     etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
