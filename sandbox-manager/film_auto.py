@@ -419,7 +419,7 @@ class Film:
             raise Arret("Aucun clip maître ne se déplie : " + " | ".join(refus))
         self.etat["maitre"] = m
         self.etat["clips"] = [{"job": j} for j in d["clips"]]
-        self.noter("deplier", clips=d["clips"], cles=d.get("cles"))
+        self.noter("deplier", clips=d["clips"], cles=d.get("cles"), retouches=d.get("retouches"))
         for k, c in enumerate(self.etat["clips"]):
             c.update(self._juge(c["job"]), essais=1)
             self.noter("clip", plan=k + 1, job=c["job"], verdict=c["verdict"], defauts=c["defauts"])
