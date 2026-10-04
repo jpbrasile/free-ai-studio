@@ -147,6 +147,28 @@ def test_une_sequence_trop_longue_pour_le_maitre_est_condensee_par_le_chat(fa, t
     assert "time of day" in fa.CONSIGNE_SEQUENCES
 
 
+def test_un_decoupage_que_le_studio_dit_a_reessayer_est_redemande(fa, tmp_path):
+    """« Le robot perdu », film 5 : 502 « Le découpage a inventé ou changé une réplique : réessayez »."""
+    class Inventif(FauxStudio):
+        def __init__(self, ratés):
+            super().__init__()
+            self.rates = ratés
+
+        def __call__(self, methode, chemin, corps=None):
+            if chemin == "/video-h3/scenario/decouper" and self.rates:
+                self.rates -= 1
+                self.appels.append((methode, chemin, corps))
+                return 502, {"detail": "Le découpage a inventé ou changé une réplique : réessayez."}
+            return super().__call__(methode, chemin, corps)
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=30)
+    fa.Film(etat, tmp_path, Inventif(2), chat_sf, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    assert [j["etape"] for j in etat["journal"]].count("decoupage_reessaye") == 2
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=30)
+    fa.Film(etat, tmp_path, Inventif(3), chat_sf, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "arrete" and "502" in etat["erreur"]
+
+
 def test_la_duree_du_film_est_bornee_et_l_essai_a_deux_sequences(fa):
     assert "sequences" not in fa.nouvel_etat("Oscar allume le phare.", duree_s=15)["reglages"]
     essai = fa.nouvel_etat("Oscar allume le phare.", essai=True, duree_s=120)["reglages"]

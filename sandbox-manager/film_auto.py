@@ -221,6 +221,13 @@ class Film:
             raise Arret("%s %s : %s %s" % (methode, chemin, code, str(detail)[:600]))
         return rendu
 
+    def route_rendue(self, code: int, rendu, chemin: str) -> dict:
+        """Comme `route`, pour un POST déjà appelé."""
+        if code != 200:
+            detail = rendu.get("detail") if isinstance(rendu, dict) else rendu
+            raise Arret("POST %s : %s %s" % (chemin, code, str(detail)[:600]))
+        return rendu
+
     def attendre(self, jid: str) -> dict:
         """Le travail fini (réussi ou non) ; Arret s'il dépasse ATTENTE_MAX_S."""
         debut = time.time()
@@ -257,8 +264,19 @@ class Film:
         self.etat["fiches"] = fiches
         self.noter("personnages", fiches=[f["id"] for f in fiches])
 
+    def _decoupage_studio(self, texte: str, fiches: list) -> dict:
+        """Le découpage du Studio ; son 502 dit « réessayez » (le chat a inventé une réplique : « Le
+        robot perdu », film 5, séquence 5, « Look at the stars. ») — deux nouvelles demandes."""
+        corps = {"scenario": texte, "fiches": [f["id"] for f in fiches]}
+        for _ in range(2):
+            code, rendu = self.appel("POST", "/video-h3/scenario/decouper", corps)
+            if code != 502:
+                return self.route_rendue(code, rendu, "/video-h3/scenario/decouper")
+            self.noter("decoupage_reessaye", erreur=str((rendu or {}).get("detail"))[:300])
+        return self.route("POST", "/video-h3/scenario/decouper", corps)
+
     def _decouper(self, texte: str, fiches: list) -> list:
-        d = self.route("POST", "/video-h3/scenario/decouper", {"scenario": texte, "fiches": [f["id"] for f in fiches]})
+        d = self._decoupage_studio(texte, fiches)
         plans = d.get("plans") or []
         if not plans:
             raise Arret("Le découpage n'a rendu aucun plan.")
@@ -291,8 +309,7 @@ class Film:
         joue à vitesse normale. Entre deux séquences, une coupe (« Le robot perdu », film 2 : une
         suite demandée, H3 coupe ou fond quand même, et le fondu dédouble Leila)."""
         texte = s["texte"]
-        d = self.route("POST", "/video-h3/scenario/decouper",
-                       {"scenario": texte, "fiches": [f["id"] for f in self._fiches_de(texte)]})
+        d = self._decoupage_studio(texte, self._fiches_de(texte))
         plans = d.get("plans") or []
         if not plans:
             raise Arret("Le découpage de la séquence %d n'a rendu aucun plan." % (k + 1))
