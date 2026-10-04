@@ -2648,10 +2648,13 @@ PREFIXE_FIN = "Photo réaliste, cadrage paysage 16:9, image nette, fin de la sc�
 # « Le robot perdu », film 5, 04/10 : le maître part de la seule image du plan 1, où Pixel n'est pas ;
 # H3 l'a inventé d'après son nom (« robot blanc cubique » au lieu de la sphère de métal de sa fiche),
 # et chaque plan déplié en partirait. L'image du maître est redessinée d'après les fiches.
-CONSIGNE_RETOUCHE = ("L'image jointe %d est l'image à reprendre : garder EXACTEMENT son cadrage, sa caméra, son "
-                     "décor, sa lumière, ses objets, et la place, la pose et l'orientation de chaque personnage. "
-                     "Seule l'apparence des personnages change : chacun redessiné pour être exactement celui de "
-                     "ses photos (forme, matière, couleurs, visage, tenue). Rien n'est ajouté ni retiré. ")
+# « garder EXACTEMENT la pose » laissait le cube (fautes restantes aux plans 3, 5, 6) ; « remplacé ENTIER »
+# a rendu la sphère de la fiche, à sa place dans la capsule (essai sur l'image du plan 3, même jour).
+CONSIGNE_RETOUCHE = ("L'image jointe %d est l'image à reprendre : garder son cadrage, sa caméra, son décor, sa "
+                     "lumière, ses objets, et la place, la taille et l'orientation de chaque personnage. Un "
+                     "personnage qui ne ressemble pas à ses photos est remplacé ENTIER par celui des photos — tête, "
+                     "corps, proportions, matière, couleurs, visage, tenue — à la même place, à la même taille, "
+                     "tourné du même côté : rien de l'ancien ne reste. Rien d'autre n'est ajouté ni retiré. ")
 # Ce que la retouche reçoit comme description : qui reconnaître, jamais l'action du plan (qui se dessinerait).
 TEXTE_RETOUCHE = ("Personnages à reconnaître dans l'image à reprendre : %s. C'est l'instant de cette image, ni "
                   "avant ni après : aucun objet, aucun geste, aucun regard nouveau. ")
