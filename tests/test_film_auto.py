@@ -73,7 +73,7 @@ def chat(consigne):
 def chat_sf(consigne):
     if "characters" in consigne:
         return ('{"personnages": [{"nom": "Leila", "description": "une adolescente", "genre": "personne"},'
-                ' {"nom": "Pixel", "description": "un petit robot rond", "genre": "personne"}]}')
+                ' {"nom": "Pixel", "description": "un petit robot rond", "genre": "animal"}]}')
     if "sequences" in consigne:
         n = int(consigne.split("exactly ")[1].split()[0])
         return json.dumps({"sequences": ["Leila trouve une capsule." if k == 0 else "Leila et Pixel montent. %d" % k
@@ -94,6 +94,8 @@ def test_un_film_de_2_minutes_se_tourne_en_huit_sequences_de_15_s(fa, tmp_path):
     # Leila garde sa fiche (la plus complète) ; Pixel, nouveau, en reçoit une.
     assert etat["fiches"][0]["id"] == "c978c4e9daaa"
     assert [c for m, c, _x in studio.appels if c == "/video-h3/fiches" and m == "POST"] == ["/video-h3/fiches"]
+    # Le chat dit « animal » pour le robot ; le Studio n'a que des fiches « personne » pour un personnage.
+    assert next(x for m, c, x in studio.appels if c == "/video-h3/fiches" and m == "POST")["genre"] == "personne"
     maitres = [x for m, c, x in studio.appels if c == "/video-h3/maitre"]
     assert len(maitres) == 8 and {x["definition"] for x in maitres} == {"768p"}
     assert {x["longueur_maitre"] for x in maitres} == {362}

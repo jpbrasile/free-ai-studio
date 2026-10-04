@@ -54,7 +54,7 @@ SEQUENCES_MAX = 8
 DEFINITION_SEQUENCE = "768p"
 
 CONSIGNE_PERSONNAGES = (
-    "Here is a short film story. List its characters who appear on screen (people or animals), at most %d, "
+    "Here is a short film story. List its characters who appear on screen (people, animals, robots...), at most %d, "
     "the main one first. For each, give the name used in the story and a visual description for a portrait "
     "artist: age, face, hair, build, clothes; one sentence, in French. Answer with JSON only: "
     "{\"personnages\": [{\"nom\": \"...\", \"description\": \"...\", \"genre\": \"personne\" or \"animal\"}]}"
@@ -87,8 +87,10 @@ def lire_personnages(reponse: str) -> list:
         nom = " ".join(str(g.get("nom") or "").split())[:60]
         description = " ".join(str(g.get("description") or "").split())[:800]
         if nom and description:
-            propres.append({"nom": nom, "description": description,
-                            "genre": "animal" if g.get("genre") == "animal" else "personne"})
+            # Le Studio n'a pas de fiche « animal » (personne, objet, pose, décor) : un personnage à
+            # l'écran est une « personne », comme Zib le Martien. 04/10, robot Pixel classé « animal »
+            # par le chat → 400, le film arrêté à sa première étape.
+            propres.append({"nom": nom, "description": description, "genre": "personne"})
     if not propres:
         raise ValueError("L'histoire n'a aucun personnage lisible.")
     return propres
