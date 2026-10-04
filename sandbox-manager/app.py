@@ -7408,6 +7408,32 @@ async def video_h3_film_auto_reprendre(fid: str, request: Request,
     return _film_auto_lancer(etat)
 
 
+@app.post("/video-h3/film/auto/{fid}/clip")
+async def video_h3_film_auto_clip(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """{plan, job} : l'essai que le propriétaire garde pour ce plan, parmi ceux tournés pour lui ; vaut au
+    prochain montage (reprendre depuis « montage »). Propriétaire, 04/10 (« Le robot perdu ») : « prends
+    l'essai 2 du plan 4 » — à égalité de défauts, le film gardait le premier, un double de Leila."""
+    _h3_ou_404()
+    auth(authorization)
+    etat = _film_auto_lire(fid)
+    fil = _FILMS_AUTO_FILS.get(fid)
+    if fil is not None and fil.is_alive():
+        raise HTTPException(409, "Ce film est en cours : choisissez le clip une fois le film arrêté ou fini.")
+    corps = await request.json()
+    plan, job = corps.get("plan"), corps.get("job")
+    clips = etat.get("clips") or []
+    if not isinstance(plan, int) or not 1 <= plan <= len(clips):
+        raise HTTPException(400, "Numéro de plan illisible.")
+    essais = {j.get("job"): j for j in etat.get("journal") or []
+              if j.get("etape") in ("clip", "clip_rejoue") and j.get("plan") == plan}
+    if job not in essais:
+        raise HTTPException(400, "Ce clip n'est pas un essai du plan %d de ce film." % plan)
+    clips[plan - 1].update(job=job, verdict=essais[job].get("verdict"), defauts=essais[job].get("defauts") or [],
+                           choisi=True)
+    film_auto.Film(etat, DOSSIER_FILMS_AUTO, _film_auto_appel, _film_auto_chat).ecrire()
+    return etat
+
+
 @app.post("/video-h3/film/auto/{fid}/maitre")
 async def video_h3_film_auto_maitre(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
     """{job} : le clip maître que le propriétaire veut voir déplié, parmi les essais tournés ; vaut à la

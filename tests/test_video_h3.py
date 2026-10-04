@@ -3575,6 +3575,27 @@ def test_un_film_se_refait_depuis_une_etape_en_gardant_les_precedentes(h3, monke
                   json={"depuis": "rien"}).status_code == 400
 
 
+def test_le_proprietaire_choisit_l_essai_garde_pour_un_plan(h3, monkeypatch, tmp_path):
+    """« Le robot perdu », 04/10 : « prends l'essai 2 du plan 4 » (l'essai 1 avait un double de Leila)."""
+    monkeypatch.setattr(h3, "DOSSIER_FILMS_AUTO", tmp_path / "films")
+    monkeypatch.setattr(h3, "_FILMS_AUTO_FILS", {})
+    fid = "e" * 32
+    etat = h3.film_auto.nouvel_etat("Oscar allume le phare.")
+    etat.update(id=fid, statut="fini", clips=[{"job": "a" * 32, "verdict": "defaut", "defauts": ["double"]}],
+                journal=[{"etape": "clip", "plan": 1, "job": "a" * 32, "verdict": "defaut", "defauts": ["double"]},
+                         {"etape": "clip_rejoue", "plan": 1, "job": "b" * 32, "verdict": "defaut",
+                          "defauts": ["antenne"]}])
+    (tmp_path / "films").mkdir()
+    (tmp_path / "films" / (fid + ".json")).write_text(json.dumps(etat), encoding="utf-8")
+    c = client(h3)
+    r = c.post("/video-h3/film/auto/%s/clip" % fid, headers=CLE, json={"plan": 1, "job": "b" * 32})
+    assert r.status_code == 200, r.text
+    lu = json.loads((tmp_path / "films" / (fid + ".json")).read_text(encoding="utf-8"))
+    assert lu["clips"][0] == {"job": "b" * 32, "verdict": "defaut", "defauts": ["antenne"], "choisi": True}
+    for corps in ({"plan": 1, "job": "c" * 32}, {"plan": 2, "job": "b" * 32}):
+        assert c.post("/video-h3/film/auto/%s/clip" % fid, headers=CLE, json=corps).status_code == 400
+
+
 def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):
     """03/10, clip maître de 15 s : la planche 4 x 3 n'en montrait que 6 s, et le juge a dit « ok »
     à une fillette dédoublée à 12,5 s. Tout le clip est vu, en planches de 18 s au plus."""
