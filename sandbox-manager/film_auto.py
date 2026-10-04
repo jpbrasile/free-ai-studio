@@ -45,12 +45,25 @@ REGLAGES = {"plans_max": PLANS_MAX, "longueur_maitre": 362, "definition": DEFINI
             "definition_maitre": DEFINITION_MAITRE, "essais_maitre": ESSAIS_MAITRE}
 REGLAGES_ESSAI = {"plans_max": 2, "longueur_maitre": 124, "definition": "480p", "definition_maitre": "480p",
                   "essais_maitre": 1}
+# Le film en séquences (04/10, propriétaire : « un autre film de science-fiction avec Leila de 2 mn
+# (15 s par clip) »). L'histoire est coupée en séquences de 15 s ; chacune est un clip H3 en plans
+# (le maître, coupes franches en mode Première image), tourné en 768p, jugé et rejoué ; le film
+# monte ces clips tels quels, sans dépliage.
+SEQUENCE_S = 15
+SEQUENCES_MAX = 8
+DEFINITION_SEQUENCE = "768p"
 
 CONSIGNE_PERSONNAGES = (
     "Here is a short film story. List its characters who appear on screen (people or animals), at most %d, "
     "the main one first. For each, give the name used in the story and a visual description for a portrait "
     "artist: age, face, hair, build, clothes; one sentence, in French. Answer with JSON only: "
     "{\"personnages\": [{\"nom\": \"...\", \"description\": \"...\", \"genre\": \"personne\" or \"animal\"}]}"
+    "\n\nStory:\n%s")
+CONSIGNE_SEQUENCES = (
+    "Here is a short film story. Split it into exactly %d consecutive sequences of 15 seconds each, in story "
+    "order, covering the whole story. Each sequence is one or two sentences in French describing only what "
+    "is seen (actions, places, light), with 2 or 3 visible actions at most, and names each character it shows "
+    "by the name used in the story. No dialogue. Answer with JSON only: {\"sequences\": [\"...\", \"...\"]}"
     "\n\nStory:\n%s")
 CONSIGNE_MUSIQUE = (
     "Here is a short film story. Write the style of an instrumental film score for it, in English, in at most "
@@ -79,6 +92,31 @@ def lire_personnages(reponse: str) -> list:
     if not propres:
         raise ValueError("L'histoire n'a aucun personnage lisible.")
     return propres
+
+
+def lire_sequences(reponse: str, nombre: int) -> list:
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    brutes = (d or {}).get("sequences") if isinstance(d, dict) else None
+    textes = [" ".join(str(s or "").split())[:600] for s in brutes] if isinstance(brutes, list) else []
+    textes = [s for s in textes if s]
+    if len(textes) != nombre:
+        raise ValueError("L'histoire devait tenir en %d séquences, le chat en a rendu %d." % (nombre, len(textes)))
+    return textes
+
+
+def fiche_du_nom(fiches: list, nom: str):
+    """La fiche déjà faite qui porte ce nom : la plus complète (angles), puis la plus récente.
+    04/10, « un autre film avec Leila » : Leila a sa fiche (4 angles) depuis le 28/09 ; en refaire
+    une changerait son visage. Et « Le phare » avait laissé sept Oscar, un par film."""
+    cle = " ".join(str(nom or "").split()).casefold()
+    memes = [f for f in fiches or [] if isinstance(f, dict) and f.get("id")
+             and " ".join(str(f.get("nom") or "").split()).casefold() == cle]
+    return max(memes, key=lambda f: (len(f.get("angles") or []), str(f.get("cree_le") or ""))) if memes else None
 
 
 def lire_style(reponse: str) -> str:
@@ -137,8 +175,15 @@ class Film:
     # --- les étapes ---
     def personnages(self):
         gens = lire_personnages(self.chat(CONSIGNE_PERSONNAGES % (PERSONNAGES_MAX, self.etat["histoire"])))
+        existantes = self.route("GET", "/video-h3/fiches")
+        existantes = existantes.get("fiches") if isinstance(existantes, dict) else None
         fiches = []
         for g in gens:
+            deja = fiche_du_nom(existantes if isinstance(existantes, list) else [], g["nom"])
+            if deja:
+                fiches.append({"id": deja["id"], "nom": deja.get("nom") or g["nom"],
+                               "description": deja.get("description") or g["description"], "reprise": True})
+                continue
             f = self.route("POST", "/video-h3/fiches", g)
             self.route("POST", "/video-h3/fiches/%s/images/face" % f["id"], {})
             self.route("POST", "/video-h3/fiches/%s/planche" % f["id"], {})
@@ -146,9 +191,8 @@ class Film:
         self.etat["fiches"] = fiches
         self.noter("personnages", fiches=[f["id"] for f in fiches])
 
-    def decoupage(self):
-        d = self.route("POST", "/video-h3/scenario/decouper",
-                       {"scenario": self.etat["histoire"], "fiches": [f["id"] for f in self.etat["fiches"]]})
+    def _decouper(self, texte: str, fiches: list) -> list:
+        d = self.route("POST", "/video-h3/scenario/decouper", {"scenario": texte, "fiches": [f["id"] for f in fiches]})
         plans = d.get("plans") or []
         if not plans:
             raise Arret("Le découpage n'a rendu aucun plan.")
@@ -158,32 +202,51 @@ class Film:
         elif len(plans) > PLANS_MAX:
             raise Arret("Le découpage a rendu %d plans : %d au plus tiennent dans un clip maître de 15 s."
                         % (len(plans), PLANS_MAX))
-        self.etat["plans"] = plans
-        self.noter("decoupage", plans=len(plans))
+        return plans
+
+    def decoupage(self):
+        self.etat["plans"] = self._decouper(self.etat["histoire"], self.etat["fiches"])
+        self.noter("decoupage", plans=len(self.etat["plans"]))
 
     def musique_lancee(self):
         style = lire_style(self.chat(CONSIGNE_MUSIQUE % self.etat["histoire"]))
-        job = self.route("POST", "/chanson/creer", {"style": style, "lora": True, "duree": "1", "ou": "modal",
+        # La chanson du Studio dure « jusqu'à 1, 2 ou 3 minutes » : la plus courte qui couvre le film.
+        secondes = self.etat["reglages"].get("sequences", 1) * SEQUENCE_S
+        duree = "1" if secondes <= 60 else "2" if secondes <= 120 else "3"
+        job = self.route("POST", "/chanson/creer", {"style": style, "lora": True, "duree": duree, "ou": "modal",
                                                     "titre": self.etat["titre"] + " (musique)"})
         self.etat["musique"] = {"job": job["id"], "style": style}
         self.noter("musique_lancee", job=job["id"])
 
-    def _commun(self) -> dict:
-        ids = [f["id"] for f in self.etat["fiches"]]
+    def _commun(self, fiches: list = None) -> dict:
+        ids = [f["id"] for f in (fiches or self.etat["fiches"])]
         return {"fiches": ids} if len(ids) > 1 else {"fiche": ids[0]}
 
+    def _fiches_de(self, texte: str) -> list:
+        """Les personnages qu'une séquence nomme ; tous si elle n'en nomme aucun. Une fiche donnée au
+        maître sans que la séquence la montre ferait entrer le personnage dans l'image de départ."""
+        bas = texte.casefold()
+        nommes = [f for f in self.etat["fiches"] if f["nom"].casefold() in bas]
+        return nommes or list(self.etat["fiches"])
+
     def maitre(self):
+        self.etat["maitres"] = self._tourner_maitre(self.etat["plans"], self.etat["fiches"])
+        self.etat["maitre"] = min(self.etat["maitres"], key=lambda e: (e["verdict"] != "ok", len(e["defauts"])))
+        self.ecrire()
+
+    def _tourner_maitre(self, plans: list, fiches: list, **marque) -> list:
+        """Le clip en plans, jugé ; rejoué tant que le juge voit un défaut (essais_maitre au plus)."""
         essais, forcer = [], False
         r = self.etat["reglages"]
         for k in range(r["essais_maitre"]):
-            corps = dict(self._commun(), plans=self.etat["plans"], ou="maison",
+            corps = dict(self._commun(fiches), plans=plans, ou="maison",
                          definition=r.get("definition_maitre") or r["definition"],
                          longueur_maitre=r["longueur_maitre"], forcer=forcer)
             code, rendu = self.appel("POST", "/video-h3/maitre", corps)
             if code == 409 and not forcer:
                 # Une règle d'avant tournage refusée : notée, puis « tourner quand même », comme la page
                 # le propose ; la règle de la voix n'a jamais de passe-droit (le Studio refuse encore).
-                self.noter("maitre_regles", refus=str((rendu or {}).get("detail"))[:1500])
+                self.noter("maitre_regles", refus=str((rendu or {}).get("detail"))[:1500], **marque)
                 forcer = True
                 code, rendu = self.appel("POST", "/video-h3/maitre", dict(corps, forcer=True))
             if code != 200:
@@ -192,13 +255,40 @@ class Film:
             verdict = self.route("POST", "/video-h3/jobs/%s/juger" % rendu["id"], {})
             defauts = verdict.get("defauts") or []
             essais.append({"job": rendu["id"], "verdict": verdict.get("verdict"), "defauts": defauts})
-            self.etat["maitres"] = essais
             self.noter("maitre", essai=k + 1, job=rendu["id"], verdict=verdict.get("verdict"),
-                       defauts=[d.get("quoi") for d in defauts])
+                       defauts=[d.get("quoi") for d in defauts], **marque)
             if verdict.get("verdict") == "ok":
                 break
-        meilleur = min(essais, key=lambda e: (e["verdict"] != "ok", len(e["defauts"])))
-        self.etat["maitre"] = meilleur
+        return essais
+
+    def sequences(self):
+        n = self.etat["reglages"]["sequences"]
+        erreur = ""
+        for _ in range(2):   # le chat peut rendre une séquence de trop ou de moins : une seconde demande
+            try:
+                textes = lire_sequences(self.chat(CONSIGNE_SEQUENCES % (n, self.etat["histoire"])), n)
+                break
+            except ValueError as exc:
+                erreur = str(exc)
+        else:
+            raise Arret(erreur)
+        self.etat["sequences"] = [{"texte": t} for t in textes]
+        self.noter("sequences", nombre=n)
+
+    def tourner(self):
+        """Chaque séquence : son découpage, puis son clip en plans jugé et rejoué ; le moins fautif est
+        gardé. Une reprise saute les séquences déjà tournées."""
+        for i, s in enumerate(self.etat["sequences"]):
+            if s.get("clip"):
+                continue
+            fiches = self._fiches_de(s["texte"])
+            s["plans"] = self._decouper(s["texte"], fiches)
+            s["maitres"] = self._tourner_maitre(s["plans"], fiches, sequence=i + 1)
+            meilleur = min(s["maitres"], key=lambda e: (e["verdict"] != "ok", len(e["defauts"])))
+            s.update(clip=meilleur["job"], verdict=meilleur["verdict"], defauts=meilleur["defauts"])
+            self.noter("sequence", sequence=i + 1, plans=len(s["plans"]), job=meilleur["job"],
+                       verdict=meilleur["verdict"], defauts=[d.get("quoi") for d in meilleur["defauts"]])
+        self.etat["clips"] = [{"job": s["clip"], "verdict": s["verdict"]} for s in self.etat["sequences"]]
         self.ecrire()
 
     def deplier(self):
@@ -273,11 +363,15 @@ class Film:
         self.noter("musique", job=film["id"])
 
     ETAPES = ("personnages", "decoupage", "musique_lancee", "maitre", "deplier", "montage", "agrandir", "musique")
+    ETAPES_SEQUENCES = ("personnages", "sequences", "musique_lancee", "tourner", "montage", "agrandir", "musique")
+
+    def etapes(self) -> tuple:
+        return self.ETAPES_SEQUENCES if self.etat["reglages"].get("sequences", 1) > 1 else self.ETAPES
 
     def derouler(self):
         """Chaque étape une fois, dans l'ordre ; une étape déjà faite (reprise) est sautée."""
         try:
-            for etape in self.ETAPES:
+            for etape in self.etapes():
                 if etape in self.etat["faites"]:
                     continue
                 getattr(self, etape)()
@@ -291,13 +385,28 @@ class Film:
         self.noter(self.etat["statut"])
 
 
-def nouvel_etat(histoire: str, titre: str = "", essai: bool = False) -> dict:
+def nouvel_etat(histoire: str, titre: str = "", essai: bool = False, duree_s=0) -> dict:
+    """`duree_s` au-delà de 15 s : le film en séquences de 15 s (2 min = 8 séquences, le plus long).
+    À l'essai à blanc, deux séquences courtes en 480p."""
     histoire = str(histoire or "").strip()
     if not histoire:
         raise ValueError("Écrivez l'histoire du film.")
     if len(histoire) > HISTOIRE_MAX:
         raise ValueError("Histoire trop longue (%d caractères au plus)." % HISTOIRE_MAX)
+    try:
+        duree_s = float(duree_s or 0)
+    except (TypeError, ValueError):
+        raise ValueError("Durée du film illisible (en secondes).") from None
+    if duree_s < 0 or duree_s > SEQUENCES_MAX * SEQUENCE_S:
+        raise ValueError("Le film dure %d s au plus (%d séquences de %d s)."
+                         % (SEQUENCES_MAX * SEQUENCE_S, SEQUENCES_MAX, SEQUENCE_S))
     titre = " ".join(str(titre or "").split())[:80] or re.split(r"[.!?\n]", histoire)[0][:60]
+    reglages = dict(REGLAGES_ESSAI if essai else REGLAGES)
+    sequences = -(-int(duree_s) // SEQUENCE_S) if duree_s > SEQUENCE_S else 1
+    if sequences > 1:
+        reglages["sequences"] = min(sequences, 2) if essai else sequences
+        if not essai:
+            reglages["definition_maitre"] = DEFINITION_SEQUENCE   # le clip est le film, pas un story-board
     return {"id": uuid.uuid4().hex, "cree_le": round(time.time()), "histoire": histoire, "titre": titre,
             "statut": "en cours", "etape": "", "faites": [], "journal": [], "erreur": "",
-            "essai": bool(essai), "reglages": dict(REGLAGES_ESSAI if essai else REGLAGES)}
+            "essai": bool(essai), "reglages": reglages}

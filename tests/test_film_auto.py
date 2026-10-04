@@ -18,6 +18,7 @@ class FauxStudio:
         self.verdicts_maitre, self.refus_regles = list(verdicts_maitre), refus_regles
         self.verdicts_clips = list(verdicts_clips)
         self.sans_coupe = set()   # les maîtres que le Studio refuse de déplier
+        self.fiches = []          # les fiches déjà faites
 
     def job(self, statut="succeeded"):
         self.n += 1
@@ -29,6 +30,8 @@ class FauxStudio:
         self.appels.append((methode, chemin, json.loads(json.dumps(corps))))
         if methode == "GET" and chemin.startswith("/jobs/"):
             return 200, self.jobs[chemin.split("/")[-1]]
+        if methode == "GET" and chemin == "/video-h3/fiches":
+            return 200, {"fiches": list(self.fiches), "angles": []}
         if chemin == "/video-h3/fiches":
             return 200, {"id": "f%011d" % len(self.appels)}
         if chemin.startswith("/video-h3/fiches/"):
@@ -67,14 +70,76 @@ def chat(consigne):
     return "gentle orchestral score, strings and celesta, slow tempo, hopeful"
 
 
+def chat_sf(consigne):
+    if "characters" in consigne:
+        return ('{"personnages": [{"nom": "Leila", "description": "une adolescente", "genre": "personne"},'
+                ' {"nom": "Pixel", "description": "un petit robot rond", "genre": "personne"}]}')
+    if "sequences" in consigne:
+        n = int(consigne.split("exactly ")[1].split()[0])
+        return json.dumps({"sequences": ["Leila trouve une capsule." if k == 0 else "Leila et Pixel montent. %d" % k
+                                         for k in range(n)]})
+    return "ambient synth score"
+
+
+def test_un_film_de_2_minutes_se_tourne_en_huit_sequences_de_15_s(fa, tmp_path):
+    """04/10, propriétaire : « un autre film de science fiction avec Leila de 2 mn (15 s par clip) »."""
+    studio = FauxStudio(verdicts_maitre=("ok",) * 8)
+    studio.fiches = [{"id": "c978c4e9daaa", "nom": "Leila", "angles": ["face", "trois_quarts", "pied", "profil"],
+                      "cree_le": "2026-09-28 16:31:50", "description": "adolescente de 15 ans"},
+                     {"id": "aaaaaaaaaaaa", "nom": "leila", "angles": ["face"], "cree_le": "2026-10-01 10:00:00"}]
+    etat = fa.nouvel_etat("Leila trouve un robot tombé du ciel et l'aide à rentrer.", duree_s=120)
+    fa.Film(etat, tmp_path, studio, chat_sf, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    assert etat["faites"] == list(fa.Film.ETAPES_SEQUENCES)
+    # Leila garde sa fiche (la plus complète) ; Pixel, nouveau, en reçoit une.
+    assert etat["fiches"][0]["id"] == "c978c4e9daaa"
+    assert [c for m, c, _x in studio.appels if c == "/video-h3/fiches" and m == "POST"] == ["/video-h3/fiches"]
+    maitres = [x for m, c, x in studio.appels if c == "/video-h3/maitre"]
+    assert len(maitres) == 8 and {x["definition"] for x in maitres} == {"768p"}
+    assert {x["longueur_maitre"] for x in maitres} == {362}
+    # La séquence 1 ne nomme que Leila : Pixel n'est pas donné au clip.
+    assert maitres[0].get("fiche") == "c978c4e9daaa" and len(maitres[1]["fiches"]) == 2
+    assert not any(c.endswith("/deplier") for _m, c, _x in studio.appels)
+    montage = next(x for m, c, x in studio.appels if c == "/video-h3/montage")
+    assert montage["clips"] == [s["clip"] for s in etat["sequences"]]
+    assert next(x for m, c, x in studio.appels if c == "/chanson/creer")["duree"] == "2"
+
+
+def test_une_sequence_fautive_est_rejouee_et_la_reprise_saute_les_tournees(fa, tmp_path):
+    studio = FauxStudio(verdicts_maitre=("defaut", "ok", "ok"))
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=30)
+    film = fa.Film(etat, tmp_path, studio, chat_sf, dormir=lambda s: None)
+    film.derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    assert [len(s["maitres"]) for s in etat["sequences"]] == [2, 1]
+    assert etat["sequences"][0]["clip"] == etat["sequences"][0]["maitres"][1]["job"]
+    # Reprise d'un tournage interrompu après la séquence 1 : elle n'est pas retournée.
+    etat["faites"] = etat["faites"][:3]
+    del etat["sequences"][1]["clip"]
+    avant = len(studio.appels)
+    studio.verdicts_maitre = ["ok"]
+    fa.Film(etat, tmp_path, studio, chat_sf, dormir=lambda s: None).derouler()
+    assert len([1 for _m, c, _x in studio.appels[avant:] if c == "/video-h3/maitre"]) == 1
+
+
+def test_la_duree_du_film_est_bornee_et_l_essai_a_deux_sequences(fa):
+    assert "sequences" not in fa.nouvel_etat("Oscar allume le phare.", duree_s=15)["reglages"]
+    essai = fa.nouvel_etat("Oscar allume le phare.", essai=True, duree_s=120)["reglages"]
+    assert essai["sequences"] == 2 and essai["definition_maitre"] == "480p"
+    with pytest.raises(ValueError):
+        fa.nouvel_etat("Oscar allume le phare.", duree_s=121)
+    with pytest.raises(ValueError):
+        fa.lire_sequences('{"sequences": ["a", "b"]}', 3)
+
+
 def test_l_essai_a_blanc_va_du_texte_au_film_par_les_routes_du_studio(fa, tmp_path):
     studio = FauxStudio()
     etat = fa.nouvel_etat("Oscar allume le phare. Un bateau rentre au port.", essai=True)
     fa.Film(etat, tmp_path, studio, chat, dormir=lambda s: None).derouler()
     assert etat["statut"] == "fini", etat["erreur"]
     routes = [c for m, c, _x in studio.appels if m == "POST"]
-    assert routes[:4] == ["/video-h3/fiches", "/video-h3/fiches/f00000000001/images/face",
-                          "/video-h3/fiches/f00000000001/planche", "/video-h3/scenario/decouper"]
+    assert routes[:4] == ["/video-h3/fiches", "/video-h3/fiches/f00000000002/images/face",
+                          "/video-h3/fiches/f00000000002/planche", "/video-h3/scenario/decouper"]
     corps = dict((c, x) for m, c, x in studio.appels if m == "POST")
     # Essai à blanc : deux plans, maître de 124 images en 480p, sur la carte d'ici ; musique chez Modal.
     assert len(corps["/video-h3/maitre"]["plans"]) == 2

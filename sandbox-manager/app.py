@@ -7157,14 +7157,16 @@ def _film_auto_lancer(etat: dict) -> dict:
 
 @app.post("/video-h3/film/auto")
 async def video_h3_film_auto(request: Request, authorization: Optional[str] = Header(default=None)):
-    """{histoire, titre?, essai?} : le film se fait seul, du texte au film 4K avec musique.
-    `essai` : l'essai à blanc, deux plans courts en 480p (film_auto.REGLAGES_ESSAI)."""
+    """{histoire, titre?, essai?, duree_s?} : le film se fait seul, du texte au film 4K avec musique.
+    `essai` : l'essai à blanc, deux plans courts en 480p (film_auto.REGLAGES_ESSAI).
+    `duree_s` au-delà de 15 : le film en séquences de 15 s, une par clip (120 s au plus)."""
     _h3_ou_404()
     auth(authorization)
     _garde_licence_h3()
     corps = await request.json()
     try:
-        etat = film_auto.nouvel_etat(corps.get("histoire"), corps.get("titre") or "", corps.get("essai") is True)
+        etat = film_auto.nouvel_etat(corps.get("histoire"), corps.get("titre") or "", corps.get("essai") is True,
+                                     corps.get("duree_s") or 0)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return _film_auto_lancer(etat)
