@@ -132,6 +132,8 @@ def test_la_duree_du_film_est_bornee_et_l_essai_a_deux_sequences(fa):
         fa.nouvel_etat("Oscar allume le phare.", duree_s=121)
     with pytest.raises(ValueError):
         fa.lire_sequences('{"sequences": ["a", "b"]}', 3)
+    # « Le robot perdu », 04/10 : un personnage absent de l'image de départ n'a que son nom.
+    assert "visible, in plain view, at its very first moment" in fa.CONSIGNE_SEQUENCES
 
 
 def test_l_essai_a_blanc_va_du_texte_au_film_par_les_routes_du_studio(fa, tmp_path):

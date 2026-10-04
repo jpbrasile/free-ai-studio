@@ -49,6 +49,10 @@ REGLAGES_ESSAI = {"plans_max": 2, "longueur_maitre": 124, "definition": "480p", 
 # (15 s par clip) »). L'histoire est coupée en séquences de 15 s ; chacune est un clip H3 en plans
 # (le maître, coupes franches en mode Première image), tourné en 768p, jugé et rejoué ; le film
 # monte ces clips tels quels, sans dépliage.
+# Le clip ne reçoit que son image de départ : un personnage absent de cette image n'a que son nom.
+# « Le robot perdu », essai à blanc, 04/10 : Pixel, encore dans sa capsule au départ, est sorti en
+# « tête cubique jaune pixélisée » (son nom pris au mot). Chaque séquence montre donc ses personnages
+# dès sa première image ; une apparition se fait à la coupe entre deux séquences.
 SEQUENCE_S = 15
 SEQUENCES_MAX = 8
 DEFINITION_SEQUENCE = "768p"
@@ -63,7 +67,10 @@ CONSIGNE_SEQUENCES = (
     "Here is a short film story. Split it into exactly %d consecutive sequences of 15 seconds each, in story "
     "order, covering the whole story. Each sequence is one or two sentences in French describing only what "
     "is seen (actions, places, light), with 2 or 3 visible actions at most, and names each character it shows "
-    "by the name used in the story. No dialogue. Answer with JSON only: {\"sequences\": [\"...\", \"...\"]}"
+    "by the name used in the story. Every character a sequence shows is already visible, in plain view, at its "
+    "very first moment: nobody arrives, emerges, wakes up inside something or is discovered during a sequence; "
+    "such a reveal happens at the cut between two sequences, the next one opening on the revealed character. "
+    "No dialogue. Answer with JSON only: {\"sequences\": [\"...\", \"...\"]}"
     "\n\nStory:\n%s")
 CONSIGNE_MUSIQUE = (
     "Here is a short film story. Write the style of an instrumental film score for it, in English, in at most "
