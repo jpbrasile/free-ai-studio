@@ -456,9 +456,10 @@ class Film:
     def deplier(self):
         # Film « Le phare », 03/10 : le maître le moins fautif n'avait pas fait deux coupes, et le
         # Studio refusait de le déplier ; les autres essais le pouvaient. Du moins fautif au plus
-        # fautif, le premier qui se déplie.
+        # fautif, le premier qui se déplie. Le clip maître choisi par le propriétaire passe devant.
+        choisi = self.etat.get("maitre_choisi")
         candidats = sorted(self.etat.get("maitres") or [self.etat["maitre"]],
-                           key=lambda e: (e["verdict"] != "ok", len(e["defauts"])))
+                           key=lambda e: (e["job"] != choisi, e["verdict"] != "ok", len(e["defauts"])))
         refus = []
         for m in candidats:
             code, d = self.appel("POST", "/video-h3/maitre/%s/deplier" % m["job"],
@@ -476,7 +477,7 @@ class Film:
         self.etat["maitre"] = m
         self.etat["clips"] = [{"job": j} for j in d["clips"]]
         self.noter("deplier", clips=d["clips"], cles=d.get("cles"), retouches=d.get("retouches"),
-                   departs=d.get("departs"))
+                   departs=d.get("departs"), continus=d.get("continus"))
         for k, c in enumerate(self.etat["clips"]):
             c.update(self._juge(c["job"]), essais=1)
             self.noter("clip", plan=k + 1, job=c["job"], verdict=c["verdict"], defauts=c["defauts"])

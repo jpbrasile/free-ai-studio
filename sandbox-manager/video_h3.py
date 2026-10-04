@@ -969,12 +969,15 @@ def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
 
 
 def cles_du_maitre(plans: list, debuts_s: list, coupes_vues_s: list, images: int,
-                   coupes_faibles_s: list = ()) -> list:
+                   coupes_faibles_s: list = (), continus: Optional[list] = None) -> list:
     """La première et la dernière image de chaque plan dans le maître : [(premiere, derniere)].
     Une coupe prend la date où ffmpeg l'a vue, plus une image (pas de mélange des deux cadrages) ;
     une suite partage l'image de fin du plan d'avant, sans saut. ValueError si le maître n'a pas
     fait une coupe demandée : déplié, ce plan mélangerait deux cadrages. `coupes_faibles_s` : les
-    changements vus au seuil COUPE_SEUIL_ATTENDUE, pris seulement là où une coupe est demandée."""
+    changements vus au seuil COUPE_SEUIL_ATTENDUE, pris seulement là où une coupe est demandée.
+    `continus` (une liste) : une coupe manquée devient une suite, à sa date prévue, et son numéro
+    de plan y est ajouté — propriétaire, 04/10 : « si une coupe n'est pas faite, fais le clip en
+    mode continu » (H3 avait enchaîné les plans 7 et 8 du « Robot perdu » d'une traite)."""
     debuts, manquees, coupes = [], [], []
     for k, (p, d) in enumerate(zip(plans, debuts_s)):
         vues = [c for c in coupes_vues_s if abs(c - d) <= MAITRE_ECART_COUPE_S]
@@ -984,6 +987,9 @@ def cles_du_maitre(plans: list, debuts_s: list, coupes_vues_s: list, images: int
         # (essai à blanc du 03/10, « Le phare », plan 2). Vue, elle se traite en coupe : l'image
         # partagée serait celle du changement de cadre.
         coupe = k > 0 and (p.get("enchainement", "coupe") == "coupe" or bool(vues))
+        if coupe and not vues and continus is not None:
+            continus.append(k + 1)
+            coupe = False
         coupes.append(coupe)
         if k == 0:
             debuts.append(0)

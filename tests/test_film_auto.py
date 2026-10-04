@@ -355,6 +355,22 @@ def test_un_plan_toujours_refuse_garde_le_moins_fautif(fa, tmp_path):
     assert premier["essais"] == fa.ESSAIS_PLAN and premier["verdict"] == "defaut"
 
 
+def test_le_maitre_choisi_par_le_proprietaire_est_deplie_le_premier(fa, tmp_path):
+    """« Le robot perdu », 04/10, propriétaire : « prends l'essai 2 si égalité »."""
+    studio = FauxStudio(verdicts_maitre=("defaut", "defaut", "defaut"))
+    etat = fa.nouvel_etat("Oscar allume le phare.")
+    film = fa.Film(etat, tmp_path, studio, chat, dormir=lambda s: None)
+    for etape in fa.Film.ETAPES[:fa.Film.ETAPES.index("maitre") + 1]:
+        getattr(film, etape)()
+        etat["faites"].append(etape)
+    deuxieme = etat["maitres"][1]["job"]
+    etat["maitre_choisi"] = deuxieme
+    film.derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    deplies = [c for m, c, x in studio.appels if c.endswith("/deplier")]
+    assert deplies == ["/video-h3/maitre/%s/deplier" % deuxieme] and etat["maitre"]["job"] == deuxieme
+
+
 def test_un_maitre_qui_ne_se_deplie_pas_laisse_la_place_au_suivant(fa, tmp_path):
     """Film « Le phare », 03/10 : le moins fautif des trois maîtres n'avait pas fait deux coupes."""
     studio = FauxStudio(verdicts_maitre=("defaut", "defaut", "defaut"))

@@ -7124,7 +7124,8 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
         raise HTTPException(400, "Numéros de plans illisibles.")
     try:
         coupes, faibles = await _coupes_du_maitre(film)
-        cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"], faibles)
+        continus = []
+        cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"], faibles, continus)
         travaux, retouches, departs = [], {}, {}
         await _etiquettes_assurer(maitre["commun"].get("fiches") or [maitre["commun"].get("fiche")])
         for k, (a, b) in enumerate(cles):
@@ -7173,7 +7174,8 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
         write_job(jid, job)
     return dict({"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes,
                  "departs": departs},
-                **({"retouches": retouches} if retouches else {}))
+                **({"retouches": retouches} if retouches else {}),
+                **({"continus": continus} if continus else {}))
 
 
 async def _coupes_du_maitre(film: bytes) -> tuple:
@@ -7382,6 +7384,26 @@ def video_h3_film_auto_reprendre(fid: str, authorization: Optional[str] = Header
         raise HTTPException(409, "Ce film est déjà en cours.")
     etat.update(statut="en cours", erreur="")
     return _film_auto_lancer(etat)
+
+
+@app.post("/video-h3/film/auto/{fid}/maitre")
+async def video_h3_film_auto_maitre(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """{job} : le clip maître que le propriétaire veut voir déplié, parmi les essais tournés ; vaut à la
+    reprise d'un film arrêté. Propriétaire, 04/10 (« Le robot perdu ») : « prends l'essai 2 si égalité »."""
+    _h3_ou_404()
+    auth(authorization)
+    etat = _film_auto_lire(fid)
+    fil = _FILMS_AUTO_FILS.get(fid)
+    if fil is not None and fil.is_alive():
+        raise HTTPException(409, "Ce film est en cours : choisissez le clip maître une fois le film arrêté.")
+    if "deplier" in etat.get("faites", []):
+        raise HTTPException(409, "Ce film a déjà déplié son clip maître.")
+    job = (await request.json()).get("job")
+    if job not in [m.get("job") for m in etat.get("maitres") or []]:
+        raise HTTPException(400, "Ce clip maître n'est pas un essai de ce film.")
+    etat["maitre_choisi"] = job
+    film_auto.Film(etat, DOSSIER_FILMS_AUTO, _film_auto_appel, _film_auto_chat).ecrire()
+    return etat
 
 
 DEFAUTS_PAR_PLAN = 3

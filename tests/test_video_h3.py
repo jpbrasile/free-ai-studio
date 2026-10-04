@@ -222,6 +222,11 @@ def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
     assert v.cles_du_maitre(plans, m["debuts_s"], [3.65, 9.9], 362) == [(0, 87), (89, 181), (181, 361)]
     with pytest.raises(ValueError, match="coupe du plan 2"):
         v.cles_du_maitre(plans, m["debuts_s"], [9.9], 362)
+    # Propriétaire, 04/10 : « si une coupe n'est pas faite, fais le clip en mode continu » — la coupe
+    # manquée devient une suite à sa date prévue (le plan 1 finit sur l'image d'où part le plan 2).
+    continus = []
+    assert v.cles_du_maitre(plans, m["debuts_s"], [9.9], 362, (), continus) == [(0, 91), (91, 181), (181, 361)]
+    assert continus == [2]
     # Le maître part de son image en « Première image » (coupes franches) ; sans image, rien ne change.
     p = v.payload_maitre({"mode": "references", "depart_reference": "QUJD", "fiches": ["f1"]}, "Oscar.")
     assert p["mode"] == "premiere" and p["images"] == ["QUJD"] and p["depart_reference"] is None
