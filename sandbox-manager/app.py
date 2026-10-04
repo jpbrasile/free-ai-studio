@@ -7152,7 +7152,10 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
     try:
         did = video_h3.depart_poser(base64.b64encode(image).decode())
         for tour in range(video_h3.RACCORD_ESSAIS):
-            demande, _texte = video_h3.demande_image(texte, fiches=nommes, retouche=did, a_eviter=a_eviter)
+            # Les noms seuls, pas l'action : « Le robot perdu », 04/10, plan 1, le texte (« la capsule tombe »)
+            # a fait dessiner la capsule déjà au sol et Leila la regardant, l'image du maître n'en avait pas.
+            demande, _texte = video_h3.demande_image(video_h3.TEXTE_RETOUCHE % ", ".join(noms), fiches=nommes,
+                                                     retouche=did, a_eviter=a_eviter)
             rendu = await _image_du_studio(demande)
             octets = montage.recadrer_image(base64.b64decode(rendu.split(",", 1)[-1]),
                                             *video_h3.DEFINITIONS[definition])

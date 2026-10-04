@@ -1056,7 +1056,9 @@ def consigne_retouche(noms: list) -> str:
             "like their reference photo (%s). Check only: (a) image 2 keeps the framing, the camera, the place, the "
             "light, the objects, and where each character stands, faces and how they pose, as in image 1; (b) each "
             "character of image 2 matches their photo (shape, material, colours, face, clothes); (c) nobody appears "
-            "twice, and nobody is added or missing compared with image 1. Answer JSON only: {\"ok\": true or false, "
+            "twice, and nobody is added or missing compared with image 1; (d) no object is added, moved or removed "
+            "and nobody looks in another direction (an object on the ground in image 2 but not in image 1 is a "
+            "fault). Answer JSON only: {\"ok\": true or false, "
             "\"fautes\": [\"one short sentence per fault, naming the character or element\"]}." % photos)
 
 
@@ -2650,6 +2652,9 @@ CONSIGNE_RETOUCHE = ("L'image jointe %d est l'image à reprendre : garder EXACTE
                      "décor, sa lumière, ses objets, et la place, la pose et l'orientation de chaque personnage. "
                      "Seule l'apparence des personnages change : chacun redessiné pour être exactement celui de "
                      "ses photos (forme, matière, couleurs, visage, tenue). Rien n'est ajouté ni retiré. ")
+# Ce que la retouche reçoit comme description : qui reconnaître, jamais l'action du plan (qui se dessinerait).
+TEXTE_RETOUCHE = ("Personnages à reconnaître dans l'image à reprendre : %s. C'est l'instant de cette image, ni "
+                  "avant ni après : aucun objet, aucun geste, aucun regard nouveau. ")
 CONSIGNE_FIN = ("L'image jointe %d est la PREMIÈRE image de ce plan. Dessine sa DERNIÈRE image, une fois faite "
                 "l'action décrite : même lieu, même caméra, même cadrage, même lumière ; mêmes personnes et mêmes "
                 "objets aux mêmes places, sauf ce que l'action change (ce qui naît pendant le plan est là, ce qui "

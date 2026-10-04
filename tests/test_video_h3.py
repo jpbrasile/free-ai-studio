@@ -3334,6 +3334,8 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
     # La remarque du juge du maître est à éviter dès le premier dessin ; celle du contrôle, au suivant.
     assert "image à reprendre" in demandes[0]["prompt"] and "Leila en double" in demandes[0]["prompt"]
     assert "Pixel est cubique" in demandes[1]["prompt"] and "Leila en double" not in demandes[1]["prompt"]
+    # Les noms, pas l'action : « looks at the sky » se dessinerait (04/10, la capsule déjà au sol au plan 1).
+    assert "Leila" in demandes[0]["prompt"] and "looks at the sky" not in demandes[0]["prompt"]
     assert len(demandes[0]["image_reference"]) == 2   # la fiche de Leila, puis l'image du maître
     assert controles[0] == ("le contrôle de la retouche", 3)   # maître, retouche, photo de Leila
     assert len(demandes[2]["image_reference"]) == 3   # Pixel et Leila, puis l'image du maître
