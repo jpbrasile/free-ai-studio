@@ -72,6 +72,20 @@ CONSIGNE_SEQUENCES = (
     "such a reveal happens at the cut between two sequences, the next one opening on the revealed character. "
     "No dialogue. Answer with JSON only: {\"sequences\": [\"...\", \"...\"]}"
     "\n\nStory:\n%s")
+# La caméra (04/10, propriétaire : « la caméra doit être mise en œuvre aussi ») : le découpage laisse la
+# caméra au Studio (le menu de la page), et le film automatique n'en choisissait aucune — « The camera
+# holds a static shot » dans chaque plan. Le chat en choisit une par plan, dans le menu du Studio.
+CONSIGNE_CAMERA = (
+    "Here are the shots of a short film, in order. Choose ONE camera movement for each shot, as a "
+    "cinematographer would, to tell the story: the camera moves in most shots; \"fixe\" (static) only for "
+    "a shot that needs stillness, never twice in a row. Follow a character who walks or flies (\"suit\"), "
+    "push in on a discovery or an emotion (\"avance\"), tilt up to the sky (\"bascule_haut\"), pull out "
+    "or rise to reveal a place (\"recule\", \"monte\"), arc around a meeting (\"arc\"). Keep the faces as "
+    "they are: amplitude \"petite\" or \"\" (normal), never \"grande\" when a face is in close-up. "
+    "Allowed movements: %s. Allowed amplitudes: \"petite\", \"\", \"grande\". Allowed speeds: \"lente\", "
+    "\"\", \"rapide\". Answer with JSON only: {\"cameras\": [{\"mouvement\": \"...\", \"amplitude\": \"...\", "
+    "\"vitesse\": \"...\"}]}, one per shot, in order.\n\nShots:\n%s")
+CAMERA_SECOURS = {"mouvement": "avance", "amplitude": "petite", "vitesse": "lente"}
 CONSIGNE_MUSIQUE = (
     "Here is a short film story. Write the style of an instrumental film score for it, in English, in at most "
     "25 words: genre, instruments, tempo, mood. No vocals. Answer with the style only.\n\nStory:\n%s")
@@ -126,6 +140,31 @@ def fiche_du_nom(fiches: list, nom: str):
     memes = [f for f in fiches or [] if isinstance(f, dict) and f.get("id")
              and " ".join(str(f.get("nom") or "").split()).casefold() == cle]
     return max(memes, key=lambda f: (len(f.get("angles") or []), str(f.get("cree_le") or ""))) if memes else None
+
+
+def lire_cameras(reponse: str, nombre: int) -> list:
+    """Une caméra du menu du Studio par plan ; un choix illisible ou hors menu devient CAMERA_SECOURS
+    (une petite avancée lente), jamais la caméra fixe par défaut."""
+    from video_h3 import lire_camera   # le menu et ses contrôles sont ceux de la page
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    brutes = (d or {}).get("cameras") if isinstance(d, dict) else None
+    brutes = brutes if isinstance(brutes, list) else []
+    cameras = []
+    for k in range(nombre):
+        try:
+            c = lire_camera(brutes[k] if k < len(brutes) and isinstance(brutes[k], dict) else None)
+        except ValueError:
+            c = None
+        deux_fixes = c and c["mouvement"] == "fixe" and cameras and cameras[-1]["mouvement"] == "fixe"
+        if k >= len(brutes) or not c or c["mouvement"] == "auto" or deux_fixes:
+            c = dict(CAMERA_SECOURS)   # absent, illisible, au choix du modèle, ou fixe deux fois de suite
+        cameras.append(c)
+    return cameras
 
 
 def lire_style(reponse: str) -> str:
@@ -211,7 +250,11 @@ class Film:
         elif len(plans) > PLANS_MAX:
             raise Arret("Le découpage a rendu %d plans : %d au plus tiennent dans un clip maître de 15 s."
                         % (len(plans), PLANS_MAX))
-        return plans
+        from video_h3 import CAMERA_MOUVEMENTS
+        permis = ", ".join('"%s"' % m for m in CAMERA_MOUVEMENTS if m not in ("auto", "tremble"))
+        liste = "\n".join("%d. %s" % (k + 1, p.get("image_paroles") or "") for k, p in enumerate(plans))
+        cameras = lire_cameras(self.chat(CONSIGNE_CAMERA % (permis, liste)), len(plans))
+        return [dict(p, camera=c) for p, c in zip(plans, cameras)]
 
     def decoupage(self):
         self.etat["plans"] = self._decouper(self.etat["histoire"], self.etat["fiches"])

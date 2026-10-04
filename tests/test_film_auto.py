@@ -136,6 +136,28 @@ def test_la_duree_du_film_est_bornee_et_l_essai_a_deux_sequences(fa):
     assert "visible, in plain view, at its very first moment" in fa.CONSIGNE_SEQUENCES
 
 
+def test_chaque_plan_recoit_une_camera_du_menu_jamais_fixe_par_defaut(fa, tmp_path):
+    """04/10, propriétaire : « la caméra doit être mise en œuvre aussi » (tout était « static shot »)."""
+    cams = fa.lire_cameras('{"cameras": [{"mouvement": "suit", "amplitude": "", "vitesse": "lente"},'
+                           ' {"mouvement": "fixe"}, {"mouvement": "fixe"}, {"mouvement": "envol"}]}', 5)
+    assert [c["mouvement"] for c in cams] == ["suit", "fixe", "avance", "avance", "avance"]
+    assert cams[0]["vitesse"] == "lente" and cams[2] == fa.CAMERA_SECOURS
+    assert fa.lire_cameras("pas de json", 2) == [fa.CAMERA_SECOURS] * 2
+
+    def chat_camera(consigne):
+        if "camera movement" in consigne:
+            assert '"bascule_haut"' in consigne and '"auto"' not in consigne
+            return '{"cameras": [{"mouvement": "bascule_haut", "amplitude": "petite", "vitesse": "lente"}]}'
+        return chat(consigne)
+    studio = FauxStudio()
+    etat = fa.nouvel_etat("Oscar allume le phare.")
+    fa.Film(etat, tmp_path, studio, chat_camera, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    maitre = next(x for m, c, x in studio.appels if c == "/video-h3/maitre")
+    assert maitre["plans"][0]["camera"]["mouvement"] == "bascule_haut"
+    assert maitre["plans"][1]["camera"] == fa.CAMERA_SECOURS
+
+
 def test_l_essai_a_blanc_va_du_texte_au_film_par_les_routes_du_studio(fa, tmp_path):
     studio = FauxStudio()
     etat = fa.nouvel_etat("Oscar allume le phare. Un bateau rentre au port.", essai=True)

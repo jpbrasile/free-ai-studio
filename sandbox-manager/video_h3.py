@@ -3065,6 +3065,16 @@ def consigne_jugement(noms: list, texte: str = "", raccord: int = 0, depuis_s: f
     quoi = ("ONE video made of several shots joined by the planned cuts its text dates ([Shot N] At MM:SS); a "
             "change of framing at those times is NOT a fault, but the same people and places must remain "
             "across them" if plans else "ONE video shot")
+    # « Le robot perdu », 04/10 : une coupe faite à 7,54 s pour « At 00:07.542 » jugée « changement de
+    # plan non planifié » ; le juge lit des numéros d'image, pas des heures. On lui dit l'image.
+    coupes = [int(m) * 60 + float(s) for m, s in re.findall(r"At (\d+):(\d+(?:\.\d+)?), the camera cuts",
+                                                             str(texte or ""))]
+    coupes = [t for t in coupes if t >= depuis_s]
+    if coupes:
+        quoi += (" (planned cuts here: " + ", ".join("%g s, about frame %d" % (round(t, 1), round((t - depuis_s) / 0.5) + 1)
+                                                     for t in coupes)
+                 + "; across a planned cut the framing, the camera angle and where each character stands may "
+                 "all change: that is the cut, NOT a fault)")
     depuis = (" Frame 1 of this sheet is at %s s into the video." % ("%g" % round(depuis_s, 1))) if depuis_s else ""
     avant = (f" Frames 1 to {raccord} are the END OF THE PREVIOUS SHOT, the shot itself starts at frame "
              f"{raccord + 1}: also report any jump across that cut — a character suddenly elsewhere or "

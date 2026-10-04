@@ -3294,6 +3294,8 @@ def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):
     assert "shown twice at the same time" in consignes[0] and "planned cuts" in consignes[0]
     assert "Frame 1 of this sheet" not in consignes[0] and "Frame 1 of this sheet is at 18 s" in consignes[1]
     assert "ONE video shot:" in v.consigne_jugement([], "Mila waters the pot.")
+    # « Le robot perdu », 04/10 : la coupe voulue est dite par son numéro d'image, sur sa planche seulement.
+    assert "12.5 s, about frame 26" in consignes[0] and "about frame" not in consignes[1]
 
 
 def test_3_l_ecoute_compare_les_repliques_attendues():
