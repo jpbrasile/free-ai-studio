@@ -633,12 +633,52 @@ def test_la_description_de_l_image_creee_passe_a_h3(h3):
     p = v.preparer(demande(mode="premiere", images=[PNG], description_premiere="Un café bondé",
                            description_derniere="ignorée : pas de dernière image dans ce mode"))
     invite = p["resume_public"]["invite"]
-    assert invite.startswith("First frame: Un café bondé. ") and "ignorée" not in invite
+    # Syntaxe de H3 (guide de MiniMax, base, 2.1 et cas 2) : consigne d'alignement, ligne vide, champs.
+    assert invite.startswith(v.CONSIGNE_I2VA + "\n\nintegrated_multimodal_description: [Shot 1] "
+                             "<Picture 1>: Un café bondé. ") and "ignorée" not in invite
+    assert "\n\noverall_soundscape: " in invite and invite.endswith("\n\nnon_diegetic_music: N/A")
+    assert "Sound: " not in invite and "First frame" not in invite
     p = v.preparer(demande(mode="premiere_derniere", images=[PNG, PNG],
                            description_premiere="Début.", description_derniere="Fin."))
-    assert p["resume_public"]["invite"].startswith("First frame: Début. Last frame: Fin. ")
-    # Image téléversée (sans description) ou autre mode : rien n'est ajouté.
-    assert "frame:" not in v.preparer(demande(mode="premiere", images=[PNG]))["resume_public"]["invite"]
+    i = p["resume_public"]["invite"]
+    assert i.startswith("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns "
+                        "with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the "
+                        "5.17-second mark of the target video.\n\nintegrated_multimodal_description: [Shot 1] "
+                        "<Picture 1>: Début. ")
+    assert "The shot ends on the composition established by Picture 2: Fin." in i
+    # Image téléversée (sans description) : l'ancre n'est pas écrite, la consigne si.
+    i = v.preparer(demande(mode="premiere", images=[PNG]))["resume_public"]["invite"]
+    assert "<Picture 1>:" not in i and i.startswith(v.CONSIGNE_I2VA + "\n\nintegrated_multimodal_description: [Shot 1] ")
+    # La tête d'un maître, avant son [Shot 1], passe dedans, après l'ancre de l'image.
+    assert v.description_aux_images("The same place. [Shot 1] Wide shot. [Shot 2] At 00:01.885, close-up.",
+                                    "Un jardin") == (
+        "[Shot 1] <Picture 1>: Un jardin. The same place. Wide shot. [Shot 2] At 00:01.885, close-up.")
+    # Ce qui ne s'adressait qu'au modèle d'image ne part pas à H3 (maître f970b321 : « First frame: Photo
+    # réaliste, cadrage paysage 16:9, image nette, début de la scène : Wide shot… »).
+    assert v.description_aux_images("Leila walks.", v.PREFIXE_DEPART + "Wide shot, night garden. "
+                                    "Améliorations demandées : plus sombre.") == (
+        "[Shot 1] <Picture 1>: Wide shot, night garden. Leila walks.")
+    # Les noms deviennent l'étiquette de la fiche, ancrée une fois sur <Picture 1> ; une réplique garde
+    # ses mots (choix du propriétaire, 04/10 : « courte description »).
+    leila = v.fiche_creer("Leila", "x")["id"]
+    v.fiche_poser_image(leila, "face", PNG)
+    assert v.fiches_sans_etiquette([leila]) == [leila]
+    v.fiche_poser_etiquette(leila, '"The girl with dark brown hair."')
+    assert v.fiche_lire(leila)["etiquette_h3"] == "the girl with dark brown hair"
+    assert v.fiches_sans_etiquette([leila]) == []
+    i = v.preparer(demande(mode="premiere", images=[PNG], fiches=[leila],
+                           image_paroles="Leila walks to the capsule. Leila says « Leila, wake up! »"))[
+        "resume_public"]["invite"]
+    assert i.count("The girl with dark brown hair shown in <Picture 1> walks to the capsule.") == 1, i
+    assert "The girl with dark brown hair (S1)" in i and "Leila, wake up!" in i and "Leila walks" not in i, i
+    for mauvais in ("Leila", "the girl, who is twelve years old and has very long dark brown hair"):
+        with pytest.raises(ValueError):
+            v.etiquette_lire(mauvais)
+    v.fiche_poser_image(leila, "face", PNG)   # une photo change : l'étiquette est à refaire
+    assert v.fiches_sans_etiquette([leila]) == [leila]
+    # Texte seul (T2VA) : pas de consigne d'image, les champs quand même.
+    i = v.preparer(demande(mode="texte", images=[]))["resume_public"]["invite"]
+    assert i.startswith("integrated_multimodal_description: [Shot 1] ")
     assert "frame:" not in v.preparer(demande(description_premiere="x"))["resume_public"]["invite"]
     html = client(h3).get("/video-h3").text
     assert "description_premiere: m === " in html and "description_derniere: m === " in html
@@ -2237,7 +2277,7 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
         # La caméra en tête quand aucune phrase n'est finie hors réplique (01/10).
         "detailed_description: [Shot 1] The camera holds a static shot throughout. "
         "<Subject 2> (S2) demande <d>[English] Is this seat taken?</d> "
-        "<Subject 1> (S1) répond <d>[French] Oui.</d> " + v.SEULES_REPLIQUES + " non_diegetic_music: N/A")
+        "<Subject 1> (S1) répond <d>[French] Oui.</d> " + v.SEULES_REPLIQUES + "\n\nnon_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
     for mauvais, message in (({"langues": {lea: "Klingon"}}, "inconnue"), ({"fiches": [lea, lea]}, "illisible")):
@@ -3317,13 +3357,30 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
 
     async def image(demande):
         demandes.append(demande)
-        if len(demandes) == 3:
+        if len(demandes) == 2:
             raise h3.HTTPException(502, "aucune image")
         return "data:image/png;base64," + PNG
     monkeypatch.setattr(h3, "_image_du_studio", image)
+    # Qwen, deuxième dessin : il réussit au plan 1, échoue au plan 2.
+    qwen = []
+    construire = h3.retouche_qwen.construire_script
+    monkeypatch.setattr(h3.retouche_qwen, "construire_script",
+                        lambda image, refs, texte: qwen.append((refs, texte)) or construire(image, refs, texte))
+
+    def modal(j, code, gpu, internet, **kw):
+        assert j == jid and kw["gpu_type"] == "L40S" and kw["usage"] is None and kw["volume"] == v.VOLUME
+        if len(qwen) > 1:
+            return {"exit_code": 1, "stderr": "CALCUL_ECHOUE", "artifacts": []}
+        sortie = h3.JOBS / j / "modal-output"
+        sortie.mkdir(parents=True, exist_ok=True)
+        (sortie / "0000-retouche.png").write_bytes(base64.b64decode(PNG))
+        return {"exit_code": 0, "stderr": "", "artifacts": [{"name": "0000-retouche.png"}]}
+    monkeypatch.setattr(h3, "modal_execute", modal)
     controles = []
 
     async def juge(consigne, quoi="", images=None, modele=""):
+        if quoi == "l'étiquette d'un personnage":   # écrite une fois par fiche, avant les clips
+            return "the girl with dark brown hair"
         controles.append((quoi, len(images or [])))
         return ('{"ok": false, "fautes": ["Pixel est cubique"]}' if len(controles) == 1
                 else '{"ok": true, "fautes": []}')
@@ -3331,17 +3388,21 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
     r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"retoucher": True, "forcer": True})
     assert r.status_code == 200, r.text
     ret = r.json()["retouches"]
-    assert ret["1"] == "retouchée (1 fiches), contrôle ok au dessin 2"
-    assert ret["2"].startswith("image du maître gardée")   # un refus de l'image ne bloque rien
+    assert ret["1"] == "retouchée par Qwen (1 fiches), contrôle ok au dessin 2"
+    # Google refuse, puis Qwen : un refus ne bloque rien, Google n'est pas redemandé au troisième dessin.
+    assert ret["2"].startswith("image du maître gardée") and "google" in ret["2"] and "Qwen" in ret["2"]
+    assert len(demandes) == 2 and len(qwen) == 2
     assert ret["3"].startswith("aucun personnage")
     # La remarque du juge du maître est à éviter dès le premier dessin ; celle du contrôle, au suivant.
     assert "image à reprendre" in demandes[0]["prompt"] and "Leila en double" in demandes[0]["prompt"]
-    assert "Pixel est cubique" in demandes[1]["prompt"] and "Leila en double" not in demandes[1]["prompt"]
+    refs, texte = qwen[0]
+    assert "Pixel est cubique" in texte and "Leila en double" not in texte
+    assert texte.startswith("Leila is the character of <image2>.") and len(refs) == 1   # sa photo, pas de planche
     # Les noms, pas l'action : « looks at the sky » se dessinerait (04/10, la capsule déjà au sol au plan 1).
     assert "Leila" in demandes[0]["prompt"] and "looks at the sky" not in demandes[0]["prompt"]
     assert len(demandes[0]["image_reference"]) == 2   # la fiche de Leila, puis l'image du maître
     assert controles[0] == ("le contrôle de la retouche", 3)   # maître, retouche, photo de Leila
-    assert len(demandes[2]["image_reference"]) == 3   # Pixel et Leila, puis l'image du maître
+    assert len(demandes[1]["image_reference"]) == 3   # Pixel et Leila, puis l'image du maître
     # Sans la demande, rien n'est retouché.
     demandes.clear()
     r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"forcer": True})
@@ -3372,7 +3433,8 @@ def test_la_retouche_redemande_un_refus_passager(h3, monkeypatch):
     monkeypatch.setattr(h3, "_chat_du_studio", juge)
     plan = {"image_paroles": "Pixel floats."}
     _, note = asyncio.run(h3._retoucher_depart(base64.b64decode(PNG), {"fiches": [pixel]}, plan, "480p"))
-    assert note == "retouchée (1 fiches), contrôle ok au dessin 1" and attentes == list(h3.RETOUCHE_REDEMANDES_S)
+    assert note == "retouchée par l'image du Studio (1 fiches), contrôle ok au dessin 1"
+    assert attentes == list(h3.RETOUCHE_REDEMANDES_S)
     # Toujours refusée : l'image du maître est gardée, et le dit.
     appels.clear()
     attentes.clear()
@@ -3380,6 +3442,30 @@ def test_la_retouche_redemande_un_refus_passager(h3, monkeypatch):
         h3.HTTPException(502, "Google a refuse la demande d'image (HTTP 503).")))
     _, note = asyncio.run(h3._retoucher_depart(base64.b64decode(PNG), {"fiches": [pixel]}, plan, "480p"))
     assert note.startswith("image du maître gardée") and len(attentes) == 2
+
+
+def test_la_retouche_garde_le_dessin_le_moins_fautif_et_saute_qwen_sans_modal(h3, monkeypatch):
+    v = h3.video_h3
+    pixel = v.fiche_creer("Pixel", "x")["id"]
+    v.fiche_poser_image(pixel, "face", PNG)
+    monkeypatch.setattr(h3, "modal_configured", lambda: False)
+    monkeypatch.setattr(h3, "modal_execute", lambda *a, **k: pytest.fail("Modal n'est pas branché"))
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: base64.b64decode(PNG))
+    appels = []
+
+    async def image(demande):
+        appels.append(1)
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    fautes = iter(['{"ok": false, "fautes": ["a"]}', '{"ok": false, "fautes": ["b", "c"]}'])
+
+    async def juge(consigne, quoi="", images=None, modele=""):
+        return next(fautes)
+    monkeypatch.setattr(h3, "_chat_du_studio", juge)
+    _, note = asyncio.run(h3._retoucher_depart(base64.b64decode(PNG), {"fiches": [pixel]},
+                                               {"image_paroles": "Pixel floats."}, "480p", jid="e" * 32))
+    assert len(appels) == 2   # dessins 1 et 3 ; Qwen sauté
+    assert note == "retouchée par l'image du Studio (1 fiches, dessin 1), fautes restantes : a"
 
 
 def test_un_film_coupe_par_un_redemarrage_se_reprend(h3, monkeypatch, tmp_path):
@@ -3569,9 +3655,10 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     assert p0["description_premiere"] == "Un café bondé, une chaise vide"
     invite = v.preparer(dict(p0, images=[PNG]))["resume_public"]["invite"]
     # Sans photos de fiche, les noms restent des noms ; James parle anglais.
-    assert invite.startswith("First frame: Un café bondé, une chaise vide. ")
+    assert invite.startswith(v.CONSIGNE_I2VA + "\n\nintegrated_multimodal_description: [Shot 1] "
+                             "<Picture 1>: Un café bondé, une chaise vide. ")
     assert "<Subject" not in invite and "James (S2)" in invite and "[English]" in invite
-    assert "overall_soundscape" not in invite and "detailed_description" not in invite
+    assert "detailed_description" not in invite
     with pytest.raises(ValueError, match="Première image"):
         v.preparer(demande(fiches=[lea]))
 
@@ -4374,7 +4461,7 @@ def test_le_tournage_est_refuse_quand_une_regle_n_est_pas_suivie(h3, monkeypatch
     assert r.status_code == 409 and not fils
     d = r.json()["detail"]
     assert "plan 1, règle 2 : deux actions à la fois" in d["message"] and d["passe_droit"] is True
-    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9)) + [13, 14, 16]
+    assert [x["n"] for x in d["regles"][0]["regles"]] == list(range(9)) + [13, 14, 16, 18]
     # « Tourner quand même » : parti, et le scénario garde le rapport et le passe-droit.
     r = c.post("/video-h3/scenario/tourner", headers=CLE,
                json={"plans": plans, "fiche": fid, "longueur": 124, "forcer": True})

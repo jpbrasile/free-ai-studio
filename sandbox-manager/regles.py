@@ -50,6 +50,11 @@ REGLES = (
     # 03/10, film 4 : la fontaine changeait de jets, de vasques et de statue d'un plan à l'autre.
     (17, "clip", "Le décor du plan est celui de la fiche du décor : chaque élément fixe visible garde sa forme, "
                  "son nombre de parties et sa place."),
+    # 04/10, film 5, plan 2 : « Wide shot. … Medium shot. Leila crouches… » dans un seul plan ; H3 y coupe
+    # sans [Shot N] (guide de MiniMax, base, 4.2 : une coupe est un [Shot N] à son heure ; un simple
+    # changement de distance passe par un mouvement de caméra). Propriétaire : « conform to h3 syntax ».
+    (18, "texte", "Un plan n'a qu'un cadrage : un autre cadrage (plan large, moyen, gros plan…) est un autre "
+                  "plan."),
 )
 NUMEROS = {etape: [n for n, e, _ in REGLES if e == etape] for etape in ("texte", "depart", "clip")}
 # Les règles qui arrêtent le tournage (avant tout sou) : texte et image de départ.
@@ -478,8 +483,18 @@ def regles_texte(plans: list, continuite: dict, fiches: list, langues=None, lang
         r[5] = regle_deux_fois(plans, k)
         r[13] = regle_trajet(plan)
         r[14] = regle_ecoute(plan, personnes)
+        r[18] = regle_un_cadrage(plan)
         rapport.append(r)
     return rapport
+
+
+def regle_un_cadrage(plan: dict) -> dict:
+    """Règle 18 : une seule valeur de plan dans le texte du plan (répliques retirées)."""
+    texte = video_h3.sans_repliques(plan.get("image_paroles", ""))
+    valeurs = list(dict.fromkeys(m.group(1).lower() for m in video_h3._VALEUR_DE_PLAN.finditer(texte)))
+    return resultat(len(valeurs) < 2, ("Deux cadrages dans un même plan : « %s ». Gardez le premier et faites "
+                                       "du suivant un autre plan, ou rapprochez la caméra par un mouvement."
+                                       % "», « ".join(valeurs)) if len(valeurs) > 1 else "")
 
 
 # --- Règles 6 à 8 : l'image de départ, vue par le modèle qui voit -------------------

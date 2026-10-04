@@ -22,9 +22,16 @@ KITE = {"id": "k1", "nom": "yellow kite", "genre": "objet", "description": "kite
 
 
 def test_les_regles_sont_numerotees_par_etape(r):
-    assert [n for n, _, _ in r.REGLES] == list(range(18))
-    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13, 14], "depart": [6, 7, 8, 16], "clip": [9, 10, 11, 12, 15, 17]}
-    assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 14, 6, 7, 8, 16]
+    assert [n for n, _, _ in r.REGLES] == list(range(19))
+    assert r.NUMEROS == {"texte": [0, 1, 2, 3, 4, 5, 13, 14, 18], "depart": [6, 7, 8, 16], "clip": [9, 10, 11, 12, 15, 17]}
+    assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 14, 18, 6, 7, 8, 16]
+
+
+def test_un_plan_n_a_qu_un_cadrage(r):
+    """Film 5, 04/10, plan 2 : « Wide shot. … Medium shot. » dans un seul plan, sans [Shot N]."""
+    deux = r.regle_un_cadrage({"image_paroles": "Wide shot. Leila walks to the capsule. Medium shot. Leila crouches."})
+    assert deux["ok"] is False and "wide shot" in deux["pourquoi"] and "medium shot" in deux["pourquoi"]
+    assert r.regle_un_cadrage({"image_paroles": "Wide shot. Leila says « Medium shot, please. »"})["ok"] is True
 
 
 def _ecoute(r, texte, elements=None):

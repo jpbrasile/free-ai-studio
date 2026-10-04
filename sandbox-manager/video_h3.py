@@ -733,7 +733,8 @@ SEULES_REPLIQUES = ("Only the quoted lines are spoken, each by its speaker: befo
 
 
 def invite(image_paroles: str, ambiance: str = "", musique: str = "",
-           langue: str = LANGUE_PAROLES, locuteur: str = "(S1)", son: str = "Sound: ") -> str:
+           langue: str = LANGUE_PAROLES, locuteur: str = "(S1)", son: str = "Sound: ", champ: str = "",
+           separateur: str = " ") -> str:
     """Une seule invite pour le modèle, à partir des trois cases de la page.
 
     H3 fabrique l'image ET le son à partir du même texte : la case « image et
@@ -744,6 +745,9 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     La musique va dans le champ `non_diegetic_music` du guide de MiniMax
     (docs/VIDEO_PROMPT_WRITING_GUIDE_ref_en.md) ; case vide, il vaut `N/A` :
     sans rien dire, H3 ajoute une musique (entendue le 27/09, PLAN 18.9).
+
+    `champ` : le nom du champ de la description (« integrated_multimodal_description: »),
+    `separateur` : entre les champs (une ligne vide dans les guides de MiniMax).
     """
     morceaux = []
     image_paroles = balises_paroles(image_paroles, langue, locuteur)
@@ -755,11 +759,11 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     voix = " / ".join(sons_de_voix(image_paroles, ambiance)) if muet else ""
     silence_image = SILENCE_SANS_MOTS_IMAGE % voix if voix else SILENCE_IMAGE
     silence_son = SILENCE_SANS_MOTS_SON % voix if voix else SILENCE_SON
-    for texte, prefixe in ((image_paroles, ""), (ambiance, son), (musique, "non_diegetic_music: ")):
+    for k, (texte, prefixe) in enumerate(((image_paroles, champ), (ambiance, son), (musique, "non_diegetic_music: "))):
         t = " ".join(str(texte or "").split())
-        if prefixe == "" and t:
+        if k == 0 and t:
             t = (t if t[-1] in ".!?\"»>" else t + ".") + " " + (silence_image if muet else SEULES_REPLIQUES)
-        if muet and prefixe == son:
+        if muet and k == 1:
             t = (t if not t or t[-1] in ".!?\"»>" else t + ".") + (" " if t else "") + silence_son
         if t:
             if t[-1] not in ".!?\"»>":
@@ -767,7 +771,62 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
             morceaux.append(prefixe + t)
     if morceaux and not " ".join(str(musique or "").split()):
         morceaux.append("non_diegetic_music: N/A")
-    return " ".join(morceaux)
+    return separateur.join(morceaux)
+
+
+# --- La syntaxe de H3 hors « Références » (04/10, propriétaire : « conform to h3 syntax in studio,
+# mandatory ») -------------------------------------------------------------------------------------
+# MiniMax, docs/VIDEO_PROMPT_WRITING_GUIDE_base_en.md (2.1, 2.2, cas 2 à 3) : la consigne d'alignement
+# des images en première ligne, puis une ligne vide, puis les trois champs, chacun séparé d'une
+# ligne vide ; la description commence par [Shot 1]. Jusque-là, le Studio envoyait « First frame: … »,
+# le texte nu et « Sound: » (film 5, « Le robot perdu », maître f970b321 et ses clips).
+CHAMP_DESCRIPTION = "integrated_multimodal_description: "
+CHAMP_SONS = "overall_soundscape: "
+SEPARATEUR_CHAMPS = "\n\n"
+CONSIGNE_I2VA = "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced."
+CONSIGNE_FL2VA = ("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the "
+                  "0.00-second mark of the target video; Picture 2 (from Shot %d) aligns with the %.2f-second mark "
+                  "of the target video.")
+
+
+def consigne_images(mode: str, plans: int, duree_s: float) -> str:
+    """La première ligne de l'invite d'un mode à images clefs ; vide pour « Texte seul »."""
+    if mode == "premiere":
+        return CONSIGNE_I2VA
+    if mode == "premiere_derniere":
+        return CONSIGNE_FL2VA % (max(1, plans), duree_s)
+    return ""
+
+
+_CONSIGNE_DE_L_IMAGE = re.compile(r"^\s*Photo réaliste,.*?la scène\s*:\s*")
+_AMELIORATIONS = re.compile(r"\s*Améliorations demandées\s*:.*$", re.S)
+
+
+def _description_pour_h3(texte) -> str:
+    """Ce que l'image montre, sans ce qui ne s'adressait qu'au modèle d'image : le préfixe technique
+    (PREFIXE_DEPART, PREFIXE_FIN, ceux de la page) et les améliorations demandées, en français."""
+    t = _AMELIORATIONS.sub("", _CONSIGNE_DE_L_IMAGE.sub("", " ".join(str(texte or "").split())))
+    return t.strip()
+
+
+def description_aux_images(texte: str, premiere: str = "", derniere: str = "") -> str:
+    """Le texte du plan commencé par [Shot 1] ; ce que montrent les images clefs y est dit en
+    ancre (guide de MiniMax, 3.1 et 3.2) : la première au début de [Shot 1], la dernière à la fin."""
+    t = " ".join(str(texte or "").split())
+    if not _MULTIPLAN.search(t):
+        t = "[Shot 1] " + t
+    # Ce qui précède [Shot 1] (la tête du maître, « The same place… ») passe dedans : la description
+    # commence par [Shot 1].
+    i = t.find("[Shot 1]")
+    tete, t = (t[:i].strip(), t[i + len("[Shot 1]"):].strip()) if i >= 0 else (t, "")
+    d = _description_pour_h3(premiere)
+    ancre = ("<Picture 1>: " + d + ("" if d[-1] in ".!?" else ".")) if d else ""
+    t = " ".join(x for x in ("[Shot 1]", ancre, tete, t) if x)
+    d = _description_pour_h3(derniere)
+    if d:
+        t = ((t if t[-1] in ".!?\"»>" else t + ".") + " The shot ends on the composition established by "
+             "Picture 2: " + d + ("" if d[-1] in ".!?" else "."))
+    return t
 
 
 # --- Le clip maître (03/10/2026, « Le jardin de verre ») -----------------------------
@@ -1673,6 +1732,7 @@ def fiche_poser_image(fid, angle: str, image: str) -> dict:
         (dossier / ancien).unlink(missing_ok=True)
     fiche["images"][angle] = angle + ext
     (dossier / (angle + ext)).write_bytes(octets)
+    fiche.pop("etiquette_h3", None)   # écrite d'après les photos : à refaire
     _fiche_ecrire(fiche)
     return fiche
 
@@ -1682,8 +1742,77 @@ def fiche_retirer_image(fid, angle: str) -> dict:
     nom = fiche["images"].pop(_angle(angle), None)
     if nom:
         (_dossier_fiche(fid) / nom).unlink(missing_ok=True)
+    fiche.pop("etiquette_h3", None)
     _fiche_ecrire(fiche)
     return fiche
+
+
+# --- Le nom d'un personnage pour H3 hors « Références » (04/10) ---------------------------------
+# Propriétaire : « conform to h3 syntax in studio, mandatory », puis, au choix posé : une courte
+# description. Le guide de MiniMax (base, cas 2) ne nomme personne : « the young woman shown in
+# <Picture 1> ». Une seule étiquette par personnage, jamais mêlée à son nom (03/10 : « the girl » et
+# « Mila » ont fait deux fillettes) ; écrite d'après les photos de la fiche (les traits passent par
+# les images, jamais par le texte), une fois, gardée dans la fiche jusqu'à ce qu'une photo change.
+ETIQUETTE_MOTS_MAX = 8
+CONSIGNE_ETIQUETTE = (
+    "These pictures all show one and the same character. Write a short English label of at most six words "
+    "that tells this character apart at a glance in a video, from what the pictures show (kind of being, "
+    "age group, one or two striking visual traits), starting with \"the\": for example \"the girl with dark "
+    "brown hair\" or \"the small spherical silver robot\". No name, no punctuation, nothing else: only the label.")
+
+
+def etiquette_lire(texte: str) -> str:
+    """L'étiquette rendue par le modèle, vérifiée ; ValueError si elle n'en est pas une."""
+    t = " ".join(str(texte or "").strip().strip("\"'«»“”.").split()).rstrip(".")
+    t = t[:1].lower() + t[1:]
+    if not re.fullmatch(r"the [a-z][a-z' -]*", t) or len(t.split()) > ETIQUETTE_MOTS_MAX:
+        raise ValueError("Étiquette illisible : « %s »." % str(texte)[:80])
+    return t
+
+
+def fiche_poser_etiquette(fid, etiquette: str) -> dict:
+    fiche = fiche_lire(fid)
+    fiche["etiquette_h3"] = etiquette_lire(etiquette)
+    _fiche_ecrire(fiche)
+    return fiche
+
+
+def fiches_sans_etiquette(ids) -> list:
+    """Les fiches (personnes et objets à photos) qui n'ont pas encore leur étiquette."""
+    sortie = []
+    for fid in ids or []:
+        try:
+            f = fiche_lire(fid)
+        except ValueError:
+            continue
+        if f.get("genre") not in ("decor", "pose") and f.get("images") and not f.get("etiquette_h3"):
+            sortie.append(fid)
+    return sortie
+
+
+_REPLIQUE_D = re.compile(r"(<d>.*?</d>)", re.S)
+
+
+def noms_en_etiquettes(texte: str, fiches: list, ancrees=()) -> str:
+    """Chaque nom de fiche devient son étiquette, hors des répliques (<d>…</d>, dites mot pour mot) ;
+    la première fois, « … shown in <Picture 1> » pour les fiches de `ancrees` (sur l'image de départ).
+    Une fiche sans étiquette garde son nom. Majuscule en début de phrase ou de plan."""
+    vues = set()
+    morceaux = _REPLIQUE_D.split(str(texte or ""))
+    for f in sorted((f for f in fiches if f.get("etiquette_h3")), key=lambda f: -len(f["nom"])):
+        motif = re.compile(r"(?<![\w<])" + re.escape(f["nom"]) + r"(?!\w)")
+        for k in range(0, len(morceaux), 2):
+            def remplacer(m, f=f):
+                e = f["etiquette_h3"]
+                if f["id"] in ancrees and f["id"] not in vues:
+                    e += " shown in <Picture 1>"
+                vues.add(f["id"])
+                return e
+            morceaux[k] = motif.sub(remplacer, morceaux[k])
+    for k in range(0, len(morceaux), 2):
+        morceaux[k] = re.sub(r"(^|[.!?]\s+|\]\s+|:\s+)the\b" if k == 0 else r"([.!?]\s+|\]\s+|:\s+)the\b",
+                             lambda m: m.group(1) + "The", morceaux[k])
+    return "".join(morceaux)
 
 
 def fiche_image_data_url(fid, angle: str) -> str:
@@ -2827,7 +2956,9 @@ def consigne_decoupage(scenario: str, fiches=()) -> str:
             "character's new place. "
             # Même essai : la caméra s'est approchée de plan en plan, jusqu'à
             # redessiner le visage du personnage.
-            "Say the framing of each shot in its first sentence (close-up, medium shot, wide shot); never "
+            "Say the framing of each shot in its first sentence (close-up, medium shot, wide shot), and only "
+            # 04/10, film 5, plan 2 : « Wide shot. … Medium shot. » dans un seul plan (règle 18).
+            "there: one framing per shot, a new framing is a new shot; never "
             "write a camera movement (zoom, pan, push in, the camera follows): the camera is set apart, "
             "by the Studio. %s"
             "Write in the language of the script. Dialogue must be copied EXACTLY from the script, "
@@ -4237,10 +4368,29 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         # « holding the <Subject 3> » : la balise est le nom, sans article (guide MiniMax ;
         # remarque du propriétaire, 30/09).
         image_paroles, ambiance = (_SANS_ARTICLE.sub(r"\1", t) for t in (image_paroles, ambiance))
+    images_clefs = mode in ("texte", "premiere", "premiere_derniere")
+    if images_clefs and " ".join(str(image_paroles or "").split()):
+        # Ce que montrent la première et la dernière image, quand le Studio les a créées : leur
+        # description (améliorations comprises) passe aussi à H3, pour que le texte et l'image
+        # disent la même scène (demande du propriétaire, 28/09) ; en ancre de [Shot 1] (04/10).
+        bords = {"premiere": ("premiere",), "premiere_derniere": ("premiere", "derniere")}.get(mode, ())
+        image_paroles = description_aux_images(
+            image_paroles, payload.get("description_premiere") if "premiere" in bords else "",
+            payload.get("description_derniere") if "derniere" in bords else "")
+        # Les noms deviennent les étiquettes ; « shown in <Picture 1> » pour qui est sur l'image de
+        # départ, sauf ceux que le tableau des éléments met hors champ au début.
+        elements = payload.get("elements") if isinstance(payload.get("elements"), list) else []
+        absents = {_norme_replique(str(e.get("nom") or "")) for e in elements
+                   if isinstance(e, dict) and hors_champ(e.get("debut"))}
+        ancrees = {f["id"] for f in fiches if _norme_replique(f["nom"]) not in absents} if bords else set()
+        image_paroles = noms_en_etiquettes(image_paroles, fiches, ancrees)
+        ambiance = noms_en_etiquettes(ambiance, fiches)
     texte = invite(image_paroles, ambiance, payload.get("musique", ""), langue, "(S1)",
                    # Rubriques du mode références, dans l'ordre de la consigne de MiniMax
                    # (skills/h3-prompt-writing/SKILL.md).
-                   "overall_soundscape: " if refs and fiches else "Sound: ")
+                   CHAMP_SONS if images_clefs or (refs and fiches) else "Sound: ",
+                   champ=CHAMP_DESCRIPTION if images_clefs else "",
+                   separateur=SEPARATEUR_CHAMPS if images_clefs or (refs and fiches) else " ")
     if not texte:
         raise ValueError("Décrivez au moins ce qu'on voit (première case).")
     # Image de départ ET photos des fiches (29/09, visage réinventé dans un plan parti
@@ -4282,23 +4432,18 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                  + (" detailed_description: " if _MULTIPLAN.search(texte) else " detailed_description: [Shot 1] ")
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
-    # Ce que montrent la première et la dernière image, quand le Studio les a
-    # créées : leur description (améliorations comprises) passe aussi à H3, pour
-    # que le texte et l'image disent la même scène (demande du propriétaire, 28/09).
-    bords = {"premiere": ("premiere",), "premiere_derniere": ("premiere", "derniere")}.get(mode, ())
-    for bord, etiquette in (("derniere", "Last frame: "), ("premiere", "First frame: ")):
-        d = " ".join(str(payload.get("description_" + bord) or "").split())
-        if d and bord in bords:
-            texte = etiquette + d + (" " if d[-1] in ".!?" else ". ") + texte
-    if len(texte) > 4000:
-        raise ValueError("Invite trop longue : %d caractères, 4 000 au plus. Raccourcissez le texte du plan."
-                         % len(texte))
     try:
         longueur = int(payload.get("longueur") or LONGUEUR_PAR_DEFAUT)
     except (TypeError, ValueError) as exc:
         raise ValueError("Durée illisible.") from exc
     if longueur not in LONGUEURS:
         raise ValueError("Durée hors de la grille du modèle.")
+    consigne = consigne_images(mode, len(_MULTIPLAN.findall(texte)), longueur / IMAGES_PAR_SECONDE)
+    if consigne:
+        texte = consigne + SEPARATEUR_CHAMPS + texte
+    if len(texte) > 4000:
+        raise ValueError("Invite trop longue : %d caractères, 4 000 au plus. Raccourcissez le texte du plan."
+                         % len(texte))
     try:
         coupe = float(payload.get("coupe_s") or 0)
     except (TypeError, ValueError) as exc:

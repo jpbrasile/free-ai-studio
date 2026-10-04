@@ -70,6 +70,7 @@ import montage
 import notebooklm_pont
 import ou_calculer
 import poids_video
+import retouche_qwen
 import video
 import video_h3
 import visages
@@ -4154,6 +4155,7 @@ async def video_h3_creer(request: Request, authorization: Optional[str] = Header
         if traduit:
             payload = video_h3.lire_traduction(
                 await _chat_du_studio(video_h3.consigne_traduction(payload)), payload)
+        await _etiquettes_assurer(payload.get("fiches") or [payload.get("fiche")])
         plan = video_h3.preparer(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -6808,6 +6810,22 @@ def _photos_des_fiches(ids) -> tuple:
     return noms, refs
 
 
+async def _etiquettes_assurer(ids) -> None:
+    """L'étiquette H3 de chaque fiche qui n'en a pas (video_h3.CONSIGNE_ETIQUETTE), lue sur ses photos
+    et sa planche par le modèle du juge. Un refus laisse le nom au plan, et se journalise."""
+    for fid in video_h3.fiches_sans_etiquette([f for f in ids or [] if f]):
+        f = video_h3.fiche_lire(fid)
+        images = [video_h3.fiche_image_data_url(fid, a) for a in video_h3.ANGLES if a in f["images"]]
+        planche = video_h3.fiche_planche_data_url(fid)
+        try:
+            video_h3.fiche_poser_etiquette(fid, await _chat_du_studio(
+                video_h3.CONSIGNE_ETIQUETTE, "l'étiquette d'un personnage",
+                images=images + ([planche] if planche else []), modele=video_h3.MODELE_JUGE))
+        except (HTTPException, ValueError) as exc:
+            log.warning("fiche %s : pas d'étiquette H3 (%s), son nom reste", fid,
+                        str(getattr(exc, "detail", exc))[:200])
+
+
 async def _juger_passage(film: bytes, debut: float, duree: float, noms: list, refs: list, texte: str,
                          raccord: int = 0) -> dict:
     # Tout le passage est vu (03/10) : une planche par tranche de 18 s au plus, chacune jugée.
@@ -7035,6 +7053,7 @@ async def video_h3_maitre(request: Request, authorization: Optional[str] = Heade
         m = video_h3.texte_maitre(anglais, longueur)
         payload = dict(video_h3.payload_maitre(a_tourner[0]["payload"], plans[0].get("description_depart", "")),
                        image_paroles=m["texte"], ambiance=m["ambiance"], longueur=longueur, camera=None)
+        await _etiquettes_assurer(payload.get("fiches") or [payload.get("fiche")])
         plan = video_h3.preparer(payload)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -7081,6 +7100,7 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
         coupes, faibles = await _coupes_du_maitre(film)
         cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"], faibles)
         travaux, retouches, departs = [], {}, {}
+        await _etiquettes_assurer(maitre["commun"].get("fiches") or [maitre["commun"].get("fiche")])
         for k, (a, b) in enumerate(cles):
             if k + 1 not in voulus:
                 continue
@@ -7094,7 +7114,7 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
             if corps.get("retoucher") is True:
                 images[0], retouches[k + 1] = await _retoucher_depart(
                     images[0], maitre["commun"], plans[k], definition,
-                    [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)])
+                    [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)], jid=jid)
             images = [base64.b64encode(i).decode() for i in images]
             # L'image d'où part le clip, gardée dès le dépliage (propriétaire, 04/10 : « montre-moi les
             # images retouchées » ; un clip en file ne l'écrivait nulle part avant de démarrer).
@@ -7143,17 +7163,73 @@ async def _coupes_du_maitre(film: bytes) -> tuple:
 RETOUCHE_ESSAIS = 3
 RETOUCHE_REDEMANDES_S = (20, 60)   # un refus passager (429, 5xx) est redemandé après ces attentes
 _PASSAGER = re.compile(r"HTTP (429|5\d\d)")
+# Propriétaire, 04/10 : « ajoute Qwen comme deuxième retouche ». Essai du même jour (plans 3, 4, 7) :
+# Qwen-Image 2.1 rend Pixel juste et à sa taille là où Google le laissait faux ; il a aussi retiré la
+# capsule et recadré Leila. Les deux moteurs alternent donc, et le juge garde le dessin le moins fautif.
+RETOUCHE_MOTEURS = ("google", "qwen", "google")
+
+
+async def _retouche_qwen(jid: str, image: bytes, nommes: list, a_eviter: list) -> bytes:
+    """L'image redessinée par Qwen-Image 2.1 sur une carte Modal (retouche_qwen), d'après la première
+    photo et la planche de chaque fiche. HTTPException si Modal manque, refuse ou ne rend rien."""
+    if not jid or not modal_configured():
+        raise HTTPException(503, "Modal n'est pas branché : pas de retouche Qwen.")
+    personnages, refs = [], []
+    for fid in nommes:
+        f = video_h3.fiche_lire(fid)
+        angle = next((a for a in video_h3.ANGLES if a in f["images"]), None)
+        urls = [u for u in ((video_h3.fiche_image_data_url(fid, angle) if angle else None),
+                            video_h3.fiche_planche_data_url(fid)) if u]
+        if urls:
+            personnages.append((f["nom"], len(urls)))
+            refs += [base64.b64decode(u.split(",", 1)[1]) for u in urls]
+    code = retouche_qwen.construire_script(image, refs, retouche_qwen.consigne(personnages, a_eviter))
+    try:
+        budget_modal.verifier("video", retouche_qwen.GPU, retouche_qwen.DUREE_MAX_S, retouche_qwen.MEMOIRE_MB,
+                              quoi="La retouche Qwen", coeurs=retouche_qwen.COEURS)
+    except budget_modal.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+    debut = time.time()
+    try:
+        res = await asyncio.to_thread(
+            modal_execute, jid, code, True, True, gpu_type=retouche_qwen.GPU, timeout_s=retouche_qwen.DUREE_MAX_S,
+            memory_mb=retouche_qwen.MEMOIRE_MB, coeurs=retouche_qwen.COEURS, paquets=retouche_qwen.PAQUETS,
+            apt=video_h3.APT, commandes=video_h3.commandes(), volume=video_h3.VOLUME,
+            point_de_montage=video_h3.POINT_DE_MONTAGE, usage=None)   # compté ici, sur « video »
+    except BackendUnavailable as exc:
+        raise HTTPException(503, "Retouche Qwen : %s" % str(exc)[:300]) from exc
+    finally:
+        budget_modal.consommer("video", retouche_qwen.GPU, time.time() - debut, retouche_qwen.MEMOIRE_MB,
+                               coeurs=retouche_qwen.COEURS, cle=jid)
+    sortie = next((a for a in res.get("artifacts") or []
+                   if str(a.get("name", "")).endswith("retouche.png") and not a.get("skipped")), None)
+    if res.get("exit_code") != 0 or not sortie:
+        raise HTTPException(502, retouche_qwen.phrase_d_echec(res.get("stderr", "")) or
+                            "La retouche Qwen n'a rien rendu : %s" % str(res.get("stderr") or "")[-200:])
+    return (JOBS / jid / "modal-output" / sortie["name"]).read_bytes()
+
+
+async def _retouche_google(demande: dict) -> bytes:
+    for attente in RETOUCHE_REDEMANDES_S + (None,):
+        try:
+            rendu = await _image_du_studio(demande)
+            return base64.b64decode(rendu.split(",", 1)[-1])
+        except HTTPException as exc:
+            if attente is None or not _PASSAGER.search(str(exc.detail)):
+                raise
+            await asyncio.sleep(attente)
 
 
 async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: str,
-                            remarques: list = ()) -> tuple:
+                            remarques: list = (), jid: str = "") -> tuple:
     """L'image du maître d'où part un plan déplié, redessinée par l'image du Studio d'après les
     fiches des personnages que le plan nomme — toutes leurs vues et leur planche multivue
     (CONSIGNE_RETOUCHE) : (image, ce qui s'est passé). Propriétaire, 04/10 : « reconstruire les
     images intermédiaires avec les multiview et la remarque des reviewers » : les défauts que le
     juge a vus dans le maître sont à éviter dès le premier dessin ; un juge compare ensuite la
     retouche au maître et aux photos, et ses fautes repartent au dessin suivant (RETOUCHE_ESSAIS).
-    Un refus de l'image garde l'image du maître, et le dit."""
+    Les dessins alternent l'image du Studio et Qwen (RETOUCHE_MOTEURS) ; un moteur qui refuse n'est
+    plus redemandé, le dessin aux moins de fautes est gardé. Tout refusé : l'image du maître, et le dit."""
     ids = [f for f in (commun.get("fiches") or [commun.get("fiche")]) if f]
     texte = str(plan.get("image_paroles") or "")
     nommes = [f for f in ids if video_h3.fiche_lire(f)["nom"].casefold() in texte.casefold()]
@@ -7161,36 +7237,45 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
         return image, "aucun personnage nommé : image du maître"
     a_eviter = [str(r) for r in remarques if r][:video_h3.A_EVITER_MAX]
     noms, photos = _photos_des_fiches(nommes)
+    meilleur, refus = None, {}   # meilleur : (fautes, octets, moteur, tour)
     try:
         did = video_h3.depart_poser(base64.b64encode(image).decode())
-        for tour in range(RETOUCHE_ESSAIS):
-            # Les noms seuls, pas l'action : « Le robot perdu », 04/10, plan 1, le texte (« la capsule tombe »)
-            # a fait dessiner la capsule déjà au sol et Leila la regardant, l'image du maître n'en avait pas.
-            demande, _texte = video_h3.demande_image(video_h3.TEXTE_RETOUCHE % ", ".join(noms), fiches=nommes,
-                                                     retouche=did, a_eviter=a_eviter)
-            for attente in RETOUCHE_REDEMANDES_S + (None,):
-                try:
-                    rendu = await _image_du_studio(demande)
-                    break
-                except HTTPException as exc:
-                    if attente is None or not _PASSAGER.search(str(exc.detail)):
-                        raise
-                    await asyncio.sleep(attente)
-            octets = montage.recadrer_image(base64.b64decode(rendu.split(",", 1)[-1]),
-                                            *video_h3.DEFINITIONS[definition])
-            try:
-                fautes = video_h3.lire_raccord(await _chat_du_studio(
-                    video_h3.consigne_retouche(noms), "le contrôle de la retouche",
-                    images=[_data_url(image), _data_url(octets)] + list(photos), modele=video_h3.MODELE_JUGE))
-            except (ValueError, HTTPException) as exc:
-                return octets, "retouchée (%d fiches), contrôle muet : %s" % (
-                    len(nommes), str(getattr(exc, "detail", exc))[:150])
-            if not fautes:
-                return octets, "retouchée (%d fiches), contrôle ok au dessin %d" % (len(nommes), tour + 1)
-            a_eviter = fautes[:video_h3.A_EVITER_MAX]
-        return octets, "retouchée (%d fiches), fautes restantes : %s" % (len(nommes), " ; ".join(fautes)[:300])
-    except (HTTPException, ValueError) as exc:
-        return image, "image du maître gardée : %s" % str(getattr(exc, "detail", exc))[:200]
+    except ValueError as exc:
+        return image, "image du maître gardée : %s" % str(exc)[:200]
+    for tour, moteur in enumerate(RETOUCHE_MOTEURS[:RETOUCHE_ESSAIS]):
+        if moteur in refus:
+            continue
+        try:
+            if moteur == "qwen":
+                brut = await _retouche_qwen(jid, image, nommes, a_eviter)
+            else:
+                # Les noms seuls, pas l'action : « Le robot perdu », 04/10, plan 1, le texte (« la capsule
+                # tombe ») a fait dessiner la capsule déjà au sol et Leila la regardant.
+                demande, _texte = video_h3.demande_image(video_h3.TEXTE_RETOUCHE % ", ".join(noms), fiches=nommes,
+                                                         retouche=did, a_eviter=a_eviter)
+                brut = await _retouche_google(demande)
+            octets = montage.recadrer_image(brut, *video_h3.DEFINITIONS[definition])
+        except (HTTPException, ValueError) as exc:
+            refus[moteur] = str(getattr(exc, "detail", exc))[:200]
+            continue
+        par = "par Qwen" if moteur == "qwen" else "par l'image du Studio"
+        try:
+            fautes = video_h3.lire_raccord(await _chat_du_studio(
+                video_h3.consigne_retouche(noms), "le contrôle de la retouche",
+                images=[_data_url(image), _data_url(octets)] + list(photos), modele=video_h3.MODELE_JUGE))
+        except (ValueError, HTTPException) as exc:
+            return octets, "retouchée %s (%d fiches), contrôle muet : %s" % (
+                par, len(nommes), str(getattr(exc, "detail", exc))[:150])
+        if not fautes:
+            return octets, "retouchée %s (%d fiches), contrôle ok au dessin %d" % (par, len(nommes), tour + 1)
+        if meilleur is None or len(fautes) < len(meilleur[0]):
+            meilleur = (fautes, octets, par, tour)
+        a_eviter = fautes[:video_h3.A_EVITER_MAX]
+    if meilleur:
+        fautes, octets, par, tour = meilleur
+        return octets, "retouchée %s (%d fiches, dessin %d), fautes restantes : %s" % (
+            par, len(nommes), tour + 1, " ; ".join(fautes)[:300])
+    return image, "image du maître gardée : %s" % " ; ".join("%s : %s" % m for m in refus.items())[:300]
 
 
 # --- Le film automatique (03/10) : d'un texte simple au film fini (film_auto.py) ---------
@@ -7775,6 +7860,11 @@ def _depart_de_coupe(sid: str, i: int, precedent: str, payload: dict) -> bool:
 def run_scenario_h3(sid: str, a_tourner: list):
     """Chaque plan attend le précédent ; chacun est recollé au film déjà tourné.
     Un plan repris est découpé dans l'ancien film, sans rien louer."""
+    try:
+        sc = video_h3.scenario_lire(sid)
+        asyncio.run(_etiquettes_assurer(sc.get("fiches") or [sc.get("fiche")]))
+    except Exception:   # sans étiquette, le nom reste : jamais le scénario arrêté pour elle
+        log.exception("scénario %s : étiquettes des fiches", sid)
     precedent, en_attente, fins = None, None, []
     chaine_reprise = 0   # les plans repris depuis la dernière coupe (01/10)
     ips = video_h3.IMAGES_PAR_SECONDE
