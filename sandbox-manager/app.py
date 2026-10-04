@@ -7133,6 +7133,13 @@ async def _coupes_du_maitre(film: bytes) -> tuple:
     return fortes, faibles
 
 
+# « Le robot perdu », 04/10, troisième dépliage : deux plans gardent le Pixel cube du maître sur un 503
+# passager de Google, et le plan 6 n'a pas eu assez de deux dessins.
+RETOUCHE_ESSAIS = 3
+RETOUCHE_REDEMANDES_S = (20, 60)   # un refus passager (429, 5xx) est redemandé après ces attentes
+_PASSAGER = re.compile(r"HTTP (429|5\d\d)")
+
+
 async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: str,
                             remarques: list = ()) -> tuple:
     """L'image du maître d'où part un plan déplié, redessinée par l'image du Studio d'après les
@@ -7140,7 +7147,7 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
     (CONSIGNE_RETOUCHE) : (image, ce qui s'est passé). Propriétaire, 04/10 : « reconstruire les
     images intermédiaires avec les multiview et la remarque des reviewers » : les défauts que le
     juge a vus dans le maître sont à éviter dès le premier dessin ; un juge compare ensuite la
-    retouche au maître et aux photos, et ses fautes repartent au dessin suivant (RACCORD_ESSAIS).
+    retouche au maître et aux photos, et ses fautes repartent au dessin suivant (RETOUCHE_ESSAIS).
     Un refus de l'image garde l'image du maître, et le dit."""
     ids = [f for f in (commun.get("fiches") or [commun.get("fiche")]) if f]
     texte = str(plan.get("image_paroles") or "")
@@ -7151,12 +7158,19 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
     noms, photos = _photos_des_fiches(nommes)
     try:
         did = video_h3.depart_poser(base64.b64encode(image).decode())
-        for tour in range(video_h3.RACCORD_ESSAIS):
+        for tour in range(RETOUCHE_ESSAIS):
             # Les noms seuls, pas l'action : « Le robot perdu », 04/10, plan 1, le texte (« la capsule tombe »)
             # a fait dessiner la capsule déjà au sol et Leila la regardant, l'image du maître n'en avait pas.
             demande, _texte = video_h3.demande_image(video_h3.TEXTE_RETOUCHE % ", ".join(noms), fiches=nommes,
                                                      retouche=did, a_eviter=a_eviter)
-            rendu = await _image_du_studio(demande)
+            for attente in RETOUCHE_REDEMANDES_S + (None,):
+                try:
+                    rendu = await _image_du_studio(demande)
+                    break
+                except HTTPException as exc:
+                    if attente is None or not _PASSAGER.search(str(exc.detail)):
+                        raise
+                    await asyncio.sleep(attente)
             octets = montage.recadrer_image(base64.b64decode(rendu.split(",", 1)[-1]),
                                             *video_h3.DEFINITIONS[definition])
             try:

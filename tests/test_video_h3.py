@@ -3345,6 +3345,40 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
     assert r.status_code == 200 and "retouches" not in r.json() and not demandes
 
 
+def test_la_retouche_redemande_un_refus_passager(h3, monkeypatch):
+    """« Le robot perdu », 04/10 : deux plans ont gardé le Pixel cube du maître sur un 503 de Google."""
+    v = h3.video_h3
+    pixel = v.fiche_creer("Pixel", "x")["id"]
+    v.fiche_poser_image(pixel, "face", PNG)
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: base64.b64decode(PNG))
+    attentes, appels = [], []
+
+    async def dormir(s):
+        attentes.append(s)
+    monkeypatch.setattr(h3.asyncio, "sleep", dormir)
+
+    async def image(demande):
+        appels.append(1)
+        if len(appels) <= 2:
+            raise h3.HTTPException(502, "Google a refuse la demande d'image (HTTP 503).")
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+
+    async def juge(consigne, quoi="", images=None, modele=""):
+        return '{"ok": true, "fautes": []}'
+    monkeypatch.setattr(h3, "_chat_du_studio", juge)
+    plan = {"image_paroles": "Pixel floats."}
+    _, note = asyncio.run(h3._retoucher_depart(base64.b64decode(PNG), {"fiches": [pixel]}, plan, "480p"))
+    assert note == "retouchée (1 fiches), contrôle ok au dessin 1" and attentes == list(h3.RETOUCHE_REDEMANDES_S)
+    # Toujours refusée : l'image du maître est gardée, et le dit.
+    appels.clear()
+    attentes.clear()
+    monkeypatch.setattr(h3, "_image_du_studio", lambda d: (_ for _ in ()).throw(
+        h3.HTTPException(502, "Google a refuse la demande d'image (HTTP 503).")))
+    _, note = asyncio.run(h3._retoucher_depart(base64.b64decode(PNG), {"fiches": [pixel]}, plan, "480p"))
+    assert note.startswith("image du maître gardée") and len(attentes) == 2
+
+
 def test_un_film_coupe_par_un_redemarrage_se_reprend(h3, monkeypatch, tmp_path):
     """« Le robot perdu », 04/10 : la reconstruction a coupé le film, resté « en cours » dans son
     fichier ; « Ce film est déjà en cours » refusait sa reprise sans fin."""
