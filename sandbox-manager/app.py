@@ -7092,8 +7092,9 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
             images = [montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
                                              *video_h3.DEFINITIONS[definition]) for n in bornes]
             if corps.get("retoucher") is True:
-                images[0], retouches[k + 1] = await _retoucher_depart(images[0], maitre["commun"], plans[k],
-                                                                      definition)
+                images[0], retouches[k + 1] = await _retoucher_depart(
+                    images[0], maitre["commun"], plans[k], definition,
+                    [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)])
             images = [base64.b64encode(i).decode() for i in images]
             payload = dict({x: y for x, y in maitre["commun"].items() if y},
                            mode="premiere_derniere" if suite_apres else "premiere", images=images,
@@ -7123,21 +7124,40 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
                 **({"retouches": retouches} if retouches else {}))
 
 
-async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: str) -> tuple:
+async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: str,
+                            remarques: list = ()) -> tuple:
     """L'image du maître d'où part un plan déplié, redessinée par l'image du Studio d'après les
-    fiches des personnages que le plan nomme (CONSIGNE_RETOUCHE) : (image, ce qui s'est passé).
+    fiches des personnages que le plan nomme — toutes leurs vues et leur planche multivue
+    (CONSIGNE_RETOUCHE) : (image, ce qui s'est passé). Propriétaire, 04/10 : « reconstruire les
+    images intermédiaires avec les multiview et la remarque des reviewers » : les défauts que le
+    juge a vus dans le maître sont à éviter dès le premier dessin ; un juge compare ensuite la
+    retouche au maître et aux photos, et ses fautes repartent au dessin suivant (RACCORD_ESSAIS).
     Un refus de l'image garde l'image du maître, et le dit."""
     ids = [f for f in (commun.get("fiches") or [commun.get("fiche")]) if f]
     texte = str(plan.get("image_paroles") or "")
     nommes = [f for f in ids if video_h3.fiche_lire(f)["nom"].casefold() in texte.casefold()]
     if not nommes:
         return image, "aucun personnage nommé : image du maître"
+    a_eviter = [str(r) for r in remarques if r][:video_h3.A_EVITER_MAX]
+    noms, photos = _photos_des_fiches(nommes)
     try:
         did = video_h3.depart_poser(base64.b64encode(image).decode())
-        demande, _texte = video_h3.demande_image(texte, fiches=nommes, retouche=did)
-        rendu = await _image_du_studio(demande)
-        octets = base64.b64decode(rendu.split(",", 1)[-1])
-        return montage.recadrer_image(octets, *video_h3.DEFINITIONS[definition]), "retouchée (%d fiches)" % len(nommes)
+        for tour in range(video_h3.RACCORD_ESSAIS):
+            demande, _texte = video_h3.demande_image(texte, fiches=nommes, retouche=did, a_eviter=a_eviter)
+            rendu = await _image_du_studio(demande)
+            octets = montage.recadrer_image(base64.b64decode(rendu.split(",", 1)[-1]),
+                                            *video_h3.DEFINITIONS[definition])
+            try:
+                fautes = video_h3.lire_raccord(await _chat_du_studio(
+                    video_h3.consigne_retouche(noms), "le contrôle de la retouche",
+                    images=[_data_url(image), _data_url(octets)] + list(photos), modele=video_h3.MODELE_JUGE))
+            except (ValueError, HTTPException) as exc:
+                return octets, "retouchée (%d fiches), contrôle muet : %s" % (
+                    len(nommes), str(getattr(exc, "detail", exc))[:150])
+            if not fautes:
+                return octets, "retouchée (%d fiches), contrôle ok au dessin %d" % (len(nommes), tour + 1)
+            a_eviter = fautes[:video_h3.A_EVITER_MAX]
+        return octets, "retouchée (%d fiches), fautes restantes : %s" % (len(nommes), " ; ".join(fautes)[:300])
     except (HTTPException, ValueError) as exc:
         return image, "image du maître gardée : %s" % str(getattr(exc, "detail", exc))[:200]
 

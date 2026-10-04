@@ -1038,6 +1038,17 @@ def consigne_raccord(description: str) -> str:
             "fault, naming the element\"]}." % " ".join(str(description or "").split()))
 
 
+def consigne_retouche(noms: list) -> str:
+    """Pour le juge : l'image du maître (1), sa retouche (2), puis les photos des fiches, une par nom."""
+    photos = ", ".join("image %d is %s" % (k + 3, n) for k, n in enumerate(noms))
+    return ("Image 1 is a frame of a film. Image 2 is the same frame redrawn so that each character looks exactly "
+            "like their reference photo (%s). Check only: (a) image 2 keeps the framing, the camera, the place, the "
+            "light, the objects, and where each character stands, faces and how they pose, as in image 1; (b) each "
+            "character of image 2 matches their photo (shape, material, colours, face, clothes); (c) nobody appears "
+            "twice, and nobody is added or missing compared with image 1. Answer JSON only: {\"ok\": true or false, "
+            "\"fautes\": [\"one short sentence per fault, naming the character or element\"]}." % photos)
+
+
 # 03/10, story-board du « Jardin de verre » : l'image de fin du plan 3 (l'arbre envahit la
 # pièce) a changé de salon — bibliothèque remplie, lampe chaude, autre fenêtre, un second
 # arbre — et les coupes 4 et 5, parties d'elle, en ont hérité. Seul le début d'une coupe

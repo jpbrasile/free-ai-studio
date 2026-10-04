@@ -3282,7 +3282,7 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
              {"image_paroles": "Pixel floats beside Leila.", "enchainement": "coupe", "camera": v.lire_camera(None)},
              {"image_paroles": "A spaceship descends.", "enchainement": "coupe", "camera": v.lire_camera(None)}]
     jid = "d" * 32
-    job = {"id": jid, "status": "succeeded", "jugement": {"verdict": "ok", "defauts": []},
+    job = {"id": jid, "status": "succeeded", "jugement": {"verdict": "defaut", "defauts": [{"quoi": "Leila en double"}]},
            "video": {"moteur": "MiniMax H3 (ComfyUI)", "maitre": {
                "plans": plans, "debuts_s": [0.0, 1.7, 3.4], "longueur": 124,
                "commun": {"fiches": [leila, pixel], "definition": "480p"}}}}
@@ -3296,21 +3296,32 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
 
     async def image(demande):
         demandes.append(demande)
-        if len(demandes) == 2:
+        if len(demandes) == 3:
             raise h3.HTTPException(502, "aucune image")
         return "data:image/png;base64," + PNG
     monkeypatch.setattr(h3, "_image_du_studio", image)
-    r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"retoucher": True})
+    controles = []
+
+    async def juge(consigne, quoi="", images=None, modele=""):
+        controles.append((quoi, len(images or [])))
+        return ('{"ok": false, "fautes": ["Pixel est cubique"]}' if len(controles) == 1
+                else '{"ok": true, "fautes": []}')
+    monkeypatch.setattr(h3, "_chat_du_studio", juge)
+    r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"retoucher": True, "forcer": True})
     assert r.status_code == 200, r.text
     ret = r.json()["retouches"]
-    assert ret["1"].startswith("retouchée (1 fiche")
+    assert ret["1"] == "retouchée (1 fiches), contrôle ok au dessin 2"
     assert ret["2"].startswith("image du maître gardée")   # un refus de l'image ne bloque rien
     assert ret["3"].startswith("aucun personnage")
-    assert "image à reprendre" in demandes[0]["prompt"] and len(demandes[0]["image_reference"]) == 2
-    assert len(demandes[1]["image_reference"]) == 3   # Pixel et Leila, puis l'image du maître
+    # La remarque du juge du maître est à éviter dès le premier dessin ; celle du contrôle, au suivant.
+    assert "image à reprendre" in demandes[0]["prompt"] and "Leila en double" in demandes[0]["prompt"]
+    assert "Pixel est cubique" in demandes[1]["prompt"] and "Leila en double" not in demandes[1]["prompt"]
+    assert len(demandes[0]["image_reference"]) == 2   # la fiche de Leila, puis l'image du maître
+    assert controles[0] == ("le contrôle de la retouche", 3)   # maître, retouche, photo de Leila
+    assert len(demandes[2]["image_reference"]) == 3   # Pixel et Leila, puis l'image du maître
     # Sans la demande, rien n'est retouché.
     demandes.clear()
-    r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={})
+    r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"forcer": True})
     assert r.status_code == 200 and "retouches" not in r.json() and not demandes
 
 
