@@ -151,7 +151,8 @@ def test_une_invite_de_maitre_trop_longue_fait_condenser_les_plans_et_redemander
     """Film 5 relancé, 04/10 : avec la syntaxe H3, l'invite du maître a fait 4 102 caractères."""
     class Long(FauxStudio):
         def __call__(self, methode, chemin, corps=None):
-            if chemin == "/video-h3/maitre" and "court" not in corps["plans"][0]["image_paroles"]:
+            if (chemin == "/video-h3/maitre" and "court" not in corps["plans"][0]["image_paroles"]
+                    and (corps.get("forcer") or not self.refus_regles)):
                 self.appels.append((methode, chemin, json.loads(json.dumps(corps))))
                 return 400, {"detail": "Invite trop longue : 4102 caractères, 4 000 au plus. Raccourcissez le texte du plan."}
             return super().__call__(methode, chemin, corps)
@@ -172,6 +173,13 @@ def test_une_invite_de_maitre_trop_longue_fait_condenser_les_plans_et_redemander
     longueur = len("Plan 0. Plan 1. Plan 2. Plan 3.")
     assert cibles == [max(longueur // 2, longueur - -(-(4102 - 4000 + fa.INVITE_MARGE) // 8))] * 8
     assert any(j["etape"] == "maitre_raccourci" for j in etat["journal"])
+    # Règles refusées puis tournage forcé, maître rejoué : l'essai suivant repart des plans condensés.
+    cibles.clear()
+    studio = Long(verdicts_maitre=("defaut", "ok"), refus_regles=True)
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
+    fa.Film(etat, tmp_path, studio, chat_court, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    assert len(cibles) == 8 and [j["etape"] for j in etat["journal"]].count("maitre_raccourci") == 1
 
 
 def test_un_decoupage_que_le_studio_dit_a_reessayer_est_redemande(fa, tmp_path):

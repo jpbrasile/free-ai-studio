@@ -1791,6 +1791,7 @@ def fiches_sans_etiquette(ids) -> list:
 
 
 _REPLIQUE_D = re.compile(r"(<d>.*?</d>)", re.S)
+_PLAN_SUIVANT = re.compile(r"\[Shot (?!1\])\d+\]")
 
 
 def noms_en_etiquettes(texte: str, fiches: list, ancrees=()) -> str:
@@ -4382,7 +4383,11 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         elements = payload.get("elements") if isinstance(payload.get("elements"), list) else []
         absents = {_norme_replique(str(e.get("nom") or "")) for e in elements
                    if isinstance(e, dict) and hors_champ(e.get("debut"))}
-        ancrees = {f["id"] for f in fiches if _norme_replique(f["nom"]) not in absents} if bords else set()
+        # Et seulement ceux que le premier plan nomme : film 5 relancé, 04/10, Pixel, absent de l'image
+        # de départ, était « shown in <Picture 1> » au plan 3 ; H3 lui a fait un visage d'écran noir.
+        premier = _PLAN_SUIVANT.split(image_paroles, 1)[0]
+        ancrees = {f["id"] for f in fiches if _norme_replique(f["nom"]) not in absents
+                   and re.search(r"(?<![\w<])" + re.escape(f["nom"]) + r"(?!\w)", premier)} if bords else set()
         image_paroles = noms_en_etiquettes(image_paroles, fiches, ancrees)
         ambiance = noms_en_etiquettes(ambiance, fiches)
     texte = invite(image_paroles, ambiance, payload.get("musique", ""), langue, "(S1)",

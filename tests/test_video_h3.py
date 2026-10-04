@@ -671,6 +671,14 @@ def test_la_description_de_l_image_creee_passe_a_h3(h3):
         "resume_public"]["invite"]
     assert i.count("The girl with dark brown hair shown in <Picture 1> walks to the capsule.") == 1, i
     assert "The girl with dark brown hair (S1)" in i and "Leila, wake up!" in i and "Leila walks" not in i, i
+    # Film 5 relancé, 04/10 : Pixel, absent du premier plan (donc de l'image de départ), n'est pas ancré.
+    pixel = v.fiche_creer("Pixel", "x")["id"]
+    v.fiche_poser_image(pixel, "face", PNG)
+    v.fiche_poser_etiquette(pixel, "the silver robot with blue eyes")
+    i = v.preparer(demande(mode="premiere", images=[PNG], fiches=[leila, pixel],
+                           image_paroles="[Shot 1] Leila walks. [Shot 2] Wide shot. Pixel wakes up."))[
+        "resume_public"]["invite"]
+    assert "The silver robot with blue eyes wakes up." in i and i.count("shown in <Picture 1>") == 1, i
     for mauvais in ("Leila", "the girl, who is twelve years old and has very long dark brown hair"):
         with pytest.raises(ValueError):
             v.etiquette_lire(mauvais)

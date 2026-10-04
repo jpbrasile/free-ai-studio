@@ -376,8 +376,9 @@ class Film:
                 # Une règle d'avant tournage refusée : notée, puis « tourner quand même », comme la page
                 # le propose ; la règle de la voix n'a jamais de passe-droit (le Studio refuse encore).
                 self.noter("maitre_regles", refus=str((rendu or {}).get("detail"))[:1500], **marque)
-                forcer = True
-                code, rendu = self._poster_maitre(dict(corps, forcer=True))
+                forcer = corps["forcer"] = True
+                code, rendu = self._poster_maitre(corps)
+                plans = corps["plans"]   # condensés : l'essai suivant repart d'eux (film 5 relancé, 04/10)
             if code != 200:
                 raise Arret("POST /video-h3/maitre : %s %s" % (code, str((rendu or {}).get("detail"))[:600]))
             self.reussi(rendu["id"], "Le clip maître")
