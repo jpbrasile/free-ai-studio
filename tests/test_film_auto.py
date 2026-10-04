@@ -355,6 +355,33 @@ def test_un_plan_toujours_refuse_garde_le_moins_fautif(fa, tmp_path):
     assert premier["essais"] == fa.ESSAIS_PLAN and premier["verdict"] == "defaut"
 
 
+def test_le_son_des_clips_ou_le_juge_entend_des_paroles_est_coupe_au_montage(fa, tmp_path):
+    """« Le robot perdu », 04/10 : H3 a fait parler Leila dans un plan sans réplique ; propriétaire :
+    couper le son seulement des clips où le juge a entendu des paroles."""
+    studio = FauxStudio()
+    parlants = []
+
+    def studio_parlant(methode, chemin, corps=None):
+        code, rendu = studio(methode, chemin, corps)
+        deplie = any(c.endswith("/deplier") for _m, c, _x in studio.appels)
+        if chemin.endswith("/juger") and deplie and not parlants:
+            parlants.append(chemin.split("/")[-2])
+            rendu = {"verdict": "defaut", "defauts": [{"quoi": "Aucune réplique écrite ; le clip dit : « Bonjour »."}]}
+        return code, rendu
+    etat = fa.nouvel_etat("Oscar allume le phare.", essai=True)
+    fa.Film(etat, tmp_path, studio_parlant, chat, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    montage = next(x for m, c, x in studio.appels if c == "/video-h3/montage")
+    # Le clip parlant a été retourné ; le second essai, juste, le remplace : rien n'est coupé.
+    assert parlants and parlants[0] not in montage["clips"] and "muets" not in montage
+    # Gardé (aucun autre essai), son son est coupé.
+    etat["clips"][0].update(job=parlants[0], verdict="defaut",
+                            defauts=["Aucune réplique écrite ; le clip dit : « Bonjour »."])
+    fa.Film(etat, tmp_path, studio, chat, dormir=lambda s: None).montage()
+    montage = [x for m, c, x in studio.appels if c == "/video-h3/montage"][-1]
+    assert montage["muets"] == [parlants[0]]
+
+
 def test_le_maitre_choisi_par_le_proprietaire_est_deplie_le_premier(fa, tmp_path):
     """« Le robot perdu », 04/10, propriétaire : « prends l'essai 2 si égalité »."""
     studio = FauxStudio(verdicts_maitre=("defaut", "defaut", "defaut"))

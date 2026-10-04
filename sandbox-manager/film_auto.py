@@ -500,11 +500,17 @@ class Film:
         return {"verdict": verdict.get("verdict"), "defauts": [x.get("quoi") for x in verdict.get("defauts") or []]}
 
     def montage(self):
-        film = self.route("POST", "/video-h3/montage", {"clips": [c["job"] for c in self.etat["clips"]],
-                                                        "scenario": self.etat["titre"]})
+        # « Le robot perdu », 04/10 : H3 a fait parler Leila dans un plan sans réplique, et ce clip restait
+        # le moins fautif. Propriétaire : couper le son seulement des clips où le juge a entendu des paroles.
+        from video_h3 import PAROLES_EN_TROP
+        muets = [c["job"] for c in self.etat["clips"]
+                 if any(PAROLES_EN_TROP.match(str(d or "")) for d in c.get("defauts") or [])]
+        film = self.route("POST", "/video-h3/montage", dict({"clips": [c["job"] for c in self.etat["clips"]],
+                                                             "scenario": self.etat["titre"]},
+                                                            **({"muets": muets} if muets else {})))
         self.reussi(film["id"], "Le montage")
         self.etat["film_monte"] = film["id"]
-        self.noter("montage", job=film["id"])
+        self.noter("montage", job=film["id"], muets=muets)
 
     def agrandir(self):
         fin = self.route("POST", "/video-h3/finaliser", {"job": self.etat["film_monte"], "echelle": "4k",

@@ -3501,6 +3501,10 @@ def passages_en_trop(attendues, morceaux) -> list:
     return trop
 
 
+# Les défauts de defaut_de_paroles où le clip dit ce que personne n'a écrit (pas une réplique manquée).
+PAROLES_EN_TROP = re.compile(r"^(?:Paroles non écrites|Aucune réplique écrite|Le clip prononce le ton)")
+
+
 def defaut_de_paroles(paroles: dict, t_s: float):
     """Un défaut du jugement quand la réplique manque ; None sinon."""
     if paroles.get("ok") is not False:

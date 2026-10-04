@@ -222,6 +222,17 @@ def recoller_son(premiere: bytes, suite: bytes, retirer: int = 1) -> bytes:
         return sortie.read_bytes()
 
 
+def couper_son(video: bytes) -> bytes:
+    """Le clip avec un son muet de même durée ; l'image n'est pas recompressée. Propriétaire, 04/10
+    (« Le robot perdu ») : couper le son des clips où le juge a entendu des paroles non écrites."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "a.mp4"), Path(dossier, "muet.mp4")
+        a.write_bytes(video)
+        _lancer(["-i", str(a), "-map", "0:v", "-map", "0:a", "-af", "volume=0", "-c:v", "copy",
+                 "-c:a", "aac", "-movflags", "+faststart", str(sortie)], "Le son coupé du clip")
+        return sortie.read_bytes()
+
+
 def poser_musique(film: bytes, musique: bytes, debut_s: float, volume: float = 0.3,
                   depart_chanson_s: float = 0.0, fondu_s: float = 0.3,
                   sous_paroles: bool = False) -> bytes:

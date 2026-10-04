@@ -5358,7 +5358,8 @@ async def video_h3_scenario_ordonner(request: Request, authorization: Optional[s
 @app.post("/video-h3/montage")
 async def video_h3_montage(request: Request, authorization: Optional[str] = Header(default=None)):
     """Recolle les clips dans l'ordre donné, son compris, sans rien couper : chacun
-    a été tourné à part. Le film devient un travail de plus, jouable et prolongeable."""
+    a été tourné à part. Le film devient un travail de plus, jouable et prolongeable.
+    `muets` : les clips (de l'ordre) dont le son est coupé au montage."""
     _h3_ou_404()
     auth(authorization)
     corps = await request.json()
@@ -5366,17 +5367,25 @@ async def video_h3_montage(request: Request, authorization: Optional[str] = Head
         ordre = video_h3.verifier_ordre(corps.get("clips"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    muets = corps.get("muets") or []
+    if not isinstance(muets, list) or any(m not in ordre for m in muets):
+        raise HTTPException(400, "Les clips muets doivent être des clips du montage.")
     scenario = str(corps.get("scenario") or "").strip()[:video_h3.SCENARIO_MAX]
     chemins = [_video_h3_octets(jid) for jid in ordre]
     avec = {c["id"] for c in _clips_h3()}
     if any(jid not in avec for jid in ordre) or not all(chemins):
         raise HTTPException(404, "Un des clips n'est plus sur ce Studio.")
     try:
-        film = await asyncio.to_thread(_recoller_tous, [c.read_bytes() for c in chemins])
+        videos = [c.read_bytes() for c in chemins]
+        for k, jid in enumerate(ordre):
+            if jid in muets:
+                videos[k] = await asyncio.to_thread(montage.couper_son, videos[k])
+        film = await asyncio.to_thread(_recoller_tous, videos)
     except montage.MontageImpossible as exc:
         raise HTTPException(503, str(exc)) from exc
-    return read_job(_film_h3(film, {"mode": "montage", "mode_titre": "Montage de clips", "invite": scenario,
-                                    "clips": ordre, "plans": len(ordre)}, scenario[:60] or "Montage H3"))
+    return read_job(_film_h3(film, dict({"mode": "montage", "mode_titre": "Montage de clips", "invite": scenario,
+                                         "clips": ordre, "plans": len(ordre)}, **({"muets": muets} if muets else {})),
+                             scenario[:60] or "Montage H3"))
 
 
 def _artefact_du_film(jid: str, chemin: Path) -> dict:
@@ -7374,14 +7383,27 @@ def video_h3_film_auto_etat(fid: str, authorization: Optional[str] = Header(defa
 
 
 @app.post("/video-h3/film/auto/{fid}/reprendre")
-def video_h3_film_auto_reprendre(fid: str, authorization: Optional[str] = Header(default=None)):
-    """Reprend un film arrêté à l'étape où il s'est arrêté ; les étapes faites sont gardées."""
+async def video_h3_film_auto_reprendre(fid: str, request: Request,
+                                       authorization: Optional[str] = Header(default=None)):
+    """Reprend un film arrêté à l'étape où il s'est arrêté ; les étapes faites sont gardées.
+    {depuis: étape} : cette étape et les suivantes sont refaites (« Le robot perdu », 04/10 : le
+    montage refait pour couper le son des clips parlants, les plans dépliés gardés)."""
     _h3_ou_404()
     auth(authorization)
     etat = _film_auto_lire(fid)
     fil = _FILMS_AUTO_FILS.get(fid)
     if etat.get("statut") == "en cours" and fil is not None and fil.is_alive():
         raise HTTPException(409, "Ce film est déjà en cours.")
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    depuis = (corps or {}).get("depuis") if isinstance(corps, dict) else None
+    if depuis:
+        etapes = list(film_auto.Film(etat, DOSSIER_FILMS_AUTO, _film_auto_appel, _film_auto_chat).etapes())
+        if depuis not in etapes:
+            raise HTTPException(400, "Étape inconnue : %s." % ", ".join(etapes))
+        etat["faites"] = [e for e in etat.get("faites", []) if etapes.index(e) < etapes.index(depuis)]
     etat.update(statut="en cours", erreur="")
     return _film_auto_lancer(etat)
 

@@ -1272,6 +1272,14 @@ def test_le_film_recolle_les_clips_dans_l_ordre_sans_rien_louer(h3, monkeypatch,
     for clips in (["a" * 32, "d" * 32], ["a" * 32, "e" * 32]):
         assert c.post("/video-h3/montage", headers=CLE, json={"clips": clips}).status_code == 404
     assert c.post("/video-h3/montage", headers=CLE, json={"clips": ["a" * 32]}).status_code == 400
+    # « Le robot perdu », 04/10 : le son d'un clip où le juge a entendu des paroles est coupé au montage.
+    monkeypatch.setattr(h3.montage, "couper_son", lambda video: b"m")
+    r = c.post("/video-h3/montage", headers=CLE, json={"clips": ["b" * 32, "a" * 32], "muets": ["a" * 32]})
+    assert r.status_code == 200, r.text
+    assert c.get(c.get("/video/jobs/" + r.json()["id"], headers=CLE).json()["video_url"]).content == b"Bm"
+    assert r.json()["video"]["muets"] == ["a" * 32]
+    r = c.post("/video-h3/montage", headers=CLE, json={"clips": ["b" * 32, "a" * 32], "muets": ["c" * 32]})
+    assert r.status_code == 400
 
 
 def test_le_chat_range_les_clips_selon_le_scenario(h3, monkeypatch, tmp_path):
@@ -3545,6 +3553,26 @@ def test_un_film_coupe_par_un_redemarrage_se_reprend(h3, monkeypatch, tmp_path):
     r = c.post("/video-h3/film/auto/%s/reprendre" % fid, headers=CLE)   # son fil tourne : refus
     assert r.status_code == 409 and "déjà en cours" in r.json()["detail"]
     fin.set()
+
+
+def test_un_film_se_refait_depuis_une_etape_en_gardant_les_precedentes(h3, monkeypatch, tmp_path):
+    """« Le robot perdu », 04/10 : le montage refait (son coupé des clips parlants), les plans gardés."""
+    monkeypatch.setattr(h3, "DOSSIER_FILMS_AUTO", tmp_path / "films")
+    monkeypatch.setattr(h3, "_FILMS_AUTO_FILS", {})
+    lances = []
+    monkeypatch.setattr(h3, "_film_auto_lancer", lambda etat: lances.append(dict(etat)) or etat)
+    fid = "e" * 32
+    etat = h3.film_auto.nouvel_etat("Oscar allume le phare.")
+    etat.update(id=fid, statut="fini", faites=list(h3.film_auto.Film.ETAPES))
+    (tmp_path / "films").mkdir()
+    (tmp_path / "films" / (fid + ".json")).write_text(json.dumps(etat), encoding="utf-8")
+    c = client(h3)
+    r = c.post("/video-h3/film/auto/%s/reprendre" % fid, headers=CLE, json={"depuis": "montage"})
+    assert r.status_code == 200, r.text
+    assert lances[-1]["faites"] == ["personnages", "decoupage", "musique_lancee", "maitre", "deplier"]
+    assert lances[-1]["statut"] == "en cours"
+    assert c.post("/video-h3/film/auto/%s/reprendre" % fid, headers=CLE,
+                  json={"depuis": "rien"}).status_code == 400
 
 
 def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):
