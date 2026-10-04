@@ -3345,6 +3345,33 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
     assert r.status_code == 200 and "retouches" not in r.json() and not demandes
 
 
+def test_un_film_coupe_par_un_redemarrage_se_reprend(h3, monkeypatch, tmp_path):
+    """« Le robot perdu », 04/10 : la reconstruction a coupé le film, resté « en cours » dans son
+    fichier ; « Ce film est déjà en cours » refusait sa reprise sans fin."""
+    monkeypatch.setattr(h3, "DOSSIER_FILMS_AUTO", tmp_path / "films")
+    monkeypatch.setattr(h3, "_FILMS_AUTO_FILS", {})
+    fin = threading.Event()
+
+    class Film:
+        def __init__(self, etat, dossier, *a):
+            self.etat, self.dossier = etat, dossier
+
+        def ecrire(self):
+            self.dossier.mkdir(parents=True, exist_ok=True)
+            (self.dossier / (self.etat["id"] + ".json")).write_text(json.dumps(self.etat), encoding="utf-8")
+
+        def derouler(self):
+            fin.wait(5)
+    monkeypatch.setattr(h3.film_auto, "Film", Film)
+    fid = "e" * 32
+    Film({"id": fid, "statut": "en cours"}, tmp_path / "films").ecrire()   # coupé : aucun fil ici
+    c = client(h3)
+    assert c.post("/video-h3/film/auto/%s/reprendre" % fid, headers=CLE).status_code == 200
+    r = c.post("/video-h3/film/auto/%s/reprendre" % fid, headers=CLE)   # son fil tourne : refus
+    assert r.status_code == 409 and "déjà en cours" in r.json()["detail"]
+    fin.set()
+
+
 def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):
     """03/10, clip maître de 15 s : la planche 4 x 3 n'en montrait que 6 s, et le juge a dit « ok »
     à une fillette dédoublée à 12,5 s. Tout le clip est vu, en planches de 18 s au plus."""

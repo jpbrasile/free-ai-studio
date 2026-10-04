@@ -7203,10 +7203,17 @@ def _film_auto_lire(fid: str) -> dict:
         raise HTTPException(404, "Film inconnu.") from exc
 
 
+# Les fils des films qui se déroulent dans ce processus. « Le robot perdu », 04/10 : une reconstruction a
+# coupé le film, resté « en cours » dans son fichier ; sa reprise était refusée sans fin.
+_FILMS_AUTO_FILS: dict = {}
+
+
 def _film_auto_lancer(etat: dict) -> dict:
     film = film_auto.Film(etat, DOSSIER_FILMS_AUTO, _film_auto_appel, _film_auto_chat)
     film.ecrire()
-    threading.Thread(target=film.derouler, daemon=True).start()
+    fil = threading.Thread(target=film.derouler, daemon=True)
+    _FILMS_AUTO_FILS[etat["id"]] = fil
+    fil.start()
     return etat
 
 
@@ -7240,7 +7247,8 @@ def video_h3_film_auto_reprendre(fid: str, authorization: Optional[str] = Header
     _h3_ou_404()
     auth(authorization)
     etat = _film_auto_lire(fid)
-    if etat.get("statut") == "en cours":
+    fil = _FILMS_AUTO_FILS.get(fid)
+    if etat.get("statut") == "en cours" and fil is not None and fil.is_alive():
         raise HTTPException(409, "Ce film est déjà en cours.")
     etat.update(statut="en cours", erreur="")
     return _film_auto_lancer(etat)
