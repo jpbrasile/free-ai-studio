@@ -147,11 +147,28 @@ def test_une_sequence_trop_longue_pour_le_maitre_est_condensee_par_le_chat(fa, t
     assert "time of day" in fa.CONSIGNE_SEQUENCES
 
 
+def test_une_sequence_jointe_n_a_qu_un_cadrage(fa, tmp_path):
+    """Film 5 relancé, 04/10 : la règle 18 refusait chaque séquence (« wide shot » puis « close-up »)."""
+    class DeuxCadrages(FauxStudio):
+        def __call__(self, methode, chemin, corps=None):
+            if chemin == "/video-h3/scenario/decouper":
+                self.appels.append((methode, chemin, corps))
+                return 200, {"plans": [{"image_paroles": "Wide shot, night. Leila walks."},
+                                       {"image_paroles": "Close-up. She opens the capsule."}]}
+            return super().__call__(methode, chemin, corps)
+    studio = DeuxCadrages()
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
+    fa.Film(etat, tmp_path, studio, chat_sf, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    plans = next(x for m, c, x in studio.appels if c == "/video-h3/maitre")["plans"]
+    assert {p["image_paroles"] for p in plans} == {"Wide shot, night. Leila walks. She opens the capsule."}
+
+
 def test_une_invite_de_maitre_trop_longue_fait_condenser_les_plans_et_redemander(fa, tmp_path):
     """Film 5 relancé, 04/10 : avec la syntaxe H3, l'invite du maître a fait 4 102 caractères."""
     class Long(FauxStudio):
         def __call__(self, methode, chemin, corps=None):
-            if (chemin == "/video-h3/maitre" and "court" not in corps["plans"][0]["image_paroles"]
+            if (chemin == "/video-h3/maitre" and "Court" not in corps["plans"][0]["image_paroles"]
                     and (corps.get("forcer") or not self.refus_regles)):
                 self.appels.append((methode, chemin, json.loads(json.dumps(corps))))
                 return 400, {"detail": "Invite trop longue : 4102 caractères, 4 000 au plus. Raccourcissez le texte du plan."}
@@ -161,15 +178,15 @@ def test_une_invite_de_maitre_trop_longue_fait_condenser_les_plans_et_redemander
     def chat_court(consigne):
         if consigne.startswith("Shorten") and "Plan 0." in consigne:
             cibles.append(int(consigne.split("at most ")[1].split()[0]))
-            return "court"
+            return "Court"
         return chat_sf(consigne)
     studio = Long()
     etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
     fa.Film(etat, tmp_path, studio, chat_court, dormir=lambda s: None).derouler()
     assert etat["statut"] == "fini", etat["erreur"]
     maitres = [x for m, c, x in studio.appels if c == "/video-h3/maitre"]
-    assert len(maitres) == 2 and {p["image_paroles"] for p in maitres[1]["plans"]} == {"court"}
-    assert {p["image_paroles"] for p in etat["plans"]} == {"court"}   # les clips dépliés jouent le même texte
+    assert len(maitres) == 2 and {p["image_paroles"] for p in maitres[1]["plans"]} == {"Court"}
+    assert {p["image_paroles"] for p in etat["plans"]} == {"Court"}   # les clips dépliés jouent le même texte
     longueur = len("Plan 0. Plan 1. Plan 2. Plan 3.")
     assert cibles == [max(longueur // 2, longueur - -(-(4102 - 4000 + fa.INVITE_MARGE) // 8))] * 8
     assert any(j["etape"] == "maitre_raccourci" for j in etat["journal"])

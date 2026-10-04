@@ -166,6 +166,12 @@ def fiche_du_nom(fiches: list, nom: str):
     return max(memes, key=lambda f: (len(f.get("angles") or []), str(f.get("cree_le") or ""))) if memes else None
 
 
+def _un_cadrage(texte: str) -> str:
+    """Une séquence est UN plan du maître : un seul cadrage (règle 18, video_h3.un_seul_cadrage)."""
+    from video_h3 import un_seul_cadrage
+    return un_seul_cadrage(texte)
+
+
 def lire_cameras(reponse: str, nombre: int) -> list:
     """Une caméra du menu du Studio par plan ; un choix illisible ou hors menu devient CAMERA_SECOURS
     (une petite avancée lente), jamais la caméra fixe par défaut."""
@@ -319,7 +325,7 @@ class Film:
         plans = d.get("plans") or []
         if not plans:
             raise Arret("Le découpage de la séquence %d n'a rendu aucun plan." % (k + 1))
-        joint = " ".join(" ".join(str(p.get("image_paroles") or "").split()) for p in plans).strip()
+        joint = _un_cadrage(" ".join(" ".join(str(p.get("image_paroles") or "").split()) for p in plans))
         part = TEXTES_MAITRE_MAX // self.etat["reglages"]["sequences"]
         # Le chat vise à peu près (film 5, séquence 6 : 280 caractères deux fois pour 275) : on lui
         # demande les 4/5 de la part.
@@ -328,7 +334,7 @@ class Film:
                 break
             court = " ".join(str(self.chat(CONSIGNE_CONDENSER % (part * 4 // 5, joint)) or "").split()).strip('"')
             if court:
-                joint = court
+                joint = _un_cadrage(court)
         if len(joint) > part:
             raise Arret("Séquence %d : texte de %d caractères, %d au plus pour tenir dans le maître."
                         % (k + 1, len(joint), part))
@@ -412,7 +418,7 @@ class Film:
         for p in plans:
             texte = str(p.get("image_paroles") or "")
             cible = max(len(texte) // 2, len(texte) - -(-exces * len(texte) // total))   # la moitié au plus par tour
-            court = " ".join(str(self.chat(CONSIGNE_CONDENSER % (cible, texte)) or "").split()).strip('"')
+            court = _un_cadrage(" ".join(str(self.chat(CONSIGNE_CONDENSER % (cible, texte)) or "").split()).strip('"'))
             nouveaux.append(dict(p, image_paroles=court if court and len(court) < len(texte) else texte))
         if self.etat.get("plans") == plans:
             self.etat["plans"] = nouveaux

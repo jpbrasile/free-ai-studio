@@ -886,6 +886,27 @@ def valeur_de_plan(texte: str):
     return m.group(1).lower() if m else None
 
 
+_CADRAGE_ET_LIAISON = re.compile(_VALEUR_DE_PLAN.pattern + r"(?:\s+(?:of|on)\b)?\s*[,:.]?\s*", re.IGNORECASE)
+
+
+def un_seul_cadrage(texte: str) -> str:
+    """Le premier cadrage du texte reste, les autres valeurs de plan sont retirées (hors répliques) :
+    la règle 18 tenue d'office quand plusieurs plans du découpage deviennent un seul plan (une
+    séquence du film automatique ; film 5 relancé, 04/10 : « wide shot » puis « close-up »)."""
+    premiere = None
+
+    def retirer(m):
+        nonlocal premiere
+        premiere = premiere or m.group(1).lower()
+        return m.group(0) if m.group(1).lower() == premiere else ""
+    morceaux = _REPLIQUE_D.split(str(texte or ""))
+    for k in range(0, len(morceaux), 2):
+        t = _CADRAGE_ET_LIAISON.sub(retirer, morceaux[k])
+        morceaux[k] = re.sub(r"(^|[.!?]\s+|\]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(),
+                             re.sub(r"[ \t]{2,}", " ", t))
+    return "".join(morceaux).strip()
+
+
 def suites_du_maitre(plans: list) -> list:
     """03/10, film « Le phare » : le plan 2, « suite » du plan 1, passait d'un plan large à un plan
     moyen et posait Oscar en haut de l'escalier ; sans coupe, H3 a fondu l'un dans l'autre (deux

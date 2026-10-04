@@ -27,6 +27,16 @@ def test_les_regles_sont_numerotees_par_etape(r):
     assert r.AVANT_TOURNAGE == [0, 1, 2, 3, 4, 5, 13, 14, 18, 6, 7, 8, 16]
 
 
+def test_une_sequence_jointe_garde_son_premier_cadrage_seulement(r):
+    """Film 5 relancé, 04/10 : une séquence (plusieurs plans du découpage joints) disait « wide shot »
+    puis « close-up » ; la règle 18 la refusait à chaque fois."""
+    t = r.video_h3.un_seul_cadrage("Wide shot, night. Leila walks to the capsule. Close-up. She grips the lid. "
+                                   "Medium shot of Leila smiling. Wide shot, hill. She says <d>Close-up now!</d>")
+    assert t == ("Wide shot, night. Leila walks to the capsule. She grips the lid. Leila smiling. "
+                 "Wide shot, hill. She says <d>Close-up now!</d>"), t
+    assert r.regle_un_cadrage({"image_paroles": t})["ok"]
+
+
 def test_un_plan_n_a_qu_un_cadrage(r):
     """Film 5, 04/10, plan 2 : « Wide shot. … Medium shot. » dans un seul plan, sans [Shot N]."""
     deux = r.regle_un_cadrage({"image_paroles": "Wide shot. Leila walks to the capsule. Medium shot. Leila crouches."})
