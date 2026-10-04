@@ -1926,6 +1926,13 @@ def test_la_description_de_depart_suit_le_tableau_sans_les_repliques(h3):
                            {"nom": "transparent crystal sprout", "debut": "off-frame"}]}
     assert v.texte_depart(jardin) == (v.PREFIXE_DEPART + "At twilight, close-up on the pot of soil. "
                                       "pot of soil : in the centre, with wet soil.")
+    # Film 5 relancé, 04/10 : le lieu dans la deuxième phrase ; sans lui, une rue de ville.
+    capsule = {"image_paroles": "Wide shot, night. In the garden, Leila stands center foreground, facing camera. "
+                                "A silver capsule falls from sky. Leila looks up.",
+               "elements": [{"nom": "Leila", "debut": "in the center foreground, standing, facing the camera"},
+                            {"nom": "silver capsule", "debut": "off-frame"}]}
+    assert v.texte_depart(capsule) == (v.PREFIXE_DEPART + "Wide shot, night. In the garden. "
+                                       "Leila : in the center foreground, standing, facing the camera.")
     demande, _ = v.demande_image("x", decor=v.depart_poser(PNG), coupe=True)
     assert v.CONSIGNE_COUPE % 1 in demande["prompt"] and "dernière image du plan précédent" in demande["prompt"]
 

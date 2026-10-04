@@ -92,6 +92,8 @@ TEXTES_MAITRE_MAX = 2200
 INVITE_MAX = 4000
 INVITE_MARGE = 150
 _TROP_LONGUE = re.compile(r"Invite trop longue : (\d+) caract")
+DEPART_REDEMANDES = 2
+_DEPART_REFUSE = re.compile(r"plan 1, r[eè]gle (?:\d+ : [^;]*image de d[ée]part|(?:6|7|8|16) :)", re.IGNORECASE)
 CONSIGNE_CONDENSER = (
     "Shorten this film shot description to at most %d characters. Keep the shot size, the light, every "
     "character with where they stand and face, and every action in order; drop repetitions and adjectives "
@@ -370,14 +372,25 @@ class Film:
 
     def _tourner_maitre(self, plans: list, fiches: list, **marque) -> list:
         """Le clip en plans, jugé ; rejoué tant que le juge voit un défaut (essais_maitre au plus)."""
-        essais, forcer = [], False
+        essais = []
         r = self.etat["reglages"]
         for k in range(r["essais_maitre"]):
+            # Chaque essai repart sans forcer : le Studio refait l'image de départ à chaque appel, et
+            # un tournage forcé tournait une image que les règles n'avaient jamais vue.
+            forcer = False
             corps = dict(self._commun(fiches), plans=plans, ou="maison",
                          definition=r.get("definition_maitre") or r["definition"],
                          longueur_maitre=r["longueur_maitre"], forcer=forcer)
             code, rendu = self._poster_maitre(corps)
             plans = corps["plans"]
+            # Film 5 relancé, 04/10 : « l'image de départ montre une rue asphaltée en ville et non un
+            # jardin » — noté, puis tourné quand même. Une image de départ refusée est redemandée.
+            for _ in range(DEPART_REDEMANDES):
+                if code != 409 or not _DEPART_REFUSE.search(str((rendu or {}).get("detail"))):
+                    break
+                self.noter("maitre_depart_refuse", refus=str((rendu or {}).get("detail"))[:1500], **marque)
+                code, rendu = self._poster_maitre(corps)
+                plans = corps["plans"]
             if code == 409 and not forcer:
                 # Une règle d'avant tournage refusée : notée, puis « tourner quand même », comme la page
                 # le propose ; la règle de la voix n'a jamais de passe-droit (le Studio refuse encore).

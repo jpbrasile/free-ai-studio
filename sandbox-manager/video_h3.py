@@ -2789,8 +2789,25 @@ def texte_depart(plan: dict) -> str:
     texte = sans_paroles(plan.get("image_paroles") or "")
     if not presents:
         return PREFIXE_DEPART + texte
-    cadre = texte.split(".")[0].split(":")[0].strip()
-    return PREFIXE_DEPART + cadre + ". " + " ".join(f"{e['nom']} : {e['debut']}." for e in presents)
+    return PREFIXE_DEPART + cadre_du_depart(texte, [e["nom"] for e in presents]) + ". " + " ".join(
+        f"{e['nom']} : {e['debut']}." for e in presents)
+
+
+def cadre_du_depart(texte: str, noms: list) -> str:
+    """Le cadre du plan : sa première phrase, avant les deux-points (l'action vient après) ; puis,
+    si le premier élément présent n'est nommé que plus loin, ce qui le précède (le lieu). Film 5
+    relancé, 04/10 : « Wide shot, night. In the garden, Leila stands… » — la première phrase seule
+    perdait le jardin, l'image de départ a dessiné une rue de ville, le maître a fondu de l'une à l'autre."""
+    premiere = texte.split(".")[0]
+    cadre = premiere.split(":")[0].strip()
+    positions = [m.start() for n in noms if n
+                 for m in [re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", texte, re.IGNORECASE)] if m]
+    if positions and min(positions) > len(premiere):
+        lieu = texte[len(premiere) + 1:min(positions)].split(":")[0]
+        lieu = re.sub(r"[\s,;.:]+(?:and|with|while|as)?\s*$", "", lieu.strip(), flags=re.IGNORECASE).strip()
+        if lieu:
+            cadre += ". " + lieu
+    return cadre
 
 
 # L'image de FIN d'un plan (03/10, propriétaire : « image de début + script = image de fin ») :
@@ -5343,8 +5360,24 @@ function horsChamp(etat){
 function texteDepart(p){
   const presents = (p.elements || []).filter(e => e && e.nom && e.debut && !horsChamp(e.debut));
   if (!presents.length) return PREFIXE.premiere + sansParoles(p.image_paroles);
-  const cadre = sansParoles(p.image_paroles).split(".")[0].split(":")[0].trim();   // l'action vient après « : » (03/10)
-  return PREFIXE.premiere + cadre + ". " + presents.map(e => e.nom + " : " + e.debut + ".").join(" ");
+  return PREFIXE.premiere + cadreDuDepart(sansParoles(p.image_paroles), presents.map(e => e.nom)) + ". "
+    + presents.map(e => e.nom + " : " + e.debut + ".").join(" ");
+}
+
+// Comme cadre_du_depart (le Studio) : la première phrase avant « : » (l'action vient après, 03/10),
+// puis le lieu qui précède le premier élément s'il n'est nommé que plus loin (film 5, 04/10).
+function cadreDuDepart(texte, noms){
+  const premiere = texte.split(".")[0];
+  let cadre = premiere.split(":")[0].trim();
+  const echapper = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const positions = noms.filter(Boolean).map(n => texte.search(new RegExp("(?<![\\w])" + echapper(n) + "(?![\\w])", "i")))
+    .filter(i => i >= 0);
+  if (positions.length && Math.min(...positions) > premiere.length){
+    const lieu = texte.slice(premiere.length + 1, Math.min(...positions)).split(":")[0].trim()
+      .replace(/[\s,;.:]+(?:and|with|while|as)?\s*$/i, "").trim();
+    if (lieu) cadre += ". " + lieu;
+  }
+  return cadre;
 }
 
 function majInvitesImages(){

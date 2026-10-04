@@ -147,6 +147,28 @@ def test_une_sequence_trop_longue_pour_le_maitre_est_condensee_par_le_chat(fa, t
     assert "time of day" in fa.CONSIGNE_SEQUENCES
 
 
+def test_une_image_de_depart_refusee_est_redemandee_sans_forcer(fa, tmp_path):
+    """Film 5 relancé, 04/10 : « l'image de départ montre une rue asphaltée en ville et non un jardin »,
+    noté puis tourné quand même ; le Studio refait l'image à chaque appel."""
+    class DepartFaux(FauxStudio):
+        refus = 1
+
+        def __call__(self, methode, chemin, corps=None):
+            if chemin == "/video-h3/maitre" and not corps.get("forcer") and self.refus:
+                self.refus -= 1
+                self.appels.append((methode, chemin, json.loads(json.dumps(corps))))
+                return 409, {"detail": "Règles non suivies : plan 1, règle 2 : L'image de départ montre une rue "
+                                       "asphaltée en ville et non un jardin. ; plan 3, règle 2 : saut spatial."}
+            return super().__call__(methode, chemin, corps)
+    studio = DepartFaux()
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
+    fa.Film(etat, tmp_path, studio, chat_sf, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    maitres = [x for m, c, x in studio.appels if c == "/video-h3/maitre"]
+    assert [x["forcer"] for x in maitres] == [False, False]   # redemandé, pas forcé
+    assert [j["etape"] for j in etat["journal"]].count("maitre_depart_refuse") == 1
+
+
 def test_une_sequence_jointe_n_a_qu_un_cadrage(fa, tmp_path):
     """Film 5 relancé, 04/10 : la règle 18 refusait chaque séquence (« wide shot » puis « close-up »)."""
     class DeuxCadrages(FauxStudio):
@@ -283,7 +305,8 @@ def test_le_maitre_fautif_est_rejoue_et_le_moins_fautif_deplie(fa, tmp_path):
     assert etat["statut"] == "fini", etat["erreur"]
     maitres = [x for m, c, x in studio.appels if c == "/video-h3/maitre"]
     # Refus des règles : noté, puis « tourner quand même » ; trois essais, aucun « ok ».
-    assert [x["forcer"] for x in maitres] == [False, True, True, True]
+    # Chaque essai repart sans forcer (04/10 : son image de départ est vérifiée).
+    assert [x["forcer"] for x in maitres] == [False, True] * 3
     assert len(etat["maitres"]) == 3 and any(j["etape"] == "maitre_regles" for j in etat["journal"])
     deplier = next(x for m, c, x in studio.appels if c.endswith("/deplier"))
     assert deplier["forcer"] is True and deplier["definition"] == "768p"
