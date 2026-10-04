@@ -1181,11 +1181,9 @@ def consigne_retouche(noms: list, etats: str = "") -> str:
     """Pour le juge : l'image du maître (1), sa retouche (2), puis les photos des fiches, une par nom.
     `etats` : l'état de départ des éléments du plan (etats_au_debut) ; image 2 le suit, pas image 1."""
     photos = ", ".join("image %d is %s" % (k + 3, n) for k, n in enumerate(noms))
-    if etats:
-        return consigne_retouche(noms) + (
-            " Also check (e): each element of image 2 is in this start state, even where image 1 shows it "
-            "otherwise (a light switched off, an object held another way): %s A change of image 1 that brings an "
-            "element to this state is not a fault; an element of image 2 in another state is one." % etats)
+    e = (" (e) each element of image 2 is in this start state, even where image 1 shows it otherwise (a light "
+         "switched off, an object held another way): %s A change of image 1 that brings an element to this state "
+         "is not a fault; an element of image 2 in another state is one." % etats) if etats else ""
     return ("Image 1 is a frame of a film. Image 2 is the same frame redrawn so that each character looks exactly "
             "like their reference photo (%s). Check only: (a) image 2 keeps the framing, the camera, the place, the "
             "light, the objects, and where each character stands and faces, as in image 1 (a character redrawn may "
@@ -1193,8 +1191,24 @@ def consigne_retouche(noms: list, etats: str = "") -> str:
             "character of image 2 matches their photo (shape, size, material, colours, face, clothes); (c) nobody appears "
             "twice, and nobody is added or missing compared with image 1; (d) no object is added, moved or removed "
             "and nobody looks in another direction (an object on the ground in image 2 but not in image 1 is a "
-            "fault). Answer JSON only: {\"ok\": true or false, "
-            "\"fautes\": [\"one short sentence per fault, naming the character or element\"]}." % photos)
+            "fault).%s Answer JSON only: {\"ok\": true or false, "
+            "\"fautes\": [\"one short sentence per fault, naming the character or element\"], "
+            # Essais D et E du plan 6, 04/10 : Pixel remplacé par une fille, dessin gardé à égalité de fautes,
+            # et H3 a fait deux Leila. Les personnages faux se disent à part (CONSIGNE : noms exacts).
+            "\"faux\": [\"the exact name of each character who, in image 2, is missing, appears twice, is "
+            "replaced by someone else or does not look like their photo\"]}." % (photos, e))
+
+
+def lire_retouche(reponse: str, noms: list) -> tuple:
+    """(fautes, faux) du juge de la retouche : `faux`, les noms (parmi `noms`) des personnages absents,
+    doublés, remplacés ou qui ne ressemblent pas à leurs photos. ValueError si illisible."""
+    fautes = lire_raccord(reponse)
+    if not fautes:
+        return [], []
+    t = str(reponse)
+    d = json.loads(t[t.find("{"):t.rfind("}") + 1])
+    dits = {" ".join(str(n).split()).casefold() for n in d.get("faux") or [] if isinstance(n, str)}
+    return fautes, [n for n in noms if n.casefold() in dits]
 
 
 # 03/10, story-board du « Jardin de verre » : l'image de fin du plan 3 (l'arbre envahit la

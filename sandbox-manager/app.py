@@ -7153,6 +7153,7 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
             bornes = (a, b) if suite_apres else (a,)
             images = [montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
                                              *video_h3.DEFINITIONS[definition]) for n in bornes]
+            faux = []
             if corps.get("retoucher") is True:
                 # Les fautes que le juge a vues dans un essai de CE plan (rejeu) s'ajoutent à celles du
                 # maître : audit du 04/10, « Le robot perdu », plan 6, la lampe allumée dès le départ,
@@ -7161,7 +7162,8 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
                     images[0], maitre["commun"], plans[k], definition,
                     # Une parole entendue n'est pas une faute de l'image (PAROLES_EN_TROP).
                     [str(r) for r in remarques.get(str(k + 1)) or [] if r and not video_h3.PAROLES_EN_TROP.match(str(r))]
-                    + [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)], jid=jid)
+                    + [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)], jid=jid,
+                    faux=faux)
             images = [base64.b64encode(i).decode() for i in images]
             # L'image d'où part le clip, gardée dès le dépliage (propriétaire, 04/10 : « montre-moi les
             # images retouchées » ; un clip en file ne l'écrivait nulle part avant de démarrer).
@@ -7180,7 +7182,12 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
             # Seulement les fiches que le plan nomme (comme la retouche) : un plan sans personne n'en reçoit
             # aucune (« Le jardin de verre », 03/10 : une photo envoyée a fait traverser le champ à Mila).
             texte_plan = str(plans[k].get("image_paroles") or "").casefold()
-            nommees = [f for f in fiches_film if video_h3.fiche_lire(f)["nom"].casefold() in texte_plan]
+            # Ni celles d'un personnage resté faux dans l'image de départ (absent, doublé, autre dessin) :
+            # essais A, C, D, E du plan 6, 04/10, ses photos face à un autre dessin ont fait des doubles à
+            # chaque fois. Le clip le suit alors tel que l'image le montre.
+            mal = {n.casefold() for n in faux}
+            nommees = [f for f in fiches_film if video_h3.fiche_lire(f)["nom"].casefold() in texte_plan
+                       and video_h3.fiche_lire(f)["nom"].casefold() not in mal]
             if not suite_apres and nommees:
                 nb_photos, visages_seuls = video_h3.photos_avec_depart(nommees)
                 if 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
@@ -7283,7 +7290,7 @@ async def _retouche_google(demande: dict) -> bytes:
 
 
 async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: str,
-                            remarques: list = (), jid: str = "") -> tuple:
+                            remarques: list = (), jid: str = "", faux: Optional[list] = None) -> tuple:
     """L'image du maître d'où part un plan déplié, redessinée par l'image du Studio d'après les
     fiches des personnages que le plan nomme — toutes leurs vues et leur planche multivue
     (CONSIGNE_RETOUCHE) : (image, ce qui s'est passé). Propriétaire, 04/10 : « reconstruire les
@@ -7291,7 +7298,8 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
     juge a vus dans le maître sont à éviter dès le premier dessin ; un juge compare ensuite la
     retouche au maître et aux photos, et ses fautes repartent au dessin suivant (RETOUCHE_ESSAIS).
     Les dessins alternent l'image du Studio et Qwen (RETOUCHE_MOTEURS) ; un moteur qui refuse n'est
-    plus redemandé, le dessin aux moins de fautes est gardé. Tout refusé : l'image du maître, et le dit."""
+    plus redemandé, le dessin aux moins de personnages faux, puis aux moins de fautes, est gardé ; `faux`
+    reçoit les noms des personnages restés faux dans ce dessin. Tout refusé : l'image du maître, et le dit."""
     ids = [f for f in (commun.get("fiches") or [commun.get("fiche")]) if f]
     texte = str(plan.get("image_paroles") or "")
     nommes = [f for f in ids if video_h3.fiche_lire(f)["nom"].casefold() in texte.casefold()]
@@ -7325,21 +7333,26 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
             continue
         par = "par Qwen" if moteur == "qwen" else "par l'image du Studio"
         try:
-            fautes = video_h3.lire_raccord(await _chat_du_studio(
+            fautes, mal = video_h3.lire_retouche(await _chat_du_studio(
                 video_h3.consigne_retouche(noms, etats), "le contrôle de la retouche",
-                images=[_data_url(image), _data_url(octets)] + list(photos), modele=video_h3.MODELE_JUGE))
+                images=[_data_url(image), _data_url(octets)] + list(photos), modele=video_h3.MODELE_JUGE), noms)
         except (ValueError, HTTPException) as exc:
             return octets, "retouchée %s (%d fiches), contrôle muet : %s" % (
                 par, len(nommes), str(getattr(exc, "detail", exc))[:150])
         if not fautes:
             return octets, "retouchée %s (%d fiches), contrôle ok au dessin %d" % (par, len(nommes), tour + 1)
-        if meilleur is None or len(fautes) < len(meilleur[0]):
-            meilleur = (fautes, octets, par, tour)
+        # Un personnage faux (absent, doublé, remplacé) pèse plus que toutes les autres fautes : essais D et E
+        # du plan 6, 04/10, Pixel remplacé par une fille gardé à égalité de fautes, et H3 a fait deux Leila.
+        if meilleur is None or (len(mal), len(fautes)) < (len(meilleur[4]), len(meilleur[0])):
+            meilleur = (fautes, octets, par, tour, mal)
         a_eviter = fautes[:video_h3.A_EVITER_MAX]
     if meilleur:
-        fautes, octets, par, tour = meilleur
-        return octets, "retouchée %s (%d fiches, dessin %d), fautes restantes : %s" % (
-            par, len(nommes), tour + 1, " ; ".join(fautes)[:300])
+        fautes, octets, par, tour, mal = meilleur
+        if faux is not None:
+            faux.extend(mal)
+        return octets, "retouchée %s (%d fiches, dessin %d), fautes restantes : %s%s" % (
+            par, len(nommes), tour + 1, " ; ".join(fautes)[:300],
+            (" ; resté faux : %s" % ", ".join(mal)) if mal else "")
     return image, "image du maître gardée : %s" % " ; ".join("%s : %s" % m for m in refus.items())[:300]
 
 

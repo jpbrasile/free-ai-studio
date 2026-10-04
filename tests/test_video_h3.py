@@ -3495,10 +3495,12 @@ def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_d
         return "data:image/png;base64," + PNG
     monkeypatch.setattr(h3, "_image_du_studio", image)
 
+    reponse_retouche = ['{"ok": true, "fautes": []}']
+
     async def juge(consigne, quoi="", images=None, modele=""):
         if quoi == "l'étiquette d'un personnage":
             return "the girl with dark brown hair"
-        return '{"ok": true, "fautes": []}'
+        return reponse_retouche[0]
     monkeypatch.setattr(h3, "_chat_du_studio", juge)
     c = client(h3)
     r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"remarques": ["la lampe"]})
@@ -3525,6 +3527,18 @@ def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_d
     # L'état de départ des éléments du plan va à la retouche (l'instant de l'image), pas l'action.
     assert "the flashlight : in Leila's right hand, switched off." in demandes[0]["prompt"]
     assert "is switched on" not in demandes[0]["prompt"]
+    # Un personnage resté faux dans l'image de départ n'envoie pas ses photos à H3 (essais D et E du plan 6 :
+    # Pixel redessiné en fille, ses photos face à elle, et H3 a fait deux Leila).
+    reponse_retouche[0] = '{"ok": false, "fautes": ["Pixel est une fille"], "faux": ["Pixel", "Zorg"]}'
+    tournes.clear()
+    r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"plans": [2], "retoucher": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["retouches"]["2"].endswith("resté faux : Pixel")
+    for _ in range(50):
+        if tournes:
+            break
+        time.sleep(0.05)
+    assert tournes[0]["mode"] == "references" and [f["nom"] for f in tournes[0]["fiches"]] == ["Leila"]
 
 
 def test_la_retouche_donne_au_personnage_la_taille_et_la_forme_de_ses_photos(h3):
@@ -3549,7 +3563,13 @@ def test_la_retouche_met_chaque_element_dans_son_etat_de_depart(h3):
     assert etats == "Leila : standing at the left. the flashlight : in her hand, switched off."
     assert v.etats_au_debut({}) == "" and v.consigne_retouche(["Leila"], "") == v.consigne_retouche(["Leila"])
     juge = v.consigne_retouche(["Leila"], etats)
-    assert juge.startswith(v.consigne_retouche(["Leila"])) and "switched off." in juge and "(e)" in juge
+    assert "switched off." in juge and "(e)" in juge and juge.rstrip().endswith("}.")
+    # Les personnages faux se disent à part, par leur nom exact.
+    assert '"faux"' in juge
+    assert v.lire_retouche('{"ok": false, "fautes": ["x"], "faux": ["pixel", "Autre"]}', ["Leila", "Pixel"]) \
+        == (["x"], ["Pixel"])
+    assert v.lire_retouche('{"ok": true, "fautes": [], "faux": ["Pixel"]}', ["Pixel"]) == ([], [])
+    assert v.lire_retouche('{"ok": false, "fautes": ["x"]}', ["Pixel"]) == (["x"], [])
     qwen = h3.retouche_qwen.consigne([("Leila", 1)], (), etats)
     assert qwen.endswith("even where <image1> shows it otherwise: " + etats + " ")
 
