@@ -3471,7 +3471,9 @@ def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_d
     film = tmp_path / "maitre.mp4"
     film.write_bytes(b"MAITRE")
     plans = [{"image_paroles": "Leila switches on her flashlight.", "enchainement": "coupe",
-              "camera": v.lire_camera(None)},
+              "camera": v.lire_camera(None),
+              "elements": [{"nom": "the flashlight", "debut": "in Leila's right hand, switched off",
+                            "mouvement": "is switched on", "fin": "switched on"}]},
              {"image_paroles": "Pixel floats beside Leila.", "enchainement": "coupe", "camera": v.lire_camera(None)},
              {"image_paroles": "A spaceship descends.", "enchainement": "coupe", "camera": v.lire_camera(None)}]
     jid = "e" * 32
@@ -3520,6 +3522,9 @@ def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_d
                             "Paroles non écrites : « hello » vers 3 s"]}})
     assert r.status_code == 200, r.text
     assert "La lampe est allumée" in demandes[0]["prompt"] and "hello" not in demandes[0]["prompt"]
+    # L'état de départ des éléments du plan va à la retouche (l'instant de l'image), pas l'action.
+    assert "the flashlight : in Leila's right hand, switched off." in demandes[0]["prompt"]
+    assert "is switched on" not in demandes[0]["prompt"]
 
 
 def test_la_retouche_donne_au_personnage_la_taille_et_la_forme_de_ses_photos(h3):
@@ -3531,6 +3536,22 @@ def test_la_retouche_donne_au_personnage_la_taille_et_la_forme_de_ses_photos(h3)
     assert "ITS OWN size and shape" in h3.retouche_qwen.consigne([("Pixel", 1)])
     # Le juge de la retouche ne compte plus ce changement comme une faute.
     assert "may change size, shape and pose" in v.consigne_retouche(["Pixel"])
+
+
+def test_la_retouche_met_chaque_element_dans_son_etat_de_depart(h3):
+    """« Le robot perdu », 04/10, plan 6 : la lampe allumée dans l'image du maître, éteinte au début selon le
+    tableau du plan ; la retouche ne recevait que les noms, et deux clips sont partis lampe allumée."""
+    v = h3.video_h3
+    plan = {"elements": [{"nom": "Leila", "debut": "standing at the left."},
+                         {"nom": "the flashlight", "debut": "in her hand, switched off", "fin": "switched on"},
+                         {"nom": "Pixel", "debut": "hors champ"}]}
+    etats = v.etats_au_debut(plan)
+    assert etats == "Leila : standing at the left. the flashlight : in her hand, switched off."
+    assert v.etats_au_debut({}) == "" and v.consigne_retouche(["Leila"], "") == v.consigne_retouche(["Leila"])
+    juge = v.consigne_retouche(["Leila"], etats)
+    assert juge.startswith(v.consigne_retouche(["Leila"])) and "switched off." in juge and "(e)" in juge
+    qwen = h3.retouche_qwen.consigne([("Leila", 1)], (), etats)
+    assert qwen.endswith("even where <image1> shows it otherwise: " + etats + " ")
 
 
 def test_la_retouche_redemande_un_refus_passager(h3, monkeypatch):

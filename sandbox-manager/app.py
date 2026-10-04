@@ -7231,7 +7231,7 @@ _PASSAGER = re.compile(r"HTTP (429|5\d\d)")
 RETOUCHE_MOTEURS = ("google", "qwen", "google")
 
 
-async def _retouche_qwen(jid: str, image: bytes, nommes: list, a_eviter: list) -> bytes:
+async def _retouche_qwen(jid: str, image: bytes, nommes: list, a_eviter: list, etats: str = "") -> bytes:
     """L'image redessinée par Qwen-Image 2.1 sur une carte Modal (retouche_qwen), d'après la première
     photo et la planche de chaque fiche. HTTPException si Modal manque, refuse ou ne rend rien."""
     if not jid or not modal_configured():
@@ -7245,7 +7245,7 @@ async def _retouche_qwen(jid: str, image: bytes, nommes: list, a_eviter: list) -
         if urls:
             personnages.append((f["nom"], len(urls)))
             refs += [base64.b64decode(u.split(",", 1)[1]) for u in urls]
-    code = retouche_qwen.construire_script(image, refs, retouche_qwen.consigne(personnages, a_eviter))
+    code = retouche_qwen.construire_script(image, refs, retouche_qwen.consigne(personnages, a_eviter, etats))
     try:
         budget_modal.verifier("video", retouche_qwen.GPU, retouche_qwen.DUREE_MAX_S, retouche_qwen.MEMOIRE_MB,
                               quoi="La retouche Qwen", coeurs=retouche_qwen.COEURS)
@@ -7298,6 +7298,8 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
     if not nommes:
         return image, "aucun personnage nommé : image du maître"
     a_eviter = [str(r) for r in remarques if r][:video_h3.A_EVITER_MAX]
+    # L'état de départ de chaque élément du plan (son tableau) : l'instant de l'image, pas l'action.
+    etats = video_h3.etats_au_debut(plan)
     noms, photos = _photos_des_fiches(nommes)
     meilleur, refus = None, {}   # meilleur : (fautes, octets, moteur, tour)
     try:
@@ -7309,12 +7311,13 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
             continue
         try:
             if moteur == "qwen":
-                brut = await _retouche_qwen(jid, image, nommes, a_eviter)
+                brut = await _retouche_qwen(jid, image, nommes, a_eviter, etats)
             else:
                 # Les noms seuls, pas l'action : « Le robot perdu », 04/10, plan 1, le texte (« la capsule
                 # tombe ») a fait dessiner la capsule déjà au sol et Leila la regardant.
-                demande, _texte = video_h3.demande_image(video_h3.TEXTE_RETOUCHE % ", ".join(noms), fiches=nommes,
-                                                         retouche=did, a_eviter=a_eviter)
+                demande, _texte = video_h3.demande_image(
+                    video_h3.TEXTE_RETOUCHE % ", ".join(noms) + (video_h3.ETATS_RETOUCHE % etats if etats else ""),
+                    fiches=nommes, retouche=did, a_eviter=a_eviter)
                 brut = await _retouche_google(demande)
             octets = montage.recadrer_image(brut, *video_h3.DEFINITIONS[definition])
         except (HTTPException, ValueError) as exc:
@@ -7323,7 +7326,7 @@ async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: 
         par = "par Qwen" if moteur == "qwen" else "par l'image du Studio"
         try:
             fautes = video_h3.lire_raccord(await _chat_du_studio(
-                video_h3.consigne_retouche(noms), "le contrôle de la retouche",
+                video_h3.consigne_retouche(noms, etats), "le contrôle de la retouche",
                 images=[_data_url(image), _data_url(octets)] + list(photos), modele=video_h3.MODELE_JUGE))
         except (ValueError, HTTPException) as exc:
             return octets, "retouchée %s (%d fiches), contrôle muet : %s" % (

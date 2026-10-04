@@ -39,8 +39,9 @@ GARDER = ("Keep everything else in <image1> exactly as it is: the framing and th
           "sitting or standing), the side they face and the direction they look. ")
 
 
-def consigne(personnages: list, a_eviter=()) -> str:
-    """`personnages` : [(nom, nombre de photos)] dans l'ordre des images jointes, qui suivent <image1>."""
+def consigne(personnages: list, a_eviter=(), etats: str = "") -> str:
+    """`personnages` : [(nom, nombre de photos)] dans l'ordre des images jointes, qui suivent <image1>.
+    `etats` : l'état de départ des éléments du plan (video_h3.etats_au_debut), suivi même contre <image1>."""
     phrases, n = [], 2
     for nom, k in personnages:
         images = " and ".join("<image%d>" % i for i in range(n, n + k))
@@ -50,6 +51,9 @@ def consigne(personnages: list, a_eviter=()) -> str:
              "the one of the pictures, whole: head, body, proportions, material, colours, face and clothes, at the "
              "same place and facing the same way, with ITS OWN size and shape from the pictures even if the old one "
              "was taller or shaped differently; nothing of the old one remains. " + GARDER)
+    if etats:
+        texte += ("At this instant each element is exactly in this state, even where <image1> shows it otherwise: "
+                  + etats + " ")
     fautes = [" ".join(str(f or "").split()).rstrip(".") for f in a_eviter]
     fautes = [f for f in fautes if f]
     if fautes:

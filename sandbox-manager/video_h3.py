@@ -1177,9 +1177,15 @@ def consigne_depart_conforme(texte: str) -> str:
             "and what the text says\"]}.\n\nShot: " + sans_paroles(texte))
 
 
-def consigne_retouche(noms: list) -> str:
-    """Pour le juge : l'image du maître (1), sa retouche (2), puis les photos des fiches, une par nom."""
+def consigne_retouche(noms: list, etats: str = "") -> str:
+    """Pour le juge : l'image du maître (1), sa retouche (2), puis les photos des fiches, une par nom.
+    `etats` : l'état de départ des éléments du plan (etats_au_debut) ; image 2 le suit, pas image 1."""
     photos = ", ".join("image %d is %s" % (k + 3, n) for k, n in enumerate(noms))
+    if etats:
+        return consigne_retouche(noms) + (
+            " Also check (e): each element of image 2 is in this start state, even where image 1 shows it "
+            "otherwise (a light switched off, an object held another way): %s A change of image 1 that brings an "
+            "element to this state is not a fault; an element of image 2 in another state is one." % etats)
     return ("Image 1 is a frame of a film. Image 2 is the same frame redrawn so that each character looks exactly "
             "like their reference photo (%s). Check only: (a) image 2 keeps the framing, the camera, the place, the "
             "light, the objects, and where each character stands and faces, as in image 1 (a character redrawn may "
@@ -2879,6 +2885,21 @@ CONSIGNE_RETOUCHE = ("L'image jointe %d est l'image à reprendre : garder son ca
 # Ce que la retouche reçoit comme description : qui reconnaître, jamais l'action du plan (qui se dessinerait).
 TEXTE_RETOUCHE = ("Personnages à reconnaître dans l'image à reprendre : %s. C'est l'instant de cette image, ni "
                   "avant ni après : aucun objet, aucun geste, aucun regard nouveau. ")
+# « Le robot perdu », 04/10, plan 6 : la lampe torche allumée dans l'image du maître, alors que le plan la
+# veut éteinte au début (son tableau : « switched off ») ; deux clips l'ont gardée allumée, refusés par le
+# juge. L'état de départ de chaque élément est l'instant même de l'image, pas l'action : la retouche le suit.
+ETATS_RETOUCHE = "À cet instant, chaque élément est exactement dans cet état, même si l'image à reprendre le montre autrement : %s "
+ETATS_RETOUCHE_MAX = 900
+
+
+def etats_au_debut(plan: dict) -> str:
+    """« nom : état de départ. » pour chaque élément du tableau du plan ; vide sans tableau."""
+    morceaux = []
+    for e in plan.get("elements") or ():
+        if isinstance(e, dict) and e.get("nom") and e.get("debut") and not hors_champ(e.get("debut")):
+            morceaux.append("%s : %s" % (" ".join(str(e["nom"]).split()),
+                                         " ".join(str(e["debut"]).split()).rstrip(".") + "."))
+    return " ".join(morceaux)[:ETATS_RETOUCHE_MAX]
 CONSIGNE_FIN = ("L'image jointe %d est la PREMIÈRE image de ce plan. Dessine sa DERNIÈRE image, une fois faite "
                 "l'action décrite : même lieu, même caméra, même cadrage, même lumière ; mêmes personnes et mêmes "
                 "objets aux mêmes places, sauf ce que l'action change (ce qui naît pendant le plan est là, ce qui "
