@@ -117,6 +117,36 @@ def test_un_film_de_2_minutes_joue_ses_8_sequences_dans_un_maitre_puis_les_depli
     assert next(x for m, c, x in studio.appels if c == "/chanson/creer")["duree"] == "2"
 
 
+def test_une_sequence_trop_longue_pour_le_maitre_est_condensee_par_le_chat(fa, tmp_path):
+    """« Le robot perdu », film 4 : 8 séquences jointes, invite du maître de 4 254 caractères (4 000 au plus)."""
+    class Bavard(FauxStudio):
+        def __call__(self, methode, chemin, corps=None):
+            if chemin == "/video-h3/scenario/decouper":
+                self.appels.append((methode, chemin, corps))
+                return 200, {"plans": [{"image_paroles": "Wide shot at night, Leila walks. " * 8}, {"image_paroles": "x " * 50}]}
+            return super().__call__(methode, chemin, corps)
+    condenses = []
+
+    def chat_court(consigne):
+        if consigne.startswith("Shorten"):
+            condenses.append(int(consigne.split("at most ")[1].split()[0]))
+            return "Wide shot at night: Leila walks uphill."
+        return chat_sf(consigne)
+    studio = Bavard()
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
+    fa.Film(etat, tmp_path, studio, chat_court, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    assert condenses == [fa.TEXTES_MAITRE_MAX // 8] * 8
+    assert {p["image_paroles"] for p in etat["plans"]} == {"Wide shot at night: Leila walks uphill."}
+    # Le chat qui ne condense pas : le film s'arrête et dit pourquoi, plutôt qu'un maître refusé.
+    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=120)
+    def chat_tetu(consigne):   # rend le texte tel quel
+        return consigne.split("\n\n", 1)[1] if consigne.startswith("Shorten") else chat_sf(consigne)
+    fa.Film(etat, tmp_path, Bavard(), chat_tetu, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "arrete" and "au plus pour tenir dans le maître" in etat["erreur"]
+    assert "time of day" in fa.CONSIGNE_SEQUENCES
+
+
 def test_la_duree_du_film_est_bornee_et_l_essai_a_deux_sequences(fa):
     assert "sequences" not in fa.nouvel_etat("Oscar allume le phare.", duree_s=15)["reglages"]
     essai = fa.nouvel_etat("Oscar allume le phare.", essai=True, duree_s=120)["reglages"]

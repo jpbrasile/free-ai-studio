@@ -74,8 +74,22 @@ CONSIGNE_SEQUENCES = (
     "by the name used in the story. Every character a sequence shows is already visible, in plain view, at its "
     "very first moment: nobody arrives, emerges, wakes up inside something or is discovered during a sequence; "
     "such a reveal happens at the cut between two sequences, the next one opening on the revealed character. "
+    "Each sequence opens by naming its place and its time of day or light, as the story sets them "
+    "(\"Dans le jardin, la nuit, ...\"), so that it reads alone; it never changes them unless the story does. "
     "No dialogue. Answer with JSON only: {\"sequences\": [\"...\", \"...\"]}"
     "\n\nStory:\n%s")
+# « Le robot perdu », film 4, 04/10 : chaque séquence est découpée seule ; « Pixel flotte dans les
+# airs » sans « la nuit » est sorti « in the evening sun », la colline « in the afternoon sun » —
+# le moment de l'histoire perdu d'une séquence à l'autre. Chaque séquence le dit donc elle-même.
+# Le même film : les 8 séquences jointes faisaient une invite de maître de 4 254 caractères (4 000 au
+# plus pour H3) ; le Studio y ajoute environ 180 caractères par plan (coupe datée, caméra). Chaque
+# texte de séquence tient donc dans sa part de TEXTES_MAITRE_MAX, condensé par le chat sans perdre
+# d'action (le clip déplié joue ce même texte pendant 15 s).
+TEXTES_MAITRE_MAX = 2200
+CONSIGNE_CONDENSER = (
+    "Shorten this film shot description to at most %d characters. Keep the shot size, the light, every "
+    "character with where they stand and face, and every action in order; drop repetitions and adjectives "
+    "that change nothing on screen. English. Answer with the shortened text only.\n\n%s")
 # La caméra (04/10, propriétaire : « la caméra doit être mise en œuvre aussi ») : le découpage laisse la
 # caméra au Studio (le menu de la page), et le film automatique n'en choisissait aucune — « The camera
 # holds a static shot » dans chaque plan. Le chat en choisit une par plan, dans le menu du Studio.
@@ -283,6 +297,17 @@ class Film:
         if not plans:
             raise Arret("Le découpage de la séquence %d n'a rendu aucun plan." % (k + 1))
         joint = " ".join(" ".join(str(p.get("image_paroles") or "").split()) for p in plans).strip()
+        part = TEXTES_MAITRE_MAX // self.etat["reglages"]["sequences"]
+        for _ in range(2):
+            if len(joint) <= part:
+                break
+            court = " ".join(str(self.chat(CONSIGNE_CONDENSER % (part, joint)) or "").split()).strip('"')
+            if court:
+                joint = court
+        if len(joint) > part:
+            raise Arret("Séquence %d : texte de %d caractères, %d au plus pour tenir dans le maître."
+                        % (k + 1, len(joint), part))
+        self.noter("sequence_texte", sequence=k + 1, caracteres=len(joint))
         return dict(plans[0], image_paroles=joint, enchainement="coupe",
                     longueur=self.etat["reglages"]["longueur_plan"])
 
