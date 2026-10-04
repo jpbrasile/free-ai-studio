@@ -783,6 +783,10 @@ LONGUEUR_MAITRE = LONGUEURS[-1]
 # plus ; « Le phare », 03/10 : 0,44 s (11,75 s pour 11,312 s), refusée à 0,4. Les plans d'un maître de
 # 15 s en 8 plans sont à 1,9 s l'un de l'autre : 0,6 s ne prend pas la coupe du voisin.
 MAITRE_ECART_COUPE_S = 0.6
+# Près d'une coupe DEMANDÉE, un changement d'image plus faible suffit. « Le robot perdu », film 5,
+# 04/10 : trois maîtres refusés (« n'a pas fait la coupe du plan 2, 3 ») ; les coupes y étaient, à
+# 1,83 et 3,63 s, mais entre deux plans de nuit (scene 0,27 et 0,29, sous le seuil de 0,3).
+COUPE_SEUIL_ATTENDUE = 0.2
 _MULTIPLAN = re.compile(r"\[Shot \d+\]")
 # Ni « the girl » ni autre nom pour une personne que celui du plan : le 03/10, « the same … girl
 # in every shot » en tête et « Mila » dans les plans, le dernier plan a montré deux fillettes.
@@ -881,14 +885,18 @@ def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
             "longueur": longueur}
 
 
-def cles_du_maitre(plans: list, debuts_s: list, coupes_vues_s: list, images: int) -> list:
+def cles_du_maitre(plans: list, debuts_s: list, coupes_vues_s: list, images: int,
+                   coupes_faibles_s: list = ()) -> list:
     """La première et la dernière image de chaque plan dans le maître : [(premiere, derniere)].
     Une coupe prend la date où ffmpeg l'a vue, plus une image (pas de mélange des deux cadrages) ;
     une suite partage l'image de fin du plan d'avant, sans saut. ValueError si le maître n'a pas
-    fait une coupe demandée : déplié, ce plan mélangerait deux cadrages."""
+    fait une coupe demandée : déplié, ce plan mélangerait deux cadrages. `coupes_faibles_s` : les
+    changements vus au seuil COUPE_SEUIL_ATTENDUE, pris seulement là où une coupe est demandée."""
     debuts, manquees, coupes = [], [], []
     for k, (p, d) in enumerate(zip(plans, debuts_s)):
         vues = [c for c in coupes_vues_s if abs(c - d) <= MAITRE_ECART_COUPE_S]
+        if not vues and k and p.get("enchainement", "coupe") == "coupe":
+            vues = [c for c in coupes_faibles_s if abs(c - d) <= MAITRE_ECART_COUPE_S]
         # Une « suite » qui change de valeur de plan (« Medium shot ») : H3 y coupe quand même
         # (essai à blanc du 03/10, « Le phare », plan 2). Vue, elle se traite en coupe : l'image
         # partagée serait celle du changement de cadre.

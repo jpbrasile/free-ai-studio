@@ -6976,8 +6976,8 @@ async def video_h3_clip_juger(jid: str, authorization: Optional[str] = Header(de
         # Film « Le phare », 03/10 : trois maîtres sans une coupe demandée, vus seulement au dépliage,
         # une fois les trois essais passés. Le juge le dit : l'essai suivant le remplace.
         try:
-            video_h3.cles_du_maitre(maitre["plans"], maitre["debuts_s"],
-                                    await asyncio.to_thread(montage.coupes_vues, film), maitre["longueur"])
+            fortes, faibles = await _coupes_du_maitre(film)
+            video_h3.cles_du_maitre(maitre["plans"], maitre["debuts_s"], fortes, maitre["longueur"], faibles)
         except ValueError as exc:
             verdict["verdict"] = "defaut"
             verdict.setdefault("defauts", []).append({"t_s": 0.0, "quoi": str(exc), "cause": "video"})
@@ -7078,8 +7078,8 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     if not isinstance(voulus, list) or not all(isinstance(n, int) and 1 <= n <= len(plans) for n in voulus):
         raise HTTPException(400, "Numéros de plans illisibles.")
     try:
-        coupes = await asyncio.to_thread(montage.coupes_vues, film)
-        cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"])
+        coupes, faibles = await _coupes_du_maitre(film)
+        cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"], faibles)
         travaux, retouches = [], {}
         for k, (a, b) in enumerate(cles):
             if k + 1 not in voulus:
@@ -7122,6 +7122,14 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
         write_job(jid, job)
     return dict({"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes},
                 **({"retouches": retouches} if retouches else {}))
+
+
+async def _coupes_du_maitre(film: bytes) -> tuple:
+    """(coupes franches, changements plus faibles) d'un clip maître ; les seconds ne comptent que
+    près d'une coupe demandée (video_h3.COUPE_SEUIL_ATTENDUE)."""
+    fortes = await asyncio.to_thread(montage.coupes_vues, film)
+    faibles = await asyncio.to_thread(montage.coupes_vues, film, video_h3.COUPE_SEUIL_ATTENDUE)
+    return fortes, faibles
 
 
 async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: str,

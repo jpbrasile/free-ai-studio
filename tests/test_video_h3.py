@@ -3222,14 +3222,14 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     monkeypatch.setattr(h3, "_photos_des_fiches", lambda ids: ([], []))
     monkeypatch.setattr(h3, "_juger_passage", lambda *a: asyncio.sleep(0, {"verdict": "ok", "defauts": []}))
     monkeypatch.setattr(h3, "_ecouter", lambda *a: asyncio.sleep(0, {"attendu": [], "ok": None}))
-    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [] if isinstance(f, bytes) else 1 / 0)
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f, seuil=0.3: [] if isinstance(f, bytes) else 1 / 0)
     r = c.post("/video-h3/jobs/%s/juger" % jid, headers=CLE)
     assert r.status_code == 200 and r.json()["verdict"] == "defaut", r.text
     assert "coupe du plan 2" in r.json()["defauts"][-1]["quoi"]
 
     job["jugement"] = {"verdict": "ok", "defauts": []}
     h3.write_job(jid, job)
-    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [2.5])
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f, seuil=0.3: [2.5])
     pris = []
     monkeypatch.setattr(h3.montage, "image_numero", lambda f, n: pris.append(n) or base64.b64decode(PNG))
     monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: base64.b64decode(PNG))
@@ -3251,7 +3251,7 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     # Une suite : le plan d'avant finit sur l'image dont elle repart (première et dernière).
     job["video"]["maitre"]["plans"][1]["enchainement"] = "suite"
     h3.write_job(jid, job)
-    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [])
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f, seuil=0.3: [])
     pris.clear()
     tournes.clear()
     r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"definition": "768p"})
@@ -3262,6 +3262,20 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
             break
         time.sleep(0.05)
     assert [t["mode"] for t in tournes] == ["premiere_derniere", "premiere"]
+
+
+def test_pres_d_une_coupe_demandee_un_changement_plus_faible_suffit(h3):
+    """« Le robot perdu », film 5 : trois maîtres refusés ; les coupes des plans 2 et 3 y étaient,
+    entre deux plans de nuit (scene 0,27 et 0,29 à 1,83 et 3,63 s, sous le seuil de 0,3)."""
+    v = h3.video_h3
+    plans = [{"enchainement": "coupe"}] * 3
+    with pytest.raises(ValueError, match="coupe du plan 2, 3"):
+        v.cles_du_maitre(plans, [0.0, 1.885, 3.771], [], 124)
+    assert v.cles_du_maitre(plans, [0.0, 1.885, 3.771], [], 124, [1.833, 3.625]) == [(0, 43), (45, 86), (88, 123)]
+    # Loin d'une coupe demandée, ou pour une suite, le changement faible ne compte pas.
+    suite = [{"enchainement": "coupe"}, {"enchainement": "suite"}]
+    assert v.cles_du_maitre(suite, [0.0, 2.6], [], 124, [2.5]) == [(0, 62), (62, 123)]
+    assert v.cles_du_maitre(plans[:2], [0.0, 2.6], [1.0], 124, [1.0, 2.4])[1][0] == round(2.4 * 24) + 1
 
 
 def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypatch, tmp_path):
@@ -3288,7 +3302,7 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
                "commun": {"fiches": [leila, pixel], "definition": "480p"}}}}
     h3.write_job(jid, job)
     monkeypatch.setattr(h3, "_video_h3_octets", lambda j: film if j == jid else None)
-    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [1.68, 3.38])
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f, seuil=0.3: [1.68, 3.38] if seuil < 0.3 else [1.68])
     monkeypatch.setattr(h3.montage, "image_numero", lambda f, n: base64.b64decode(PNG))
     monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: base64.b64decode(PNG))
     monkeypatch.setattr(h3, "run_video_h3", lambda j, *a: None)
