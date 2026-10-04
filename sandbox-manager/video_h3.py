@@ -1182,8 +1182,9 @@ def consigne_retouche(noms: list) -> str:
     photos = ", ".join("image %d is %s" % (k + 3, n) for k, n in enumerate(noms))
     return ("Image 1 is a frame of a film. Image 2 is the same frame redrawn so that each character looks exactly "
             "like their reference photo (%s). Check only: (a) image 2 keeps the framing, the camera, the place, the "
-            "light, the objects, and where each character stands, faces and how they pose, as in image 1; (b) each "
-            "character of image 2 matches their photo (shape, material, colours, face, clothes); (c) nobody appears "
+            "light, the objects, and where each character stands and faces, as in image 1 (a character redrawn may "
+            "change size, shape and pose to become the one of their photo: that is not a fault); (b) each "
+            "character of image 2 matches their photo (shape, size, material, colours, face, clothes); (c) nobody appears "
             "twice, and nobody is added or missing compared with image 1; (d) no object is added, moved or removed "
             "and nobody looks in another direction (an object on the ground in image 2 but not in image 1 is a "
             "fault). Answer JSON only: {\"ok\": true or false, "
@@ -2866,11 +2867,15 @@ PREFIXE_FIN = "Photo réaliste, cadrage paysage 16:9, image nette, fin de la sc�
 # et chaque plan déplié en partirait. L'image du maître est redessinée d'après les fiches.
 # « garder EXACTEMENT la pose » laissait le cube (fautes restantes aux plans 3, 5, 6) ; « remplacé ENTIER »
 # a rendu la sphère de la fiche, à sa place dans la capsule (essai sur l'image du plan 3, même jour).
+# « Le robot perdu », 04/10, plan 6 : Pixel, petit robot rond sur sa fiche, était un grand humanoïde dans
+# le maître ; « à la même taille » contredisait « proportions des photos », et trois dessins l'ont gardé
+# humanoïde. La place et l'orientation restent ; la taille et la forme sont celles des photos.
 CONSIGNE_RETOUCHE = ("L'image jointe %d est l'image à reprendre : garder son cadrage, sa caméra, son décor, sa "
-                     "lumière, ses objets, et la place, la taille et l'orientation de chaque personnage. Un "
-                     "personnage qui ne ressemble pas à ses photos est remplacé ENTIER par celui des photos — tête, "
-                     "corps, proportions, matière, couleurs, visage, tenue — à la même place, à la même taille, "
-                     "tourné du même côté : rien de l'ancien ne reste. Rien d'autre n'est ajouté ni retiré. ")
+                     "lumière, ses objets, et la place et l'orientation de chaque personnage. Un personnage qui ne "
+                     "ressemble pas à ses photos est remplacé ENTIER par celui des photos — tête, corps, "
+                     "proportions, matière, couleurs, visage, tenue — à la même place, tourné du même côté, à SA "
+                     "taille et dans SA forme, celles des photos, même si l'ancien était plus grand ou d'une autre "
+                     "forme : rien de l'ancien ne reste. Rien d'autre n'est ajouté ni retiré. ")
 # Ce que la retouche reçoit comme description : qui reconnaître, jamais l'action du plan (qui se dessinerait).
 TEXTE_RETOUCHE = ("Personnages à reconnaître dans l'image à reprendre : %s. C'est l'instant de cette image, ni "
                   "avant ni après : aucun objet, aucun geste, aucun regard nouveau. ")

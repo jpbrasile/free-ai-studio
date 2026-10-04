@@ -3522,6 +3522,17 @@ def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_d
     assert "La lampe est allumée" in demandes[0]["prompt"] and "hello" not in demandes[0]["prompt"]
 
 
+def test_la_retouche_donne_au_personnage_la_taille_et_la_forme_de_ses_photos(h3):
+    """« Le robot perdu », 04/10, plan 6 : Pixel (petit robot rond) était un grand humanoïde dans le maître ;
+    « à la même taille » l'a gardé humanoïde en trois dessins, et le clip a suivi son image de départ."""
+    v = h3.video_h3
+    assert "même taille" not in v.CONSIGNE_RETOUCHE and "SA taille" in v.CONSIGNE_RETOUCHE
+    assert "same size" not in h3.retouche_qwen.consigne([("Pixel", 1)])
+    assert "ITS OWN size and shape" in h3.retouche_qwen.consigne([("Pixel", 1)])
+    # Le juge de la retouche ne compte plus ce changement comme une faute.
+    assert "may change size, shape and pose" in v.consigne_retouche(["Pixel"])
+
+
 def test_la_retouche_redemande_un_refus_passager(h3, monkeypatch):
     """« Le robot perdu », 04/10 : deux plans ont gardé le Pixel cube du maître sur un 503 de Google."""
     v = h3.video_h3

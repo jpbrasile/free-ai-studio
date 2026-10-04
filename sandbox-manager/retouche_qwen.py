@@ -48,8 +48,8 @@ def consigne(personnages: list, a_eviter=()) -> str:
         n += k
     texte = (" ".join(phrases) + " In <image1>, replace each of them who does not look like their pictures with "
              "the one of the pictures, whole: head, body, proportions, material, colours, face and clothes, at the "
-             "same place, at the same size, in the same pose and facing the same way; nothing of the old one "
-             "remains. " + GARDER)
+             "same place and facing the same way, with ITS OWN size and shape from the pictures even if the old one "
+             "was taller or shaped differently; nothing of the old one remains. " + GARDER)
     fautes = [" ".join(str(f or "").split()).rstrip(".") for f in a_eviter]
     fautes = [f for f in fautes if f]
     if fautes:
