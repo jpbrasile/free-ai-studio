@@ -7080,7 +7080,7 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     try:
         coupes = await asyncio.to_thread(montage.coupes_vues, film)
         cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"])
-        travaux = []
+        travaux, retouches = [], {}
         for k, (a, b) in enumerate(cles):
             if k + 1 not in voulus:
                 continue
@@ -7089,9 +7089,12 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
             # arrière (« il se téléporte en bas des escaliers ») et le bateau d'un bord à l'autre.
             suite_apres = k + 1 < len(cles) and cles[k + 1][0] == b
             bornes = (a, b) if suite_apres else (a,)
-            images = [base64.b64encode(montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
-                                                              *video_h3.DEFINITIONS[definition])).decode()
-                      for n in bornes]
+            images = [montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
+                                             *video_h3.DEFINITIONS[definition]) for n in bornes]
+            if corps.get("retoucher") is True:
+                images[0], retouches[k + 1] = await _retoucher_depart(images[0], maitre["commun"], plans[k],
+                                                                      definition)
+            images = [base64.b64encode(i).decode() for i in images]
             payload = dict({x: y for x, y in maitre["commun"].items() if y},
                            mode="premiere_derniere" if suite_apres else "premiere", images=images,
                            image_paroles=plans[k]["image_paroles"], ambiance=plans[k].get("ambiance", ""),
@@ -7116,7 +7119,27 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     if len(voulus) == len(plans):
         job["deplie"] = clips
         write_job(jid, job)
-    return {"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes}
+    return dict({"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes},
+                **({"retouches": retouches} if retouches else {}))
+
+
+async def _retoucher_depart(image: bytes, commun: dict, plan: dict, definition: str) -> tuple:
+    """L'image du maître d'où part un plan déplié, redessinée par l'image du Studio d'après les
+    fiches des personnages que le plan nomme (CONSIGNE_RETOUCHE) : (image, ce qui s'est passé).
+    Un refus de l'image garde l'image du maître, et le dit."""
+    ids = [f for f in (commun.get("fiches") or [commun.get("fiche")]) if f]
+    texte = str(plan.get("image_paroles") or "")
+    nommes = [f for f in ids if video_h3.fiche_lire(f)["nom"].casefold() in texte.casefold()]
+    if not nommes:
+        return image, "aucun personnage nommé : image du maître"
+    try:
+        did = video_h3.depart_poser(base64.b64encode(image).decode())
+        demande, _texte = video_h3.demande_image(texte, fiches=nommes, retouche=did)
+        rendu = await _image_du_studio(demande)
+        octets = base64.b64decode(rendu.split(",", 1)[-1])
+        return montage.recadrer_image(octets, *video_h3.DEFINITIONS[definition]), "retouchée (%d fiches)" % len(nommes)
+    except (HTTPException, ValueError) as exc:
+        return image, "image du maître gardée : %s" % str(getattr(exc, "detail", exc))[:200]
 
 
 # --- Le film automatique (03/10) : d'un texte simple au film fini (film_auto.py) ---------

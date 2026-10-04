@@ -1091,7 +1091,7 @@ def reformuler_depart(texte: str, reponse: str) -> str:
 
 
 def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=None, coupe: bool = False,
-                  lieu=None, fin_de=None, meubles=None, a_eviter=()) -> tuple:
+                  lieu=None, fin_de=None, meubles=None, a_eviter=(), retouche=None) -> tuple:
     """(demande au routeur, description de l'image). La description est ce que
     l'image montre, sans la présentation des photos : c'est elle qui passe à H3.
 
@@ -1168,6 +1168,11 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
             tete += ("L'image jointe %d est le plan précédent : garder le même univers, la même lumière et le même "
                      "style ; l'endroit précis, le cadrage et la place des personnes suivent la description, et si "
                      "elle dit le même endroit, garder aussi le même décor et les mêmes enseignes. " % len(photos))
+    if retouche:   # une image du maître (04/10), redessinée d'après les fiches (CONSIGNE_RETOUCHE)
+        octets = depart_lire(retouche)
+        genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
+        photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
+        tete += CONSIGNE_RETOUCHE % len(photos)
     if fin_de:   # l'image de fin (03/10) : l'image de début du même plan, jointe en dernier
         octets = depart_lire(fin_de)
         genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
@@ -2616,6 +2621,13 @@ def texte_depart(plan: dict) -> str:
 # L'image de FIN d'un plan (03/10, propriétaire : « image de début + script = image de fin ») :
 # l'image de début jointe, le texte du plan sans ses répliques, et l'état « fin » du tableau.
 PREFIXE_FIN = "Photo réaliste, cadrage paysage 16:9, image nette, fin de la scène : "
+# « Le robot perdu », film 5, 04/10 : le maître part de la seule image du plan 1, où Pixel n'est pas ;
+# H3 l'a inventé d'après son nom (« robot blanc cubique » au lieu de la sphère de métal de sa fiche),
+# et chaque plan déplié en partirait. L'image du maître est redessinée d'après les fiches.
+CONSIGNE_RETOUCHE = ("L'image jointe %d est l'image à reprendre : garder EXACTEMENT son cadrage, sa caméra, son "
+                     "décor, sa lumière, ses objets, et la place, la pose et l'orientation de chaque personnage. "
+                     "Seule l'apparence des personnages change : chacun redessiné pour être exactement celui de "
+                     "ses photos (forme, matière, couleurs, visage, tenue). Rien n'est ajouté ni retiré. ")
 CONSIGNE_FIN = ("L'image jointe %d est la PREMIÈRE image de ce plan. Dessine sa DERNIÈRE image, une fois faite "
                 "l'action décrite : même lieu, même caméra, même cadrage, même lumière ; mêmes personnes et mêmes "
                 "objets aux mêmes places, sauf ce que l'action change (ce qui naît pendant le plan est là, ce qui "

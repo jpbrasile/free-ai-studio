@@ -407,7 +407,7 @@ class Film:
         for m in candidats:
             code, d = self.appel("POST", "/video-h3/maitre/%s/deplier" % m["job"],
                                  {"definition": self.etat["reglages"]["definition"], "ou": "maison",
-                                  "forcer": m["verdict"] != "ok"})
+                                  "forcer": m["verdict"] != "ok", "retoucher": True})
             if code == 200:
                 break
             detail = str((d or {}).get("detail") if isinstance(d, dict) else d)[:600]
@@ -427,7 +427,7 @@ class Film:
             while c["verdict"] != "ok" and c["essais"] < ESSAIS_PLAN:
                 r = self.route("POST", "/video-h3/maitre/%s/deplier" % m["job"],
                                {"definition": self.etat["reglages"]["definition"], "ou": "maison",
-                                "forcer": m["verdict"] != "ok", "plans": [k + 1]})
+                                "forcer": m["verdict"] != "ok", "plans": [k + 1], "retoucher": True})
                 autre = dict(self._juge(r["clips"][0]), job=r["clips"][0])
                 c["essais"] += 1
                 self.noter("clip_rejoue", plan=k + 1, job=autre["job"], verdict=autre["verdict"],

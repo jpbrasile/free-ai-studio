@@ -3264,6 +3264,56 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     assert [t["mode"] for t in tournes] == ["premiere_derniere", "premiere"]
 
 
+def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypatch, tmp_path):
+    """« Le robot perdu », film 5, 04/10 : le maître part de la seule image du plan 1, sans Pixel ;
+    H3 l'a fait cube blanc au lieu de la sphère de sa fiche. Au dépliage, l'image du maître d'où
+    part chaque plan est redessinée d'après les fiches des personnages qu'il nomme."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    leila = v.fiche_creer("Leila", "x")["id"]
+    pixel = v.fiche_creer("Pixel", "x")["id"]
+    for f in (leila, pixel):
+        v.fiche_poser_image(f, "face", PNG)
+    film = tmp_path / "maitre.mp4"
+    film.write_bytes(b"MAITRE")
+    plans = [{"image_paroles": "Leila looks at the sky.", "enchainement": "coupe", "camera": v.lire_camera(None)},
+             {"image_paroles": "Pixel floats beside Leila.", "enchainement": "coupe", "camera": v.lire_camera(None)},
+             {"image_paroles": "A spaceship descends.", "enchainement": "coupe", "camera": v.lire_camera(None)}]
+    jid = "d" * 32
+    job = {"id": jid, "status": "succeeded", "jugement": {"verdict": "ok", "defauts": []},
+           "video": {"moteur": "MiniMax H3 (ComfyUI)", "maitre": {
+               "plans": plans, "debuts_s": [0.0, 1.7, 3.4], "longueur": 124,
+               "commun": {"fiches": [leila, pixel], "definition": "480p"}}}}
+    h3.write_job(jid, job)
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda j: film if j == jid else None)
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f: [1.68, 3.38])
+    monkeypatch.setattr(h3.montage, "image_numero", lambda f, n: base64.b64decode(PNG))
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: base64.b64decode(PNG))
+    monkeypatch.setattr(h3, "run_video_h3", lambda j, *a: None)
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        if len(demandes) == 2:
+            raise h3.HTTPException(502, "aucune image")
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"retoucher": True})
+    assert r.status_code == 200, r.text
+    ret = r.json()["retouches"]
+    assert ret["1"].startswith("retouchée (1 fiche")
+    assert ret["2"].startswith("image du maître gardée")   # un refus de l'image ne bloque rien
+    assert ret["3"].startswith("aucun personnage")
+    assert "image à reprendre" in demandes[0]["prompt"] and len(demandes[0]["image_reference"]) == 2
+    assert len(demandes[1]["image_reference"]) == 3   # Pixel et Leila, puis l'image du maître
+    # Sans la demande, rien n'est retouché.
+    demandes.clear()
+    r = client(h3).post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={})
+    assert r.status_code == 200 and "retouches" not in r.json() and not demandes
+
+
 def test_le_juge_voit_tout_un_clip_long_et_cherche_les_doubles(h3, monkeypatch):
     """03/10, clip maître de 15 s : la planche 4 x 3 n'en montrait que 6 s, et le juge a dit « ok »
     à une fillette dédoublée à 12,5 s. Tout le clip est vu, en planches de 18 s au plus."""
