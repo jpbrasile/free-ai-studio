@@ -3250,7 +3250,10 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     # le texte montré au client reste le sien.
     assert all(v.PERSONNE_D_AUTRE in t["invite"] for t in tournes)
     assert tournes[0]["texte_client"] == "Oscar climbs the stairs."
-    assert tournes[1]["deplie_de"] == {"maitre": jid, "plan": 2, "images": [61]}
+    # L'image de départ de chaque clip est gardée dès le dépliage, lisible par sa route (04/10).
+    departs = r.json()["departs"]
+    assert tournes[1]["deplie_de"] == {"maitre": jid, "plan": 2, "images": [61], "depart": departs["2"]}
+    assert c.get("/video-h3/depart/%s" % departs["1"], headers=CLE).json()["image"].endswith(PNG)
     assert h3.read_job(jid)["deplie"] == r.json()["clips"]
     # Une suite : le plan d'avant finit sur l'image dont elle repart (première et dernière).
     job["video"]["maitre"]["plans"][1]["enchainement"] = "suite"

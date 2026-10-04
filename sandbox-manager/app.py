@@ -7080,7 +7080,7 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     try:
         coupes, faibles = await _coupes_du_maitre(film)
         cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"], faibles)
-        travaux, retouches = [], {}
+        travaux, retouches, departs = [], {}, {}
         for k, (a, b) in enumerate(cles):
             if k + 1 not in voulus:
                 continue
@@ -7096,6 +7096,9 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
                     images[0], maitre["commun"], plans[k], definition,
                     [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)])
             images = [base64.b64encode(i).decode() for i in images]
+            # L'image d'où part le clip, gardée dès le dépliage (propriétaire, 04/10 : « montre-moi les
+            # images retouchées » ; un clip en file ne l'écrivait nulle part avant de démarrer).
+            departs[k + 1] = video_h3.depart_poser(images[0])
             payload = dict({x: y for x, y in maitre["commun"].items() if y},
                            mode="premiere_derniere" if suite_apres else "premiere", images=images,
                            image_paroles=plans[k]["image_paroles"].rstrip() + " " + video_h3.PERSONNE_D_AUTRE,
@@ -7104,7 +7107,8 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
                            longueur=plans[k].get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT)
             plan = video_h3.preparer(payload)
             plan["resume_public"].update(texte_client=plans[k]["image_paroles"],
-                                         deplie_de={"maitre": jid, "plan": k + 1, "images": list(bornes)})
+                                         deplie_de={"maitre": jid, "plan": k + 1, "images": list(bornes),
+                                                    "depart": departs[k + 1]})
             travaux.append(plan)
     except montage.MontageImpossible as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -7121,7 +7125,8 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     if len(voulus) == len(plans):
         job["deplie"] = clips
         write_job(jid, job)
-    return dict({"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes},
+    return dict({"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes,
+                 "departs": departs},
                 **({"retouches": retouches} if retouches else {}))
 
 
