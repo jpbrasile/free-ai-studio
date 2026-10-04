@@ -6508,6 +6508,32 @@ async def _depart_redemande(corps: dict) -> dict:
             await asyncio.sleep(COUPE_PAUSE_S)
 
 
+DEPART_CONTROLES = 3   # dessins d'une image de départ au plus, le juge entre chacun
+
+
+async def _depart_controle(plan: dict, corps: dict) -> dict:
+    """L'image de départ, comparée au texte du plan par le juge qui voit (consigne_depart_conforme) ;
+    ses fautes repartent au dessin suivant (`a_eviter`), et la moins fautive est gardée. Propriétaire,
+    04/10 : « autant le faire bosser lui s'il sait mieux le faire » — le relecteur de la continuité
+    avait vu la rue de ville à la place du jardin, mais seulement après coup. Un juge muet : l'image reste."""
+    meilleur = None
+    for _ in range(DEPART_CONTROLES):
+        d = await _depart_redemande(dict(corps))
+        try:
+            fautes = video_h3.lire_raccord(await _chat_du_studio(
+                video_h3.consigne_depart_conforme(plan.get("image_paroles") or ""), "le contrôle de l'image de départ",
+                images=[_data_url(video_h3.depart_lire(d["id"]))], modele=video_h3.MODELE_JUGE))
+        except (HTTPException, ValueError) as exc:
+            log.warning("contrôle de l'image de départ muet : %s", getattr(exc, "detail", exc))
+            return d
+        if not fautes:
+            return d
+        if meilleur is None or len(fautes) < len(meilleur[0]):
+            meilleur = (fautes, d)
+        corps["a_eviter"] = fautes[:video_h3.A_EVITER_MAX]
+    return meilleur[1]
+
+
 async def _departs_des_coupes(plans: list, commun: dict) -> bool:
     """01/10, propriétaire : « le premier clip doit démarrer à partir d'une image », puis
     « une coupure démarre par une image créée par un text to image ». Elle ne se faisait
@@ -6526,10 +6552,10 @@ async def _departs_des_coupes(plans: list, commun: dict) -> bool:
             # Avec la fiche du décor (02/10), elle donne le lieu, et chaque coupe change de cadrage ;
             # l'image de la coupe d'avant tient les meubles en place (03/10, « le fauteuil se balade »).
             lieu = commun.get("decor")
-            d = await _depart_redemande({"texte": video_h3.texte_depart(p), "fiches": ids,
-                                         "decor": None if lieu else decor, "meubles": decor if lieu else None,
-                                         "lieu": lieu, "coupe": bool(lieu and k),
-                                         "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
+            d = await _depart_controle(p, {"texte": video_h3.texte_depart(p), "fiches": ids,
+                                           "decor": None if lieu else decor, "meubles": decor if lieu else None,
+                                           "lieu": lieu, "coupe": bool(lieu and k),
+                                           "elements": p.get("elements") or [], "plans": textes, "plan": k + 1})
             p.update(image_depart=d["id"], description_depart=d["texte"])
             pose = True
         decor = p["image_depart"]

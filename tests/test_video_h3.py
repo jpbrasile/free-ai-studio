@@ -3459,6 +3459,38 @@ def test_la_retouche_redemande_un_refus_passager(h3, monkeypatch):
     assert note.startswith("image du maître gardée") and len(attentes) == 2
 
 
+def test_l_image_de_depart_est_controlee_et_redessinee_avec_les_fautes_du_juge(h3, monkeypatch):
+    """Film 5 relancé, 04/10 : une rue de ville pour « in the garden ». Propriétaire : « autant le faire
+    bosser lui s'il sait mieux le faire »."""
+    v = h3.video_h3
+    demandes = []
+
+    async def depart(corps):
+        demandes.append(corps)
+        return {"id": v.depart_poser(PNG), "image": PNG, "texte": "d%d" % len(demandes)}
+    monkeypatch.setattr(h3, "_depart_redemande", depart)
+    reponses = iter(['{"ok": false, "fautes": ["une rue de ville, pas un jardin", "jour au lieu de nuit"]}',
+                     '{"ok": false, "fautes": ["pas d\'étoiles"]}', '{"ok": true, "fautes": []}'])
+    vus = []
+
+    async def juge(consigne, quoi="", images=None, modele=""):
+        vus.append((consigne, quoi, len(images or [])))
+        return next(reponses)
+    monkeypatch.setattr(h3, "_chat_du_studio", juge)
+    plan = {"image_paroles": "Wide shot, night. In the garden, Leila stands. A capsule falls. Leila dit : « Oh ! »"}
+    d = asyncio.run(h3._depart_controle(plan, {"texte": "x", "fiches": []}))
+    assert d["texte"] == "d3" and len(demandes) == 3
+    assert "a_eviter" not in demandes[0] and demandes[1]["a_eviter"] == ["une rue de ville, pas un jardin",
+                                                                       "jour au lieu de nuit"]
+    assert vus[0][1] == "le contrôle de l'image de départ" and vus[0][2] == 1
+    assert "In the garden" in vus[0][0] and "Oh !" not in vus[0][0] and "FIRST frame" in vus[0][0]
+    # Toujours fautive : la moins fautive est gardée (le 2e dessin, une faute).
+    demandes.clear()
+    reponses = iter(['{"ok": false, "fautes": ["a", "b"]}', '{"ok": false, "fautes": ["c"]}',
+                     '{"ok": false, "fautes": ["d", "e", "f"]}'])
+    assert asyncio.run(h3._depart_controle(plan, {"texte": "x"}))["texte"] == "d2"
+
+
 def test_la_retouche_garde_le_dessin_le_moins_fautif_et_saute_qwen_sans_modal(h3, monkeypatch):
     v = h3.video_h3
     pixel = v.fiche_creer("Pixel", "x")["id"]

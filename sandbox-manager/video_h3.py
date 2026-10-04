@@ -1129,6 +1129,17 @@ def consigne_raccord(description: str) -> str:
             "fault, naming the element\"]}." % " ".join(str(description or "").split()))
 
 
+def consigne_depart_conforme(texte: str) -> str:
+    """Pour le juge : l'image de départ d'un plan, contre le texte du plan (film 5 relancé, 04/10 : une rue
+    de ville pour « in the garden » ; le relecteur de la continuité l'a vu, après coup)."""
+    return ("This image is the FIRST frame of a film shot. The shot is described below; what happens later in "
+            "the shot (actions, things that fall, arrive or appear) must NOT be in the image yet. Check only: "
+            "(a) the place and the setting; (b) the time of day and the light; (c) the framing; (d) the "
+            "characters and objects that are there from the start, where they stand and face. Answer JSON only: "
+            "{\"ok\": true or false, \"fautes\": [\"one short sentence per fault, saying what the image shows "
+            "and what the text says\"]}.\n\nShot: " + sans_paroles(texte))
+
+
 def consigne_retouche(noms: list) -> str:
     """Pour le juge : l'image du maître (1), sa retouche (2), puis les photos des fiches, une par nom."""
     photos = ", ".join("image %d is %s" % (k + 3, n) for k, n in enumerate(noms))
