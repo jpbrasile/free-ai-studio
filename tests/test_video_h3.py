@@ -192,6 +192,14 @@ def test_sans_replique_ecrite_le_silence_se_dit(h3):
     # Une réplique écrite : rien de tel.
     parle = v.invite("Elle dit « Bonjour. »", "grillons", "")
     assert v.SILENCE_IMAGE not in parle and v.SILENCE_SON not in parle
+    # Syntaxe de H3 (guide de MiniMax, base 4.6) : overall_soundscape ne dit que des sons ; le silence
+    # reste dans la description. Audit du 04/10 : « No dialogue… » y était, et H3 a parlé quand même.
+    h3_muet = v.invite("Zib prend le biscuit", "grillons", "", son=v.CHAMP_SONS, champ=v.CHAMP_DESCRIPTION,
+                       separateur=v.SEPARATEUR_CHAMPS)
+    assert h3_muet == ("integrated_multimodal_description: Zib prend le biscuit. " + v.SILENCE_IMAGE
+                       + "\n\noverall_soundscape: grillons.\n\nnon_diegetic_music: N/A")
+    assert v.invite("Zib dort", "", "", son=v.CHAMP_SONS).endswith(
+        "overall_soundscape: " + v.AMBIANCE_SEULE + " non_diegetic_music: N/A")
 
 
 def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
@@ -212,7 +220,9 @@ def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
                           "amplitude at slow speed. [Shot 2] At 00:03.771, the camera cuts to a new shot. Close-up "
                           "of the pot: a shoot grows. The camera holds a static shot. From 00:07.542, without a "
                           "cut: The shoot becomes a shrub. The camera holds a static shot.")
-    assert m["ambiance"] == "Birds; Crystal chimes" and "girl" not in m["texte"]
+    # Des phrases de sons (base 4.6), et aucun « same place » : chaque plan dit son lieu (audit du 04/10).
+    assert m["ambiance"] == "Birds. Crystal chimes." and "girl" not in m["texte"]
+    assert "same place" not in m["texte"]
     # Le texte en plans part sans la caméra fixe par défaut, qui le contredisait.
     plan = v.preparer({"mode": "texte", "image_paroles": m["texte"], "longueur": v.LONGUEUR_MAITRE})
     assert "static shot throughout" not in plan["resume_public"]["invite"]
@@ -639,8 +649,11 @@ def test_la_description_de_l_image_creee_passe_a_h3(h3):
                            description_derniere="ignorée : pas de dernière image dans ce mode"))
     invite = p["resume_public"]["invite"]
     # Syntaxe de H3 (guide de MiniMax, base, 2.1 et cas 2) : consigne d'alignement, ligne vide, champs.
+    # Le style ouvre [Shot 1] (base 4.1) ; l'ancre est une phrase, pas l'étiquette « <Picture 1>: » (cas 2).
     assert invite.startswith(v.CONSIGNE_I2VA + "\n\nintegrated_multimodal_description: [Shot 1] "
-                             "<Picture 1>: Un café bondé. ") and "ignorée" not in invite
+                             "Live-action, cinematic. The shot begins from <Picture 1>, preserving its people, "
+                             "their appearance, the setting and the composition: Un café bondé. ") \
+        and "ignorée" not in invite and "<Picture 1>:" not in invite
     assert "\n\noverall_soundscape: " in invite and invite.endswith("\n\nnon_diegetic_music: N/A")
     assert "Sound: " not in invite and "First frame" not in invite
     p = v.preparer(demande(mode="premiere_derniere", images=[PNG, PNG],
@@ -649,20 +662,22 @@ def test_la_description_de_l_image_creee_passe_a_h3(h3):
     assert i.startswith("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns "
                         "with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the "
                         "5.17-second mark of the target video.\n\nintegrated_multimodal_description: [Shot 1] "
-                        "<Picture 1>: Début. ")
+                        + v.STYLE_H3 + " " + v.ANCRE_PREMIERE + "Début. ")
     assert "The shot ends on the composition established by Picture 2: Fin." in i
     # Image téléversée (sans description) : l'ancre n'est pas écrite, la consigne si.
     i = v.preparer(demande(mode="premiere", images=[PNG]))["resume_public"]["invite"]
-    assert "<Picture 1>:" not in i and i.startswith(v.CONSIGNE_I2VA + "\n\nintegrated_multimodal_description: [Shot 1] ")
+    assert "<Picture 1>" not in i.split("\n\n", 1)[1] and i.startswith(
+        v.CONSIGNE_I2VA + "\n\nintegrated_multimodal_description: [Shot 1] " + v.STYLE_H3 + " ")
     # La tête d'un maître, avant son [Shot 1], passe dedans, après l'ancre de l'image.
-    assert v.description_aux_images("The same place. [Shot 1] Wide shot. [Shot 2] At 00:01.885, close-up.",
+    assert v.description_aux_images("The same people. [Shot 1] Wide shot. [Shot 2] At 00:01.885, close-up.",
                                     "Un jardin") == (
-        "[Shot 1] <Picture 1>: Un jardin. The same place. Wide shot. [Shot 2] At 00:01.885, close-up.")
+        "[Shot 1] " + v.STYLE_H3 + " " + v.ANCRE_PREMIERE + "Un jardin. The same people. Wide shot. "
+        "[Shot 2] At 00:01.885, close-up.")
     # Ce qui ne s'adressait qu'au modèle d'image ne part pas à H3 (maître f970b321 : « First frame: Photo
     # réaliste, cadrage paysage 16:9, image nette, début de la scène : Wide shot… »).
     assert v.description_aux_images("Leila walks.", v.PREFIXE_DEPART + "Wide shot, night garden. "
                                     "Améliorations demandées : plus sombre.") == (
-        "[Shot 1] <Picture 1>: Wide shot, night garden. Leila walks.")
+        "[Shot 1] " + v.STYLE_H3 + " " + v.ANCRE_PREMIERE + "Wide shot, night garden. Leila walks.")
     # Les noms deviennent l'étiquette de la fiche, ancrée une fois sur <Picture 1> ; une réplique garde
     # ses mots (choix du propriétaire, 04/10 : « courte description »).
     leila = v.fiche_creer("Leila", "x")["id"]
@@ -788,7 +803,7 @@ def test_une_suite_en_references_epingle_les_22_dernieres_images_et_leur_son(h3,
     assert "summary: [video continuation + reference generation] The target video is a single shot with " \
            "<Subject 1>, continuing <Video 1> without a cut. " in invite
     assert v.SUITE_GARDE in invite and "<Picture 2>" not in invite
-    assert "detailed_description: [Shot 1] " + v.SUITE_DEBUT in invite
+    assert "detailed_description: [Shot 1] " + v.STYLE_H3 + " " + v.SUITE_DEBUT in invite
     # 17 images de plus, pour que les 22 reprises ne raccourcissent pas le plan ; retirées au recollage.
     assert plan["resume_public"]["images"] == 141 and dem["longueur"] == 141
     assert plan["resume_public"]["voie"] == "raccord" and v.images_a_retirer(plan) == 22
@@ -870,7 +885,7 @@ def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3,
     assert "summary: [reference generation + keyframe completion] The target video is a single shot with " \
            "<Subject 1> and <Subject 2>, beginning from <Picture 3>. " in invite
     assert "<Picture 3> ([Shot 1] first frame): fully_preserved - the shot begins exactly on <Picture 3>" in invite
-    assert "detailed_description: [Shot 1] The shot begins from <Picture 3>. " in invite
+    assert "detailed_description: [Shot 1] Live-action, cinematic. The shot begins from <Picture 3>. " in invite
     assert "<Subject 1> (S1) regarde <Subject 2> et dit <d>[French] Oui.</d>" in invite
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert plan["resume_public"]["voie"] == "image"
@@ -1113,7 +1128,8 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
                              "<Subject 1>. retention_analysis: <Subject 1> (appears in [Shot 1]): "
                              "fully_preserved - the face, hair and clothing "
                              "of the person in <Picture 1>, <Picture 2> are retained, as one single person. "
-                             "detailed_description: [Shot 1] The camera holds a static shot throughout. Elle sourit")
+                             "detailed_description: [Shot 1] Live-action, cinematic. The camera holds a static shot "
+                             "throughout. Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
     assert "manteau rouge" not in invite and "Léa" not in invite
@@ -2303,9 +2319,11 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
         "person in <Picture 3> are retained, as one single person. "
         # Chaque personnage n'est placé qu'une fois, par la description elle-même.
         # La caméra en tête quand aucune phrase n'est finie hors réplique (01/10).
-        "detailed_description: [Shot 1] The camera holds a static shot throughout. "
+        # Le style ouvre [Shot 1] (guide de MiniMax, base 4.1) ; le champ des sons reste, en une phrase (4.6).
+        "detailed_description: [Shot 1] Live-action, cinematic. The camera holds a static shot throughout. "
         "<Subject 2> (S2) demande <d>[English] Is this seat taken?</d> "
-        "<Subject 1> (S1) répond <d>[French] Oui.</d> " + v.SEULES_REPLIQUES + "\n\nnon_diegetic_music: N/A")
+        "<Subject 1> (S1) répond <d>[French] Oui.</d> " + v.SEULES_REPLIQUES
+        + "\n\noverall_soundscape: " + v.AMBIANCE_SEULE + "\n\nnon_diegetic_music: N/A")
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert [f["nom"] for f in plan["resume_public"]["fiches"]] == ["Léa", "James"]
     for mauvais, message in (({"langues": {lea: "Klingon"}}, "inconnue"), ({"fiches": [lea, lea]}, "illisible")):
@@ -3437,6 +3455,73 @@ def test_le_depliage_retouche_l_image_du_maitre_d_apres_les_fiches(h3, monkeypat
     assert r.status_code == 200 and "retouches" not in r.json() and not demandes
 
 
+def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_de_son_essai(h3, monkeypatch,
+                                                                                            tmp_path):
+    """Audit du 04/10, « Le robot perdu » : chaque clip déplié partait en « Première image », l'image du
+    maître seule, jamais les photos des fiches ; et son rejeu repartait sans rien savoir des fautes que
+    le juge avait vues (plan 6 : la lampe allumée dès le départ, deux fois)."""
+    v = h3.video_h3
+    _autoriser(h3)
+    v.poids_noter(True)
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    leila = v.fiche_creer("Leila", "x")["id"]
+    pixel = v.fiche_creer("Pixel", "x")["id"]
+    for f in (leila, pixel):
+        v.fiche_poser_image(f, "face", PNG)
+    film = tmp_path / "maitre.mp4"
+    film.write_bytes(b"MAITRE")
+    plans = [{"image_paroles": "Leila switches on her flashlight.", "enchainement": "coupe",
+              "camera": v.lire_camera(None)},
+             {"image_paroles": "Pixel floats beside Leila.", "enchainement": "coupe", "camera": v.lire_camera(None)},
+             {"image_paroles": "A spaceship descends.", "enchainement": "coupe", "camera": v.lire_camera(None)}]
+    jid = "e" * 32
+    job = {"id": jid, "status": "succeeded", "jugement": {"verdict": "ok", "defauts": []},
+           "video": {"moteur": "MiniMax H3 (ComfyUI)", "maitre": {
+               "plans": plans, "debuts_s": [0.0, 1.7, 3.4], "longueur": 124,
+               "commun": {"fiches": [leila, pixel], "definition": "480p"}}}}
+    h3.write_job(jid, job)
+    monkeypatch.setattr(h3, "_video_h3_octets", lambda j: film if j == jid else None)
+    monkeypatch.setattr(h3.montage, "coupes_vues", lambda f, seuil=0.3: [1.68, 3.38])
+    monkeypatch.setattr(h3.montage, "image_numero", lambda f, n: base64.b64decode(PNG))
+    monkeypatch.setattr(h3.montage, "recadrer_image", lambda image, l, h: base64.b64decode(PNG))
+    tournes = []
+    monkeypatch.setattr(h3, "run_video_h3", lambda j, *a: tournes.append(h3.read_job(j)["video"]))
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+
+    async def juge(consigne, quoi="", images=None, modele=""):
+        if quoi == "l'étiquette d'un personnage":
+            return "the girl with dark brown hair"
+        return '{"ok": true, "fautes": []}'
+    monkeypatch.setattr(h3, "_chat_du_studio", juge)
+    c = client(h3)
+    r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"remarques": ["la lampe"]})
+    assert r.status_code == 400 and "Remarques illisibles" in r.json()["detail"]
+    r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={"definition": "768p"})
+    assert r.status_code == 200, r.text
+    for _ in range(50):
+        if len(tournes) == 3:
+            break
+        time.sleep(0.05)
+    # Un plan qui nomme un personnage part en Références : ses fiches, puis l'image de départ épinglée.
+    assert [t["mode"] for t in tournes] == ["references", "references", "premiere"]
+    assert [[f["nom"] for f in t["fiches"]] for t in tournes[:2]] == [["Leila"], ["Leila", "Pixel"]]
+    assert "The shot begins from <Picture 2>." in tournes[0]["invite"]
+    assert "The shot begins from <Picture 3>." in tournes[1]["invite"]
+    assert "Live-action, cinematic." in tournes[2]["invite"] and "<Subject" not in tournes[2]["invite"]
+    # Le rejeu d'un plan : les fautes de son essai vont à la retouche ; une parole entendue n'en est pas une.
+    r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={
+        "plans": [1], "retoucher": True,
+        "remarques": {"1": ["La lampe est allumée dès la première image",
+                            "Paroles non écrites : « hello » vers 3 s"]}})
+    assert r.status_code == 200, r.text
+    assert "La lampe est allumée" in demandes[0]["prompt"] and "hello" not in demandes[0]["prompt"]
+
+
 def test_la_retouche_redemande_un_refus_passager(h3, monkeypatch):
     """« Le robot perdu », 04/10 : deux plans ont gardé le Pixel cube du maître sur un 503 de Google."""
     v = h3.video_h3
@@ -3738,7 +3823,8 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     p0 = a_tourner[0]["payload"]
     assert p0["mode"] == "references" and p0["depart_reference"] == base64.b64encode(CADRE).decode()
     plan = v.preparer(dict(p0, depart_reference=PNG))
-    assert "detailed_description: [Shot 1] The shot begins from <Picture 4>. " in plan["resume_public"]["invite"]
+    assert ("detailed_description: [Shot 1] Live-action, cinematic. The shot begins from <Picture 4>. "
+            in plan["resume_public"]["invite"])
     assert list(plan["demande"]["images"]) == [f"ref_{i}.png" for i in range(4)]
     # 01/10 : l'image de départ est aussi ÉPINGLÉE à l'image 0 (deux Leila sinon).
     g = plan["demande"]["graphe"]
@@ -3757,7 +3843,7 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     invite = v.preparer(dict(p0, images=[PNG]))["resume_public"]["invite"]
     # Sans photos de fiche, les noms restent des noms ; James parle anglais.
     assert invite.startswith(v.CONSIGNE_I2VA + "\n\nintegrated_multimodal_description: [Shot 1] "
-                             "<Picture 1>: Un café bondé, une chaise vide. ")
+                             + v.STYLE_H3 + " " + v.ANCRE_PREMIERE + "Un café bondé, une chaise vide. ")
     assert "<Subject" not in invite and "James (S2)" in invite and "[English]" in invite
     assert "detailed_description" not in invite
     with pytest.raises(ValueError, match="Première image"):

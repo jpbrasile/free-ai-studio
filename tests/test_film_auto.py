@@ -340,6 +340,8 @@ def test_un_plan_refuse_par_le_juge_est_retourne_et_le_meilleur_garde(fa, tmp_pa
     assert etat["statut"] == "fini", etat["erreur"]
     depliers = [x for m, c, x in studio.appels if c.endswith("/deplier")]
     assert [x.get("plans") for x in depliers] == [None, [2]]
+    # Le rejeu sait ce que le juge a vu dans l'essai refusé (audit du 04/10).
+    assert depliers[1]["remarques"] == {"2": ["geste manquant"]} and "remarques" not in depliers[0]
     rejoue = next(j for j in etat["journal"] if j["etape"] == "clip_rejoue")
     assert etat["clips"][1]["job"] == rejoue["job"] and etat["clips"][1]["verdict"] == "ok"
     montage = next(x for m, c, x in studio.appels if c == "/video-h3/montage")

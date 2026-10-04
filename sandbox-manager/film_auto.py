@@ -482,11 +482,16 @@ class Film:
             c.update(self._juge(c["job"]), essais=1)
             self.noter("clip", plan=k + 1, job=c["job"], verdict=c["verdict"], defauts=c["defauts"])
             # Essai à blanc du 03/10 : les deux plans refusés (geste manquant) étaient gardés tels quels.
+            # Audit du 04/10 : le rejeu repartait sans rien savoir du refus ; les fautes vues dans les
+            # essais de ce plan vont à la retouche de son image de départ (`remarques`).
+            vues = list(c["defauts"] or [])
             while c["verdict"] != "ok" and c["essais"] < ESSAIS_PLAN:
                 r = self.route("POST", "/video-h3/maitre/%s/deplier" % m["job"],
                                {"definition": self.etat["reglages"]["definition"], "ou": "maison",
-                                "forcer": m["verdict"] != "ok", "plans": [k + 1], "retoucher": True})
+                                "forcer": m["verdict"] != "ok", "plans": [k + 1], "retoucher": True,
+                                "remarques": {str(k + 1): vues}})
                 autre = dict(self._juge(r["clips"][0]), job=r["clips"][0])
+                vues += [d for d in autre["defauts"] or [] if d not in vues]
                 c["essais"] += 1
                 self.noter("clip_rejoue", plan=k + 1, job=autre["job"], verdict=autre["verdict"],
                            defauts=autre["defauts"])

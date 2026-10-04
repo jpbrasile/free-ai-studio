@@ -759,11 +759,17 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
     voix = " / ".join(sons_de_voix(image_paroles, ambiance)) if muet else ""
     silence_image = SILENCE_SANS_MOTS_IMAGE % voix if voix else SILENCE_IMAGE
     silence_son = SILENCE_SANS_MOTS_SON % voix if voix else SILENCE_SON
+    # overall_soundscape (guide de MiniMax, base 4.6) : des sons seulement ; la parole n'y est pas
+    # redite. Le silence se dit dans la description (SILENCE_IMAGE), plus dans ce champ (audit du 04/10,
+    # « Le robot perdu » : « No dialogue… » dans les sons, et H3 a parlé quand même aux plans 3 et 5).
+    sons_seuls = son == CHAMP_SONS
     for k, (texte, prefixe) in enumerate(((image_paroles, champ), (ambiance, son), (musique, "non_diegetic_music: "))):
         t = " ".join(str(texte or "").split())
         if k == 0 and t:
             t = (t if t[-1] in ".!?\"»>" else t + ".") + " " + (silence_image if muet else SEULES_REPLIQUES)
-        if muet and k == 1:
+        if k == 1 and sons_seuls and not t and morceaux:
+            t = AMBIANCE_SEULE
+        if muet and k == 1 and not sons_seuls:
             t = (t if not t or t[-1] in ".!?\"»>" else t + ".") + (" " if t else "") + silence_son
         if t:
             if t[-1] not in ".!?\"»>":
@@ -782,6 +788,22 @@ def invite(image_paroles: str, ambiance: str = "", musique: str = "",
 # le texte nu et « Sound: » (film 5, « Le robot perdu », maître f970b321 et ses clips).
 CHAMP_DESCRIPTION = "integrated_multimodal_description: "
 CHAMP_SONS = "overall_soundscape: "
+# Plan sans ambiance écrite : le champ des sons reste, en une phrase de sons (base 4.6 : N/A seulement
+# pour un silence complet demandé).
+AMBIANCE_SEULE = "Only the quiet ambient sound of the place is heard."
+# Le style ouvre [Shot 1] (base 4.1, « [Shot 1] Live-action, cinematic, … ») ; le Studio fait des images
+# photo réalistes. Audit du 04/10 : aucune des 12 invites du film 5 ne le disait.
+STYLE_H3 = "Live-action, cinematic."
+
+
+def avec_style(texte: str) -> str:
+    """Le style dit juste après le premier [Shot 1], une fois."""
+    t = str(texte or "")
+    i = t.find("[Shot 1]")
+    if i < 0 or STYLE_H3 in t:
+        return t
+    j = i + len("[Shot 1]")
+    return t[:j] + " " + STYLE_H3 + " " + t[j:].lstrip()
 SEPARATEUR_CHAMPS = "\n\n"
 CONSIGNE_I2VA = "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced."
 CONSIGNE_FL2VA = ("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the "
@@ -809,6 +831,9 @@ def _description_pour_h3(texte) -> str:
     return t.strip()
 
 
+ANCRE_PREMIERE = "The shot begins from <Picture 1>, preserving its people, their appearance, the setting and the composition: "
+
+
 def description_aux_images(texte: str, premiere: str = "", derniere: str = "") -> str:
     """Le texte du plan commencé par [Shot 1] ; ce que montrent les images clefs y est dit en
     ancre (guide de MiniMax, 3.1 et 3.2) : la première au début de [Shot 1], la dernière à la fin."""
@@ -820,8 +845,10 @@ def description_aux_images(texte: str, premiere: str = "", derniere: str = "") -
     i = t.find("[Shot 1]")
     tete, t = (t[:i].strip(), t[i + len("[Shot 1]"):].strip()) if i >= 0 else (t, "")
     d = _description_pour_h3(premiere)
-    ancre = ("<Picture 1>: " + d + ("" if d[-1] in ".!?" else ".")) if d else ""
-    t = " ".join(x for x in ("[Shot 1]", ancre, tete, t) if x)
+    # Une phrase, pas une étiquette (base, cas 2 : « the young woman shown in <Picture 1> remains …,
+    # preserving her appearance… ») ; audit du 04/10 : « <Picture 1>: » suivi de fragments.
+    ancre = (ANCRE_PREMIERE + d + ("" if d[-1] in ".!?" else ".")) if d else ""
+    t = " ".join(x for x in ("[Shot 1]", STYLE_H3, ancre, tete, t) if x)
     d = _description_pour_h3(derniere)
     if d:
         t = ((t if t[-1] in ".!?\"»>" else t + ".") + " The shot ends on the composition established by "
@@ -852,7 +879,9 @@ COUPE_SEUIL_ATTENDUE = 0.2
 _MULTIPLAN = re.compile(r"\[Shot \d+\]")
 # Ni « the girl » ni autre nom pour une personne que celui du plan : le 03/10, « the same … girl
 # in every shot » en tête et « Mila » dans les plans, le dernier plan a montré deux fillettes.
-MAITRE_TETE = "The same place, the same light and the same people in every shot."
+# Sans « the same place » : audit du 04/10, « Le robot perdu » va du jardin à la colline, et les plans
+# 5, 7 et 8 du maître sont restés au jardin. Chaque plan dit son lieu.
+MAITRE_TETE = "The same people in every shot; each shot takes place where its own text says."
 _VERBES_DE_PAROLE = re.compile(
     r"(?:,\s*|\s+)(?:and\s+|et\s+)?(?:says|said|murmurs|whispers|asks|replies|answers|shouts|calls|exclaims|"
     r"sings|adds|dit|murmure|chuchote|demande|répond|crie|chante|ajoute|s'exclame)\b[^.!?;«»<¶]*?(?=\s*[.!?;¶]|\s*$)",
@@ -964,7 +993,9 @@ def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
         a = " ".join(str(p.get("ambiance") or "").split()).rstrip(".")
         if a and a not in ambiances:
             ambiances.append(a)
-    return {"texte": " ".join(morceaux), "ambiance": "; ".join(ambiances), "debuts_s": debuts,
+    # Des phrases, pas des fragments séparés de « ; » (base 4.6).
+    return {"texte": " ".join(morceaux), "ambiance": " ".join(a[0].upper() + a[1:] + "." for a in ambiances),
+            "debuts_s": debuts,
             "longueur": longueur}
 
 
@@ -4492,10 +4523,13 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                                    {k for k, f in enumerate(fiches) if f.get("vues")},
                                    legere=payload.get("invite_legere") is True, lieu=numero_lieu,
                                    nb_plans=len(_MULTIPLAN.findall(texte)) or 1)
-                 # Un texte en plans porte déjà ses [Shot N] : pas un second [Shot 1] devant.
-                 + (" detailed_description: " if _MULTIPLAN.search(texte) else " detailed_description: [Shot 1] ")
+                 # Un texte en plans porte déjà ses [Shot N] : pas un second [Shot 1] devant ; le style
+                 # (base 4.1) va juste après le [Shot 1] (avec_style).
+                 + (" detailed_description: " if _MULTIPLAN.search(texte)
+                    else " detailed_description: [Shot 1] " + STYLE_H3 + " ")
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
+        texte = avec_style(texte)
     try:
         longueur = int(payload.get("longueur") or LONGUEUR_PAR_DEFAUT)
     except (TypeError, ValueError) as exc:

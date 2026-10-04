@@ -7131,6 +7131,12 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     voulus = corps.get("plans") or list(range(1, len(plans) + 1))
     if not isinstance(voulus, list) or not all(isinstance(n, int) and 1 <= n <= len(plans) for n in voulus):
         raise HTTPException(400, "Numéros de plans illisibles.")
+    # `remarques` : {numéro du plan : [fautes vues par le juge dans un essai de ce plan]}.
+    remarques = corps.get("remarques") or {}
+    if not isinstance(remarques, dict) or not all(isinstance(v, list) for v in remarques.values()):
+        raise HTTPException(400, "Remarques illisibles : {plan : [fautes]}.")
+    remarques = {str(n): v for n, v in remarques.items()}
+    fiches_film = [f for f in (maitre["commun"].get("fiches") or [maitre["commun"].get("fiche")]) if f]
     try:
         coupes, faibles = await _coupes_du_maitre(film)
         continus = []
@@ -7148,9 +7154,14 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
             images = [montage.recadrer_image(await asyncio.to_thread(montage.image_numero, film, n),
                                              *video_h3.DEFINITIONS[definition]) for n in bornes]
             if corps.get("retoucher") is True:
+                # Les fautes que le juge a vues dans un essai de CE plan (rejeu) s'ajoutent à celles du
+                # maître : audit du 04/10, « Le robot perdu », plan 6, la lampe allumée dès le départ,
+                # vue par le juge au premier essai, et le second reparti de la même image.
                 images[0], retouches[k + 1] = await _retoucher_depart(
                     images[0], maitre["commun"], plans[k], definition,
-                    [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)], jid=jid)
+                    # Une parole entendue n'est pas une faute de l'image (PAROLES_EN_TROP).
+                    [str(r) for r in remarques.get(str(k + 1)) or [] if r and not video_h3.PAROLES_EN_TROP.match(str(r))]
+                    + [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)], jid=jid)
             images = [base64.b64encode(i).decode() for i in images]
             # L'image d'où part le clip, gardée dès le dépliage (propriétaire, 04/10 : « montre-moi les
             # images retouchées » ; un clip en file ne l'écrivait nulle part avant de démarrer).
@@ -7161,6 +7172,20 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
                            ambiance=plans[k].get("ambiance", ""),
                            camera=plans[k].get("camera"), definition=definition,
                            longueur=plans[k].get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT)
+            # Les photos des fiches avec l'image de départ, quand elles tiennent (comme un plan « coupe »
+            # parti de son image, _scenario_prepare). Audit du 04/10 : en « premiere », H3 ne recevait que
+            # l'image du maître, jamais les fiches (demandes du propriétaire du 29/09 et du 03/10). Le
+            # maître reste en « premiere » (payload_maitre : ses coupes fondaient en Références) ; un plan
+            # déplié n'a pas de coupe. Une fin imposée (suite après) garde « premiere_derniere ».
+            # Seulement les fiches que le plan nomme (comme la retouche) : un plan sans personne n'en reçoit
+            # aucune (« Le jardin de verre », 03/10 : une photo envoyée a fait traverser le champ à Mila).
+            texte_plan = str(plans[k].get("image_paroles") or "").casefold()
+            nommees = [f for f in fiches_film if video_h3.fiche_lire(f)["nom"].casefold() in texte_plan]
+            if not suite_apres and nommees:
+                nb_photos, visages_seuls = video_h3.photos_avec_depart(nommees)
+                if 0 < nb_photos < video_h3.MODES["references"]["images_max"]:
+                    payload.update(mode="references", images=[], depart_reference=images[0],
+                                   visages_seuls=visages_seuls, fiches=nommees, fiche=None)
             plan = video_h3.preparer(payload)
             plan["resume_public"].update(texte_client=plans[k]["image_paroles"],
                                          deplie_de={"maitre": jid, "plan": k + 1, "images": list(bornes),
