@@ -46,16 +46,20 @@ REGLAGES = {"plans_max": PLANS_MAX, "longueur_maitre": 362, "definition": DEFINI
 REGLAGES_ESSAI = {"plans_max": 2, "longueur_maitre": 124, "definition": "480p", "definition_maitre": "480p",
                   "essais_maitre": 1}
 # Le film en séquences (04/10, propriétaire : « un autre film de science-fiction avec Leila de 2 mn
-# (15 s par clip) »). L'histoire est coupée en séquences de 15 s ; chacune est un clip H3 en plans
-# (le maître, coupes franches en mode Première image), tourné en 768p, jugé et rejoué ; le film
-# monte ces clips tels quels, sans dépliage.
+# (15 s par clip) »). L'histoire est coupée en séquences de 15 s ; le maître joue les N séquences
+# en 15 s (un plan chacune, en 768p), puis chaque séquence est dépliée en un clip de 15 s
+# à vitesse normale, depuis sa première image dans le maître.
+# Propriétaire, 04/10 : « la bonne solution pour avoir un film consistant était d'en faire 1 où tout
+# le scénario se joue en 15 s ; on en extrait les images des 8 clips à vitesse normale ». Film 1 à 3
+# du « Robot perdu » tournaient chaque séquence seule, d'une image de départ à elle : rien ne tenait
+# le décor ni les personnages d'une séquence à l'autre.
 # Le clip ne reçoit que son image de départ : un personnage absent de cette image n'a que son nom.
 # « Le robot perdu », essai à blanc, 04/10 : Pixel, encore dans sa capsule au départ, est sorti en
 # « tête cubique jaune pixélisée » (son nom pris au mot). Chaque séquence montre donc ses personnages
 # dès sa première image ; une apparition se fait à la coupe entre deux séquences.
 SEQUENCE_S = 15
 SEQUENCES_MAX = 8
-DEFINITION_SEQUENCE = "768p"
+LONGUEUR_SEQUENCE = 362   # 15,1 s, le plus long clip de la grille H3
 
 CONSIGNE_PERSONNAGES = (
     "Here is a short film story. List its characters who appear on screen (people, animals, robots...), at most %d, "
@@ -250,12 +254,9 @@ class Film:
         elif len(plans) > PLANS_MAX:
             raise Arret("Le découpage a rendu %d plans : %d au plus tiennent dans un clip maître de 15 s."
                         % (len(plans), PLANS_MAX))
-        if r.get("sequences", 1) > 1:
-            # « Le robot perdu », 04/10, séquence 1 : « From 00:07.542, without a cut » trois fois → une
-            # coupe à 8,12 s, un plan tenu mais d'autres défauts, un fondu à 7,75 s qui dédouble Leila.
-            # Dans un clip en plans, H3 ne tient pas une suite ; il fait la coupe demandée (7 sur 7 en
-            # mode Première image). Le clip d'une séquence est le film : chaque plan y est une coupe.
-            plans = [dict(p, enchainement="coupe") for p in plans]
+        return self._avec_cameras(plans)
+
+    def _avec_cameras(self, plans: list) -> list:
         from video_h3 import CAMERA_MOUVEMENTS
         permis = ", ".join('"%s"' % m for m in CAMERA_MOUVEMENTS if m not in ("auto", "tremble"))
         liste = "\n".join("%d. %s" % (k + 1, p.get("image_paroles") or "") for k, p in enumerate(plans))
@@ -263,8 +264,27 @@ class Film:
         return [dict(p, camera=c) for p, c in zip(plans, cameras)]
 
     def decoupage(self):
-        self.etat["plans"] = self._decouper(self.etat["histoire"], self.etat["fiches"])
+        if self.etat["reglages"].get("sequences", 1) > 1:
+            self.etat["plans"] = self._avec_cameras([self._plan_de_sequence(k, s)
+                                                     for k, s in enumerate(self.etat["sequences"])])
+        else:
+            self.etat["plans"] = self._decouper(self.etat["histoire"], self.etat["fiches"])
         self.noter("decoupage", plans=len(self.etat["plans"]))
+
+    def _plan_de_sequence(self, k: int, s: dict) -> dict:
+        """Une séquence = un plan du maître, déplié en un clip de 15 s. Le découpage du Studio la
+        traduit et en retire la tenue ; ses plans sont joints en un seul texte, que le clip déplié
+        joue à vitesse normale. Entre deux séquences, une coupe (« Le robot perdu », film 2 : une
+        suite demandée, H3 coupe ou fond quand même, et le fondu dédouble Leila)."""
+        texte = s["texte"]
+        d = self.route("POST", "/video-h3/scenario/decouper",
+                       {"scenario": texte, "fiches": [f["id"] for f in self._fiches_de(texte)]})
+        plans = d.get("plans") or []
+        if not plans:
+            raise Arret("Le découpage de la séquence %d n'a rendu aucun plan." % (k + 1))
+        joint = " ".join(" ".join(str(p.get("image_paroles") or "").split()) for p in plans).strip()
+        return dict(plans[0], image_paroles=joint, enchainement="coupe",
+                    longueur=self.etat["reglages"]["longueur_plan"])
 
     def musique_lancee(self):
         style = lire_style(self.chat(CONSIGNE_MUSIQUE % self.etat["histoire"]))
@@ -332,22 +352,6 @@ class Film:
             raise Arret(erreur)
         self.etat["sequences"] = [{"texte": t} for t in textes]
         self.noter("sequences", nombre=n)
-
-    def tourner(self):
-        """Chaque séquence : son découpage, puis son clip en plans jugé et rejoué ; le moins fautif est
-        gardé. Une reprise saute les séquences déjà tournées."""
-        for i, s in enumerate(self.etat["sequences"]):
-            if s.get("clip"):
-                continue
-            fiches = self._fiches_de(s["texte"])
-            s["plans"] = self._decouper(s["texte"], fiches)
-            s["maitres"] = self._tourner_maitre(s["plans"], fiches, sequence=i + 1)
-            meilleur = min(s["maitres"], key=lambda e: (e["verdict"] != "ok", len(e["defauts"])))
-            s.update(clip=meilleur["job"], verdict=meilleur["verdict"], defauts=meilleur["defauts"])
-            self.noter("sequence", sequence=i + 1, plans=len(s["plans"]), job=meilleur["job"],
-                       verdict=meilleur["verdict"], defauts=[d.get("quoi") for d in meilleur["defauts"]])
-        self.etat["clips"] = [{"job": s["clip"], "verdict": s["verdict"]} for s in self.etat["sequences"]]
-        self.ecrire()
 
     def deplier(self):
         # Film « Le phare », 03/10 : le maître le moins fautif n'avait pas fait deux coupes, et le
@@ -421,7 +425,8 @@ class Film:
         self.noter("musique", job=film["id"])
 
     ETAPES = ("personnages", "decoupage", "musique_lancee", "maitre", "deplier", "montage", "agrandir", "musique")
-    ETAPES_SEQUENCES = ("personnages", "sequences", "musique_lancee", "tourner", "montage", "agrandir", "musique")
+    ETAPES_SEQUENCES = ("personnages", "sequences", "decoupage", "musique_lancee", "maitre", "deplier", "montage",
+                        "agrandir", "musique")
 
     def etapes(self) -> tuple:
         return self.ETAPES_SEQUENCES if self.etat["reglages"].get("sequences", 1) > 1 else self.ETAPES
@@ -463,8 +468,13 @@ def nouvel_etat(histoire: str, titre: str = "", essai: bool = False, duree_s=0) 
     sequences = -(-int(duree_s) // SEQUENCE_S) if duree_s > SEQUENCE_S else 1
     if sequences > 1:
         reglages["sequences"] = min(sequences, 2) if essai else sequences
+        # Chaque séquence déplie en 15 s ; à l'essai à blanc, le clip court de la grille.
+        reglages["longueur_plan"] = REGLAGES_ESSAI["longueur_maitre"] if essai else LONGUEUR_SEQUENCE
         if not essai:
-            reglages["definition_maitre"] = DEFINITION_SEQUENCE   # le clip est le film, pas un story-board
+            # Propriétaire, 04/10 : « on fait le maître à la définition maximale pour avoir des images
+            # de qualité » — chaque clip part d'une image du maître. Les coupes y tiennent : « Le robot
+            # perdu », films 1 et 2, maîtres 768p en mode Première image, 7 coupes franches sur 7.
+            reglages["definition_maitre"] = DEFINITION
     return {"id": uuid.uuid4().hex, "cree_le": round(time.time()), "histoire": histoire, "titre": titre,
             "statut": "en cours", "etape": "", "faites": [], "journal": [], "erreur": "",
             "essai": bool(essai), "reglages": reglages}

@@ -53,7 +53,8 @@ class FauxStudio:
                 return 409, {"detail": "Le clip maître n'a pas fait la coupe du plan 2 : rejouez-le avant de le déplier."}
             if corps.get("plans"):
                 return 200, {"clips": [self.job()["id"]], "cles": [[62, 123]], "plans": corps["plans"]}
-            return 200, {"clips": [self.job()["id"], self.job()["id"]], "cles": [[0, 60], [62, 123]]}
+            n = max(2, len(next(x for _m, c, x in reversed(self.appels) if c == "/video-h3/maitre")["plans"]))
+            return 200, {"clips": [self.job()["id"] for _k in range(n)], "cles": [[0, 60], [62, 123]]}
         if chemin == "/video-h3/finaliser":
             # Comme le Studio : le film 4K est un autre travail, nommé par la finalisation.
             film, fin = self.job()["id"], self.job()
@@ -81,9 +82,11 @@ def chat_sf(consigne):
     return "ambient synth score"
 
 
-def test_un_film_de_2_minutes_se_tourne_en_huit_sequences_de_15_s(fa, tmp_path):
-    """04/10, propriétaire : « un autre film de science fiction avec Leila de 2 mn (15 s par clip) »."""
-    studio = FauxStudio(verdicts_maitre=("ok",) * 8)
+def test_un_film_de_2_minutes_joue_ses_8_sequences_dans_un_maitre_puis_les_deplie_en_15_s(fa, tmp_path):
+    """04/10, propriétaire : « un autre film de science fiction avec Leila de 2 mn (15 s par clip) » ;
+    « la bonne solution pour avoir un film consistant était d'en faire 1 où tout le scénario se joue
+    en 15 s ; on en extrait les images des 8 clips à vitesse normale »."""
+    studio = FauxStudio()
     studio.fiches = [{"id": "c978c4e9daaa", "nom": "Leila", "angles": ["face", "trois_quarts", "pied", "profil"],
                       "cree_le": "2026-09-28 16:31:50", "description": "adolescente de 15 ans"},
                      {"id": "aaaaaaaaaaaa", "nom": "leila", "angles": ["face"], "cree_le": "2026-10-01 10:00:00"}]
@@ -96,40 +99,29 @@ def test_un_film_de_2_minutes_se_tourne_en_huit_sequences_de_15_s(fa, tmp_path):
     assert [c for m, c, _x in studio.appels if c == "/video-h3/fiches" and m == "POST"] == ["/video-h3/fiches"]
     # Le chat dit « animal » pour le robot ; le Studio n'a que des fiches « personne » pour un personnage.
     assert next(x for m, c, x in studio.appels if c == "/video-h3/fiches" and m == "POST")["genre"] == "personne"
+    # Chaque séquence découpée seule (la séquence 1 ne nomme que Leila : Pixel n'y est pas donné).
+    decoupes = [x for m, c, x in studio.appels if c == "/video-h3/scenario/decouper"]
+    assert len(decoupes) == 8 and decoupes[0]["fiches"] == ["c978c4e9daaa"] and len(decoupes[1]["fiches"]) == 2
+    # Un seul maître : les 8 séquences en 15 s, à la définition maximale (768p), un plan par séquence, coupe entre elles.
     maitres = [x for m, c, x in studio.appels if c == "/video-h3/maitre"]
-    assert len(maitres) == 8 and {x["definition"] for x in maitres} == {"768p"}
-    assert {x["longueur_maitre"] for x in maitres} == {362}
-    # La séquence 1 ne nomme que Leila : Pixel n'est pas donné au clip.
-    assert maitres[0].get("fiche") == "c978c4e9daaa" and len(maitres[1]["fiches"]) == 2
-    assert not any(c.endswith("/deplier") for _m, c, _x in studio.appels)
+    assert len(maitres) == 1 and maitres[0]["definition"] == "768p" and maitres[0]["longueur_maitre"] == 362
+    plans = maitres[0]["plans"]
+    assert len(plans) == 8 and {p["enchainement"] for p in plans} == {"coupe"}
+    assert {p["longueur"] for p in plans} == {362}
+    assert plans[0]["image_paroles"] == "Plan 0. Plan 1. Plan 2. Plan 3."   # la séquence entière
+    # Puis chaque séquence dépliée à vitesse normale, en 768p ; le montage prend les 8 clips.
+    deplie = next(x for m, c, x in studio.appels if c.endswith("/deplier"))
+    assert deplie["definition"] == "768p"
     montage = next(x for m, c, x in studio.appels if c == "/video-h3/montage")
-    assert montage["clips"] == [s["clip"] for s in etat["sequences"]]
+    assert len(montage["clips"]) == 8 and montage["clips"] == [c["job"] for c in etat["clips"]]
     assert next(x for m, c, x in studio.appels if c == "/chanson/creer")["duree"] == "2"
-    # Une suite dans le clip d'une séquence : H3 coupe ou fond quand même ; chaque plan y est une coupe.
-    assert {p["enchainement"] for x in maitres for p in x["plans"]} == {"coupe"}
-
-
-def test_une_sequence_fautive_est_rejouee_et_la_reprise_saute_les_tournees(fa, tmp_path):
-    studio = FauxStudio(verdicts_maitre=("defaut", "ok", "ok"))
-    etat = fa.nouvel_etat("Leila trouve un robot.", duree_s=30)
-    film = fa.Film(etat, tmp_path, studio, chat_sf, dormir=lambda s: None)
-    film.derouler()
-    assert etat["statut"] == "fini", etat["erreur"]
-    assert [len(s["maitres"]) for s in etat["sequences"]] == [2, 1]
-    assert etat["sequences"][0]["clip"] == etat["sequences"][0]["maitres"][1]["job"]
-    # Reprise d'un tournage interrompu après la séquence 1 : elle n'est pas retournée.
-    etat["faites"] = etat["faites"][:3]
-    del etat["sequences"][1]["clip"]
-    avant = len(studio.appels)
-    studio.verdicts_maitre = ["ok"]
-    fa.Film(etat, tmp_path, studio, chat_sf, dormir=lambda s: None).derouler()
-    assert len([1 for _m, c, _x in studio.appels[avant:] if c == "/video-h3/maitre"]) == 1
 
 
 def test_la_duree_du_film_est_bornee_et_l_essai_a_deux_sequences(fa):
     assert "sequences" not in fa.nouvel_etat("Oscar allume le phare.", duree_s=15)["reglages"]
     essai = fa.nouvel_etat("Oscar allume le phare.", essai=True, duree_s=120)["reglages"]
-    assert essai["sequences"] == 2 and essai["definition_maitre"] == "480p"
+    assert essai["sequences"] == 2 and essai["definition_maitre"] == "480p" and essai["longueur_plan"] == 124
+    assert fa.nouvel_etat("Oscar allume le phare.", duree_s=120)["reglages"]["definition_maitre"] == "768p"
     with pytest.raises(ValueError):
         fa.nouvel_etat("Oscar allume le phare.", duree_s=121)
     with pytest.raises(ValueError):
