@@ -7098,7 +7098,8 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
             images = [base64.b64encode(i).decode() for i in images]
             payload = dict({x: y for x, y in maitre["commun"].items() if y},
                            mode="premiere_derniere" if suite_apres else "premiere", images=images,
-                           image_paroles=plans[k]["image_paroles"], ambiance=plans[k].get("ambiance", ""),
+                           image_paroles=plans[k]["image_paroles"].rstrip() + " " + video_h3.PERSONNE_D_AUTRE,
+                           ambiance=plans[k].get("ambiance", ""),
                            camera=plans[k].get("camera"), definition=definition,
                            longueur=plans[k].get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT)
             plan = video_h3.preparer(payload)

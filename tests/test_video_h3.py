@@ -3246,6 +3246,10 @@ def test_le_maitre_se_deplie_apres_le_juge_plan_par_plan(h3, monkeypatch, tmp_pa
     assert [t["mode"] for t in tournes] == ["premiere"] * 2
     # Le plan déplié garde sa réplique et sa caméra ; il sait d'où il vient.
     assert "Voilà." in tournes[1]["invite"] and "pushes in" in tournes[1]["invite"]
+    # Personne d'autre que les personnages nommés (« Le robot perdu », 04/10 : un homme inventé) ;
+    # le texte montré au client reste le sien.
+    assert all(v.PERSONNE_D_AUTRE in t["invite"] for t in tournes)
+    assert tournes[0]["texte_client"] == "Oscar climbs the stairs."
     assert tournes[1]["deplie_de"] == {"maitre": jid, "plan": 2, "images": [61]}
     assert h3.read_job(jid)["deplie"] == r.json()["clips"]
     # Une suite : le plan d'avant finit sur l'image dont elle repart (première et dernière).

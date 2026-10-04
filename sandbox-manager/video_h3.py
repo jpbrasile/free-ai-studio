@@ -701,6 +701,9 @@ def avec_camera(texte: str, phrase: str) -> str:
     return (phrase + (" " if t else "") + t).strip()
 
 
+# 04/10, « Le robot perdu », clip déplié 1 : un homme que le texte ne nomme pas ramasse la capsule. Un clip
+# déplié ne voit que son plan ; on y dit qu'il n'y a personne d'autre (pas au maître, proche des 4 000 signes).
+PERSONNE_D_AUTRE = "Nobody else appears: only the characters named here are on screen."
 SILENCE_IMAGE = "Nobody speaks: every person keeps their lips closed."
 SILENCE_SON = "No dialogue, no voiceover, no singing, no individual voices."
 # 03/10, « Le jardin de verre », clip 4 : « she laughs » et « gentle laughter » avec « lips closed » et
