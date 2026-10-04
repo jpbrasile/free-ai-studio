@@ -86,6 +86,12 @@ CONSIGNE_SEQUENCES = (
 # texte de séquence tient donc dans sa part de TEXTES_MAITRE_MAX, condensé par le chat sans perdre
 # d'action (le clip déplié joue ce même texte pendant 15 s).
 TEXTES_MAITRE_MAX = 2200
+# Film 5 relancé, 04/10 : la syntaxe H3 (champs, étiquettes à la place des noms) a porté l'invite du
+# maître à 4 102 caractères. Ce que le Studio ajoute dépend des étiquettes : au refus, le film condense
+# ses plans d'autant que l'invite dépasse, et redemande.
+INVITE_MAX = 4000
+INVITE_MARGE = 150
+_TROP_LONGUE = re.compile(r"Invite trop longue : (\d+) caract")
 CONSIGNE_CONDENSER = (
     "Shorten this film shot description to at most %d characters. Keep the shot size, the light, every "
     "character with where they stand and face, and every action in order; drop repetitions and adjectives "
@@ -364,13 +370,14 @@ class Film:
             corps = dict(self._commun(fiches), plans=plans, ou="maison",
                          definition=r.get("definition_maitre") or r["definition"],
                          longueur_maitre=r["longueur_maitre"], forcer=forcer)
-            code, rendu = self.appel("POST", "/video-h3/maitre", corps)
+            code, rendu = self._poster_maitre(corps)
+            plans = corps["plans"]
             if code == 409 and not forcer:
                 # Une règle d'avant tournage refusée : notée, puis « tourner quand même », comme la page
                 # le propose ; la règle de la voix n'a jamais de passe-droit (le Studio refuse encore).
                 self.noter("maitre_regles", refus=str((rendu or {}).get("detail"))[:1500], **marque)
                 forcer = True
-                code, rendu = self.appel("POST", "/video-h3/maitre", dict(corps, forcer=True))
+                code, rendu = self._poster_maitre(dict(corps, forcer=True))
             if code != 200:
                 raise Arret("POST /video-h3/maitre : %s %s" % (code, str((rendu or {}).get("detail"))[:600]))
             self.reussi(rendu["id"], "Le clip maître")
@@ -382,6 +389,35 @@ class Film:
             if verdict.get("verdict") == "ok":
                 break
         return essais
+
+    def _poster_maitre(self, corps: dict) -> tuple:
+        """POST /video-h3/maitre ; une invite trop longue pour H3 fait condenser les plans (_raccourcir),
+        deux fois au plus. `corps["plans"]` reçoit les plans condensés."""
+        code, rendu = self.appel("POST", "/video-h3/maitre", corps)
+        for _ in range(2):
+            trop = _TROP_LONGUE.search(str((rendu or {}).get("detail"))) if code == 400 else None
+            if not trop:
+                break
+            corps["plans"] = self._raccourcir(corps["plans"], int(trop.group(1)))
+            code, rendu = self.appel("POST", "/video-h3/maitre", corps)
+        return code, rendu
+
+    def _raccourcir(self, plans: list, longueur: int) -> list:
+        """Les textes des plans condensés d'autant que l'invite du maître dépasse INVITE_MAX, chacun à
+        proportion de sa longueur ; gardés dans l'état (les clips dépliés jouent ces mêmes textes)."""
+        exces = longueur - INVITE_MAX + INVITE_MARGE
+        total = sum(len(p.get("image_paroles") or "") for p in plans) or 1
+        nouveaux = []
+        for p in plans:
+            texte = str(p.get("image_paroles") or "")
+            cible = max(len(texte) // 2, len(texte) - -(-exces * len(texte) // total))   # la moitié au plus par tour
+            court = " ".join(str(self.chat(CONSIGNE_CONDENSER % (cible, texte)) or "").split()).strip('"')
+            nouveaux.append(dict(p, image_paroles=court if court and len(court) < len(texte) else texte))
+        if self.etat.get("plans") == plans:
+            self.etat["plans"] = nouveaux
+        self.noter("maitre_raccourci", invite=longueur,
+                   caracteres=sum(len(p["image_paroles"]) for p in nouveaux))
+        return nouveaux
 
     def sequences(self):
         n = self.etat["reglages"]["sequences"]
