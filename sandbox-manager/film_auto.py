@@ -250,6 +250,12 @@ class Film:
         elif len(plans) > PLANS_MAX:
             raise Arret("Le découpage a rendu %d plans : %d au plus tiennent dans un clip maître de 15 s."
                         % (len(plans), PLANS_MAX))
+        if r.get("sequences", 1) > 1:
+            # « Le robot perdu », 04/10, séquence 1 : « From 00:07.542, without a cut » trois fois → une
+            # coupe à 8,12 s, un plan tenu mais d'autres défauts, un fondu à 7,75 s qui dédouble Leila.
+            # Dans un clip en plans, H3 ne tient pas une suite ; il fait la coupe demandée (7 sur 7 en
+            # mode Première image). Le clip d'une séquence est le film : chaque plan y est une coupe.
+            plans = [dict(p, enchainement="coupe") for p in plans]
         from video_h3 import CAMERA_MOUVEMENTS
         permis = ", ".join('"%s"' % m for m in CAMERA_MOUVEMENTS if m not in ("auto", "tremble"))
         liste = "\n".join("%d. %s" % (k + 1, p.get("image_paroles") or "") for k, p in enumerate(plans))

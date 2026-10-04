@@ -37,7 +37,7 @@ class FauxStudio:
         if chemin.startswith("/video-h3/fiches/"):
             return 200, {}
         if chemin == "/video-h3/scenario/decouper":
-            return 200, {"plans": [{"image_paroles": "Plan %d." % k, "enchainement": "coupe"} for k in range(4)]}
+            return 200, {"plans": [{"image_paroles": "Plan %d." % k, "enchainement": "suite" if k else "coupe"} for k in range(4)]}
         if chemin == "/video-h3/maitre":
             if self.refus_regles and not corps.get("forcer"):
                 return 409, {"detail": "Règle 2 : la lumière change."}
@@ -105,6 +105,8 @@ def test_un_film_de_2_minutes_se_tourne_en_huit_sequences_de_15_s(fa, tmp_path):
     montage = next(x for m, c, x in studio.appels if c == "/video-h3/montage")
     assert montage["clips"] == [s["clip"] for s in etat["sequences"]]
     assert next(x for m, c, x in studio.appels if c == "/chanson/creer")["duree"] == "2"
+    # Une suite dans le clip d'une séquence : H3 coupe ou fond quand même ; chaque plan y est une coupe.
+    assert {p["enchainement"] for x in maitres for p in x["plans"]} == {"coupe"}
 
 
 def test_une_sequence_fautive_est_rejouee_et_la_reprise_saute_les_tournees(fa, tmp_path):
