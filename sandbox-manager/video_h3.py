@@ -710,8 +710,12 @@ SILENCE_SON = "No dialogue, no voiceover, no singing, no individual voices."
 # « no individual voices » ; la consigne se contredisait, et H3 a fait dire « I'll be done! » (Whisper).
 # Un son de voix sans paroles demandé (rire, soupir…) reste permis ; seuls les mots sont interdits.
 # « hum » n'en est pas : un frigo, la ville, un néon bourdonnent aussi (« humming fridge »).
-_SONS_DE_VOIX = re.compile(r"\b(laugh\w*|giggl\w*|chuckl\w*|sigh\w*|gasp\w*|scream\w*|sob\w*|"
-                           r"cr(y|ies|ying)|yawn\w*|whimper\w*|squeal\w*|shriek\w*)\b", re.I)
+# Les formes du verbe seulement : essai I du 05/10, plan 3, « the sight of it » a été lu « sigh » et l'invite
+# a dit « the only voice sound is the wordless sight described » (« sob\w* » prenait aussi « sober »).
+_SONS_DE_VOIX = re.compile(r"\b(laugh(?:s|ed|ing|ter)?|giggl(?:e|es|ed|ing)|chuckl(?:e|es|ed|ing)|"
+                           r"sigh(?:s|ed|ing)?|gasp(?:s|ed|ing)?|scream(?:s|ed|ing)?|sob(?:s|bed|bing)?|"
+                           r"cr(?:y|ies|ied|ying)|yawn(?:s|ed|ing)?|whimper(?:s|ed|ing)?|squeal(?:s|ed|ing)?|"
+                           r"shriek(?:s|ed|ing)?)\b", re.I)
 SILENCE_SANS_MOTS_IMAGE = ("Nobody says a single word: the only voice sound is the wordless %s described; "
                            "no speech before or after it.")
 SILENCE_SANS_MOTS_SON = "No dialogue, no words, no voiceover, no singing; only the wordless %s described."

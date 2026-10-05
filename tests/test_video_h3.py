@@ -260,6 +260,9 @@ def test_sans_replique_un_rire_demande_reste_permis_sans_mots(h3):
     assert v.sons_de_voix("Mila touches a leaf and she laughs.", "shimmer, gentle laughter, a sigh") == [
         "laughs", "laughter", "sigh"]
     assert v.sons_de_voix("A humming fridge? no: a hummingbird.", "") == []   # pas un mot dans un autre
+    # Essai I, 05/10 : « the sight of it » lu « sigh » ; « sober » n'est pas « sob ».
+    assert v.sons_de_voix("She smiles at the sight of it, sober and calm; nobody is sighted.", "") == []
+    assert v.sons_de_voix("She sighed, then sobbing, cried.", "") == ["sighed", "sobbing", "cried"]
     i = v.invite("Mila touches a crystal leaf, and she laughs.", "soft shimmer, gentle laughter", "")
     assert v.SILENCE_IMAGE not in i and "lips closed" not in i and "no individual voices" not in i
     assert v.SILENCE_SANS_MOTS_IMAGE % "laughs / laughter" in i
