@@ -916,6 +916,22 @@ def test_un_clip_qui_s_eclaircit_en_halo_est_refuse_par_le_juge(h3):
     assert v.defaut_de_lumiere([]) is None and v.defaut_de_lumiere([50.0]) is None
 
 
+def test_les_coupes_demandees_ne_sont_pas_un_halo(h3):
+    """Jalon 0 bis, essai A, 05/10 : trois plans demandés dans un clip (plan moyen, gros plan devant les
+    fenêtres, ciel) ; 47 puis 72 puis 32 aux coupes. Chaque plan se juge contre son propre début."""
+    v = h3.video_h3
+    texte = ("[Shot 1] A medium close-up. [Shot 2] At 00:03.000, the camera cuts to a close-up. "
+             "[Shot 3] At 00:06.000, the camera cuts to the sky.")
+    a = [47.2, 47.3, 47.4, 47.4, 47.4, 47.4, 47.4, 47.4, 47.5, 47.6, 47.7, 47.7, 72.0, 71.3, 70.9, 70.2, 70.7,
+         71.4, 71.7, 72.2, 72.3, 72.4, 71.8, 70.9, 32.0, 32.2, 32.8, 33.1, 33.3, 33.4, 33.4]
+    assert v.defaut_de_lumiere(a, texte) is None
+    # Sans les dates, la même courbe est un défaut ; un halo DANS un plan reste vu.
+    assert v.defaut_de_lumiere(a, "[Shot 1] A medium close-up.")
+    halo = a[:16] + [80.0, 85.0, 90.0, 92.0, 95.0, 96.0, 97.0, 98.0] + a[24:]
+    d = v.defaut_de_lumiere(halo, texte, 10.0)
+    assert d and "s'éclaircit" in d["quoi"] and 13.0 < d["t_s"] < 16.0
+
+
 def test_la_luminosite_d_un_clip_se_mesure(h3, tmp_path):
     m = h3.montage
 

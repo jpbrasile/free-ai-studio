@@ -3701,15 +3701,41 @@ _LUMIERE_DEMANDEE = re.compile(r"\b(?:allum|éteint|eteint|aube|lever du soleil|
 DERIVE_DE_LUMIERE = re.compile(r"^L'image s'(?:éclaircit|assombrit) de ")
 
 
+# Les dates des coupes qu'un texte multiplan demande (« [Shot 2] At 00:03.000, … »).
+_DATE_DE_COUPE = re.compile(r"\[Shot \d+\]\s*At (\d+):(\d+(?:\.\d+)?)")
+
+
+def _plans_de_la_courbe(n: int, texte: str) -> list:
+    """Les tranches [début, fin) de la courbe, une par plan demandé ; MAITRE_ECART_COUPE_S autour de
+    chaque coupe n'appartient à aucun plan (la coupe peut tomber un peu à côté de sa date)."""
+    coupes = sorted(int(m) * 60 + float(s) for m, s in _DATE_DE_COUPE.findall(texte or ""))
+    bornes, debut = [], 0.0
+    for c in coupes + [None]:
+        fin = n / LUMIERE_PAR_SECONDE if c is None else c - MAITRE_ECART_COUPE_S
+        i, j = int(round(debut * LUMIERE_PAR_SECONDE)), min(n, int(round(fin * LUMIERE_PAR_SECONDE)))
+        if j - i >= 2:
+            bornes.append((i, j))
+        if c is not None:
+            debut = c + MAITRE_ECART_COUPE_S
+    return bornes
+
+
 def defaut_de_lumiere(courbe: list, texte: str = "", t_s: float = 0.0):
     """Un défaut du jugement quand la luminosité moyenne du clip (`courbe`, LUMIERE_PAR_SECONDE mesures
-    par seconde) s'écarte de plus de DERIVE_LUMIERE_MAX de sa première image ; None sinon."""
-    if len(courbe or []) < 2 or courbe[0] <= 0 or _LUMIERE_DEMANDEE.search(texte or ""):
+    par seconde) s'écarte de plus de DERIVE_LUMIERE_MAX de la première image de son plan ; None sinon.
+    Jalon 0 bis, essai A (05/10) : trois plans demandés dans un clip, 47 puis 71 puis 33 aux coupes ;
+    chaque plan se compare à son propre début, jamais par-dessus une coupe demandée."""
+    if len(courbe or []) < 2 or _LUMIERE_DEMANDEE.search(texte or ""):
         return None
-    debut = courbe[0]
-    pire = max(range(len(courbe)), key=lambda i: abs(courbe[i] - debut))
-    ecart = (courbe[pire] - debut) / debut
-    if abs(ecart) <= DERIVE_LUMIERE_MAX:
+    pire, debut, ecart = None, 0.0, 0.0
+    for i, j in _plans_de_la_courbe(len(courbe), texte):
+        if courbe[i] <= 0:
+            continue
+        k = max(range(i, j), key=lambda x: abs(courbe[x] - courbe[i]))
+        e = (courbe[k] - courbe[i]) / courbe[i]
+        if abs(e) > abs(ecart):
+            pire, debut, ecart = k, courbe[i], e
+    if pire is None or abs(ecart) <= DERIVE_LUMIERE_MAX:
         return None
     return {"t_s": round(t_s + pire / LUMIERE_PAR_SECONDE, 1), "cause": "video",
             "quoi": "L'image %s de %d %% en cours de plan (de %.0f à %.0f) : halo ou lumière qui bave, "
