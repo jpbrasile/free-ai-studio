@@ -927,6 +927,34 @@ def valeur_de_plan(texte: str):
     return m.group(1).lower() if m else None
 
 
+def phrase_de_coupe(texte: str) -> str:
+    """« the shot cuts to a close-up of Leila… » : la forme du guide de MiniMax (ref-en.md, 7). Un plan qui
+    ouvre sur sa valeur (« Close-up of Leila… ») la prend dans la phrase de coupe ; sinon la valeur de sa
+    première phrase est nommée devant (« the shot cuts to a wide shot. Leila… ») ; sans valeur, le plan
+    est refusé dès le découpage (exiger_cadrages)."""
+    t = str(texte or "").strip()
+    valeur = valeur_de_plan(t)
+    if not valeur:
+        return "the shot cuts to a new shot. " + t
+    article = "an" if valeur[0] in "aeiou" else "a"
+    m = re.match(r"(?:an?\s+|the\s+)?" + re.escape(valeur) + r"\b", t, re.IGNORECASE)
+    if m:
+        return "the shot cuts to %s %s%s" % (article, valeur, t[m.end():])
+    return "the shot cuts to %s %s. %s" % (article, valeur, t)
+
+
+def exiger_cadrages(plans: list) -> list:
+    """Chaque plan qui ouvre sur une coupe dit sa valeur de plan dans sa première phrase (consigne du
+    découpage ; guide de MiniMax, 5.1 : « clearly establish the current composition »). Jalon 0 bis,
+    clip 10 (05/10) : « The camera holds a static shot from the lawn », sans valeur ni orientation ;
+    H3 a ouvert sur le gros plan de face de la photo, puis coupé. ValueError (« réessayez ») sinon."""
+    for i, p in enumerate(plans):
+        if (i == 0 or p.get("enchainement", "coupe") == "coupe") and not valeur_de_plan(p.get("image_paroles")):
+            raise ValueError("Le plan %d ne dit pas sa valeur de plan dans sa première phrase (close-up, "
+                             "medium shot, wide shot…) : réessayez." % (i + 1))
+    return plans
+
+
 _CADRAGE_ET_LIAISON = re.compile(_VALEUR_DE_PLAN.pattern + r"(?:\s+(?:of|on)\b)?\s*[,:.]?\s*", re.IGNORECASE)
 
 
@@ -997,11 +1025,12 @@ def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
             morceaux.append("[Shot 1] " + t)
         elif p.get("enchainement", "coupe") == "coupe":
             n += 1
-            # Une coupe franche, nommée (05/10, propriétaire : « la prochaine coupe franche (web search) ») :
-            # jalon 0 bis, clip 9, H3 a fondu un plan dans l'autre. Exemple du guide de MiniMax : « [Shot 2]
-            # At 00:01.300, hard cut to an extreme close-up… » ; un « cuts to » vague donne souvent un fondu
-            # (prompt-architects.com, transitions).
-            morceaux.append("[Shot %d] At %s, hard cut to a new shot. %s" % (n, _horodatage(debut), t))
+            # Une coupe nommée avec sa valeur de plan (05/10, propriétaire : « la prochaine coupe franche
+            # (web search) », puis « hard code studio pour éviter ces bugs ») : jalon 0 bis, clip 9, H3 a fondu
+            # un plan dans l'autre. Guide de MiniMax (VIDEO_PROMPT_WRITING_GUIDE_ref_en.md, 5.2 et 7) :
+            # « [Shot 2] At 00:03.000, the shot cuts to a close-up of <Subject 4>… » ; « hard cut to a new
+            # shot », écrit d'abord, n'est pas dans le guide et ne disait pas vers quoi.
+            morceaux.append("[Shot %d] At %s, %s" % (n, _horodatage(debut), phrase_de_coupe(t)))
         else:
             morceaux.append("From %s, without a cut: %s" % (_horodatage(debut), t))
     ambiances = []
@@ -4183,6 +4212,8 @@ def lire_correction(reponse: str, plans: list) -> list:
     for i, (n, p) in enumerate(zip(nouveaux, plans)):
         if repliques(n["image_paroles"] + " " + n["ambiance"]) != repliques(p["image_paroles"] + " " + p["ambiance"]):
             raise ValueError(f"La correction a déplacé ou retiré une réplique (plan {i + 1}) : réessayez.")
+        if valeur_de_plan(p["image_paroles"]) and not valeur_de_plan(n["image_paroles"]):
+            raise ValueError(f"La correction a retiré la valeur de plan (plan {i + 1}) : réessayez.")
     # La caméra et la durée sont des choix du propriétaire (menus) : la correction n'y touche pas.
     return [dict(n, enchainement=p["enchainement"], camera=lire_camera(p.get("camera")),
                  **{k: p[k] for k in ("image_depart", "description_depart", "longueur") if k in p})

@@ -5925,7 +5925,7 @@ async def video_h3_scenario_decouper(request: Request, authorization: Optional[s
     scenario = await _histoire_en_anglais(scenario)
     reponse = await _chat_du_studio(video_h3.consigne_decoupage(scenario, fiches), "le découpage en plans")
     try:
-        plans = video_h3.lire_decoupage(reponse, scenario)
+        plans = video_h3.exiger_cadrages(video_h3.lire_decoupage(reponse, scenario))
     except ValueError as exc:
         raise HTTPException(502, str(exc)) from exc
     continuite = await _continuite(plans, scenario)
@@ -7340,15 +7340,21 @@ async def _developper_plan(plan: dict, depart: bytes, fiches) -> tuple:
         if re.search(r"(?<!\w)" + re.escape(nom) + r"(?!\w)", original):
             noms.append(nom)
     duree = (plan.get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT) / video_h3.IMAGES_PAR_SECONDE
-    try:
-        texte = video_h3.lire_developpe(await _chat_du_studio(
-            video_h3.consigne_developpe(plan, noms, duree), "le développement du texte d'un plan",
-            images=[_data_url(depart)], modele=video_h3.MODELE_JUGE), original, noms)
-    except (HTTPException, ValueError) as exc:
-        pourquoi = str(getattr(exc, "detail", exc))[:200]
-        log.warning("texte du plan non développé (%s), il part tel quel", pourquoi)
-        return original, "texte d'origine : " + pourquoi
-    return texte, "%d mots" % len(texte.split())
+    # Deux demandes (05/10, propriétaire : « hard code studio pour éviter ces bugs ») : un texte de
+    # ~100 mots parti tel quel laisse H3 inventer le cadrage (jalon 0 bis, clip 10) ; la seconde
+    # demande dit pourquoi la première n'a pas tenu.
+    consigne, pourquoi = video_h3.consigne_developpe(plan, noms, duree), ""
+    for _ in range(2):
+        try:
+            texte = video_h3.lire_developpe(await _chat_du_studio(
+                consigne + (("\n\nYour previous answer was refused: " + pourquoi) if pourquoi else ""),
+                "le développement du texte d'un plan", images=[_data_url(depart)], modele=video_h3.MODELE_JUGE),
+                original, noms)
+            return texte, "%d mots" % len(texte.split())
+        except (HTTPException, ValueError) as exc:
+            pourquoi = str(getattr(exc, "detail", exc))[:200]
+    log.warning("texte du plan non développé (%s), il part tel quel", pourquoi)
+    return original, "texte d'origine : " + pourquoi
 
 
 async def _coupes_du_maitre(film: bytes) -> tuple:

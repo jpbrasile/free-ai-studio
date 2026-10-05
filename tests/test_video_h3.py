@@ -217,12 +217,17 @@ def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
     m = v.texte_maitre(plans)
     assert m["debuts_s"] == [0.0, 3.771, 7.542]
     assert m["texte"] == (v.MAITRE_TETE + " [Shot 1] Mila kneels by the pot. The camera pushes in with small "
-                          "amplitude at slow speed. [Shot 2] At 00:03.771, hard cut to a new shot. Close-up "
+                          "amplitude at slow speed. [Shot 2] At 00:03.771, the shot cuts to a close-up "
                           "of the pot: a shoot grows. The camera holds a static shot. From 00:07.542, without a "
                           "cut: The shoot becomes a shrub. The camera holds a static shot.")
     # Des phrases de sons (base 4.6), et aucun « same place » : chaque plan dit son lieu (audit du 04/10).
     assert m["ambiance"] == "Birds. Crystal chimes." and "girl" not in m["texte"]
     assert "same place" not in m["texte"]
+    # La coupe dit vers quel cadrage, comme le guide de MiniMax (« the shot cuts to a close-up of… »).
+    assert v.phrase_de_coupe("A wide shot of the garden.") == "the shot cuts to a wide shot of the garden."
+    assert v.phrase_de_coupe("Leila, in medium shot, waves.") == \
+        "the shot cuts to a medium shot. Leila, in medium shot, waves."
+    assert v.phrase_de_coupe("extreme close-up on her eyes.") == "the shot cuts to an extreme close-up on her eyes."
     # Le texte en plans part sans la caméra fixe par défaut, qui le contredisait.
     plan = v.preparer({"mode": "texte", "image_paroles": m["texte"], "longueur": v.LONGUEUR_MAITRE})
     assert "static shot throughout" not in plan["resume_public"]["invite"]
@@ -1615,13 +1620,13 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     scenario = "Léa est seule à une table. Tom arrive, pose un livre et dit « Tiens. »"
     decoupe = json.dumps([
-        {"image_paroles": "À gauche, Léa seule à une table ; le livre est sur la table.", "ambiance": "",
+        {"image_paroles": "Medium shot. À gauche, Léa seule à une table ; le livre est sur la table.", "ambiance": "",
          "enchainement": "coupe"},
         {"image_paroles": "À droite, Tom pose le livre et dit « Tiens. »", "ambiance": "", "enchainement": "suite"}],
         ensure_ascii=False)
     probleme = '{"etats": [], "problemes": [{"plan": 1, "quoi": "Le livre est là avant que Tom le pose."}]}'
     corrige = json.dumps([
-        {"image_paroles": "À gauche, Léa seule à une table vide.", "ambiance": "", "enchainement": "coupe"},
+        {"image_paroles": "Medium shot. À gauche, Léa seule à une table vide.", "ambiance": "", "enchainement": "coupe"},
         {"image_paroles": "À droite, Tom arrive, pose le livre et dit « Tiens. »", "ambiance": "",
          "enchainement": "suite"}], ensure_ascii=False)
     vus = []
@@ -1631,7 +1636,7 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
     r = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario})
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["plans"][0]["image_paroles"] == "À gauche, Léa seule à une table vide."
+    assert d["plans"][0]["image_paroles"] == "Medium shot. À gauche, Léa seule à une table vide."
     # 30/09 : la réplique reçoit sa marque de langue, posée par le Studio.
     assert d["plans"][1]["image_paroles"].endswith("« [French] Tiens. »")
     assert d["marques"] == {"demandees": 1, "sans_langue_ou_emotion": 1}
@@ -1652,14 +1657,14 @@ def test_le_relecteur_du_scenario_complet_corrige_avant_de_montrer_les_plans(h3,
 def test_le_relecteur_garde_le_texte_si_la_correction_ne_fait_pas_mieux(h3, monkeypatch, sans_traduction):
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     scenario = "Léa lance le ballon vers le panier."
-    decoupe = '[{"image_paroles": "Léa lance le ballon.", "ambiance": "", "enchainement": "coupe"}]'
+    decoupe = '[{"image_paroles": "Wide shot. Léa lance le ballon.", "ambiance": "", "enchainement": "coupe"}]'
     probleme = '{"etats": [], "problemes": [{"plan": 1, "quoi": "Le panier n\'est pas placé."}]}'
     pire = ('{"etats": [], "problemes": [{"plan": 1, "quoi": "Le panier n\'est pas placé."}, '
             '{"plan": 1, "quoi": "Le ballon n\'arrive nulle part."}]}')
-    corrige = '[{"image_paroles": "Léa lance le ballon en l\'air.", "ambiance": "", "enchainement": "coupe"}]'
+    corrige = '[{"image_paroles": "Wide shot. Léa lance le ballon en l\'air.", "ambiance": "", "enchainement": "coupe"}]'
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite([decoupe, probleme, corrige, pire], []))
     d = client(h3).post("/video-h3/scenario/decouper", headers=CLE, json={"scenario": scenario}).json()
-    assert d["plans"][0]["image_paroles"] == "Léa lance le ballon."
+    assert d["plans"][0]["image_paroles"] == "Wide shot. Léa lance le ballon."
     assert d["relecture"]["corrige"] is False and "texte d'origine est gardé" in d["relecture"]["erreur"]
     assert d["continuite"]["problemes"] == [{"plan": 1, "quoi": "Le panier n'est pas placé."}]
 
@@ -1668,9 +1673,9 @@ def test_la_correction_demande_le_modele_haut_de_gamme_gratuit(h3, monkeypatch, 
     """29/09 : free-ai-auto rendait 5 plans au lieu de 4 (4 corrections lues sur 15),
     free-ai-max 15 sur 15."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
-    decoupe = '[{"image_paroles": "Léa lance le ballon.", "ambiance": "", "enchainement": "coupe"}]'
+    decoupe = '[{"image_paroles": "Wide shot. Léa lance le ballon.", "ambiance": "", "enchainement": "coupe"}]'
     probleme = '{"etats": [], "problemes": [{"plan": 1, "quoi": "Le panier n\'est pas placé."}]}'
-    corrige = '[{"image_paroles": "Léa lance le ballon vers le panier.", "ambiance": "", "enchainement": "coupe"}]'
+    corrige = '[{"image_paroles": "Wide shot. Léa lance le ballon vers le panier.", "ambiance": "", "enchainement": "coupe"}]'
     vus = []
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
         [decoupe, probleme, corrige, '{"etats": [], "problemes": []}'], vus))
@@ -1685,11 +1690,11 @@ def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(
     relecture relevait un autre petit point et le compte égal rejetait la correction."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     scenario = "Leila se retourne vers nous et sourit."
-    decoupe = ('[{"image_paroles": "Leila est face à la caméra. Leila se retourne vers la caméra et sourit.", '
+    decoupe = ('[{"image_paroles": "Wide shot. Leila est face à la caméra. Leila se retourne vers la caméra et sourit.", '
                '"ambiance": "", "enchainement": "coupe"}]')
     probleme = ('{"etats": [], "problemes": [{"plan": 1, "citation": "Leila est face à la caméra", '
                 '"quoi": "La pose de départ est le résultat du mouvement."}]}')
-    corrige = ('[{"image_paroles": "Leila est de dos. Leila se retourne vers la caméra et sourit.", '
+    corrige = ('[{"image_paroles": "Wide shot. Leila est de dos. Leila se retourne vers la caméra et sourit.", '
                '"ambiance": "", "enchainement": "coupe"}]')
     autre = '{"etats": [], "problemes": [{"plan": 1, "citation": "", "quoi": "Le lieu n\'est pas nommé."}]}'
     # Le second tour corrige ce que la seconde relecture a trouvé (29/09, parapluie de la gare).
@@ -1700,7 +1705,7 @@ def test_une_correction_qui_retire_les_mots_cites_est_gardee_meme_a_compte_egal(
     assert d["relecture"]["corrige"] is True
     assert d["relecture"]["second_tour"] == {"trouves": [{"plan": 1, "quoi": "Le lieu n'est pas nommé."}],
                                              "corrige": True}
-    assert d["plans"][0]["image_paroles"].startswith("Sur un terrain de basket, Leila est de dos.")
+    assert d["plans"][0]["image_paroles"].startswith("Wide shot. Sur un terrain de basket, Leila est de dos.")
     assert d["continuite"]["ok"] is True
     # Les mots cités encore là : à compte égal, le texte d'origine reste.
     reste = ('{"etats": [], "problemes": [{"plan": 1, "citation": "", "quoi": "Autre chose."}]}')
@@ -1853,7 +1858,7 @@ def test_une_correction_n_est_jugee_que_sur_les_plans_qu_elle_change(h3, monkeyp
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     scenario = "Leila dribble, tire, puis se retourne vers nous et lève le poing."
     decoupe = json.dumps([
-        {"image_paroles": "Leila dribble.", "ambiance": "", "enchainement": "coupe"},
+        {"image_paroles": "Wide shot. Leila dribble.", "ambiance": "", "enchainement": "coupe"},
         {"image_paroles": "Leila tire.", "ambiance": "", "enchainement": "suite"},
         {"image_paroles": "Leila est face à la caméra et lève le poing.", "ambiance": "", "enchainement": "suite"}],
         ensure_ascii=False)
@@ -1979,9 +1984,9 @@ def test_chaque_plan_a_son_tableau_depart_mouvement_arrivee(h3, monkeypatch, san
     # Au découpage : le tableau est gardé, et la rupture rejoint la relecture.
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     decoupe = json.dumps([
-        {"elements": [ballon("dans ses mains", "au sol à droite")], "image_paroles": "Leila tire.",
+        {"elements": [ballon("dans ses mains", "au sol à droite")], "image_paroles": "Wide shot. Leila tire.",
          "ambiance": "", "enchainement": "coupe"},
-        {"elements": [ballon("au sol à droite", "au sol"), verre("none")], "image_paroles": "Le ballon est au sol.",
+        {"elements": [ballon("au sol à droite", "au sol"), verre("none")], "image_paroles": "Wide shot. Le ballon est au sol.",
          "ambiance": "", "enchainement": "suite"}], ensure_ascii=False)
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
         [decoupe, '{"etats": [], "problemes": []}', decoupe], []))
@@ -1995,7 +2000,7 @@ def test_le_relecteur_ecarte_une_citation_absente_et_une_correction_identique(h3
     « corrigé » annoncé sur un texte resté le même."""
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
     scenario = "Tom pose un livre sur la table."
-    decoupe = '[{"image_paroles": "À droite, Tom pose le livre sur la table.", "ambiance": "", "enchainement": "coupe"}]'
+    decoupe = '[{"image_paroles": "Wide shot. À droite, Tom pose le livre sur la table.", "ambiance": "", "enchainement": "coupe"}]'
     problemes = ('{"etats": [], "problemes": ['
                  '{"plan": 1, "citation": "Tom  pose le livre", "quoi": "Tom devrait arriver avant."}, '
                  '{"plan": 1, "citation": "table rouge", "quoi": "La table change de couleur."}]}')
@@ -4873,7 +4878,7 @@ def test_le_decoupage_part_de_l_histoire_en_anglais(h3, monkeypatch):
         return "Lea puts the red book down and says « Bonjour. »"
     monkeypatch.setattr(h3, "_histoire_en_anglais", en_anglais)
     vus = []
-    decoupe = json.dumps([{"image_paroles": "Lea puts the red book down and says « Bonjour. »", "ambiance": "",
+    decoupe = json.dumps([{"image_paroles": "Medium shot. Lea puts the red book down and says « Bonjour. »", "ambiance": "",
                            "enchainement": "coupe"}], ensure_ascii=False)
     _faux_chat(monkeypatch, h3, {"le découpage en plans": decoupe,
                                  "le contrôle de continuité": '{"etats": [], "problemes": []}'}, vus)
@@ -7488,7 +7493,7 @@ def test_le_decoupage_recoit_les_fiches_et_ne_change_pas_la_tenue(h3, monkeypatc
     mila = c.post("/video-h3/fiches", headers=CLE, json={
         "nom": "Mila", "description": "Fillette de 9 ans, pull à rayures blanches et bleu marine, "
                                      "salopette en velours jaune moutarde"}).json()["id"]
-    decoupe = '[{"image_paroles": "Mila arrose le pot.", "ambiance": "", "enchainement": "coupe"}]'
+    decoupe = '[{"image_paroles": "Wide shot. Mila arrose le pot.", "ambiance": "", "enchainement": "coupe"}]'
     vus = []
     monkeypatch.setattr(h3.httpx, "AsyncClient", _FauxRouteurSuite(
         [decoupe, '{"etats": [], "problemes": []}', "[]", "[]"], vus))
@@ -7670,3 +7675,43 @@ def test_le_texte_developpe_d_un_plan_est_refuse_s_il_perd_un_nom_ou_touche_aux_
     # Un plan sans réplique : la consigne interdit toute parole ; avec une réplique, elle la garde.
     assert v.DEVELOPPE_SANS_PAROLE in v.consigne_developpe({"image_paroles": "Leila walks."}, ["Leila"], 15.1)
     assert v.DEVELOPPE_PAROLES in v.consigne_developpe({"image_paroles": original}, ["Leila", "Pixel"], 15.1)
+
+
+def test_un_texte_developpe_refuse_est_redemande_avec_la_raison(h3, monkeypatch):
+    """05/10, jalon 0 bis, clip 10 (propriétaire : « hard code studio pour éviter ces bugs ») : un texte
+    de ~100 mots laisse H3 inventer le cadrage ; le refus est redemandé une fois, avec sa raison."""
+    consignes = []
+    bon = "Leila stands in the garden. " * 60
+
+    async def chat(consigne, quoi="", images=None, modele=""):
+        consignes.append(consigne)
+        return "Leila waves." if len(consignes) == 1 else bon
+    monkeypatch.setattr(h3, "_chat_du_studio", chat)
+    texte, note = asyncio.run(h3._developper_plan({"image_paroles": "Leila waves."}, b"png", []))
+    assert texte == bon.strip() and note == "300 mots" and len(consignes) == 2
+    assert "refused: Texte développé de 2 mots" in consignes[1]
+    # Deux refus : le texte d'origine, et la note dit pourquoi.
+    async def court(consigne, quoi="", images=None, modele=""):
+        return "Leila waves."
+    monkeypatch.setattr(h3, "_chat_du_studio", court)
+    texte, note = asyncio.run(h3._developper_plan({"image_paroles": "Leila waves."}, b"png", []))
+    assert texte == "Leila waves." and note.startswith("texte d'origine : Texte développé de 2 mots")
+
+
+def test_le_decoupage_exige_la_valeur_de_chaque_plan_coupe(h3):
+    """05/10, jalon 0 bis, clip 10 : « The camera holds a static shot from the lawn », sans valeur de
+    plan ; H3 est parti du gros plan de face de la photo, puis a coupé. Une suite hérite du cadrage."""
+    v = h3.video_h3
+    plans = [{"image_paroles": "Wide shot: Leila on the lawn.", "enchainement": "coupe"},
+             {"image_paroles": "She walks to the door.", "enchainement": "suite"},
+             {"image_paroles": "Close-up of Leila.", "enchainement": "coupe"}]
+    assert v.exiger_cadrages(plans) is plans
+    with pytest.raises(ValueError, match="plan 3 ne dit pas sa valeur"):
+        v.exiger_cadrages(plans[:2] + [{"image_paroles": "Leila opens the door.", "enchainement": "coupe"}])
+    with pytest.raises(ValueError, match="plan 1"):
+        v.exiger_cadrages([{"image_paroles": "Leila on the lawn.", "enchainement": "suite"}])
+    # Une correction du chat ne retire pas la valeur de plan.
+    p = [{"image_paroles": "Wide shot: Leila on the lawn.", "ambiance": "", "enchainement": "coupe"}]
+    with pytest.raises(ValueError, match="valeur de plan"):
+        v.lire_correction(json.dumps([{"image_paroles": "Leila on the lawn.", "ambiance": "",
+                                       "enchainement": "coupe"}]), p)
