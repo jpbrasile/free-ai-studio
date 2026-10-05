@@ -2946,6 +2946,9 @@ def etats_au_debut(plan: dict) -> str:
 # Le chat le développe donc d'après l'image de départ retouchée, le tableau des éléments et la durée.
 # Ni apparence (les traits passent par les images, 03/10 ; une description a été DITE le 28/09), ni
 # caméra (phrase_camera la dit), ni son (champ des sons), ni réplique ajoutée.
+# Essai H, plan 3 (05/10, juge ok) : « never he/she » a donné « <Subject 1> turns <Subject 1>'s head »,
+# et le plan, presque sans action, a été rempli de « the capsule stays completely still » redits ; le
+# guide écrit « She closes her lips » (ref-en.txt, 7) : le nom ouvre la phrase, le pronom la suit.
 DEVELOPPE_MOTS = (350, 500)
 DEVELOPPE_TOLERES = (250, 650)   # hors de là, le texte du plan part tel quel
 CONSIGNE_DEVELOPPE = (
@@ -2956,11 +2959,14 @@ CONSIGNE_DEVELOPPE = (
     "faces and what state each object is in; where the shot text contradicts the image about the starting "
     "state, follow the image. Then tell, step by step, every action of the shot text, how each character "
     "and object moves (direction, speed, gestures, gaze, expression) and where it ends.\n"
-    "Rules: name the characters exactly as written here (%s), always by that name, never \"he\", \"she\" "
-    "or \"it\" at the start of a sentence; never describe their appearance, face, hair, clothes, colours "
-    "or body (the pictures give it); add no person, animal or object that is neither in the image nor in "
-    "the text; do not describe the camera, the framing changes or the sound; %s Output only the "
-    "description, one paragraph, no title, no list.\n\nShot text: %s%s")
+    "Rules: name the characters exactly as written here (%s); start each sentence with a name, then use "
+    "he, she, it, his, her or its inside that sentence instead of repeating the name (never \"Leila's\" "
+    "for \"her\"); never describe their appearance, face, hair, clothes, colours or body (the pictures "
+    "give it); add no person, animal or object that is neither in the image nor in the text; do not "
+    "describe the camera, the framing changes or the sound; never repeat an idea already written, such "
+    "as something staying still: when the action is short, tell its small steps once each (gaze, breath, "
+    "gesture, light) at their moment; %s Output only the description, one paragraph, no title, no list."
+    "\n\nShot text: %s%s")
 DEVELOPPE_SANS_PAROLE = "nobody says anything: write no speech, no words in quotes."
 DEVELOPPE_PAROLES = ("keep every line in quotes or <d>…</d> of the shot text exactly as written, said by the "
                      "same character at the same moment, and add no other speech.")
