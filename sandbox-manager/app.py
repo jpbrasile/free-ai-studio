@@ -7039,6 +7039,11 @@ async def _ecouter(video: bytes, texte: str) -> dict:
     if trop:   # 02/10 : la réplique entendue ne suffit pas, rien d'autre ne doit être dit
         resultat["en_trop"] = trop
         resultat["ok"] = False
+    # 05/10 : ni rien de plus au milieu de la réplique (passage par passage ; le clip entier s'il n'y en a pas)
+    inseres = video_h3.mots_inseres(resultat.get("attendu"), [m["entendu"] for m in morceaux] or [entendu])
+    if inseres:
+        resultat["inseres"] = inseres
+        resultat["ok"] = False
     if ecartes:
         resultat["ecartes"] = ecartes
     return resultat

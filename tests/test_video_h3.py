@@ -6880,6 +6880,27 @@ def test_une_parole_non_ecrite_est_une_faute_meme_si_la_replique_est_dite(h3):
     assert "Paroles non écrites" in v.defaut_de_paroles(paroles, 10.0)["quoi"]
 
 
+def test_des_mots_ajoutes_au_milieu_de_la_replique_sont_une_faute(h3):
+    # 05/10, jalon 0 bis, clip 7 : tous les mots attendus entendus, la part et passages_en_trop disaient « ok ».
+    v = h3.video_h3
+    attendues = ["Une dernière, juste une."]
+    small, medium = "Une dernière valeur SM, juste une.", "Une dernière fois l'RSM, juste une."
+    assert v.comparer_paroles("<d>[French] Une dernière, juste une.</d>", small)["ok"] is True
+    assert v.passages_en_trop(attendues, [{"de_s": 1.9, "a_s": 6.4, "entendu": small}]) == []
+    assert v.mots_inseres(attendues, [small]) == ["valeur sm"]
+    assert v.mots_inseres(attendues, [medium]) == ["fois l rsm"]
+    assert v.mots_inseres(attendues, ["Une dernière, juste une."]) == []         # l'ancien clip 7, dit juste
+    assert v.mots_inseres(["Tu es trempé"], ["Tu es trompé"]) == []                # 29/09 : un mot mal entendu
+    assert v.mots_inseres(attendues, ["Une dernière, juste une, euh."]) == []      # un mot de plus : toléré
+    # Au bord de la réplique, une tournure (28/09) : laissée au juge comme avant.
+    assert v.mots_inseres(["Is this seat taken?"], ["Excuse me, is this seat taken?"]) == []
+    paroles = {"attendu": attendues, "entendu": small, "ok": False, "inseres": ["valeur sm"]}
+    d = v.defaut_de_paroles(paroles, 36.3)
+    assert d["t_s"] == 36.3 and "Mots ajoutés" in d["quoi"] and "valeur sm" in d["quoi"]
+    assert not v.PAROLES_EN_TROP.match(d["quoi"])   # la réplique est dite : le montage ne coupe pas le son
+    assert h3.regles.regle_paroles(paroles)["ok"] is False
+
+
 def test_une_coupe_franche_dans_un_plan_se_voit_pas_un_mouvement(h3):
     m = h3.montage
     # Plan 2, prise 3 : un pic seul (48,2) sur une médiane de 3,3.

@@ -3677,6 +3677,33 @@ def passages_en_trop(attendues, morceaux) -> list:
     return trop
 
 
+# 05/10, jalon 0 bis, clip 7 (graine 207, ouverture épinglée) : écrit « Une dernière, juste une. », dit
+# « Une dernière valeur SM, juste une. » (Whisper small ; medium : « fois l'RSM »). Tous les mots attendus
+# y sont et le passage est surtout écrit : ni la part ni passages_en_trop ne le voyaient. Une suite d'au
+# moins PAROLES_INSEREES_MOTS mots entendus qui ne s'alignent sur rien de la réplique est un ajout de H3 ;
+# un mot seul mal entendu (« trompé » pour « trempé », 29/09) reste toléré. Choisi sur ce cas, PROVISOIRE.
+PAROLES_INSEREES_MOTS = 2
+
+
+def mots_inseres(attendues, entendus) -> list:
+    """Les suites de mots entendus qui s'insèrent dans une réplique écrite (ajouts de H3), en texte."""
+    import difflib
+    ecrits = _mots(" ".join(attendues or []))
+    ajouts = []
+    for entendu in entendus or []:
+        dits = _mots(entendu)
+        if not ecrits or not dits:
+            continue
+        for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=ecrits, b=dits, autojunk=False).get_opcodes():
+            # Un remplacement mot pour mot est une erreur d'oreille ; seul l'excédent est un ajout. Au bord de la
+            # réplique (« Excuse me, is this seat taken? » pour « Is this seat taken? »), c'est une tournure
+            # que le Studio laisse passer depuis le 28/09 ; seul ce qui la coupe en deux compte ici.
+            if (op in ("insert", "replace") and 0 < i1 and i2 < len(ecrits)
+                    and (j2 - j1) - (i2 - i1) >= PAROLES_INSEREES_MOTS):
+                ajouts.append(" ".join(dits[j1:j2]))
+    return ajouts
+
+
 # Les défauts de defaut_de_paroles où le clip dit ce que personne n'a écrit (pas une réplique manquée).
 PAROLES_EN_TROP = re.compile(r"^(?:Paroles non écrites|Aucune réplique écrite|Le clip prononce le ton)")
 
@@ -3689,6 +3716,9 @@ def defaut_de_paroles(paroles: dict, t_s: float):
         m = paroles["en_trop"][0]
         return {"t_s": round(t_s + float(m.get("de_s") or 0), 1),
                 "quoi": "Paroles non écrites : « %s » (%.1f-%.1f s du plan)." % (m["entendu"], m["de_s"], m["a_s"])}
+    if paroles.get("inseres"):
+        return {"t_s": round(t_s, 1), "quoi": "Mots ajoutés dans la réplique « %s » : « %s » ; le clip dit : « %s »."
+                % (" / ".join(paroles.get("attendu") or []), " / ".join(paroles["inseres"]), paroles["entendu"])}
     if paroles.get("ton_dit"):
         return {"t_s": round(t_s, 1), "quoi": "Le clip prononce le ton écrit pour H3 (« %s ») ; il dit : « %s »."
                 % (" / ".join(paroles["ton_dit"]), paroles["entendu"])}
