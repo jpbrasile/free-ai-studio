@@ -117,6 +117,7 @@
       "cout_max_usd": 0,
       "source": "https://huggingface.co/openai/gpt-oss-20b",
       "verifie_le": "2026-09-11",
+      "relu_le": "2026-10-05",
       "code": "free-tier-manager/app.py PROVIDERS['groq']['model']"
     },
     {
@@ -231,6 +232,7 @@
       "cout_max_usd": 0,
       "source": "https://huggingface.co/Systran/faster-whisper-small",
       "verifie_le": "2026-09-15",
+      "relu_le": "2026-10-05",
       "code": "free-tier-manager/app.py WHISPER_LOCAL"
     },
     {
@@ -250,6 +252,7 @@
       "cout_max_usd": 0,
       "source": "https://huggingface.co/openai/whisper-large-v3",
       "verifie_le": "2026-09-15",
+      "relu_le": "2026-10-05",
       "code": "free-tier-manager/app.py GROQ_DICTEE_MODELE"
     },
     {
@@ -288,6 +291,7 @@
       "cout_max_usd": 0.277,
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B",
       "verifie_le": "2026-09-11",
+      "relu_le": "2026-10-05",
       "code": "sandbox-manager/video.py MODELES['rapide']"
     },
     {
@@ -307,6 +311,7 @@
       "cout_max_usd": 0.277,
       "source": "https://huggingface.co/Wan-AI/Wan2.1-VACE-1.3B",
       "verifie_le": "2026-09-24",
+      "relu_le": "2026-10-05",
       "code": "sandbox-manager/composite.py demande_du_travail + sandbox-manager/montage.py"
     },
     {
@@ -326,6 +331,7 @@
       "cout_max_usd": 0,
       "source": "https://huggingface.co/Wan-AI/Wan2.2-TI2V-5B-Diffusers",
       "verifie_le": "2026-09-21",
+      "relu_le": "2026-10-05",
       "code": "sandbox-manager/video.py MODELES['maison']",
       "note": "Place sur la carte MESURÉE, pas estimée : la mémoire libre qu'un vrai clip consomme, relevée durée par durée le 21/09/2026 et publiée avec sa provenance dans `sandbox-manager/ancres_video.py` (`ou_calculer.BESOIN_MO_MESURE`). Le chiffre ci-dessus est celui d'un clip de 3 s, et la place dépend de la longueur du clip : 11 771 Mo à 1 s, 14 751 à 3 s, 16 711 à 4 s, 20 451 à 8 s. Avec les 1 024 Mo de marge de la sonde, et la carte supposée entièrement libre : une carte de 12 Go ne peut fabriquer AUCUNE durée (même 1 s demande 12 795 Mo), une carte de 16 Go s'arrête à 3 s, et il faut 24 Go pour tout le menu. Détail et provenance : `docs/GPU-LOCAL.md`, section << Ce que la carte du client peut vraiment faire >>. Jusqu'au 21/09 ce champ annonçait 12,5 Go, qui était le compteur interne de torch et non la place prise sur la carte : 1,9 Go de moins que la réalité. Ce modèle n'a pas de VACE — l'image de fin et l'image de référence ne peuvent pas être fabriquées ici, elles partent chez le loueur et la page le dit."
     },
@@ -365,6 +371,7 @@
       "cout_max_usd": 0.52,
       "source": "https://huggingface.co/m-a-p/YuE2-3B",
       "verifie_le": "2026-09-15",
+      "relu_le": "2026-10-05",
       "code": "sandbox-manager/chanson.py MODELE",
       "note": "Anglais et chinois. Version instrumentale : la LoRA `Mothersuperior/YuE2-instrumental-cot-full-loras`, CC BY-NC 4.0 elle aussi. Correctifs T4 repris du carnet Kaggle d'AIQUEST Academy, Apache 2.0, et attribués."
     },
@@ -385,6 +392,7 @@
       "cout_max_usd": null,
       "source": "https://huggingface.co/FireRedTeam/FireRedTTS2",
       "verifie_le": "2026-09-17",
+      "relu_le": "2026-10-05",
       "code": "sandbox-manager/dialogue.py MODELE",
       "note": "RÉSERVE DES AUTEURS, qui n'est pas dans la licence : leur README écrit que cette capacité est « intended solely for academic research purposes ». Une licence Apache 2.0 et cette phrase ne disent pas la même chose ; le Studio affiche LES DEUX, là où le modèle se choisit. « Territoire : aucune restriction TROUVÉE » n'est pas « aucune restriction » : deux vérifications indépendantes n'ont rien montré, le fichier de licence brut n'a pas été lu ligne à ligne. Anglais, chinois, japonais, coréen, français, allemand et russe ; 4 locuteurs, 3 minutes au plus."
     },
