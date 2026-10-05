@@ -2517,9 +2517,8 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         resume = f"[{' + '.join(types)}] " + (f"{nb_plans} shots joined by cuts." if nb_plans > 1 else "One single shot.")
         if garde_sons:
             garde_sons = ["Each <Audio> gives only a voice timbre; its words are never said."]
-        return ("subject_definitions: " + " ".join(definitions) + " summary: " + resume
-                + " retention_analysis: " + " ".join(garde + garde_sons))
-    vus = [f"<Subject {k + 1}>" for k in range(len(nombres)) if k in presents]
+        return sections_references(definitions, resume, garde + garde_sons)
+    vus =[f"<Subject {k + 1}>" for k in range(len(nombres)) if k in presents]
     # Un texte en plans (clip maître, 03/10) : « a single shot » le contredisait.
     resume = (f"[{' + '.join(types)}] The target video "
               + (f"has {nb_plans} shots joined by cuts" if nb_plans > 1 else "is a single shot")
@@ -2527,8 +2526,19 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
               + (f", beginning from <Picture {depart}>" if depart else "")
               + (", continuing <Video 1> without a cut" if suite else "") + "."
               + (" It uses " + _liste_anglaise(voix_dites) + "." if voix_dites else ""))
-    return ("subject_definitions: " + " ".join(definitions) + " summary: " + resume
-            + " retention_analysis: " + " ".join(garde + garde_sons))   # les sujets, puis les sons (exemple du guide)
+    return sections_references(definitions, resume, garde + garde_sons)   # les sujets, puis les sons (exemple du guide)
+
+
+def sections_references(definitions: list, resume: str, garde: list) -> str:
+    """Les trois premières sections du mode Références, comme l'exemple du guide (ref-en.txt, 7) : le titre
+    seul sur sa ligne, puis « Give each item its own line » (2) et « one line for each reference label »
+    (4) ; une ligne vide entre deux sections. Tout tenait sur une ligne jusqu'au 05/10 (revue du guide)."""
+    return ("subject_definitions:\n" + "\n".join(definitions) + "\n\nsummary:\n" + resume
+            + "\n\nretention_analysis:\n" + "\n".join(garde))
+
+
+# Le titre de la description, après les trois premières sections (ref-en.txt, 7).
+TITRE_DESCRIPTION_REFERENCES = "\n\ndetailed_description:\n"
 
 
 def _liste_anglaise(elements: list) -> str:
@@ -4642,7 +4652,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                  # « Established in one or two English sentences before [Shot 1] » ; après [Shot 1],
                  # c'est la règle des autres modes, appliquée ici par erreur le 04/10). Un texte en
                  # plans porte déjà ses [Shot N] : pas un second [Shot 1] devant.
-                 + " detailed_description: " + STYLE_REFERENCES + " "
+                 + TITRE_DESCRIPTION_REFERENCES + STYLE_REFERENCES + "\n"
                  + ("" if _MULTIPLAN.search(texte) else "[Shot 1] ")
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
