@@ -794,16 +794,14 @@ AMBIANCE_SEULE = "Only the quiet ambient sound of the place is heard."
 # Le style ouvre [Shot 1] (base 4.1, « [Shot 1] Live-action, cinematic, … ») ; le Studio fait des images
 # photo réalistes. Audit du 04/10 : aucune des 12 invites du film 5 ne le disait.
 STYLE_H3 = "Live-action, cinematic."
+# Mode Références : le style avant [Shot 1], en phrase (ref-en.txt, 5.2, « The target video is in a
+# cinematic, literary music-video style… »).
+STYLE_REFERENCES = "The target video is in a live-action, cinematic style."
+# La limite de MiniMax (API, tous modes : « Prompt length limit ≤ 7000 characters ») ; l'encodeur de la
+# carte d'ici (ComfyUI, text_encoders/minimax.py) n'en a pas plus bas et refuse plutôt que de couper.
+# 4 000 avant le 05/10, choix de la V1 sans source : il forçait à condenser les textes des plans.
+INVITE_MAX = 7000
 
-
-def avec_style(texte: str) -> str:
-    """Le style dit juste après le premier [Shot 1], une fois."""
-    t = str(texte or "")
-    i = t.find("[Shot 1]")
-    if i < 0 or STYLE_H3 in t:
-        return t
-    j = i + len("[Shot 1]")
-    return t[:j] + " " + STYLE_H3 + " " + t[j:].lstrip()
 SEPARATEUR_CHAMPS = "\n\n"
 CONSIGNE_I2VA = "For the target video, at 0.00 seconds into the target video, <Picture 1> (from [Shot 1]) is fully referenced."
 CONSIGNE_FL2VA = ("How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the "
@@ -2391,7 +2389,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
                       presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
-                      planches=(), vues=(), legere=False, lieu=None, nb_plans=1) -> str:
+                      planches=(), vues=(), legere=False, lieu=None, nb_plans=1, etiquettes=None) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -2409,7 +2407,10 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     `suite` : le plan continue <Video 1>, la fin du plan précédent (voie « raccord »).
     `au_depart` : les rangs que l'image de départ montre ; ils y sont nommés (« showing
     <Subject 1> »), sans quoi la personne de l'image n'est liée à aucune fiche.
-    `lieu` : le numéro de <Picture N> de la vue vide du décor du scénario (03/10)."""
+    `lieu` : le numéro de <Picture N> de la vue vide du décor du scénario (03/10).
+    `etiquettes` : {rang : étiquette lue sur ses photos} ; la fiche est définie par ce qu'elle est et ce
+    qui la distingue (ref-en.txt, 2.1 : « the fluffy white Samoyed in <Picture 2>… with thick white
+    fur… ») au lieu de « the person » : Pixel, un robot, était « the person in <Picture 3> » (05/10)."""
     definitions, garde, premiere, voix_dites, garde_sons = [], [], 1, [], []
     presents = set(range(len(nombres))) if presents is None else set(presents)
     for k, nombre in enumerate(nombres):
@@ -2434,12 +2435,14 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
                          f"{ou}: fully_preserved - the shape, colour and size of the object in "
                          f"{images} are retained; there is exactly one of it in every frame where it appears.")
             continue
-        definitions.append(f"<Subject {k + 1}> is the person in {images}"
+        etiquette = (etiquettes or {}).get(k)
+        qui = etiquette or "the person"
+        definitions.append(f"<Subject {k + 1}> is {qui} in {images}"
                            # Ce que chaque image apporte (guide de MiniMax, ref-en, 2.1) : la planche
                            # est sa dernière image (fiche_images_h3, 01/10).
                            + ((f"; <Picture {premiere - 1}> shows all angles." if legere else
-                               f"; <Picture {premiere - 1}> shows this same person from every angle: front, "
-                               "three-quarter, profile and back.") if k in planches else "."))
+                               f"; <Picture {premiere - 1}> shows this same {'character' if etiquette else 'person'} "
+                               "from every angle: front, three-quarter, profile and back.") if k in planches else "."))
         j = (voix or {}).get(k)
         if isinstance(j, dict) and len(j) == 1:
             j = next(iter(j.values()))
@@ -2471,12 +2474,20 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         porte = (f" <Subject {k + 1}> wears {ecrite} in every frame, also when seen from behind, in profile "
                  "or from afar." if ecrite else "")
         if k in tenues:   # la dernière de ses images le montre dans la tenue du scénario (29/09)
-            garde.append(f"{ou}: fully_preserved - the face and hair of the person in {images} "
-                         f"are retained, with the clothing of <Picture {premiere - 1}>, as one single person."
+            garde.append((f"{ou}: fully_preserved - the face or head, body shape and size of {etiquette} in "
+                          f"{images} are retained, with the clothing of <Picture {premiere - 1}>, as one single "
+                          "character." if etiquette else
+                          f"{ou}: fully_preserved - the face and hair of the person in {images} "
+                          f"are retained, with the clothing of <Picture {premiere - 1}>, as one single person.")
                          + porte)
             continue
-        garde.append(f"{ou}: fully_preserved - the face, hair and clothing of the person in "
-                     f"{images} are retained, as one single person." + porte)
+        # Les traits à garder sont ceux de ce qu'il est (ref-en.txt, 4.1, « the Samoyed's thick white
+        # fur… are retained ») : un robot n'a ni cheveux ni vêtements.
+        garde.append((f"{ou}: fully_preserved - the whole look of {etiquette} in {images} is retained: face "
+                      "or head, body shape and size, colours, clothing or surface, as one single character."
+                      if etiquette else
+                      f"{ou}: fully_preserved - the face, hair and clothing of the person in "
+                      f"{images} are retained, as one single person.") + porte)
     if lieu:   # 03/10, film 4 : la fontaine changeait de jets et de statue d'un plan à l'autre
         definitions.append(f"<Picture {lieu}> is the setting of [Shot 1], shown empty of people.")
         garde.append(f"<Picture {lieu}>: fully_preserved - same place and fixed elements; no person from it."
@@ -2914,6 +2925,68 @@ def etats_au_debut(plan: dict) -> str:
             morceaux.append("%s : %s" % (" ".join(str(e["nom"]).split()),
                                          " ".join(str(e["debut"]).split()).rstrip(".") + "."))
     return " ".join(morceaux)[:ETATS_RETOUCHE_MAX]
+
+
+# --- Le texte d'un plan déplié, développé (05/10) ----------------------------------------------
+# Plan 3 du film 5 relu contre le guide de MiniMax (ref-en.txt, 5.2) : « detailed_description is
+# normally 350-500 English words […] A single shot does not automatically justify a shorter
+# description ». Le texte du plan, écrit pour ~1,9 s du maître (« Wide shot, starry night garden:
+# Leila left, facing right, looks at open capsule right »), faisait 69 mots joués 15 s ; il disait
+# Pixel « blue eyes dim » quand l'image de départ les montre allumés (écart 8 de l'audit du 04/10).
+# Le chat le développe donc d'après l'image de départ retouchée, le tableau des éléments et la durée.
+# Ni apparence (les traits passent par les images, 03/10 ; une description a été DITE le 28/09), ni
+# caméra (phrase_camera la dit), ni son (champ des sons), ni réplique ajoutée.
+DEVELOPPE_MOTS = (350, 500)
+DEVELOPPE_TOLERES = (250, 650)   # hors de là, le texte du plan part tel quel
+CONSIGNE_DEVELOPPE = (
+    "The attached image is the FIRST frame of a %.1f-second video shot. Rewrite the shot text below as the "
+    "description of what happens in this shot, in %d to %d English words of complete sentences in the "
+    "present tense, from this first frame to the end of the shot, in time order, so that the action fills "
+    "the whole %.1f seconds at a natural pace. Start from what the image shows: where each character stands, "
+    "faces and what state each object is in; where the shot text contradicts the image about the starting "
+    "state, follow the image. Then tell, step by step, every action of the shot text, how each character "
+    "and object moves (direction, speed, gestures, gaze, expression) and where it ends.\n"
+    "Rules: name the characters exactly as written here (%s), always by that name, never \"he\", \"she\" "
+    "or \"it\" at the start of a sentence; never describe their appearance, face, hair, clothes, colours "
+    "or body (the pictures give it); add no person, animal or object that is neither in the image nor in "
+    "the text; do not describe the camera, the framing changes or the sound; %s Output only the "
+    "description, one paragraph, no title, no list.\n\nShot text: %s%s")
+DEVELOPPE_SANS_PAROLE = "nobody says anything: write no speech, no words in quotes."
+DEVELOPPE_PAROLES = ("keep every line in quotes or <d>…</d> of the shot text exactly as written, said by the "
+                     "same character at the same moment, and add no other speech.")
+
+
+def consigne_developpe(plan: dict, noms: list, duree_s: float) -> str:
+    texte = " ".join(str(plan.get("image_paroles") or "").split())
+    lignes = []
+    for e in plan.get("elements") or ():
+        if isinstance(e, dict) and e.get("nom"):
+            lignes.append("- %s : start %s ; movement %s ; end %s" % tuple(
+                " ".join(str(e.get(c) or "—").split()) for c in ("nom", "debut", "mouvement", "fin")))
+    tableau = ("\n\nElements of the shot (start, movement, end):\n" + "\n".join(lignes)) if lignes else ""
+    return CONSIGNE_DEVELOPPE % (duree_s, DEVELOPPE_MOTS[0], DEVELOPPE_MOTS[1], duree_s,
+                                 ", ".join(noms) if noms else "no named character",
+                                 DEVELOPPE_PAROLES if _REPLIQUE_OU_BALISE.search(texte) else DEVELOPPE_SANS_PAROLE,
+                                 texte, tableau)
+
+
+def lire_developpe(reponse: str, original: str, noms: list) -> str:
+    """Le texte développé, vérifié ; ValueError s'il ne tient pas (longueur, nom perdu, réplique
+    changée ou ajoutée) : le plan part alors avec son texte d'origine."""
+    t = " ".join(str(reponse or "").strip().strip("\"'").split())
+    mots = len(t.split())
+    if not DEVELOPPE_TOLERES[0] <= mots <= DEVELOPPE_TOLERES[1]:
+        raise ValueError("Texte développé de %d mots, attendu %d à %d." % ((mots,) + DEVELOPPE_MOTS))
+    for nom in noms:
+        motif = r"(?<!\w)" + re.escape(nom) + r"(?!\w)"
+        if re.search(motif, original) and not re.search(motif, t):
+            raise ValueError("Le texte développé a perdu « %s »." % nom)
+    dites = [m.group(0) for m in _REPLIQUE_OU_BALISE.finditer(original)]
+    if any(d not in t for d in dites) or len(_REPLIQUE_OU_BALISE.findall(t)) > len(dites):
+        raise ValueError("Le texte développé change ou ajoute une réplique.")
+    return t
+
+
 CONSIGNE_FIN = ("L'image jointe %d est la PREMIÈRE image de ce plan. Dessine sa DERNIÈRE image, une fois faite "
                 "l'action décrite : même lieu, même caméra, même cadrage, même lumière ; mêmes personnes et mêmes "
                 "objets aux mêmes places, sauf ce que l'action change (ce qui naît pendant le plan est là, ce qui "
@@ -4562,14 +4635,17 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                                    suite, au_depart, avec_planche,
                                    {k for k, f in enumerate(fiches) if f.get("vues")},
                                    legere=payload.get("invite_legere") is True, lieu=numero_lieu,
-                                   nb_plans=len(_MULTIPLAN.findall(texte)) or 1)
-                 # Un texte en plans porte déjà ses [Shot N] : pas un second [Shot 1] devant ; le style
-                 # (base 4.1) va juste après le [Shot 1] (avec_style).
-                 + (" detailed_description: " if _MULTIPLAN.search(texte)
-                    else " detailed_description: [Shot 1] " + STYLE_H3 + " ")
+                                   nb_plans=len(_MULTIPLAN.findall(texte)) or 1,
+                                   etiquettes={k: f["etiquette_h3"] for k, f in enumerate(fiches)
+                                               if f.get("etiquette_h3")})
+                 # En mode Références, le style est dit AVANT [Shot 1], en une phrase (ref-en.txt, 5.2 :
+                 # « Established in one or two English sentences before [Shot 1] » ; après [Shot 1],
+                 # c'est la règle des autres modes, appliquée ici par erreur le 04/10). Un texte en
+                 # plans porte déjà ses [Shot N] : pas un second [Shot 1] devant.
+                 + " detailed_description: " + STYLE_REFERENCES + " "
+                 + ("" if _MULTIPLAN.search(texte) else "[Shot 1] ")
                  + (f"The shot begins from <Picture {numero}>. " if numero else "")
                  + (SUITE_DEBUT if suite else "") + texte)
-        texte = avec_style(texte)
     try:
         longueur = int(payload.get("longueur") or LONGUEUR_PAR_DEFAUT)
     except (TypeError, ValueError) as exc:
@@ -4579,9 +4655,9 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     consigne = consigne_images(mode, len(_MULTIPLAN.findall(texte)), longueur / IMAGES_PAR_SECONDE)
     if consigne:
         texte = consigne + SEPARATEUR_CHAMPS + texte
-    if len(texte) > 4000:
-        raise ValueError("Invite trop longue : %d caractères, 4 000 au plus. Raccourcissez le texte du plan."
-                         % len(texte))
+    if len(texte) > INVITE_MAX:
+        raise ValueError("Invite trop longue : %d caractères, %s au plus. Raccourcissez le texte du plan."
+                         % (len(texte), f"{INVITE_MAX:,}".replace(",", " ")))
     try:
         coupe = float(payload.get("coupe_s") or 0)
     except (TypeError, ValueError) as exc:

@@ -89,7 +89,7 @@ TEXTES_MAITRE_MAX = 2200
 # Film 5 relancé, 04/10 : la syntaxe H3 (champs, étiquettes à la place des noms) a porté l'invite du
 # maître à 4 102 caractères. Ce que le Studio ajoute dépend des étiquettes : au refus, le film condense
 # ses plans d'autant que l'invite dépasse, et redemande.
-INVITE_MAX = 4000
+INVITE_MAX = 7000   # video_h3.INVITE_MAX (05/10 : la limite de MiniMax, 4 000 avant)
 INVITE_MARGE = 150
 _TROP_LONGUE = re.compile(r"Invite trop longue : (\d+) caract")
 DEPART_REDEMANDES = 2

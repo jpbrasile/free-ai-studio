@@ -187,13 +187,13 @@ def test_une_sequence_jointe_n_a_qu_un_cadrage(fa, tmp_path):
 
 
 def test_une_invite_de_maitre_trop_longue_fait_condenser_les_plans_et_redemander(fa, tmp_path):
-    """Film 5 relancé, 04/10 : avec la syntaxe H3, l'invite du maître a fait 4 102 caractères."""
+    """Film 5 relancé, 04/10 : avec la syntaxe H3, l'invite du maître a fait 4 102 caractères (limite d'alors : 4 000)."""
     class Long(FauxStudio):
         def __call__(self, methode, chemin, corps=None):
             if (chemin == "/video-h3/maitre" and "Court" not in corps["plans"][0]["image_paroles"]
                     and (corps.get("forcer") or not self.refus_regles)):
                 self.appels.append((methode, chemin, json.loads(json.dumps(corps))))
-                return 400, {"detail": "Invite trop longue : 4102 caractères, 4 000 au plus. Raccourcissez le texte du plan."}
+                return 400, {"detail": "Invite trop longue : 7102 caractères, 7 000 au plus. Raccourcissez le texte du plan."}
             return super().__call__(methode, chemin, corps)
     cibles = []
 
@@ -210,7 +210,7 @@ def test_une_invite_de_maitre_trop_longue_fait_condenser_les_plans_et_redemander
     assert len(maitres) == 2 and {p["image_paroles"] for p in maitres[1]["plans"]} == {"Court"}
     assert {p["image_paroles"] for p in etat["plans"]} == {"Court"}   # les clips dépliés jouent le même texte
     longueur = len("Plan 0. Plan 1. Plan 2. Plan 3.")
-    assert cibles == [max(longueur // 2, longueur - -(-(4102 - 4000 + fa.INVITE_MARGE) // 8))] * 8
+    assert cibles == [max(longueur // 2, longueur - -(-(7102 - fa.INVITE_MAX + fa.INVITE_MARGE) // 8))] * 8
     assert any(j["etape"] == "maitre_raccourci" for j in etat["journal"])
     # Règles refusées puis tournage forcé, maître rejoué : l'essai suivant repart des plans condensés.
     cibles.clear()

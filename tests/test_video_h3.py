@@ -803,7 +803,7 @@ def test_une_suite_en_references_epingle_les_22_dernieres_images_et_leur_son(h3,
     assert "summary: [video continuation + reference generation] The target video is a single shot with " \
            "<Subject 1>, continuing <Video 1> without a cut. " in invite
     assert v.SUITE_GARDE in invite and "<Picture 2>" not in invite
-    assert "detailed_description: [Shot 1] " + v.STYLE_H3 + " " + v.SUITE_DEBUT in invite
+    assert "detailed_description: " + v.STYLE_REFERENCES + " [Shot 1] " + v.SUITE_DEBUT in invite
     # 17 images de plus, pour que les 22 reprises ne raccourcissent pas le plan ; retirées au recollage.
     assert plan["resume_public"]["images"] == 141 and dem["longueur"] == 141
     assert plan["resume_public"]["voie"] == "raccord" and v.images_a_retirer(plan) == 22
@@ -885,7 +885,7 @@ def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3,
     assert "summary: [reference generation + keyframe completion] The target video is a single shot with " \
            "<Subject 1> and <Subject 2>, beginning from <Picture 3>. " in invite
     assert "<Picture 3> ([Shot 1] first frame): fully_preserved - the shot begins exactly on <Picture 3>" in invite
-    assert "detailed_description: [Shot 1] Live-action, cinematic. The shot begins from <Picture 3>. " in invite
+    assert "detailed_description: The target video is in a live-action, cinematic style. [Shot 1] The shot begins from <Picture 3>. " in invite
     assert "<Subject 1> (S1) regarde <Subject 2> et dit <d>[French] Oui.</d>" in invite
     assert list(plan["demande"]["images"]) == ["ref_0.png", "ref_1.png", "ref_2.png"]
     assert plan["resume_public"]["voie"] == "image"
@@ -1128,7 +1128,7 @@ def test_un_clip_avec_une_fiche_nomme_le_personnage_comme_le_guide_de_minimax(h3
                              "<Subject 1>. retention_analysis: <Subject 1> (appears in [Shot 1]): "
                              "fully_preserved - the face, hair and clothing "
                              "of the person in <Picture 1>, <Picture 2> are retained, as one single person. "
-                             "detailed_description: [Shot 1] Live-action, cinematic. The camera holds a static shot "
+                             "detailed_description: The target video is in a live-action, cinematic style. [Shot 1] The camera holds a static shot "
                              "throughout. Elle sourit")
     # La description sert aux images de la fiche, jamais à l'invite : le 28/09, le
     # personnage l'a récitée.
@@ -2320,7 +2320,7 @@ def test_deux_fiches_font_deux_sujets_chacun_sa_langue(h3):
         # Chaque personnage n'est placé qu'une fois, par la description elle-même.
         # La caméra en tête quand aucune phrase n'est finie hors réplique (01/10).
         # Le style ouvre [Shot 1] (guide de MiniMax, base 4.1) ; le champ des sons reste, en une phrase (4.6).
-        "detailed_description: [Shot 1] Live-action, cinematic. The camera holds a static shot throughout. "
+        "detailed_description: The target video is in a live-action, cinematic style. [Shot 1] The camera holds a static shot throughout. "
         "<Subject 2> (S2) demande <d>[English] Is this seat taken?</d> "
         "<Subject 1> (S1) répond <d>[French] Oui.</d> " + v.SEULES_REPLIQUES
         + "\n\noverall_soundscape: " + v.AMBIANCE_SEULE + "\n\nnon_diegetic_music: N/A")
@@ -3496,10 +3496,14 @@ def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_d
     monkeypatch.setattr(h3, "_image_du_studio", image)
 
     reponse_retouche = ['{"ok": true, "fautes": []}']
+    developpements = []
 
     async def juge(consigne, quoi="", images=None, modele=""):
         if quoi == "l'étiquette d'un personnage":
             return "the girl with dark brown hair"
+        if quoi == "le développement du texte d'un plan":
+            developpements.append((consigne, images))
+            return "Leila and Pixel stand still. " + "Leila breathes slowly. " * 90
         return reponse_retouche[0]
     monkeypatch.setattr(h3, "_chat_du_studio", juge)
     c = client(h3)
@@ -3517,6 +3521,17 @@ def test_le_plan_deplie_recoit_les_photos_des_fiches_qu_il_nomme_et_les_fautes_d
     assert "The shot begins from <Picture 2>." in tournes[0]["invite"]
     assert "The shot begins from <Picture 3>." in tournes[1]["invite"]
     assert "Live-action, cinematic." in tournes[2]["invite"] and "<Subject" not in tournes[2]["invite"]
+    # 05/10 : chaque texte de plan est développé d'après son image de départ (ref-en.txt, 5.2 : 350-500 mots),
+    # avec le tableau de ses éléments et sa durée, sans parole ajoutée.
+    assert r.json()["developpes"] == {"1": "275 mots", "2": "275 mots", "3": "275 mots"}
+    consigne, images_jointes = developpements[0]
+    assert "5.2-second video shot" in consigne and "350 to 500 English words" in consigne
+    assert ("- the flashlight : start in Leila's right hand, switched off ; movement is switched on ; "
+            "end switched on") in consigne
+    assert v.DEVELOPPE_SANS_PAROLE in consigne and "(Leila)" in consigne
+    assert images_jointes[0].startswith("data:image/png;base64,")
+    assert "<Subject 1> breathes slowly." in tournes[0]["invite"]
+    assert "The girl with dark brown hair breathes slowly." in tournes[2]["invite"]   # son étiquette, hors Références
     # Le rejeu d'un plan : les fautes de son essai vont à la retouche ; une parole entendue n'en est pas une.
     r = c.post("/video-h3/maitre/%s/deplier" % jid, headers=CLE, json={
         "plans": [1], "retoucher": True,
@@ -3875,7 +3890,7 @@ def test_4_le_plan_coupe_part_de_son_image_et_les_fiches_donnent_les_voix(h3, mo
     p0 = a_tourner[0]["payload"]
     assert p0["mode"] == "references" and p0["depart_reference"] == base64.b64encode(CADRE).decode()
     plan = v.preparer(dict(p0, depart_reference=PNG))
-    assert ("detailed_description: [Shot 1] Live-action, cinematic. The shot begins from <Picture 4>. "
+    assert ("detailed_description: The target video is in a live-action, cinematic style. [Shot 1] The shot begins from <Picture 4>. "
             in plan["resume_public"]["invite"])
     assert list(plan["demande"]["images"]) == [f"ref_{i}.png" for i in range(4)]
     # 01/10 : l'image de départ est aussi ÉPINGLÉE à l'image 0 (deux Leila sinon).
@@ -6957,9 +6972,9 @@ def test_une_suite_trop_longue_est_refusee_avant_le_premier_sou(h3):
     vrai = len(v.controler_suite(court)["resume_public"]["invite"])
     assert v.SUITE_DEBUT[:40] in v.controler_suite(court)["resume_public"]["invite"] and vrai > nu
     # Un texte qui tient nu, mais pas en suite : refusé dès le contrôle, avec sa longueur.
-    long = dict(base, image_paroles="Léa sourit. " + "x" * (4000 - nu - (vrai - nu) // 2))
+    long = dict(base, image_paroles="Léa sourit. " + "x" * (v.INVITE_MAX - nu - (vrai - nu) // 2))
     v.preparer(dict(long, depart_reference=JPG))
-    with pytest.raises(ValueError, match=r"Invite trop longue : \d+ caractères, 4 000 au plus"):
+    with pytest.raises(ValueError, match=r"Invite trop longue : \d+ caractères, 7 000 au plus"):
         v.controler_suite(long)
 
 
@@ -7320,3 +7335,45 @@ def test_avec_la_fiche_du_decor_une_coupe_d_avant_tournage_tient_les_meubles_de_
         p.pop("image_depart", None)
     asyncio.run(h3._departs_des_coupes(plans, {"fiches": ["f"]}))   # sans décor : comme avant
     assert [(x["decor"], x["meubles"]) for x in vus] == [(None, None), ("d1", None)]
+
+
+def test_en_references_une_fiche_est_definie_par_son_etiquette_et_le_style_precede_le_plan(h3):
+    """05/10, plan 3 du film 5 relu contre le guide de MiniMax (ref-en.txt) : Pixel, un robot, était
+    « the person in <Picture 3> » dont on gardait « the face, hair and clothing » ; et le style suivait
+    [Shot 1], règle des autres modes (5.2 : en mode Références, une phrase AVANT [Shot 1])."""
+    v = h3.video_h3
+    leila, pixel = v.fiche_creer("Leila", "x")["id"], v.fiche_creer("Pixel", "y")["id"]
+    v.fiche_poser_image(leila, "face", PNG)
+    v.fiche_poser_image(pixel, "face", PNG)
+    v.fiche_poser_etiquette(pixel, "the small spherical silver robot")
+    invite = v.preparer({"mode": "references", "fiches": [leila, pixel], "langues": {}, "ambiance": "",
+                         "coupe_s": 0, "images": [], "longueur": 124, "visages_seuls": False,
+                         "image_paroles": "Leila looks at Pixel.", "depart_reference": JPG})["resume_public"]["invite"]
+    assert "<Subject 2> is the small spherical silver robot in <Picture 2>." in invite
+    assert ("<Subject 2> (appears in [Shot 1]): fully_preserved - the whole look of the small spherical silver "
+            "robot in <Picture 2> is retained: face or head, body shape and size, colours, clothing or surface, "
+            "as one single character.") in invite
+    # Sans étiquette, la fiche garde l'ancienne forme.
+    assert "<Subject 1> is the person in <Picture 1>." in invite
+    assert ("detailed_description: " + v.STYLE_REFERENCES + " [Shot 1] The shot begins from <Picture 3>. ") in invite
+    assert v.STYLE_H3 not in invite and len(invite) <= v.INVITE_MAX == 7000
+
+
+def test_le_texte_developpe_d_un_plan_est_refuse_s_il_perd_un_nom_ou_touche_aux_repliques(h3):
+    """05/10 : le texte du plan développé par le chat (350-500 mots) ; s'il ne tient pas, le plan part
+    avec son texte d'origine (app._developper_plan)."""
+    v = h3.video_h3
+    original = "Leila looks at Pixel and says « Hello. »"
+    bon = "Leila stands in the garden. " * 50 + "Pixel rises. Leila says « Hello. »"
+    assert v.lire_developpe(bon, original, ["Leila", "Pixel"]).endswith("« Hello. »")
+    with pytest.raises(ValueError, match="mots"):
+        v.lire_developpe("Leila looks at Pixel and says « Hello. »", original, ["Leila", "Pixel"])
+    with pytest.raises(ValueError, match="perdu « Pixel »"):
+        v.lire_developpe("Leila stands in the garden. " * 60 + "« Hello. »", original, ["Leila", "Pixel"])
+    with pytest.raises(ValueError, match="réplique"):
+        v.lire_developpe(bon.replace("« Hello. »", "« Hi there. »"), original, ["Leila", "Pixel"])
+    with pytest.raises(ValueError, match="réplique"):
+        v.lire_developpe(bon + " Pixel answers « Bonjour. »", original, ["Leila", "Pixel"])
+    # Un plan sans réplique : la consigne interdit toute parole ; avec une réplique, elle la garde.
+    assert v.DEVELOPPE_SANS_PAROLE in v.consigne_developpe({"image_paroles": "Leila walks."}, ["Leila"], 15.1)
+    assert v.DEVELOPPE_PAROLES in v.consigne_developpe({"image_paroles": original}, ["Leila", "Pixel"], 15.1)

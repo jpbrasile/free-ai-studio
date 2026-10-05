@@ -7141,7 +7141,7 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
         coupes, faibles = await _coupes_du_maitre(film)
         continus = []
         cles = video_h3.cles_du_maitre(plans, maitre["debuts_s"], coupes, maitre["longueur"], faibles, continus)
-        travaux, retouches, departs = [], {}, {}
+        travaux, retouches, departs, developpes = [], {}, {}, {}
         await _etiquettes_assurer(maitre["commun"].get("fiches") or [maitre["commun"].get("fiche")])
         for k, (a, b) in enumerate(cles):
             if k + 1 not in voulus:
@@ -7164,13 +7164,18 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
                     [str(r) for r in remarques.get(str(k + 1)) or [] if r and not video_h3.PAROLES_EN_TROP.match(str(r))]
                     + [d.get("quoi") for d in jugement.get("defauts") or [] if isinstance(d, dict)], jid=jid,
                     faux=faux)
+            # Le texte du plan développé d'après son image de départ (video_h3.CONSIGNE_DEVELOPPE, 05/10) ;
+            # `developper: false` le laisse tel que le maître l'a joué.
+            texte_deplie = plans[k]["image_paroles"]
+            if corps.get("developper") is not False:
+                texte_deplie, developpes[k + 1] = await _developper_plan(plans[k], images[0], fiches_film)
             images = [base64.b64encode(i).decode() for i in images]
             # L'image d'où part le clip, gardée dès le dépliage (propriétaire, 04/10 : « montre-moi les
             # images retouchées » ; un clip en file ne l'écrivait nulle part avant de démarrer).
             departs[k + 1] = video_h3.depart_poser(images[0])
             payload = dict({x: y for x, y in maitre["commun"].items() if y},
                            mode="premiere_derniere" if suite_apres else "premiere", images=images,
-                           image_paroles=plans[k]["image_paroles"].rstrip() + " " + video_h3.PERSONNE_D_AUTRE,
+                           image_paroles=texte_deplie.rstrip() + " " + video_h3.PERSONNE_D_AUTRE,
                            ambiance=plans[k].get("ambiance", ""),
                            camera=plans[k].get("camera"), definition=definition,
                            longueur=plans[k].get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT)
@@ -7216,7 +7221,32 @@ async def video_h3_maitre_deplier(jid: str, request: Request, authorization: Opt
     return dict({"maitre": jid, "clips": clips, "plans": voulus, "cles": cles, "coupes_vues_s": coupes,
                  "departs": departs},
                 **({"retouches": retouches} if retouches else {}),
+                **({"developpes": developpes} if developpes else {}),
                 **({"continus": continus} if continus else {}))
+
+
+async def _developper_plan(plan: dict, depart: bytes, fiches) -> tuple:
+    """(texte, note) : le texte du plan développé par le chat d'après son image de départ ; s'il ne
+    tient pas (video_h3.lire_developpe) ou que le chat refuse, le texte d'origine, et la note dit pourquoi."""
+    original = str(plan.get("image_paroles") or "")
+    noms = []
+    for fid in fiches or []:
+        try:
+            nom = video_h3.fiche_lire(fid)["nom"]
+        except ValueError:
+            continue
+        if re.search(r"(?<!\w)" + re.escape(nom) + r"(?!\w)", original):
+            noms.append(nom)
+    duree = (plan.get("longueur") or video_h3.LONGUEUR_PAR_DEFAUT) / video_h3.IMAGES_PAR_SECONDE
+    try:
+        texte = video_h3.lire_developpe(await _chat_du_studio(
+            video_h3.consigne_developpe(plan, noms, duree), "le développement du texte d'un plan",
+            images=[_data_url(depart)], modele=video_h3.MODELE_JUGE), original, noms)
+    except (HTTPException, ValueError) as exc:
+        pourquoi = str(getattr(exc, "detail", exc))[:200]
+        log.warning("texte du plan non développé (%s), il part tel quel", pourquoi)
+        return original, "texte d'origine : " + pourquoi
+    return texte, "%d mots" % len(texte.split())
 
 
 async def _coupes_du_maitre(film: bytes) -> tuple:
