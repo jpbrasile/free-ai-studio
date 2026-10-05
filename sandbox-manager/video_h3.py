@@ -4418,28 +4418,35 @@ def graphe(mode: str, texte: str, longueur: int, graine: int, nb_images: int = 0
     return g
 
 
-NOEUDS_TRONCON = ("MiniMaxH3MotionContextLoadLatent", "MiniMaxH3MotionContext",
-                  "MiniMaxH3MotionContextTrim")
+NOEUDS_TRONCON = ("LoadVideo", "GetVideoComponents", "MiniMaxH3MotionContext", "MiniMaxH3MotionContextTrim")
+CONTEXTE_VIDEO = "contexte.mp4"
 
 
-def graphe_troncon(texte: str, longueur: int, graine: int, contexte: str) -> dict:
+def graphe_troncon(texte: str, longueur: int, graine: int) -> dict:
     """Le plan suivant par tronçon : le graphe de l'essai du 27/09 (branche b).
 
-    Le latent du plan précédent est relu sur le disque Modal ; le nœud en épingle
-    la fin (22 images, 1 s de son) au début du nouveau plan, puis Trim retire ces
-    images reprises, et le son qui va avec, du plan livré.
+    Le nœud épingle la fin du plan précédent (22 images, 1 s de son) au début du
+    nouveau plan, puis Trim retire ces images reprises, et le son qui va avec, du
+    plan livré.
     """
-    return brancher_troncon(graphe("texte", texte, longueur, graine), contexte)
+    return brancher_troncon(graphe("texte", texte, longueur, graine))
 
 
-def brancher_troncon(g: dict, contexte: str) -> dict:
+def brancher_troncon(g: dict) -> dict:
     """Le tronçon branché sur le nœud 10 du graphe, texte seul ou Références. Jalon 0 bis, clip 6
     (05/10) : en Références, les photos de la fiche et sa voix dans le clip enchaîné, la ressemblance à
-    la fiche en fin de clip passe de 0,312 à 0,453 (ArcFace), même graine, même raccord."""
-    g["30"] = _n("MiniMaxH3MotionContextLoadLatent", {"latent_path": contexte, "clip_index": 1})
+    la fiche en fin de clip passe de 0,312 à 0,453 (ArcFace), même graine, même raccord.
+
+    Le contexte est la fin du plan précédent en vidéo (CONTEXTE_VIDEO : `context_frames` et
+    `context_audio`), plus son latent gardé : ce latent porte le son du plan, que le modèle CONTINUE (clip 10,
+    05/10 : « Sorry, I'll see you better », réplique inventée). La vidéo, elle, a déjà sa voix ôtée
+    (app._derniere_et_raccord) ; propriétaire : « il fallait faire le latent sans la voix »."""
+    g["40"] = _n("LoadVideo", {"file": CONTEXTE_VIDEO})
+    g["41"] = _n("GetVideoComponents", {"video": ["40", 0]})
     g["31"] = _n("MiniMaxH3MotionContext", {
-        "conditioning": ["10", 0], "vae": ["4", 0], "latent": ["10", 1], "context_latent": ["30", 0],
-        "audio_vae": ["5", 0], "context_length": CONTEXTE_IMAGES, "audio_context_length": CONTEXTE_SON})
+        "conditioning": ["10", 0], "vae": ["4", 0], "latent": ["10", 1], "context_frames": ["41", 0],
+        "context_audio": ["41", 1], "audio_vae": ["5", 0], "context_length": CONTEXTE_IMAGES,
+        "audio_context_length": CONTEXTE_SON})
     g["13"]["inputs"]["conditioning"] = ["31", 0]
     g["32"] = _n("MiniMaxH3MotionContextTrim", {"images": ["15", 0], "audio": ["16", 0],
                                                  "trim_frames": ["31", 1], "fps": float(IMAGES_PAR_SECONDE)})
@@ -4776,9 +4783,11 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     # ambiance. Guide de MiniMax : « The copied ambience layer from <Audio N> continues throughout the
     # target video » ; une suite la prend en simple référence. Seulement s'il reste une place de son.
     # Allumé par défaut (propriétaire, 05/10 : « allume decor_son par défaut ») ; `decor_son: false` l'éteint.
+    # Pas dans un plan sans voix (clip 10 G et H, 05/10) : seule en <Audio 1>, la piste a été prise pour un
+    # timbre, une voix a parlé sur le jardin (« Sorry, I'll see you better ») ; elle reste posée au montage.
     son_lieu = None
     if refs and fiches and payload.get("decor") and payload.get("decor_son") is not False \
-            and len(sons) < VOIX_PAR_PLAN:
+            and 0 < len(sons) < VOIX_PAR_PLAN:
         piste = fiche_son_lieu(payload["decor"])
         if piste:
             sons.append(base64.b64encode(piste).decode())
@@ -4987,9 +4996,11 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
     base = dict(payload, coupe_s=0, image_paroles=texte_de_suite(payload.get("image_paroles", ""),
                                                                  payload.get("elements")))
     if voie == "troncon":
+        if not fin_b64:
+            raise ValueError("La fin du clip précédent est illisible.")
         # Les fiches restent dans le clip enchaîné (propriétaire, 05/10 : « tu n'as pas conservé les
         # images de référence des personnages dans les clips ») : Références sans première image, le
-        # début vient du latent ; sans fiche, ou trop de photos, le texte seul comme avant.
+        # début vient de la fin du clip précédent ; sans fiche, ou trop de photos, le texte seul comme avant.
         ids = base.get("fiches") or ([base["fiche"]] if base.get("fiche") else [])
         nb, visages_seuls = photos_avec_depart(ids) if ids else (0, False)
         if 0 < nb < MODES["references"]["images_max"]:
@@ -4997,15 +5008,14 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
             plan = preparer(dict(base, mode="references", images=[], visages_seuls=visages_seuls,
                                  suite_latent=True), graine_hasard)
             d = plan["demande"]
-            brancher_troncon(d["graphe"], v["latent_vers"])
-            d["classes"] = list(d["classes"]) + list(NOEUDS_TRONCON)
+            brancher_troncon(d["graphe"])
+            d["classes"] = list(d["classes"]) + [c for c in NOEUDS_TRONCON if c not in d["classes"]]
         else:
             plan = preparer(dict(base, mode="texte", images=[]), graine_hasard)
             d = plan["demande"]
-            d["graphe"] = graphe_troncon(plan["resume_public"]["invite"], d["longueur"], d["graine"],
-                                         v["latent_vers"])
+            d["graphe"] = graphe_troncon(plan["resume_public"]["invite"], d["longueur"], d["graine"])
             d["classes"] = [MODES["texte"]["noeud"], *NOEUDS_TRONCON]
-        d["contexte"] = v["latent_vers"]
+        d["videos"] = {CONTEXTE_VIDEO: fin_b64}
     else:
         if not derniere_b64:
             raise ValueError("La dernière image du clip est illisible.")
@@ -5162,19 +5172,6 @@ manque = [f for f in D["fichiers"] if not (BASE / f).is_file()]
 if manque:
     print("POIDS_ABSENTS " + ", ".join(manque), file=sys.stderr)
     sys.exit(3)
-if D.get("contexte") and not Path(D["contexte"]).is_file():
-    print("CONTEXTE_ABSENT " + D["contexte"], file=sys.stderr)
-    sys.exit(10)
-if D.get("contexte"):
-    # Le nœud Motion-Context ne lit un latent que sous le dossier de sortie de
-    # ComfyUI (« path must stay inside the ComfyUI output folder », jalon 0 du
-    # 05/10) : le latent gardé sur le disque y est copié, le graphe pointe la copie.
-    entree = Path("/tmp/sortie/contexte_entree") / Path(D["contexte"]).name
-    entree.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(D["contexte"], entree)
-    for n in D["graphe"].values():
-        if n.get("class_type") == "MiniMaxH3MotionContextLoadLatent":
-            n["inputs"]["latent_path"] = str(entree)
 
 Path("/tmp/chemins.yaml").write_text(
     "h3:\n  base_path: " + str(BASE) + "\n  diffusion_models: diffusion_models\n"

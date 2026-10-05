@@ -4369,12 +4369,12 @@ async def video_h3_prolonger(request: Request, authorization: Optional[str] = He
     except HTTPException as exc:
         raise HTTPException(404, "Ce clip n'existe plus sur ce Studio.") from exc
     derniere = fin = None
-    if video_h3.voie_prolonger(avant) == "image" and avant.get("status") == "succeeded":
+    if avant.get("status") == "succeeded":
         chemin = _video_h3_octets(precedent)
         if not chemin:
             raise HTTPException(404, "La vidéo de ce clip n'est plus sur ce Studio.")
         try:
-            derniere, fin = _derniere_et_raccord(chemin.read_bytes())
+            derniere, fin = _derniere_et_raccord(chemin.read_bytes(), ambiance=_ambiance_du_lieu(payload))
         except montage.MontageImpossible as exc:
             raise HTTPException(503, str(exc)) from exc
     try:
@@ -4384,9 +4384,18 @@ async def video_h3_prolonger(request: Request, authorization: Optional[str] = He
     return _lancer_h3(plan, precedent, retirer=video_h3.images_a_retirer(plan), ou=_ou_h3(payload))
 
 
-def _derniere_et_raccord(video: bytes, fin_vue: Optional[bytes] = None) -> tuple:
+def _ambiance_du_lieu(payload: dict) -> Optional[bytes]:
+    """La piste son du décor du plan (fiche du lieu), si elle existe et que `decor_son` n'est pas éteint."""
+    if not payload.get("decor") or payload.get("decor_son") is False:
+        return None
+    return video_h3.fiche_son_lieu(payload["decor"])
+
+
+def _derniere_et_raccord(video: bytes, fin_vue: Optional[bytes] = None, ambiance: Optional[bytes] = None) -> tuple:
     """La dernière image (base64) et les video_h3.RACCORD_IMAGES dernières images avec
-    leur son (mp4 base64) : une suite en « Références » les épingle à son début (30/09)."""
+    leur son (mp4 base64) : une suite en « Références » (raccord) ou par tronçon les épingle à
+    son début (30/09). Une voix y est remplacée par la fin de `ambiance` (la piste du lieu), à
+    défaut par un silence."""
     fin_vue = fin_vue if fin_vue is not None else montage.derniere_image(video)
     raccord = montage.fin(video, video_h3.RACCORD_IMAGES)
     # 02/10, film 4, plan 2, deux prises : le plan 1 finit sur « Parfaite ! » (9,2-9,8 s), dans le
@@ -4394,8 +4403,10 @@ def _derniere_et_raccord(video: bytes, fin_vue: Optional[bytes] = None) -> tuple
     # la consigne écrite. Une voix dans le raccord est tue : ses images restent, et elles sont
     # retirées au recollage ; les voix viennent des fiches.
     try:
+        # 05/10, clip 10 K : la fin de l'ambiance du lieu à la place de la voix, le plan suivant
+        # continue le jardin sans réplique inventée (« ça fonctionne », propriétaire).
         if montage.passages_de_voix(raccord):
-            raccord = montage.taire(raccord)
+            raccord = montage.sous_ambiance(raccord, ambiance) if ambiance else montage.taire(raccord)
     except montage.MontageImpossible:
         pass   # une aide : sans elle, le raccord part tel quel, comme avant le 02/10
     return base64.b64encode(fin_vue).decode(), base64.b64encode(raccord).decode()
@@ -8264,7 +8275,7 @@ def run_scenario_h3(sid: str, a_tourner: list):
                     arret = _controle_derniere_image(sid, i, fin_vue)
                     if arret:
                         raise ValueError(arret)
-                    derniere, fin = _derniere_et_raccord(chemin.read_bytes(), fin_vue)
+                    derniere, fin = _derniere_et_raccord(chemin.read_bytes(), fin_vue, _ambiance_du_lieu(p["payload"]))
             except HTTPException as exc:
                 video_h3.scenario_noter(sid, etat="échoué", erreur=f"Plan {i + 1} : {exc.detail}")
                 return

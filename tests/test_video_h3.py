@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 RACINE = Path(__file__).resolve().parents[1]
 CLE = {"Authorization": "Bearer cle-sandbox-de-test"}
 PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\0" * 64).decode()
+FIN = base64.b64encode(b"fin du plan precedent, mp4").decode()   # le contexte d une suite
 PDF = base64.b64encode(b"%PDF-1.4 copie").decode()
 CADRE = b"\x89PNG\r\n\x1a\n" + b"\1" * 64   # une image recadrée, pour les tests
 
@@ -895,6 +896,17 @@ def test_la_fin_d_un_film_rend_ses_22_dernieres_images_et_son_son(h3, tmp_path):
     assert son == "audio"
     with pytest.raises(m.MontageImpossible, match="moins que"):
         m.fin(film.read_bytes(), 60)
+    # Clip 10 K, 05/10 : la voix ôtée du raccord, la fin de l'ambiance du lieu prend sa place.
+    lieu = tmp_path / "lieu.wav"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=d=5:a=0.1",
+                    str(lieu)], check=True)
+    sous = tmp_path / "sous.mp4"
+    sous.write_bytes(m.sous_ambiance(fin.read_bytes(), lieu.read_bytes()))
+    assert m.images(sous) == 22
+    duree = float(subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries",
+                                  "stream=duration", "-of", "csv=p=0", str(sous)],
+                                 capture_output=True, text=True).stdout.strip())
+    assert duree < 1.5   # la fin de la piste, à la longueur du raccord, pas toute la piste
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg absent")
@@ -1053,17 +1065,20 @@ def test_avec_l_option_on_prolonge_par_troncon(h3, monkeypatch):
     v = h3.video_h3
     monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
     avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors", plans=2)
-    plan = v.preparer_prolonger(demande(), avant)
+    plan = v.preparer_prolonger(demande(), avant, fin_b64=FIN)
     g, d = plan["demande"]["graphe"], plan["demande"]
-    assert g["30"]["inputs"] == {"latent_path": avant["video"]["latent_vers"], "clip_index": 1}
+    # Clip 10, 05/10 : le latent portait le son du plan, que H3 continuait (une réplique inventée) ; le
+    # contexte est la fin du plan en vidéo, voix déjà ôtée par app._derniere_et_raccord.
+    assert "30" not in g and "contexte" not in d and d["videos"] == {"contexte.mp4": FIN}
+    assert g["40"]["inputs"] == {"file": "contexte.mp4"} and g["41"]["inputs"] == {"video": ["40", 0]}
     mc = g["31"]["inputs"]
-    assert mc["context_latent"] == ["30", 0] and mc["latent"] == ["10", 1] and mc["audio_vae"] == ["5", 0]
+    assert mc["context_frames"] == ["41", 0] and mc["context_audio"] == ["41", 1] and "context_latent" not in mc
+    assert mc["latent"] == ["10", 1] and mc["audio_vae"] == ["5", 0]
     assert (mc["context_length"], mc["audio_context_length"]) == ("22", 24)
     assert g["13"]["inputs"]["conditioning"] == ["31", 0]
     assert g["32"]["inputs"]["trim_frames"] == ["31", 1]
     assert g["17"]["inputs"]["images"] == ["32", 0] and g["17"]["inputs"]["audio"] == ["32", 1]
     assert "first_frame" not in g["10"]["inputs"] and d["images"] == {}
-    assert d["contexte"] == avant["video"]["latent_vers"]
     assert set(v.NOEUDS_TRONCON) <= set(d["classes"])
     assert plan["resume_public"]["voie"] == "troncon" and plan["resume_public"]["plans"] == 3
     # Et ce plan garde à son tour son latent pour le suivant.
@@ -1083,7 +1098,7 @@ def test_une_suite_par_troncon_garde_les_photos_de_ses_fiches(h3, monkeypatch):
     v.fiche_poser_voix(lea, WAV, 4.0, "exemple", "French")
     avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors", plans=2)
     plan = v.preparer_prolonger(demande(mode="references", fiches=[lea], langues={lea: "French"},
-                                        image_paroles="Léa lève les yeux et dit « Oui. »"), avant)
+                                        image_paroles="Léa lève les yeux et dit « Oui. »"), avant, fin_b64=FIN)
     g, d = plan["demande"]["graphe"], plan["demande"]
     assert g["10"]["class_type"] == "MiniMaxH3ReferenceToVideo" and "ref_images.ref_image_0" in g["10"]["inputs"]
     assert list(d["images"]) == ["ref_0.png"]
@@ -1091,7 +1106,7 @@ def test_une_suite_par_troncon_garde_les_photos_de_ses_fiches(h3, monkeypatch):
     assert list(d["sons"]) == ["voix_0.wav"] and g["10"]["inputs"]["ref_audios.ref_audio_0"] == ["70", 0]
     assert "<Audio 1>" in plan["resume_public"]["invite"]
     assert g["31"]["inputs"]["conditioning"] == ["10", 0] and g["13"]["inputs"]["conditioning"] == ["31", 0]
-    assert g["30"]["inputs"]["latent_path"] == avant["video"]["latent_vers"] and d["contexte"] == avant["video"]["latent_vers"]
+    assert g["31"]["inputs"]["context_frames"] == ["41", 0] and d["videos"] == {"contexte.mp4": FIN}
     assert set(v.NOEUDS_TRONCON) <= set(d["classes"]) and "MiniMaxH3ReferenceToVideo" in d["classes"]
     invite = plan["resume_public"]["invite"]
     assert "first frame" not in invite and "<Subject 1>" in invite
@@ -1107,13 +1122,36 @@ def test_une_suite_par_troncon_prend_la_piste_du_lieu_en_reference(h3, monkeypat
     v.fiche_poser_son_lieu(lieu, b"RIFF....WAVEfmt ")
     lea = v.fiche_creer("Léa", "x")["id"]
     v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_voix(lea, WAV, 4.0, "exemple", "French")
     avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors", plans=2)
-    plan = v.preparer_prolonger(demande(mode="references", fiches=[lea], decor=lieu,
-                                        image_paroles="Léa marche vers la maison."), avant)
+    plan = v.preparer_prolonger(demande(mode="references", fiches=[lea], decor=lieu, langues={lea: "French"},
+                                        image_paroles="Léa marche vers la maison et dit « Oui. »"), avant,
+                                fin_b64=FIN)
     invite = plan["resume_public"]["invite"]
     assert plan["resume_public"]["voie"] == "troncon" and plan["resume_public"]["decor_son"]
-    assert "<Audio 1>: reference - its ambience guides" in invite and "partially_copy" not in invite
-    assert "The ambience of <Audio 1> continues throughout the target video." in invite
+    assert "<Audio 2>: reference - its ambience guides" in invite and "partially_copy" not in invite
+    assert "The ambience of <Audio 2> continues throughout the target video." in invite
+
+
+def test_un_plan_sans_voix_n_envoie_pas_la_piste_du_lieu_seule(h3, monkeypatch):
+    """Clip 10 G et H, 05/10 : seule en <Audio 1>, la piste du jardin a été prise pour un timbre ; une voix a
+    parlé (« Sorry, I'll see you better »), même graine, que le texte dise le silence ou non."""
+    v = h3.video_h3
+    lieu = v.fiche_creer("le jardin", "jardin de nuit", genre="decor")["id"]
+    v.fiche_poser_image(lieu, "face", PNG)
+    v.fiche_poser_son_lieu(lieu, b"RIFF....WAVEfmt ")
+    lea = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    plan = v.preparer(demande(mode="references", fiches=[lea], decor=lieu, image_paroles="Léa marche."))
+    assert not plan["resume_public"]["decor_son"] and "<Audio" not in plan["resume_public"]["invite"]
+    assert not plan["demande"].get("sons")
+
+
+def test_une_suite_par_troncon_sans_la_fin_du_precedent_est_refusee(h3, monkeypatch):
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors")
+    with pytest.raises(ValueError, match="fin du clip précédent"):
+        h3.video_h3.preparer_prolonger(demande(), avant)
 
 
 def test_un_clip_sans_latent_garde_se_prolonge_par_l_image_meme_avec_l_option(h3, monkeypatch):
@@ -1133,34 +1171,14 @@ def test_ce_qui_ne_se_prolonge_pas_est_refuse(h3, video, statut, message):
         h3.video_h3.preparer_prolonger(demande(), avant, PNG)
 
 
-def test_le_script_verifie_le_contexte_et_garde_le_latent(h3, monkeypatch):
+def test_le_script_d_une_suite_par_troncon_garde_le_latent(h3, monkeypatch):
     v = h3.video_h3
     monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
     avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors")
-    d = v.garder_latent(v.preparer_prolonger(demande(), avant)["demande"], "c" * 32)
+    d = v.garder_latent(v.preparer_prolonger(demande(), avant, fin_b64=FIN)["demande"], "c" * 32)
     code = v.construire_script(d)
     ast.parse(code)
-    assert "CONTEXTE_ABSENT" in code and "latent_garde" in code
-    assert "par la dernière image" in v.phrase_d_echec("CONTEXTE_ABSENT /poids/chaines/x")
-
-
-def test_le_latent_du_troncon_est_copie_sous_le_dossier_de_sortie_de_comfyui(h3, monkeypatch, tmp_path):
-    # Jalon 0, 05/10 : le nœud refuse un latent hors du dossier de sortie (« path must
-    # stay inside the ComfyUI output folder ») ; /poids/chaines/… n'y est pas.
-    v = h3.video_h3
-    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
-    latent = tmp_path / "poids" / ("b" * 32 + ".safetensors")
-    latent.parent.mkdir()
-    latent.write_bytes(b"latent")
-    avant = _clip_reussi(h3, latent_vers=str(latent))
-    d = v.preparer_prolonger(demande(), avant)["demande"]
-    debut = v._SCRIPT.index('if D.get("contexte"):\n')
-    bloc = v._SCRIPT[debut:v._SCRIPT.index("\n\n", debut)].replace("/tmp/sortie", (tmp_path / "sortie").as_posix())
-    exec(bloc, {"D": d, "Path": Path, "shutil": shutil})
-    copie = tmp_path / "sortie" / "contexte_entree" / latent.name
-    assert copie.read_bytes() == b"latent"
-    assert d["graphe"]["30"]["inputs"]["latent_path"] == str(copie)
-    assert d["contexte"] == str(latent)   # la vérification CONTEXTE_ABSENT lit toujours l'original
+    assert "latent_garde" in code and "CONTEXTE_ABSENT" not in code
 
 
 def test_prolonger_sans_copie_d_autorisation_rien_n_est_loue(h3):
@@ -7347,24 +7365,27 @@ def test_le_decor_part_a_h3_avant_l_image_de_depart_quand_on_le_demande(h3):
 def test_la_piste_son_du_lieu_part_en_audio_par_defaut(h3):
     """05/10, propriétaire : « le fond sonore devrait être dans les références », « ok fais 1 + 2 », puis
     « allume decor_son par défaut ». Recopiée sur une coupe, simple référence sur une suite (guide de
-    MiniMax) ; rien sans piste, rien avec `decor_son: false`."""
+    MiniMax) ; rien sans piste, rien avec `decor_son: false`, rien dans un plan sans voix (clip 10, 05/10)."""
     v = h3.video_h3
     lieu, leila = _decor_et_leila(v)
-    base = {"mode": "references", "image_paroles": "Leila sits on the fountain.", "fiches": [leila],
-            "decor": lieu, "depart_reference": PNG}
+    v.fiche_poser_voix(leila, WAV, 4.0, "exemple", "English")
+    base = {"mode": "references", "image_paroles": "Leila sits on the fountain and says « Hello. »",
+            "fiches": [leila], "langues": {leila: "English"}, "decor": lieu, "depart_reference": PNG}
     sans_piste = v.preparer(dict(base))
-    assert not sans_piste["resume_public"]["decor_son"] and not sans_piste["demande"]["sons"]
+    assert not sans_piste["resume_public"]["decor_son"] and list(sans_piste["demande"]["sons"]) == ["voix_0.wav"]
     v.fiche_poser_son_lieu(lieu, b"RIFF....WAVEfmt ")
     coupe = v.preparer(dict(base))
     invite = coupe["resume_public"]["invite"]
-    assert coupe["resume_public"]["decor_son"] and list(coupe["demande"]["sons"]) == ["voix_0.wav"]
-    assert "<Audio 1> is the ambience reference of the setting; it contains no speech." in invite
-    assert "<Audio 1>: partially_copy - its ambience layer is copied" in invite
-    assert "The copied ambience layer from <Audio 1> continues throughout the target video." in invite
+    assert coupe["resume_public"]["decor_son"] and list(coupe["demande"]["sons"]) == ["voix_0.wav", "voix_1.wav"]
+    assert "<Audio 2> is the ambience reference of the setting; it contains no speech." in invite
+    assert "<Audio 2>: partially_copy - its ambience layer is copied" in invite
+    assert "The copied ambience layer from <Audio 2> continues throughout the target video." in invite
     assert "audio reference" in invite
     legere = v.preparer(dict(base, invite_legere=True))["resume_public"]["invite"]
-    assert "<Audio 1>: partially_copy" in legere and "Each <Audio> gives only a voice timbre" not in legere
-    assert "<Audio" not in v.preparer(dict(base, decor_son=False))["resume_public"]["invite"]
+    assert "<Audio 2>: partially_copy" in legere
+    assert "<Audio 2>" not in v.preparer(dict(base, decor_son=False))["resume_public"]["invite"]
+    muet = v.preparer(dict(base, image_paroles="Leila sits on the fountain."))
+    assert not muet["resume_public"]["decor_son"]
 
 
 def test_le_decor_ne_prend_pas_une_place_qui_manque(h3, monkeypatch):

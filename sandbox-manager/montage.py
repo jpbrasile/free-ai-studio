@@ -1141,6 +1141,18 @@ def taire(video: bytes) -> bytes:
         return b.read_bytes()
 
 
+def sous_ambiance(video: bytes, son: bytes) -> bytes:
+    """La même vidéo, images intactes (copiées), son remplacé par la fin de `son` (la piste du lieu) :
+    le plan suivant continue l'ambiance, pas une voix ni un silence (clip 10 K, 05/10)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, s, b = Path(dossier, "a.mp4"), Path(dossier, "s"), Path(dossier, "b.mp4")
+        a.write_bytes(video)
+        s.write_bytes(son)
+        _lancer(["-i", str(a), "-sseof", "-3", "-i", str(s), "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+                 "-c:a", "aac", "-shortest", str(b)], "L'ambiance du raccord")
+        return b.read_bytes()
+
+
 def _sonde(chemin: Path, champ: str, compter: bool = False) -> str:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
