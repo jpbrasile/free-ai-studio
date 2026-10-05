@@ -139,19 +139,26 @@ def test_la_page_se_parcourt_par_un_menu(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     menu = re.search(r'<select id="section_choix"[^>]*>(.*?)</select>', page, re.S).group(1)
     parties = re.findall(r'<option value="(\w+)"', menu)
-    assert parties == ["clip", "casting", "montage_bloc", "musique_bloc", "reglages"]
+    assert parties == ["clip", "casting", "montage_bloc", "film_bloc", "musique_bloc", "reglages"]
     for p in parties:
         assert re.search(r'class="[^"]*\bsection\b[^"]*" id="%s"' % p, page), p
     assert page.count('class="bloc section"') + page.count('class="section"') == len(parties)
     assert 'href="http://localhost:8000/studio"' in page
     # Le verrou d'un tournage couvre aussi la musique, sortie du bloc du scénario.
-    assert "#musique_bloc button" in page
+    assert "#musique_bloc button" in page and "#film_bloc button" in page
+    # 05/10 (« on n'a pas l'assemblage de clips ni la demande haute résolution et la
+    # compression ») : montage, 4K et compression ont leur partie, sur tout film déjà fait.
+    film = re.search(r'id="film_bloc">(.*?)<div class="bloc section"', page, re.S).group(1)
+    for i in ("clips_liste", "montage_lancer", "film_choix", "film_agrandir", "film_finaliser", "film_mo",
+              "film_compresser_lancer", "films_hd_bloc"):
+        assert 'id="%s"' % i in film, i
+    assert '<details class="plie" open><summary>1. Assembler' in film
     # Un scénario tourné est jugé de lui-même (gratuit).
     assert "if (SCENARIO_TOURNE === d.id) await actionJuger();" in page
     # Aucun lecteur dans une partie repliée : le 29/09, le film tourné y était caché.
     replies = "".join(re.findall(r"<details.*?</details>", page, re.S))
-    # Le 4e : celui des films en haute définition (30/09, « 4k dans studio »).
-    assert page.count("<video") == 4 and "<video" not in replies
+    # Le 4e : celui des films en haute définition (30/09, « 4k dans studio ») ; le 5e : le film repris (05/10).
+    assert page.count("<video") == 5 and "<video" not in replies
     # Les réglages rares sont repliés, pas retirés.
     for i in ("definition", "coupe", "graine", "ambiance", "musique_fondu", "clips_liste"):
         assert 'id="%s"' % i in page, i
@@ -6189,6 +6196,9 @@ def test_un_film_hd_passe_en_av1_si_la_qualite_mesuree_tient(h3, tmp_path):
     assert fiche["psnr_y"] >= m.AV1_PSNR_Y_MOYEN_MIN and fiche["psnr_pire"] >= m.AV1_PSNR_PIRE_MIN
     # Déjà en AV1 : rien n'est refait.
     assert m.compacter_av1(octets) == (octets, {"codec": "av1", "deja": True})
+    # 05/10 : déjà en AV1 mais au-dessus de la taille visée, serré lui aussi.
+    rendu, fiche = m.compacter_av1(octets, plafond=len(octets) - 1)
+    assert fiche["sous_plafond"] and len(rendu) < len(octets), fiche
     # Une garde impossible à tenir : les deux réglages essayés, le film rendu tel quel.
     m_seuil = m.AV1_PSNR_Y_MOYEN_MIN
     try:
@@ -6220,6 +6230,53 @@ def test_seuls_les_films_hd_sont_compresses_et_un_echec_les_laisse_tels_quels(h3
     monkeypatch.setattr(h3.montage, "compacter_av1", casse)
     assert h3._compacter_hd(b"HD", "SeedVR2 (agrandissement)") == (
         b"HD", {"raison": "La mesure de qualité (PSNR) a échoué."})
+
+
+def _attendre_travail(h3, jid):
+    for _ in range(150):   # le vrai fil
+        time.sleep(0.2)
+        try:
+            st = h3.read_job(jid)
+        except OSError:    # Windows : le fichier est en train d'être remplacé
+            continue
+        if st["status"] in ("succeeded", "failed"):
+            return st
+    raise AssertionError("travail jamais fini")
+
+
+def test_un_film_se_compresse_a_la_demande_sous_une_taille_visee(h3, monkeypatch, tmp_path):
+    """05/10 : « on n'a pas l'assemblage de clips ni la demande haute résolution et la compression »."""
+    fichiers = _deux_clips(h3, monkeypatch, tmp_path)
+    hd = "e" * 32
+    _clip_reussi(h3, hd, moteur="SeedVR2 (agrandissement)", echelle="4k")
+    fichiers[hd] = tmp_path / "hd.mp4"
+    fichiers[hd].write_bytes(b"F" * 3_000_000)
+    appels = []
+    serre = {"codec": "av1", "crf": 42, "mo": 0.0, "avant_mo": 3.0, "psnr_y": 38.2, "sous_plafond": True}
+    monkeypatch.setattr(h3.montage, "compacter_av1", lambda f, plafond=0: appels.append((len(f), plafond))
+                        or (b"AV1", serre))
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 724)
+    c = client(h3)
+    assert [f["mo"] for f in c.get("/video-h3/clips", headers=CLE).json()["films_hd"] if f["id"] == hd] == [3.0]
+    r = c.post("/video-h3/compresser", headers=CLE, json={"job": hd, "mo": 2})
+    assert r.status_code == 200, r.text
+    st = _attendre_travail(h3, r.json()["id"])
+    assert st["status"] == "succeeded", st.get("error")
+    assert appels == [(3_000_000, 2_000_000)] and st["video"]["compression"] == serre
+    # Il reste un film 4K, à part de l'original, que la page retrouve.
+    assert st["video"]["moteur"] == "SeedVR2 (agrandissement)" and st["video"]["echelle"] == "4k"
+    assert st["video"]["source"] == hd and fichiers[hd].read_bytes() == b"F" * 3_000_000
+    assert st["id"] in [f["id"] for f in c.get("/video-h3/clips", headers=CLE).json()["films_hd"]]
+    # Déjà sous la taille visée : refus, rien ne part.
+    r = c.post("/video-h3/compresser", headers=CLE, json={"job": hd, "mo": 5})
+    assert r.status_code == 422 and "3.0 Mo" in r.json()["detail"] and len(appels) == 1
+    # Rien de gagné : pas de double, la raison mesurée.
+    monkeypatch.setattr(h3.montage, "compacter_av1", lambda f, plafond=0: (
+        f, {"codec": "av1", "deja": True, "plafond": "aucun réglage ne tient sous le plafond"}))
+    st = _attendre_travail(h3, c.post("/video-h3/compresser", headers=CLE, json={"job": hd, "mo": 1}).json()["id"])
+    assert st["status"] == "failed" and "aucun réglage ne tient" in st["error"]
+    assert c.post("/video-h3/compresser", headers=CLE, json={"job": "z" * 32}).status_code == 404
+    assert c.post("/video-h3/compresser", headers=CLE, json={"job": hd, "mo": "x"}).status_code == 400
 
 
 def test_le_traducteur_des_sous_titres_sait_qui_parle_a_qui(h3, monkeypatch):

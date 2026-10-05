@@ -4576,9 +4576,14 @@ def _clips_h3() -> list:
             continue
         clips.append({"id": job["id"], "invite": v.get("invite", ""), "secondes": v.get("secondes"),
                       "cree_a": job.get("created_at"), "fiche": (v.get("fiche") or {}).get("nom"),
-                      "mode": v.get("mode", ""),
+                      "mode": v.get("mode", ""), "mo": _mo_du_film(job["id"]),
                       "video_url": f"/video/jobs/{job['id']}/fichier?cle={jeton_video(job['id'])}"})
     return clips
+
+
+def _mo_du_film(jid: str) -> Optional[float]:
+    chemin = _video_h3_octets(jid)
+    return round(chemin.stat().st_size / 1e6, 1) if chemin else None
 
 
 def _films_hd() -> list:
@@ -4600,7 +4605,7 @@ def _films_hd() -> list:
             continue
         films.append({"id": job["id"], "titre": job.get("titre") or "", "echelle": v.get("echelle", ""),
                       "secondes": v.get("secondes"), "cree_a": job.get("created_at"),
-                      "compression": v.get("compression"),
+                      "compression": v.get("compression"), "mo": _mo_du_film(job["id"]),
                       "video_url": f"/video/jobs/{job['id']}/fichier?cle={jeton_video(job['id'])}"})
     return films
 
@@ -5838,6 +5843,78 @@ def _job_noter(jid: str, **champs):
     job = read_job(jid)
     job.update(champs)
     write_job(jid, job)
+
+
+# --- Compresser un film à la demande (05/10/2026) ------------------------------
+# Propriétaire : « on n'a pas l'assemblage de clips ni la demande haute résolution et la
+# compression ». La recompression sous un plafond (montage.compacter_av1, 02/10) n'avait
+# pas de bouton. Un nouveau film, fait ici ; l'original reste tel quel.
+
+@app.post("/video-h3/compresser")
+async def video_h3_compresser(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{job, mo?} : le film en AV1, la qualité mesurée d'abord ; avec `mo`, serré jusqu'à
+    tenir sous `mo` Mo, la qualité obtenue notée. Rien n'est loué."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    film_jid = str(corps.get("job") or "")
+    if film_jid not in _films_du_studio() or not _video_h3_octets(film_jid):
+        raise HTTPException(404, "Ce film n'est plus sur ce Studio.")
+    try:
+        mo = float(corps.get("mo") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "Taille visée illisible.") from exc
+    if mo < 0:
+        raise HTTPException(400, "Taille visée négative.")
+    avant_mo = _mo_du_film(film_jid) or 0
+    if mo and avant_mo <= mo:
+        raise HTTPException(422, "Ce film fait déjà %.1f Mo, sous les %.1f Mo visés : rien à faire." % (avant_mo, mo))
+    origine = read_job(film_jid)
+    avant = origine.get("video") or {}
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid, "provider": "local", "title": "Free AI Studio compression", "gpu": False, "internet": False,
+        "status": "queued", "created_at": time.time(), "artifacts": [],
+        "video": dict({"moteur": _moteur_du_film(avant), "mode": "compression", "mode_titre": "Film compressé",
+                       "source": film_jid, "clips": [film_jid], "invite": avant.get("invite", ""),
+                       "plans": avant.get("plans") or 1, "secondes": avant.get("secondes")},
+                      **({"echelle": avant["echelle"]} if avant.get("echelle") else {})),
+        "titre": ((origine.get("titre") or "Film H3")[:60] + " (compressé)"),
+    })
+    threading.Thread(target=run_compresser, args=(jid, film_jid, int(mo * 1e6)), daemon=True).start()
+    return read_job(jid)
+
+
+def run_compresser(jid: str, film_jid: str, plafond: int):
+    """La compression sur ce PC. Un film qui ne gagne rien n'est pas gardé en double :
+    le travail finit en échec, avec la raison mesurée."""
+    try:
+        _job_noter(jid, status="running", started_at=time.time(), etape="Compression AV1 (qualité mesurée)")
+        source = _video_h3_octets(film_jid)
+        if not source:
+            raise montage.MontageImpossible("Ce film n'est plus sur ce Studio.")
+        film = source.read_bytes()
+        octets, fiche = montage.compacter_av1(film, plafond)
+        if octets == film:
+            raise montage.MontageImpossible(
+                "Rien de gagné, le film reste tel quel : "
+                + (fiche.get("plafond") or fiche.get("raison") or ("déjà en AV1" if fiche.get("deja") else "aucun gain"))
+                + ".")
+        chemin = JOBS / jid / "video.mp4"
+        chemin.write_bytes(octets)
+        try:
+            art = _artefact_du_film(jid, chemin)
+        finally:
+            chemin.unlink(missing_ok=True)
+        job = read_job(jid)
+        job["video"]["compression"] = fiche
+        job.update({"status": "succeeded", "finished_at": time.time(), "artifacts": [art], "etape": "",
+                    "error": ""})
+        write_job(jid, job)
+    except Exception as exc:  # noqa: BLE001 -- la phrase va à la page, le travail finit en échec
+        _job_noter(jid, etape="")
+        terminer_en_echec(jid, str(exc) if isinstance(exc, montage.MontageImpossible)
+                          else "La compression a échoué : %s" % type(exc).__name__)
 
 
 @app.post("/video-h3/sous-titres")

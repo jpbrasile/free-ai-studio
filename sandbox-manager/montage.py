@@ -959,7 +959,8 @@ def compacter_av1(film: bytes, plafond: int = 0) -> tuple:
     Rend (octets, fiche) ; la fiche dit ce qui a été fait et mesuré. Avec `plafond`
     (octets), un film qui le dépasse encore est recomprimé plus fort jusqu'à tenir."""
     octets, fiche = _compacter_av1_qualite(film)
-    if not plafond or len(octets) <= plafond or fiche.get("deja"):
+    # Déjà en AV1 et trop lourd (05/10, recompression à la demande) : serré lui aussi.
+    if not plafond or len(octets) <= plafond:
         return octets, fiche
     with tempfile.TemporaryDirectory() as dossier:
         a = Path(dossier, "film.mp4")

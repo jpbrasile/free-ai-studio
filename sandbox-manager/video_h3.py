@@ -5409,6 +5409,7 @@ PAGE_HTML = r"""<!doctype html>
     <option value="clip">🎬 Fabriquer un clip</option>
     <option value="casting">👤 Personnages (fiches de casting)</option>
     <option value="montage_bloc">🎥 Scénario et film</option>
+    <option value="film_bloc">🎞️ Monter, agrandir (4K), compresser</option>
     <option value="musique_bloc">🎵 Musique sous un film</option>
     <option value="reglages">⚙️ Licence et poids</option>
   </select>
@@ -5679,10 +5680,16 @@ PAGE_HTML = r"""<!doctype html>
       </details>
     </div>
   </details>
-  <details class="plie"><summary>Monter des clips déjà faits</summary>
-    <span class="note">rien n'est tourné de nouveau, rien n'est loué.</span>
+</div>
+
+<!-- 05/10 (propriétaire : « on n'a pas l'assemblage de clips ni la demande haute résolution et la
+compression ») : le montage était replié dans « Scénario et film », la 4K ne s'ouvrait qu'après un
+assemblage fait dans la même visite, la recompression n'avait pas de bouton. Les trois ici, sur tout film. -->
+<div class="bloc section" id="film_bloc">
+  <details class="plie" open><summary>1. Assembler des clips déjà faits</summary>
+    <span class="note">rien n'est tourné de nouveau, rien n'est loué. Le film assemblé s'ouvre en dessous.</span>
     <p class="note">Cochez les clips du film. Rangez-les avec ↑ ↓, ou demandez l'ordre au chat du Studio
-    d'après le scénario ; puis assemblez. Les clips sont recollés bout à bout, son compris, sans rien couper.</p>
+    d'après le scénario (celui de « Scénario et film ») ; puis assemblez. Les clips sont recollés bout à bout, son compris, sans rien couper.</p>
     <div id="clips_liste"></div>
     <button id="scenario_ordonner">Ranger selon le scénario</button>
     <button id="montage_lancer">Assembler le film</button>
@@ -5693,6 +5700,28 @@ PAGE_HTML = r"""<!doctype html>
     <span class="note">les films finalisés et les clips agrandis (4K, 1080p) de ce Studio.</span>
     <div id="films_hd_liste"></div>
     <video id="films_hd_lecteur" controls hidden style="width:100%"></video>
+  </div>
+  <!-- Hors d'un pli : un lecteur replié se cache (29/09). -->
+  <div id="film_reprendre"><b>2. Agrandir (4K), finaliser, compresser un film déjà fait</b>
+    <label for="film_choix">Film ou clip</label>
+    <select id="film_choix"><option value="">Choisissez un film…</option></select>
+    <div id="film_resultat" hidden>
+      <video id="film_lecteur" controls playsinline style="width:100%"></video>
+      <p><a id="film_telecharger" href="#">Enregistrer ce film</a> <span class="note" id="film_poids"></span></p>
+      <div id="film_agrandir" class="agrandir"></div>
+      <div id="film_visages" class="agrandir"></div>
+      <div id="film_finaliser" class="agrandir"></div>
+      <div id="film_compresser" class="agrandir">
+        <b>Compresser (AV1, sur ce PC, gratuit)</b>
+        <span class="note">un nouveau film, plus léger ; celui-ci reste tel quel. Sans taille visée, le
+        Studio garde la qualité mesurée (PSNR) ; avec une taille, il serre jusqu'à la tenir et note la qualité
+        obtenue.</span>
+        <label for="film_mo">Taille visée en Mo (vide = la qualité d'abord)</label>
+        <input id="film_mo" type="number" min="1" step="1">
+        <button id="film_compresser_lancer">Compresser</button>
+        <p class="note" id="film_compresser_etat"></p>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -7040,7 +7069,20 @@ async function chargerClips(){
     mf.appendChild(o);
   }
   if (films.some(c => c.id === gardeMf)) mf.value = gardeMf;
+  FILMS = (d.films_hd || []).concat(d.clips || []);
+  const fc = document.getElementById("film_choix");
+  const gardeFc = fc.value;
+  fc.innerHTML = '<option value="">Choisissez un film…</option>';
+  for (const c of films){
+    const o = document.createElement("option");
+    o.value = c.id;
+    o.textContent = mf.querySelector('option[value="' + c.id + '"]').textContent
+      + (FILMS.find(x => x.id === c.id).mo ? " · " + fr(FILMS.find(x => x.id === c.id).mo, 1) + " Mo" : "");
+    fc.appendChild(o);
+  }
+  if (films.some(c => c.id === gardeFc)) fc.value = gardeFc;
 }
+let FILMS = [];
 
 document.getElementById("musique_poser").addEventListener("click", async () => {
   const e = document.getElementById("musique_etat");
@@ -7171,20 +7213,61 @@ document.getElementById("scenario_ordonner").addEventListener("click", async () 
 
 document.getElementById("montage_lancer").addEventListener("click", async () => {
   montageEtat("Assemblage…");
-  document.getElementById("montage_resultat").hidden = true;
   const r = await fetch("/video-h3/montage", {method: "POST", headers: H, body: JSON.stringify({
     scenario: document.getElementById("scenario").value, clips: cochesDansLOrdre()})});
   const d = await r.json();
   if (!r.ok){ montageEtat(typeof d.detail === "string" ? d.detail : "Refusé.", true); return; }
   const j = await (await fetch("/video/jobs/" + d.id, {headers: H})).json();
-  montageEtat("Film assemblé : " + d.video.plans + " clips, " + fr(d.video.secondes, 1) + " s.");
-  document.getElementById("montage_resultat").hidden = false;
-  document.getElementById("montage_lecteur").src = j.video_url;
-  document.getElementById("montage_telecharger").href = j.video_url + "&telecharger=1&nom=film-h3";
-  blocAgrandir("montage_agrandir", d.id, "");
-  blocVisages("montage_visages", d.id, "");
-  blocFinaliser("montage_finaliser", d.id, "");
-  chargerClips();
+  montageEtat("Film assemblé : " + d.video.plans + " clips, " + fr(d.video.secondes, 1) + " s. Il est ouvert en 2.");
+  await chargerClips();
+  ouvrirFilm(d.id);
+});
+
+// Un film déjà fait (05/10) : lecteur, agrandir, finaliser, compresser, sans repasser par un assemblage.
+function ouvrirFilm(id){
+  const sel = document.getElementById("film_choix");
+  sel.value = id;
+  const f = FILMS.find(x => x.id === id);
+  document.getElementById("film_resultat").hidden = !f;
+  if (!f) return;
+  document.getElementById("film_lecteur").src = f.video_url;
+  document.getElementById("film_telecharger").href = f.video_url + "&telecharger=1&nom=film-h3";
+  document.getElementById("film_poids").textContent = f.mo ? fr(f.mo, 1) + " Mo" : "";
+  document.getElementById("film_compresser_etat").textContent = "";
+  // Un film déjà en 4K ne se ré-agrandit pas : la compression seule lui reste.
+  const hd = !!f.echelle;
+  for (const ou of ["film_agrandir", "film_visages", "film_finaliser"]){
+    document.getElementById(ou).textContent = "";
+    document.getElementById(ou).hidden = hd;
+  }
+  if (!hd){ blocAgrandir("film_agrandir", id, ""); blocVisages("film_visages", id, ""); blocFinaliser("film_finaliser", id, ""); }
+}
+document.getElementById("film_choix").addEventListener("change", e => ouvrirFilm(e.target.value));
+
+document.getElementById("film_compresser_lancer").addEventListener("click", async () => {
+  const e = document.getElementById("film_compresser_etat");
+  const b = document.getElementById("film_compresser_lancer");
+  e.className = "note";
+  e.textContent = "Compression AV1… (plusieurs minutes pour un film 4K)";
+  b.disabled = true;
+  try {
+    const r = await fetch("/video-h3/compresser", {method: "POST", headers: H, body: JSON.stringify({
+      job: document.getElementById("film_choix").value, mo: Number(document.getElementById("film_mo").value) || 0})});
+    const j = await r.json();
+    if (!r.ok){ e.className = "refus"; e.textContent = typeof j.detail === "string" ? j.detail : "Refusé."; return; }
+    let d = null;
+    for (;;){
+      await new Promise(ok => setTimeout(ok, 4000));
+      d = await fetch("/video/jobs/" + j.id, {headers: H}).then(x => x.json());
+      if (d.status === "succeeded" || d.status === "failed") break;
+    }
+    if (d.status === "failed"){ e.className = "refus"; e.textContent = d.error || d.message || "La compression a échoué."; return; }
+    const c = d.video.compression || {};
+    await chargerClips();
+    ouvrirFilm(j.id);
+    document.getElementById("film_compresser_etat").textContent = "Compressé : " + fr(c.mo || 0, 1) + " Mo au lieu de "
+      + fr(c.avant_mo || 0, 1) + " Mo (AV1, crf " + c.crf + ", PSNR " + fr(c.psnr_y || 0, 1) + " dB). C'est le film ouvert ici.";
+  } finally { b.disabled = false; }
 });
 
 // Tourner un scénario neuf : le chat découpe, le propriétaire relit, le Studio tourne.
@@ -7583,7 +7666,8 @@ let CHRONO = null;
 const LIBRES_PENDANT = new Set(["scenario_arreter", "scenario_auto_payer", "scenario_auto_arreter"]);
 
 function verrouiller(oui){
-  for (const e of document.querySelectorAll("#montage_bloc button, #montage_bloc select, #musique_bloc button, #musique_bloc select"))
+  for (const e of document.querySelectorAll("#montage_bloc button, #montage_bloc select, #film_bloc button, #film_bloc select, "
+      + "#musique_bloc button, #musique_bloc select"))
     if (!LIBRES_PENDANT.has(e.id)) e.disabled = oui;
 }
 
