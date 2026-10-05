@@ -235,6 +235,34 @@ services:
       timeout: 5s
       retries: 5
 
+  # Le fond continu d'un lieu sous les plans d'un film (05/10/2026, PLAN 21) :
+  # DeepFilterNet3 (MIT) sur le processeur, torch compris -- hors du Studio, qui
+  # l'appelle au montage par http://separer:8000. Reseau interne seulement : le
+  # modele est dans l'image, rien n'est cherche dehors.
+  separer:
+    build:
+      context: ./separer
+    container_name: free-ai-studio-separer
+    restart: unless-stopped
+    networks:
+      - sandbox-internal
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Mesure le 05/10/2026 (image construite, lecture seule, sans reseau) : 566 Mio
+    # apres le remix d'un film de 58,6 s, calcule en 2,0 s. Un film de 2 min double
+    # a peu pres le son en memoire : de la marge.
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:v0.11.4
     container_name: free-ai-studio-open-webui

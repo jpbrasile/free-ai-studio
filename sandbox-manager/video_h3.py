@@ -802,6 +802,9 @@ CHAMP_SONS = "overall_soundscape: "
 # Plan sans ambiance écrite : le champ des sons reste, en une phrase de sons (base 4.6 : N/A seulement
 # pour un silence complet demandé).
 AMBIANCE_SEULE = "Only the quiet ambient sound of the place is heard."
+# La piste son du lieu en <Audio N> (05/10) : phrase du guide de MiniMax (ref-en, overall_soundscape).
+AMBIANCE_COPIEE = "The copied ambience layer from <Audio %d> continues throughout the target video."
+AMBIANCE_REFERENCE = "The ambience of <Audio %d> continues throughout the target video."
 # Le style ouvre [Shot 1] (base 4.1, « [Shot 1] Live-action, cinematic, … ») ; le Studio fait des images
 # photo réalistes. Audit du 04/10 : aucune des 12 invites du film 5 ne le disait.
 STYLE_H3 = "Live-action, cinematic."
@@ -2405,7 +2408,8 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
                       presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
-                      planches=(), vues=(), legere=False, lieu=None, nb_plans=1, etiquettes=None) -> str:
+                      planches=(), vues=(), legere=False, lieu=None, nb_plans=1, etiquettes=None,
+                      son_lieu=None) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -2426,7 +2430,9 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     `lieu` : le numéro de <Picture N> de la vue vide du décor du scénario (03/10).
     `etiquettes` : {rang : étiquette lue sur ses photos} ; la fiche est définie par ce qu'elle est et ce
     qui la distingue (ref-en.txt, 2.1 : « the fluffy white Samoyed in <Picture 2>… with thick white
-    fur… ») au lieu de « the person » : Pixel, un robot, était « the person in <Picture 3> » (05/10)."""
+    fur… ») au lieu de « the person » : Pixel, un robot, était « the person in <Picture 3> » (05/10).
+    `son_lieu` : le numéro de <Audio N> de la piste son du lieu (05/10) ; recopiée sur une coupe
+    (« partially_copy »), simple référence sur une suite (guide de MiniMax : continuation)."""
     definitions, garde, premiere, voix_dites, garde_sons = [], [], 1, [], []
     presents = set(range(len(nombres))) if presents is None else set(presents)
     for k, nombre in enumerate(nombres):
@@ -2526,13 +2532,22 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     if suite:   # guide de MiniMax : « video continuation », la source citée en <Video N>
         definitions.append("<Video 1> is the end of the previous shot.")
         garde.append(SUITE_GARDE_LEGERE if legere else SUITE_GARDE)
+    if son_lieu:   # 05/10 : chaque clip réinventait son ambiance ; le fond du lieu part en référence
+        definitions.append(f"<Audio {son_lieu}> is the ambience reference of the setting; it contains no speech.")
+        garde_lieu = (f"<Audio {son_lieu}>: reference - its ambience guides the background sound of the target "
+                      "video; no words." if suite else
+                      f"<Audio {son_lieu}>: partially_copy - its ambience layer is copied as the background of "
+                      "the target video; no words.")
     # ref-en.txt, 3 : un préfixe de types entre crochets, puis les étiquettes déjà définies.
     types = (["video continuation"] if suite else []) + ["reference generation"] \
-        + (["keyframe completion"] if depart else []) + (["audio reference"] if voix_dites else [])
+        + (["keyframe completion"] if depart else []) + (["audio reference"] if voix_dites or son_lieu else [])
     if legere:   # 02/10 : les voix et le raccord sont déjà dits plus haut ; une ligne pour tous les sons
         resume = f"[{' + '.join(types)}] " + (f"{nb_plans} shots joined by cuts." if nb_plans > 1 else "One single shot.")
         if garde_sons:
-            garde_sons = ["Each <Audio> gives only a voice timbre; its words are never said."]
+            garde_sons = ["Each voice <Audio> gives only a voice timbre; its words are never said."
+                          if son_lieu else "Each <Audio> gives only a voice timbre; its words are never said."]
+        if son_lieu:
+            garde_sons.append(garde_lieu)
         return sections_references(definitions, resume, garde + garde_sons)
     vus =[f"<Subject {k + 1}>" for k in range(len(nombres)) if k in presents]
     # Un texte en plans (clip maître, 03/10) : « a single shot » le contredisait.
@@ -2542,6 +2557,8 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
               + (f", beginning from <Picture {depart}>" if depart else "")
               + (", continuing <Video 1> without a cut" if suite else "") + "."
               + (" It uses " + _liste_anglaise(voix_dites) + "." if voix_dites else ""))
+    if son_lieu:
+        garde_sons.append(garde_lieu)
     return sections_references(definitions, resume, garde + garde_sons)   # les sujets, puis les sons (exemple du guide)
 
 
@@ -4697,6 +4714,18 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         # « holding the <Subject 3> » : la balise est le nom, sans article (guide MiniMax ;
         # remarque du propriétaire, 30/09).
         image_paroles, ambiance = (_SANS_ARTICLE.sub(r"\1", t) for t in (image_paroles, ambiance))
+    # La piste son du lieu (fiche du décor, 03/10) part aussi en <Audio j> (05/10, propriétaire : « le fond
+    # sonore devrait être dans les références », puis « ok fais 1 + 2 ») : chaque clip H3 réinventait son
+    # ambiance. Guide de MiniMax : « The copied ambience layer from <Audio N> continues throughout the
+    # target video » ; une suite la prend en simple référence. Seulement s'il reste une place de son.
+    son_lieu = None
+    if refs and fiches and payload.get("decor") and payload.get("decor_son") is True and len(sons) < VOIX_PAR_PLAN:
+        piste = fiche_son_lieu(payload["decor"])
+        if piste:
+            sons.append(base64.b64encode(piste).decode())
+            son_lieu = len(sons)
+            ambiance = ((AMBIANCE_REFERENCE if payload.get("suite_video") else AMBIANCE_COPIEE) % son_lieu
+                        + " " + " ".join(str(ambiance or "").split())).strip()
     images_clefs = mode in ("texte", "premiere", "premiere_derniere")
     if images_clefs and " ".join(str(image_paroles or "").split()):
         # Ce que montrent la première et la dernière image, quand le Studio les a créées : leur
@@ -4762,7 +4791,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                                    legere=payload.get("invite_legere") is True, lieu=numero_lieu,
                                    nb_plans=len(_MULTIPLAN.findall(texte)) or 1,
                                    etiquettes={k: f["etiquette_h3"] for k, f in enumerate(fiches)
-                                               if f.get("etiquette_h3")})
+                                               if f.get("etiquette_h3")}, son_lieu=son_lieu)
                  # En mode Références, le style est dit AVANT [Shot 1], en une phrase (ref-en.txt, 5.2 :
                  # « Established in one or two English sentences before [Shot 1] » ; après [Shot 1],
                  # c'est la règle des autres modes, appliquée ici par erreur le 04/10). Un texte en
@@ -4847,6 +4876,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
             "fiche": {"id": fiches[0]["id"], "nom": fiches[0]["nom"]} if fiches else None,
             "fiches": [{"id": f["id"], "nom": f["nom"]} for f in fiches],
             "decor_video": bool(lieu),   # la vue du décor est partie à H3 (03/10)
+            "decor_son": bool(son_lieu),   # la piste son du lieu aussi (05/10)
             "images": longueur,
             "secondes": secondes_de(longueur),
             "coupe_s": coupe,

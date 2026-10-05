@@ -624,6 +624,39 @@ def lire_silences(journal: str, duree_s: float, min_s: float = 0.3, marge_s: flo
     return passages[:maximum]
 
 
+def son_du_film(film: bytes) -> bytes:
+    """Le son du film en WAV stéréo 16 bits à 48 kHz : ce que le service `separer` attend (05/10)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, sortie = Path(dossier, "film.mp4"), Path(dossier, "son.wav")
+        a.write_bytes(film)
+        _lancer(["-i", str(a), "-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", str(sortie)],
+                "La lecture du son du film")
+        return sortie.read_bytes()
+
+
+def poser_son(film: bytes, son_wav: bytes) -> bytes:
+    """Le film avec ce son à la place du sien ; les images ne sont pas réencodées."""
+    with tempfile.TemporaryDirectory() as dossier:
+        a, son, sortie = Path(dossier, "film.mp4"), Path(dossier, "son.wav"), Path(dossier, "remix.mp4")
+        a.write_bytes(film)
+        son.write_bytes(son_wav)
+        _lancer(["-i", str(a), "-i", str(son), "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac",
+                 "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(sortie)], "La pose du son remixé")
+        if images(sortie) != images(a):
+            raise MontageImpossible("La pose du son remixé a changé le nombre d'images : le film n'est pas rendu.")
+        return sortie.read_bytes()
+
+
+def bornes_des_clips(chemins: list) -> list:
+    """La fin de chaque clip dans le film recollé bout à bout (s), à la cadence du premier."""
+    num, den = _cadence(chemins[0])
+    fins, total = [], 0
+    for c in chemins:
+        total += images(c)
+        fins.append(round(total * den / num, 3))
+    return fins
+
+
 def passages_parles(video: bytes) -> list:
     """Où le clip fait du son au-dessus de -35 dB (voix, le plus souvent). Pour
     écouter passage par passage : sur le clip entier, Whisper n'a gardé qu'une

@@ -1485,6 +1485,42 @@ def test_le_film_recolle_les_clips_dans_l_ordre_sans_rien_louer(h3, monkeypatch,
     assert r.status_code == 400
 
 
+def test_le_montage_garde_un_fond_par_lieu_par_le_service_separer(h3, monkeypatch, tmp_path):
+    """05/10, propriétaire : « ok fais 1 + 2 ». Avec `lieux`, le son du film part au service `separer`
+    avec la fin de chaque clip ; un service absent laisse le film avec son son, et le dit."""
+    import httpx
+    _deux_clips(h3, monkeypatch, tmp_path)
+    monkeypatch.setattr(h3.montage, "recoller_son", lambda a, b, retirer: a + b)
+    monkeypatch.setattr(h3.montage, "images", lambda chemin: 248)
+    monkeypatch.setattr(h3.montage, "bornes_des_clips", lambda chemins: [10.333, 20.667])
+    monkeypatch.setattr(h3.montage, "son_du_film", lambda film: b"WAV" + film)
+    monkeypatch.setattr(h3.montage, "poser_son", lambda film, son: son.lower())
+    envois = []
+
+    def post(url, content=None, params=None, **k):
+        envois.append((url, content, params))
+        return httpx.Response(200, content=b"REMIX", headers={"X-Rapport": '{"lieux": [{"lieu": "jardin"}]}'})
+
+    monkeypatch.setattr(h3.httpx, "post", post)
+    c = client(h3)
+    r = c.post("/video-h3/montage", headers=CLE, json={"clips": ["b" * 32, "a" * 32], "lieux": ["jardin", "jardin"]})
+    assert r.status_code == 200, r.text
+    assert envois == [("http://separer:8000/remixer", b"WAVBA", {"bornes": "10.333,20.667", "lieux": "jardin,jardin"})]
+    assert r.json()["video"]["fond"] == {"lieux": [{"lieu": "jardin"}]}
+    assert c.get(c.get("/video/jobs/" + r.json()["id"], headers=CLE).json()["video_url"]).content == b"remix"
+
+    def panne(*a, **k):
+        raise httpx.ConnectError("separer absent")
+
+    monkeypatch.setattr(h3.httpx, "post", panne)
+    r = c.post("/video-h3/montage", headers=CLE, json={"clips": ["b" * 32, "a" * 32], "lieux": ["a", "b"]})
+    assert r.status_code == 200 and "separer absent" in r.json()["video"]["fond"]["erreur"]
+    assert c.get(c.get("/video/jobs/" + r.json()["id"], headers=CLE).json()["video_url"]).content == b"BA"
+    for lieux in (["jardin"], ["a b", "c"], "jardin"):
+        assert c.post("/video-h3/montage", headers=CLE,
+                      json={"clips": ["b" * 32, "a" * 32], "lieux": lieux}).status_code == 400
+
+
 def test_le_chat_range_les_clips_selon_le_scenario(h3, monkeypatch, tmp_path):
     _deux_clips(h3, monkeypatch, tmp_path)
     monkeypatch.setenv("FREE_TIER_MANAGER_KEY", "cle-routeur-de-test")
@@ -7217,6 +7253,28 @@ def test_le_decor_part_a_h3_avant_l_image_de_depart_quand_on_le_demande(h3):
     assert len(avec["demande"]["images"]) == len(sans["demande"]["images"]) + 1
     legere = v.preparer(dict(base, decor_video=True, invite_legere=True))["resume_public"]["invite"]
     assert "<Picture 2>: fully_preserved - same place and fixed elements" in legere
+
+
+def test_la_piste_son_du_lieu_part_en_audio_quand_on_le_demande(h3):
+    """05/10, propriétaire : « le fond sonore devrait être dans les références », puis « ok fais 1 + 2 ».
+    Recopiée sur une coupe, simple référence sur une suite (guide de MiniMax) ; rien sans piste."""
+    v = h3.video_h3
+    lieu, leila = _decor_et_leila(v)
+    base = {"mode": "references", "image_paroles": "Leila sits on the fountain.", "fiches": [leila],
+            "decor": lieu, "depart_reference": PNG, "decor_son": True}
+    sans_piste = v.preparer(dict(base))
+    assert not sans_piste["resume_public"]["decor_son"] and not sans_piste["demande"]["sons"]
+    v.fiche_poser_son_lieu(lieu, b"RIFF....WAVEfmt ")
+    coupe = v.preparer(dict(base))
+    invite = coupe["resume_public"]["invite"]
+    assert coupe["resume_public"]["decor_son"] and list(coupe["demande"]["sons"]) == ["voix_0.wav"]
+    assert "<Audio 1> is the ambience reference of the setting; it contains no speech." in invite
+    assert "<Audio 1>: partially_copy - its ambience layer is copied" in invite
+    assert "The copied ambience layer from <Audio 1> continues throughout the target video." in invite
+    assert "audio reference" in invite
+    legere = v.preparer(dict(base, invite_legere=True))["resume_public"]["invite"]
+    assert "<Audio 1>: partially_copy" in legere and "Each <Audio> gives only a voice timbre" not in legere
+    assert "<Audio" not in v.preparer(dict(base, decor_son=False))["resume_public"]["invite"]
 
 
 def test_le_decor_ne_prend_pas_une_place_qui_manque(h3, monkeypatch):

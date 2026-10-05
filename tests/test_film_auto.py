@@ -283,6 +283,27 @@ def test_chaque_plan_recoit_une_camera_du_menu_jamais_fixe_par_defaut(fa, tmp_pa
     assert maitre["plans"][1]["camera"] == fa.CAMERA_SECOURS
 
 
+def test_le_montage_donne_le_lieu_de_chaque_plan(fa, tmp_path):
+    """05/10 : un même lieu garde un même fond sous ses coupes ; le chat dit quels plans le partagent.
+    Une réponse illisible ou incomplète : pas de lieux, chaque clip garde son son."""
+    assert fa.lire_lieux('{"lieux": ["Jardin", "jardin", "Rue sombre"]}', 3) == ["jardin", "jardin", "rue-sombre"]
+    assert fa.lire_lieux('{"lieux": ["jardin"]}', 2) is None
+    assert fa.lire_lieux("pas de json", 1) is None
+    assert fa.lire_lieux('{"lieux": ["jardin", "!!"]}', 2) is None
+
+    def chat_lieux(consigne):
+        if "label of its place" in consigne:
+            return '{"lieux": ["phare", "phare"]}'
+        return chat(consigne)
+    studio = FauxStudio()
+    etat = fa.nouvel_etat("Oscar allume le phare. Un bateau rentre au port.", essai=True)
+    fa.Film(etat, tmp_path, studio, chat_lieux, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    montage = next(x for m, c, x in studio.appels if c == "/video-h3/montage")
+    assert montage["lieux"] == ["phare", "phare"]
+    assert next(j for j in etat["journal"] if j["etape"] == "montage")["lieux"] == ["phare", "phare"]
+
+
 def test_l_essai_a_blanc_va_du_texte_au_film_par_les_routes_du_studio(fa, tmp_path):
     studio = FauxStudio()
     etat = fa.nouvel_etat("Oscar allume le phare. Un bateau rentre au port.", essai=True)

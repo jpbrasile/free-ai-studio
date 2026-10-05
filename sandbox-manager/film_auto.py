@@ -112,6 +112,13 @@ CONSIGNE_CAMERA = (
     "\"\", \"rapide\". Answer with JSON only: {\"cameras\": [{\"mouvement\": \"...\", \"amplitude\": \"...\", "
     "\"vitesse\": \"...\"}]}, one per shot, in order.\n\nShots:\n%s")
 CAMERA_SECOURS = {"mouvement": "avance", "amplitude": "petite", "vitesse": "lente"}
+# Le fond sonore (05/10, propriétaire : « ok fais 1 + 2 ») : chaque clip H3 réinvente son ambiance ; au
+# montage, un même lieu garde un même fond sous ses coupes. Le chat dit quels plans partagent un lieu.
+CONSIGNE_LIEUX = (
+    "Here are the shots of a short film, in order. Give each shot the label of its place: the SAME label for "
+    "shots in the same place (same room, street, garden...), even far apart in the film, a new label for a "
+    "new place. Labels are short lowercase words (a-z, 0-9, -). Answer with JSON only: "
+    "{\"lieux\": [\"...\", \"...\"]}, one per shot, in order.\n\nShots:\n%s")
 CONSIGNE_MUSIQUE = (
     "Here is a short film story. Write the style of an instrumental film score for it, in English, in at most "
     "25 words: genre, instruments, tempo, mood. No vocals. Answer with the style only.\n\nStory:\n%s")
@@ -197,6 +204,22 @@ def lire_cameras(reponse: str, nombre: int) -> list:
             c = dict(CAMERA_SECOURS)   # absent, illisible, au choix du modèle, ou fixe deux fois de suite
         cameras.append(c)
     return cameras
+
+
+def lire_lieux(reponse: str, nombre: int):
+    """Une étiquette de lieu par plan, ou None si la réponse ne les donne pas toutes : sans lieux sûrs,
+    le montage garde le son de chaque clip (mettre le fond d'un lieu sous un autre serait pire)."""
+    t = str(reponse or "")
+    debut, fin = t.find("{"), t.rfind("}")
+    try:
+        d = json.loads(t[debut:fin + 1]) if debut >= 0 else None
+    except ValueError:
+        d = None
+    brutes = (d or {}).get("lieux") if isinstance(d, dict) else None
+    if not isinstance(brutes, list) or len(brutes) != nombre:
+        return None
+    lieux = [re.sub(r"[^a-z0-9-]+", "-", str(x).lower()).strip("-")[:40] for x in brutes]
+    return lieux if all(lieux) else None
 
 
 def lire_style(reponse: str) -> str:
@@ -513,12 +536,19 @@ class Film:
         from video_h3 import PAROLES_EN_TROP
         muets = [c["job"] for c in self.etat["clips"]
                  if any(PAROLES_EN_TROP.match(str(d or "")) for d in c.get("defauts") or [])]
+        plans = self.etat.get("plans") or []
+        lieux = None
+        if len(plans) == len(self.etat["clips"]):
+            liste = "\n".join("%d. %s" % (k + 1, p.get("image_paroles") or "") for k, p in enumerate(plans))
+            lieux = lire_lieux(self.chat(CONSIGNE_LIEUX % liste), len(plans))
         film = self.route("POST", "/video-h3/montage", dict({"clips": [c["job"] for c in self.etat["clips"]],
                                                              "scenario": self.etat["titre"]},
-                                                            **({"muets": muets} if muets else {})))
-        self.reussi(film["id"], "Le montage")
+                                                            **({"muets": muets} if muets else {}),
+                                                            **({"lieux": lieux} if lieux else {})))
+        job = self.reussi(film["id"], "Le montage")
         self.etat["film_monte"] = film["id"]
-        self.noter("montage", job=film["id"], muets=muets)
+        self.noter("montage", job=film["id"], muets=muets, lieux=lieux,
+                   fond=(job.get("video") or {}).get("fond"))
 
     def agrandir(self):
         fin = self.route("POST", "/video-h3/finaliser", {"job": self.etat["film_monte"], "echelle": "4k",

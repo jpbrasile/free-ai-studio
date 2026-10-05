@@ -1,0 +1,7 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+# Le calcul du remix (remix.py). La meme version que l'essai du 05/10/2026, ou
+# DeepFilterNet 0.5.6 a tourne ; torch, lui, est installe par le Dockerfile
+# (roue CPU) et n'est PAS ici : la CI installe ce fichier pour charger app.py,
+# qui n'importe torch qu'au premier remix.
+numpy==1.26.4

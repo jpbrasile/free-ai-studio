@@ -5406,7 +5406,9 @@ async def video_h3_scenario_ordonner(request: Request, authorization: Optional[s
 async def video_h3_montage(request: Request, authorization: Optional[str] = Header(default=None)):
     """Recolle les clips dans l'ordre donné, son compris, sans rien couper : chacun
     a été tourné à part. Le film devient un travail de plus, jouable et prolongeable.
-    `muets` : les clips (de l'ordre) dont le son est coupé au montage."""
+    `muets` : les clips (de l'ordre) dont le son est coupé au montage.
+    `lieux` : le lieu de chaque clip (une étiquette par clip) ; avec lui, chaque lieu garde un
+    même fond sous ses coupes (`_fond_continu`, 05/10)."""
     _h3_ou_404()
     auth(authorization)
     corps = await request.json()
@@ -5417,6 +5419,10 @@ async def video_h3_montage(request: Request, authorization: Optional[str] = Head
     muets = corps.get("muets") or []
     if not isinstance(muets, list) or any(m not in ordre for m in muets):
         raise HTTPException(400, "Les clips muets doivent être des clips du montage.")
+    lieux = corps.get("lieux")
+    if lieux is not None and (not isinstance(lieux, list) or len(lieux) != len(ordre)
+                              or not all(re.fullmatch(r"[\w-]{1,40}", str(x)) for x in lieux)):
+        raise HTTPException(400, "Il faut un lieu (lettres, chiffres) par clip du montage.")
     scenario = str(corps.get("scenario") or "").strip()[:video_h3.SCENARIO_MAX]
     chemins = [_video_h3_octets(jid) for jid in ordre]
     avec = {c["id"] for c in _clips_h3()}
@@ -5430,9 +5436,38 @@ async def video_h3_montage(request: Request, authorization: Optional[str] = Head
         film = await asyncio.to_thread(_recoller_tous, videos)
     except montage.MontageImpossible as exc:
         raise HTTPException(503, str(exc)) from exc
+    fond = None
+    if lieux:
+        film, fond = await asyncio.to_thread(_fond_continu, film, chemins, [str(x) for x in lieux])
     return read_job(_film_h3(film, dict({"mode": "montage", "mode_titre": "Montage de clips", "invite": scenario,
-                                         "clips": ordre, "plans": len(ordre)}, **({"muets": muets} if muets else {})),
+                                         "clips": ordre, "plans": len(ordre)}, **({"muets": muets} if muets else {}),
+                                        **({"fond": fond} if fond else {})),
                              scenario[:60] or "Montage H3"))
+
+
+SEPARER_URL = os.getenv("SEPARER_URL", "http://separer:8000").rstrip("/")
+
+
+def _fond_continu(film: bytes, chemins: list, lieux: list) -> tuple:
+    """Le film dont chaque lieu garde un même fond sous ses coupes, et le rapport (05/10, PLAN 21).
+
+    Chaque clip H3 réinvente son ambiance. Le service `separer` sépare la voix (DeepFilterNet3),
+    boucle le fond d'un passage sans voix du premier clip du lieu sous tous ses clips, et rouvre
+    par une porte ce qui dépasse ce fond (fins de phrase, souffles, pas) : essai « Leila » 1-8,
+    jugé « parfait » par le propriétaire. Un échec n'arrête rien : le film garde son son, le
+    rapport dit pourquoi."""
+    try:
+        bornes = montage.bornes_des_clips(chemins)
+        son = montage.son_du_film(film)
+        r = httpx.post(SEPARER_URL + "/remixer", content=son, headers={"Content-Type": "audio/wav"},
+                       params={"bornes": ",".join("%.3f" % b for b in bornes), "lieux": ",".join(lieux)},
+                       timeout=httpx.Timeout(900.0, connect=10.0))
+        if r.status_code != 200:
+            raise ValueError("le service du fond a répondu %d : %s" % (r.status_code, r.text[:200]))
+        rapport = json.loads(r.headers.get("X-Rapport") or "{}")
+        return montage.poser_son(film, r.content), rapport
+    except (httpx.HTTPError, ValueError, OSError, montage.MontageImpossible, subprocess.SubprocessError) as exc:
+        return film, {"erreur": str(exc)[:300] or type(exc).__name__}
 
 
 def _artefact_du_film(jid: str, chemin: Path) -> dict:
@@ -6071,7 +6106,8 @@ REGLAGES_SCENARIO = ("fiche", "fiches", "langues", "langue", "musique", "longueu
                      "definition", "decor",   # `decor` : la fiche du lieu (02/10), jointe aux images des coupes
                      "plan_par_plan",         # 02/10 : arrêt après chaque plan neuf, pour le valider
                      "invite_legere",         # 02/10 : invite H3 sans redites (sujets_des_fiches), à l'essai
-                     "decor_video")           # 03/10 : la vue du décor part aussi à H3 (preparer)
+                     "decor_video",           # 03/10 : la vue du décor part aussi à H3 (preparer)
+                     "decor_son")             # 05/10 : la piste son du lieu aussi, en <Audio j> (preparer)
 
 
 def _scenario_prepare(corps: dict, plans: list) -> tuple:
@@ -7678,7 +7714,7 @@ async def video_h3_scenario_rejouer(sid: str, request: Request,
                                                 parent["plans"], [dict(p) for p in plans])
     plans = video_h3.plans_avec_coupes_refaites(plans, parent["plans"], parent.get("departs_de_coupe"))
     reglages = dict(parent.get("reglages") or {"fiche": parent.get("fiche"), "fiches": parent.get("fiches")})
-    for cle in ("decor", "plan_par_plan", "invite_legere", "decor_video"):   # se posent aussi sur un rejeu (02/10)
+    for cle in ("decor", "plan_par_plan", "invite_legere", "decor_video", "decor_son"):   # aussi sur un rejeu (02/10)
         if cle in corps:
             reglages[cle] = corps.get(cle)
     musique = parent.get("musique") or {}
