@@ -44,6 +44,33 @@ en ligne de commande, jamais importé. L'usage commercial reste à trancher par 
    where they are. » La géométrie du rendu est gardée.
    `python file_attente.py deposer --nom polir --ressources gpu -- python anyangle_local.py --polir <essai> v060 11`
 
+## Caméra H3 dans un décor 3D : plan d'abord
+
+Pour un mouvement de caméra H3 (travelling, tour sur place) où le décor doit **rester fixe**. Une maquette calée à
+l'œil (étape 1) ne suffit pas : la baie glissait dans le clip, parce que la caméra supposée (fx 904, 0,9 m, horizontale,
+baie à x = -1) n'était pas la vraie. On mesure d'abord, puis on pose les emprises au sol, puis la hauteur.
+
+1. **Géométrie de la plaque** : MoGe-3 (`Ruicheng/moge-3-vitl`, MIT) dans un conteneur jetable de l'image ComfyUI du
+   Studio. Sortie : nuage de points métrique, intrinsèques, normales, masque. ~2,5 Go de VRAM.
+   `file_attente.py deposer --nom moge --ressources gpu -- python moge_plaque.py <plaque.png> <dossier plaque>/moge.npz`
+2. **Repère et vue de dessus** : sol par RANSAC (hauteur et tangage réels), murs alignés sur les axes (lacet de la
+   plaque par rapport aux murs), vue de dessus à 1 cm/px (couleur | hauteur).
+   `python plan_moge.py moge.npz plaque.png <dossier>` → `plan_moge.png`, `repere_moge.json`
+3. **Le plan, à la main, sur `plan_moge.png`** (JSON, repère de la pièce : x à droite, z devant, caméra de la plaque à
+   l'origine) : caméra `{hauteur, lacet, tangage, f}` tirée de `repere_moge.json` ; pièce ; baie ; éléments
+   `{emprise [x0,x1,z0,z1], hauteur [bas,haut]}` ; ouvertures ; **cibles relatives** `{devant, droite, tourne}`.
+   Exemple : `Desktop\leila_sf\interieur\blender3\plan_salon.json`.
+4. **Scène puis rendus** : `python scene_plan.py plan.json plaque.png contre.png pano.png <essai>/scene.json`, puis
+   `scene_blender.py` comme à l'étape 3. Il fait maintenant l'**occultation** (carte de profondeur équirectangulaire
+   depuis l'origine, vitre exclue, `profondeur.exr`) et vérifie des profondeurs connues (`controles` du scene.json) :
+   écart > 0,05 m ⇒ arrêt avant tout rendu.
+5. **Dernière image** : `anyangle_local.py <essai> 11 <caméra>` (seulement cette caméra, sans témoin).
+6. **Clip H3** (première = plaque, dernière = vue AnyAngle), par la file, ressource gpu, ~170 s sur la 4090 :
+   `python travelling_h3.py plaque.png anyangle/<cam>_aa_g11.png travelling/<nom>.mp4 11 [124] [--consigne c.json]`
+   **Tour 360°** : rotation sur place, donc exacte (aucune parallaxe). Cibles `tourne` 45, 90 … 315 à `devant = droite
+   = 0` ; les rendus servent directement d'images clés (pas d'AnyAngle) ; 8 clips H3 « pano_droite » de 45° mis bout
+   à bout : `python tour360_h3.py <essai> 11` → `<essai>/tour360/tour360_g11.mp4`.
+
 ## Résultats (05/10, salon de Leila, 4090, graine 11)
 
 Planche : `Desktop\leila_sf\interieur\PLANCHE_DECOR_360.jpg`. AnyAngle 46-89 s par image ; Blender ~65 s les 6 rendus.
@@ -79,4 +106,11 @@ Témoin sans LoRA (v060) : la plaque revient presque inchangée, le LoRA agit bi
 - Une boîte de meuble porte sur sa face avant les pixels de ce qui est derrière elle dans la photo : table en
   double plateau au travelling. Limite des boîtes ; un vrai maillage (MoGe-2, Trellis2) est la suite.
 - Arête brillante au chambranle de la porte à 60°, dans le rendu et donc dans la retouche ; cause non trouvée.
+- MoGe-3 sous Windows/Anaconda : `libtriton` ne charge pas (le runtime VC 14.27 de `Anaconda\Library\bin` passe avant
+  celui de System32 ; triton-windows en veut ≥ 14.42). Ne pas bricoler : **MoGe tourne dans Docker** (`moge_plaque.py`).
+- `np.linalg.svd` sur le nuage entier sans `full_matrices=False` demande 215 Gio : NumPy refuse, mais c'est le piège.
+- Mesures du salon (05/10) : caméra à 1,23 m, inclinée de 2,38° vers le bas, tournée de 13,1° par rapport aux murs,
+  fx 756 ; baie à x = -0,16. Rien de cela ne se devine à l'œil.
+- Le contrechamp et le panorama ont été faits sur l'ancienne maquette : ce que la plaque ne voit pas en hérite
+  (mur proche droit devenu porte vitrée au travelling). À refaire depuis le plan.
 - Les vues de `scene_blender.py` en « Standard » (pas AgX/Filmic) : sinon la photo projetée change de couleurs.

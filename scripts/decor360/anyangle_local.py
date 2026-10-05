@@ -8,7 +8,7 @@ force 1, CFG 3, 25 pas. Graphe = retouche_qwen.graphe du Studio + LoraLoaderMode
 dans un conteneur jetable de l'image ComfyUI locale (free-ai-studio-comfy-maison). Une image par conteneur.
 Témoin « sans » : même demande sans le LoRA, CFG 1 (réglage du Studio), sur la première cible.
 
-  python anyangle_local.py <dossier de l'essai> [graine]
+  python anyangle_local.py <dossier de l'essai> [graine] [caméra,caméra]     (sans liste : toutes + le témoin)
   python anyangle_local.py --polir <dossier de l'essai> <caméra> [graine]     (vue à mur nu, voir polir())
 Le dossier contient scene.json, les photos sources et rendus/rendu_<caméra>.png ; sortie dans <dossier>/anyangle/.
 Lancer par la file (ressource gpu).
@@ -61,17 +61,22 @@ def tourner(d, travail, sortie):
     return r.returncode, round(time.time() - t, 1)
 
 
-def main(dossier, graine=11):
+def main(dossier, graine=11, cameras=None):
     dossier = Path(dossier).resolve()
     cfg = json.loads((dossier / "scene.json").read_text(encoding="utf-8"))
-    sources = {s["lacet"]: (dossier / s["image"]).read_bytes() for s in cfg["sources"] if "lacet" in s}
+    # photos à plat (pas le panorama), par lacet : la plus proche de la caméra sert de base
+    sources = {s["lacet"]: (dossier / s["image"]).read_bytes() for s in cfg["sources"] if s.get("type") != "pano"}
     out = dossier / "anyangle"
     out.mkdir(exist_ok=True)
     bilan = []
     cibles = [c for c in cfg["cameras"] if not c["nom"].startswith("verif")]
-    essais = [(c, True) for c in cibles] + [(cibles[0], False)]
+    if cameras:                       # caméras choisies : ni les autres, ni le témoin sans LoRA
+        cibles = [c for c in cibles if c["nom"] in cameras]
+        essais = [(c, True) for c in cibles]
+    else:
+        essais = [(c, True) for c in cibles] + [(cibles[0], False)]
     for cam, lora in essais:
-        base = sources[0] if math.cos(math.radians(cam["lacet"])) >= 0 else sources[180]
+        base = sources[max(sources, key=lambda la: math.cos(math.radians(cam["lacet"] - la)))]
         rendu = (dossier / "rendus" / ("rendu_%s.png" % cam["nom"])).read_bytes()
         nom = "%s_%s_g%d" % (cam["nom"], "aa" if lora else "sans", graine)
         rc, duree = tourner(demande(base, rendu, graine, lora), out / ("travail_" + nom), out / (nom + ".png"))
@@ -101,4 +106,4 @@ if __name__ == "__main__":
     if sys.argv[1] == "--polir":       # python anyangle_local.py --polir <dossier> <caméra> [graine]
         polir(sys.argv[2], sys.argv[3], *(int(x) for x in sys.argv[4:5]))
     else:
-        main(sys.argv[1], *(int(x) for x in sys.argv[2:3]))
+        main(sys.argv[1], *(int(x) for x in sys.argv[2:3]), *(sys.argv[3].split(",") for _ in sys.argv[3:4]))
