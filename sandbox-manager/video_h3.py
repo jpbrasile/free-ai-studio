@@ -1318,8 +1318,10 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
             # fond, que H3 a faite second Oscar (le juge : « Oscar apparaît dédoublé »).
             "Personne d'autre à l'image : ni passant, ni figurant, ni silhouette au fond, sauf si la "
             "description en demande. ") if photos else ""
+    lieu_rang = None   # la plaque du lieu : <image1> de Qwen (retouche_qwen.depuis_demande_image)
     if lieu:
         photos.append(fiche_lieu_image(lieu))
+        lieu_rang = len(photos)
         tete += CONSIGNE_LIEU % len(photos) + (CONSIGNE_COUPE_LIEU if coupe else "")
         if decor and coupe:   # et l'instant : la dernière image du plan d'avant (03/10)
             octets = depart_lire(decor)
@@ -1335,6 +1337,7 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
         octets = depart_lire(decor)
         genre = next(g for debut, g in _EXTENSIONS.items() if octets.startswith(debut))
         photos.append(f"data:{_TYPES[genre]};base64," + base64.b64encode(octets).decode())
+        lieu_rang = len(photos)
         # Le 28/09, « garder le même lieu » a recopié la pelouse du plan 1 dans
         # un plan 2 voulu devant une résidence : le lieu précis suit la description.
         if coupe:   # `decor` est la dernière image du plan tourné juste avant (02/10)
@@ -1360,6 +1363,8 @@ def demande_image(texte: str, ameliorations=(), fiches=(), decor=None, tenues=No
     demande = {"prompt": tete + description + " " + FIGURANTS_IMAGE, "n": 1, "size": TAILLE_IMAGE_DEMANDEE}
     if photos:
         demande["image_reference"] = photos
+    if lieu_rang:
+        demande["lieu_jointe"] = lieu_rang   # retiré avant le routeur (_image_du_studio)
     return demande, description
 
 
@@ -4313,7 +4318,13 @@ def graphe_troncon(texte: str, longueur: int, graine: int, contexte: str) -> dic
     la fin (22 images, 1 s de son) au début du nouveau plan, puis Trim retire ces
     images reprises, et le son qui va avec, du plan livré.
     """
-    g = graphe("texte", texte, longueur, graine)
+    return brancher_troncon(graphe("texte", texte, longueur, graine), contexte)
+
+
+def brancher_troncon(g: dict, contexte: str) -> dict:
+    """Le tronçon branché sur le nœud 10 du graphe, texte seul ou Références. Jalon 0 bis, clip 6
+    (05/10) : en Références, les photos de la fiche et sa voix dans le clip enchaîné, la ressemblance à
+    la fiche en fin de clip passe de 0,312 à 0,453 (ArcFace), même graine, même raccord."""
     g["30"] = _n("MiniMaxH3MotionContextLoadLatent", {"latent_path": contexte, "clip_index": 1})
     g["31"] = _n("MiniMaxH3MotionContext", {
         "conditioning": ["10", 0], "vae": ["4", 0], "latent": ["10", 1], "context_latent": ["30", 0],
@@ -4847,11 +4858,22 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
     base = dict(payload, coupe_s=0, image_paroles=texte_de_suite(payload.get("image_paroles", ""),
                                                                  payload.get("elements")))
     if voie == "troncon":
-        plan = preparer(dict(base, mode="texte", images=[]), graine_hasard)
-        d = plan["demande"]
-        d["graphe"] = graphe_troncon(plan["resume_public"]["invite"], d["longueur"], d["graine"],
-                                     v["latent_vers"])
-        d["classes"] = [MODES["texte"]["noeud"], *NOEUDS_TRONCON]
+        # Les fiches restent dans le clip enchaîné (propriétaire, 05/10 : « tu n'as pas conservé les
+        # images de référence des personnages dans les clips ») : Références sans première image, le
+        # début vient du latent ; sans fiche, ou trop de photos, le texte seul comme avant.
+        ids = base.get("fiches") or ([base["fiche"]] if base.get("fiche") else [])
+        nb, visages_seuls = photos_avec_depart(ids) if ids else (0, False)
+        if 0 < nb < MODES["references"]["images_max"]:
+            plan = preparer(dict(base, mode="references", images=[], visages_seuls=visages_seuls), graine_hasard)
+            d = plan["demande"]
+            brancher_troncon(d["graphe"], v["latent_vers"])
+            d["classes"] = list(d["classes"]) + list(NOEUDS_TRONCON)
+        else:
+            plan = preparer(dict(base, mode="texte", images=[]), graine_hasard)
+            d = plan["demande"]
+            d["graphe"] = graphe_troncon(plan["resume_public"]["invite"], d["longueur"], d["graine"],
+                                         v["latent_vers"])
+            d["classes"] = [MODES["texte"]["noeud"], *NOEUDS_TRONCON]
         d["contexte"] = v["latent_vers"]
     else:
         if not derniere_b64:

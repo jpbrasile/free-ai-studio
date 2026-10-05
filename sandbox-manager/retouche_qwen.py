@@ -1,4 +1,5 @@
-"""La deuxième retouche des images de départ : Qwen-Image 2.1 (Alibaba, 20/09/2026, Apache-2.0),
+"""La deuxième retouche des images de départ : Qwen-Image 2.1 (Alibaba, 20/09/2026, « Qwen Research
+License », non commerciale — relu le 05/10 sur la carte du modèle ; Apache-2.0 est la gamme 20B d'avant),
 par les nœuds d'origine de ComfyUI v0.37.0 (TextEncodeQwenImage21), sur la machine H3 de Modal.
 
 Demande du propriétaire, 04/10/2026 : « ajoute Qwen comme deuxième retouche dans le studio ».
@@ -9,6 +10,9 @@ plus juste que l'image du Studio ; mais la capsule retirée au plan 3 et Leila r
 consigne dit donc aussi les objets, le cadrage et la pose (allongé, assis, debout).
 """
 import base64
+import re
+import struct
+import zlib
 
 import video_h3
 
@@ -98,6 +102,49 @@ def demande(image: bytes, refs: list, texte: str, graine: int = GRAINE) -> dict:
 
 def construire_script(image: bytes, refs: list, texte: str, graine: int = GRAINE) -> str:
     return video_h3._emballer(_SCRIPT, demande(image, refs, texte, graine))
+
+
+# --- L'image de départ entière par Qwen (propriétaire, 05/10 : « qwen est meilleur pour le job ») ---
+# Jalon 0 bis, clip 6 : même texte, mêmes photos, même plaque du lieu ; ArcFace contre la fiche 0,562
+# (Qwen) contre 0,408 (Gemini du routeur). La demande du routeur (video_h3.demande_image) est reprise
+# telle quelle : ses « image jointe N » deviennent des <imageN>. <image1> fixe la taille du latent
+# (TextEncodeQwenImage21) : la plaque du lieu quand il y en a une, sinon une toile unie au format
+# de l'image du Studio.
+TOILE = ("<image1> is an empty canvas that only gives the size of the picture: paint a complete new photograph "
+         "over the whole of it, nothing of the canvas remains. ")
+_JOINTE = re.compile(r"(l'|L')?(images?) jointes? (\d+)(?: à (\d+))?")
+
+
+def _png_uni(largeur: int, hauteur: int, gris: int = 24) -> bytes:
+    """Une toile PNG unie, sans dépendance (le gestionnaire n'a pas PIL)."""
+    def bloc(genre, donnees):
+        return (struct.pack(">I", len(donnees)) + genre + donnees
+                + struct.pack(">I", zlib.crc32(genre + donnees) & 0xFFFFFFFF))
+    ligne = b"\x00" + bytes([gris]) * (3 * largeur)
+    return (b"\x89PNG\r\n\x1a\n" + bloc(b"IHDR", struct.pack(">IIBBBBB", largeur, hauteur, 8, 2, 0, 0, 0))
+            + bloc(b"IDAT", zlib.compress(ligne * hauteur, 9)) + bloc(b"IEND", b""))
+
+
+def depuis_demande_image(demande: dict, lieu=None) -> tuple:
+    """(image1, références, texte) pour Qwen depuis la demande du routeur. `lieu` : le rang (1…) de la
+    plaque du lieu parmi les images jointes, qui passe alors en <image1>."""
+    photos = [base64.b64decode(str(u).split(",", 1)[1]) for u in demande.get("image_reference") or []]
+    if lieu and not 1 <= int(lieu) <= len(photos):
+        raise ValueError("Plaque du lieu introuvable parmi les images jointes.")
+    if lieu:
+        base, refs = photos[lieu - 1], photos[:lieu - 1] + photos[lieu:]
+        rang = lambda i: 1 if i == lieu else (i + 1 if i < lieu else i)  # noqa: E731
+        tete = ""
+    else:
+        largeur, hauteur = (int(x) for x in str(video_h3.TAILLE_IMAGE_DEMANDEE).split("x"))
+        base, refs, rang, tete = _png_uni(largeur, hauteur), photos, (lambda i: i + 1), TOILE
+    if len(refs) > REFERENCES_MAX:
+        raise ValueError("Trop de photos pour Qwen (%d au plus)." % REFERENCES_MAX)
+
+    def nommer(m):
+        debut = "<image%d>" % rang(int(m.group(3)))
+        return debut + (" à <image%d>" % rang(int(m.group(4))) if m.group(4) else "")
+    return base, refs, tete + _JOINTE.sub(nommer, str(demande.get("prompt") or ""))
 
 
 def phrase_d_echec(stderr: str) -> str:

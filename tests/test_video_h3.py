@@ -625,6 +625,52 @@ def test_sans_cle_du_routeur_on_propose_de_televerser(h3, monkeypatch):
     assert client(h3).post("/video-h3/image", headers=CLE, json={"texte": " "}).status_code == 400
 
 
+def test_qwen_reprend_la_demande_du_routeur(h3):
+    """05/10 : l'image de départ passe à Qwen ; la demande du routeur est reprise, ses « image jointe N »
+    deviennent des <imageN>, la plaque du lieu passe en <image1> (elle fixe la taille du latent)."""
+    q = h3.retouche_qwen
+    url = lambda octet: "data:image/png;base64," + base64.b64encode(octet).decode()  # noqa: E731
+    demande = {"prompt": "Leila est la personne des images jointes 1 à 2 (mêmes visage). L'image jointe 3 est le "
+                         "DÉCOR du film. Une fille au jardin.", "image_reference": [url(b"a"), url(b"b"), url(b"c")]}
+    base, refs, texte = q.depuis_demande_image(demande, 3)
+    assert (base, refs) == (b"c", [b"a", b"b"])
+    assert texte == ("Leila est la personne des <image2> à <image3> (mêmes visage). <image1> est le DÉCOR du film. "
+                     "Une fille au jardin.")
+    # Sans lieu : une toile au format de l'image du Studio.
+    base, refs, texte = q.depuis_demande_image(demande)
+    assert base.startswith(b"\x89PNG") and base[16:24] == bytes.fromhex("0000068000000" + "3c0")
+    assert refs == [b"a", b"b", b"c"] and texte.startswith(q.TOILE)
+    assert "<image4> est le DÉCOR" in texte and "<image2> à <image3>" in texte
+    with pytest.raises(ValueError):
+        q.depuis_demande_image(demande, 5)
+
+
+def test_l_image_de_depart_passe_par_qwen_et_retombe_sur_le_routeur(h3, monkeypatch):
+    monkeypatch.setattr(h3, "modal_configured", lambda: True)
+    vus = []
+
+    async def qwen(base, refs, texte):
+        vus.append(texte)
+        return base64.b64decode(PNG)
+    monkeypatch.setattr(h3, "_qwen_image", qwen)
+
+    async def routeur(demande):
+        assert "lieu_jointe" not in demande
+        return "data:image/png;base64," + PNG
+    monkeypatch.setattr(h3, "_image_du_studio", routeur)
+    r = client(h3).post("/video-h3/depart", headers=CLE, json={"texte": "une fille au jardin"})
+    assert r.status_code == 200 and r.json()["moteur"] == "Qwen-Image 2.1" and vus[0].startswith(h3.retouche_qwen.TOILE)
+
+    async def panne(base, refs, texte):
+        raise h3.HTTPException(429, "Budget Modal du mois atteint.")
+    monkeypatch.setattr(h3, "_qwen_image", panne)
+    r = client(h3).post("/video-h3/depart", headers=CLE, json={"texte": "une fille au jardin"})
+    assert r.status_code == 200 and r.json()["moteur"] == "Gemini (routeur)"
+    monkeypatch.setenv("H3_DEPART_QWEN", "false")
+    monkeypatch.setattr(h3, "_qwen_image", qwen)
+    assert client(h3).post("/video-h3/depart", headers=CLE, json={"texte": "x"}).json()["moteur"] == "Gemini (routeur)"
+
+
 def test_le_client_fait_refaire_l_image_en_disant_ce_qui_change(h3, monkeypatch):
     v = h3.video_h3
     assert v.texte_image(" une rue ", [" plus  de pluie ", "", "un nom lisible"]) == (
@@ -999,6 +1045,31 @@ def test_avec_l_option_on_prolonge_par_troncon(h3, monkeypatch):
     assert g["19"]["class_type"] == "MiniMaxH3MotionContextSaveLatent"
     assert g["19"]["inputs"]["latent"] == ["14", 0]
     assert d["latent_vers"] == "/poids/chaines/" + "c" * 32 + ".safetensors"
+
+
+def test_une_suite_par_troncon_garde_les_photos_de_ses_fiches(h3, monkeypatch):
+    """Jalon 0 bis, 05/10 : les clips 2 à 6 enchaînés en texte seul, Leila dérivait (ArcFace en fin de clip 6 :
+    0,312) ; en Références, même graine, même raccord : 0,453. Le tronçon garde les fiches, sans première image."""
+    v = h3.video_h3
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    lea = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    v.fiche_poser_voix(lea, WAV, 4.0, "exemple", "French")
+    avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors", plans=2)
+    plan = v.preparer_prolonger(demande(mode="references", fiches=[lea], langues={lea: "French"},
+                                        image_paroles="Léa lève les yeux et dit « Oui. »"), avant)
+    g, d = plan["demande"]["graphe"], plan["demande"]
+    assert g["10"]["class_type"] == "MiniMaxH3ReferenceToVideo" and "ref_images.ref_image_0" in g["10"]["inputs"]
+    assert list(d["images"]) == ["ref_0.png"]
+    # Et sa voix : <Audio 1> de la fiche dans le clip enchaîné (question du propriétaire, 05/10).
+    assert list(d["sons"]) == ["voix_0.wav"] and g["10"]["inputs"]["ref_audios.ref_audio_0"] == ["70", 0]
+    assert "<Audio 1>" in plan["resume_public"]["invite"]
+    assert g["31"]["inputs"]["conditioning"] == ["10", 0] and g["13"]["inputs"]["conditioning"] == ["31", 0]
+    assert g["30"]["inputs"]["latent_path"] == avant["video"]["latent_vers"] and d["contexte"] == avant["video"]["latent_vers"]
+    assert set(v.NOEUDS_TRONCON) <= set(d["classes"]) and "MiniMaxH3ReferenceToVideo" in d["classes"]
+    invite = plan["resume_public"]["invite"]
+    assert "first frame" not in invite and "<Subject 1>" in invite
+    assert plan["resume_public"]["voie"] == "troncon"
 
 
 def test_un_clip_sans_latent_garde_se_prolonge_par_l_image_meme_avec_l_option(h3, monkeypatch):

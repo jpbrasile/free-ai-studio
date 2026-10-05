@@ -4463,13 +4463,14 @@ async def _creer_depart(corps: dict) -> dict:
             image = None
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    moteur = "téléversée"
     if image is None:
-        image = await _image_du_studio(demande)
+        image, moteur = await _image_de_depart(demande)
     try:
         did = video_h3.depart_poser(image)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"id": did, "image": image, "texte": texte}
+    return {"id": did, "image": image, "texte": texte, "moteur": moteur}
 
 
 @app.get("/video-h3/depart/{did}")
@@ -4485,8 +4486,54 @@ def video_h3_depart_voir(did: str, authorization: Optional[str] = Header(default
     return {"image": "data:image/%s;base64," % genre + base64.b64encode(octets).decode()}
 
 
+async def _image_de_depart(demande: dict) -> tuple:
+    """(data-URI, moteur) de l'image de départ d'un plan : Qwen-Image 2.1 sur Modal d'abord
+    (propriétaire, 05/10 : « qwen est meilleur pour le job » ; jalon 0 bis, clip 6 : ArcFace 0,562
+    contre 0,408), l'image du routeur (Gemini, gratuite) si Modal manque, refuse ou n'a plus de budget.
+    H3_DEPART_QWEN=false garde le routeur seul."""
+    if modal_configured() and os.getenv("H3_DEPART_QWEN", "true").strip().lower() != "false":
+        try:
+            base, refs, texte = retouche_qwen.depuis_demande_image(demande, demande.get("lieu_jointe"))
+            png = await _qwen_image(base, refs, texte)
+            return "data:image/png;base64," + base64.b64encode(png).decode(), "Qwen-Image 2.1"
+        except (HTTPException, ValueError) as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            print("[depart] Qwen indisponible, image du routeur : %s" % str(detail)[:300], flush=True)
+    return await _image_du_studio(demande), "Gemini (routeur)"
+
+
+async def _qwen_image(base: bytes, refs: list, texte: str) -> bytes:
+    """Un dessin Qwen-Image 2.1 sur une carte Modal (le script de retouche_qwen), compté sur « video »."""
+    jid = "depart-" + uuid.uuid4().hex[:12]
+    code = retouche_qwen.construire_script(base, refs, texte, int.from_bytes(os.urandom(4), "big"))
+    try:
+        budget_modal.verifier("video", retouche_qwen.GPU, retouche_qwen.DUREE_MAX_S, retouche_qwen.MEMOIRE_MB,
+                              quoi="L'image de départ Qwen", coeurs=retouche_qwen.COEURS)
+    except budget_modal.BudgetDepasse as exc:
+        raise HTTPException(429, str(exc)) from exc
+    debut = time.time()
+    try:
+        res = await asyncio.to_thread(
+            modal_execute, jid, code, True, True, gpu_type=retouche_qwen.GPU, timeout_s=retouche_qwen.DUREE_MAX_S,
+            memory_mb=retouche_qwen.MEMOIRE_MB, coeurs=retouche_qwen.COEURS, paquets=retouche_qwen.PAQUETS,
+            apt=video_h3.APT, commandes=video_h3.commandes(), volume=video_h3.VOLUME,
+            point_de_montage=video_h3.POINT_DE_MONTAGE, usage=None)
+    except BackendUnavailable as exc:
+        raise HTTPException(503, "Image Qwen : %s" % str(exc)[:300]) from exc
+    finally:
+        budget_modal.consommer("video", retouche_qwen.GPU, time.time() - debut, retouche_qwen.MEMOIRE_MB,
+                               coeurs=retouche_qwen.COEURS, cle=jid)
+    sortie = next((a for a in res.get("artifacts") or []
+                   if str(a.get("name", "")).endswith("retouche.png") and not a.get("skipped")), None)
+    if res.get("exit_code") != 0 or not sortie:
+        raise HTTPException(502, retouche_qwen.phrase_d_echec(res.get("stderr", "")) or
+                            "L'image Qwen n'a rien rendu : %s" % str(res.get("stderr") or "")[-200:])
+    return (JOBS / jid / "modal-output" / sortie["name"]).read_bytes()
+
+
 async def _image_du_studio(demande: dict) -> str:
     """Une image par le routeur (Gemini) ; rend son data-URI ou lève une HTTPException."""
+    demande = {k: v for k, v in demande.items() if k != "lieu_jointe"}   # propre à Qwen
     cle = os.getenv("FREE_TIER_MANAGER_KEY", "").strip()
     if not cle:
         raise HTTPException(503, "L'image du Studio n'est pas joignable d'ici : la clé interne du "
