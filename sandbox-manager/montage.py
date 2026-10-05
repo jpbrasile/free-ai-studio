@@ -180,12 +180,29 @@ def sonie(chemin: Path, debut_s: float = 0.0):
     return float(mesures[-1])
 
 
-def gain_de_suite(premiere: Path, suite: Path, debut_s: float = 0.0) -> float:
-    """Le gain (dB) qui met la suite, à partir de `debut_s`, au niveau du film `premiere`."""
+# Le plancher (05/10, jalon 0, PLAN 21.5) : H3 de base + LoRA Realism rend −26,5 LUFS là où la Turbo
+# LoRA rend −10,5 ; la suite suivant le film, un film tout entier en H3 de base restait 16 dB plus bas.
+# Sous le plancher, le film monté est remonté vers la cible (EBU R128, gain plafonné, limiteur), et la
+# suite suit ce niveau-là. Au-dessus, rien ne change (les films Turbo, de −10 à −12, gardent le leur).
+PLANCHER_SONIE = -20.0
+CIBLE_SONIE = -14.0
+
+
+def gain_du_film(premiere: Path) -> float:
+    """Le gain (dB) qui remonte le film `premiere` vers CIBLE_SONIE s'il est sous PLANCHER_SONIE, sinon 0."""
+    avant = sonie(premiere)
+    if avant is None or avant >= PLANCHER_SONIE:
+        return 0.0
+    return round(min(ECART_SONIE_MAX_DB, CIBLE_SONIE - avant), 2)
+
+
+def gain_de_suite(premiere: Path, suite: Path, debut_s: float = 0.0, gain_film: float = 0.0) -> float:
+    """Le gain (dB) qui met la suite, à partir de `debut_s`, au niveau du film `premiere`
+    (remonté de `gain_film` dB)."""
     avant, apres = sonie(premiere), sonie(suite, debut_s)
     if avant is None or apres is None:
         return 0.0
-    gain = max(-ECART_SONIE_MAX_DB, min(ECART_SONIE_MAX_DB, avant - apres))
+    gain = max(-ECART_SONIE_MAX_DB, min(ECART_SONIE_MAX_DB, avant + gain_film - apres))
     return round(gain, 2) if abs(gain) >= ECART_SONIE_MIN_DB else 0.0
 
 
@@ -202,13 +219,17 @@ def recoller_son(premiere: bytes, suite: bytes, retirer: int = 1) -> bytes:
         b.write_bytes(suite)
         num, den = _cadence(a)
         debut_s = retirer * den / num
-        gain = gain_de_suite(a, b, debut_s)
-        niveau = (",volume=%.2fdB,alimiter=limit=%.3f:level=0:latency=1" % (gain, LIMITE_CRETE)) if gain else ""
+        gain_film = gain_du_film(a)
+        gain = gain_de_suite(a, b, debut_s, gain_film)
+        limiteur = ",alimiter=limit=%.3f:level=0:latency=1" % LIMITE_CRETE
+        niveau = (",volume=%.2fdB" % gain + limiteur) if gain else ""
+        niveau_film = ("volume=%.2fdB" % gain_film + limiteur) if gain_film else "anull"
         _lancer(["-i", str(a), "-i", str(b), "-filter_complex",
+                 "[0:a]%s[aa];"
                  "[1:v]trim=start_frame=%d[bv];"
                  "[1:a]atrim=start=%.6f,asetpts=PTS-STARTPTS%s[ba];"
-                 "[0:v][0:a][bv][ba]concat=n=2:v=1:a=1[v0][a];"
-                 "[v0]settb=%d/%d,setpts=N[v]" % (retirer, debut_s, niveau, den, num),
+                 "[0:v][aa][bv][ba]concat=n=2:v=1:a=1[v0][a];"
+                 "[v0]settb=%d/%d,setpts=N[v]" % (niveau_film, retirer, debut_s, niveau, den, num),
                  "-map", "[v]", "-map", "[a]", "-r", "%d/%d" % (num, den),
                  "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
                  "-c:a", "aac", "-movflags", "+faststart", str(sortie)],

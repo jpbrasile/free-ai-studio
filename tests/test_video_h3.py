@@ -866,6 +866,34 @@ def test_un_plan_recolle_prend_le_niveau_sonore_du_film(h3, tmp_path):
     # Un plan muet ne se pousse pas.
     muet = clip("muet.mp4", "0")
     assert m.sonie(muet) is None and m.gain_de_suite(fort, muet) == 0.0
+    # Un film plus fort que le plancher garde son niveau.
+    tres_fort = clip("tres_fort.mp4", "4")   # sine de lavfi : amplitude 1/8, d'où le « 4 »
+    assert m.sonie(tres_fort) > m.PLANCHER_SONIE and m.gain_du_film(tres_fort) == 0.0
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg absent")
+def test_un_film_trop_bas_est_remonte_au_recollage(h3, tmp_path):
+    """Jalon 0, 05/10 : H3 de base + Realism rend −26,5 LUFS contre −10,5 pour la Turbo ; tout le film
+    suivant son premier plan, il restait bas d'un bout à l'autre."""
+    m = h3.montage
+
+    def clip(nom, volume, frequence):
+        f = tmp_path / nom
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=64x64:rate=24",
+                        "-f", "lavfi", "-i", "sine=frequency=%d" % frequence, "-t", "3", "-af", "volume=%s" % volume,
+                        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(f)], check=True)
+        return f
+    bas, bas2 = clip("bas.mp4", "0.04", 440), clip("bas2.mp4", "0.04", 660)
+    assert m.sonie(bas) < m.PLANCHER_SONIE
+    attendu = min(m.ECART_SONIE_MAX_DB, m.CIBLE_SONIE - m.sonie(bas))
+    assert m.gain_du_film(bas) == pytest.approx(attendu, abs=0.01)
+    film = tmp_path / "film.mp4"
+    film.write_bytes(m.recoller_son(bas.read_bytes(), bas2.read_bytes(), 0))
+    debut = tmp_path / "debut.mp4"
+    debut.write_bytes(m.extraire(film.read_bytes(), 0, 70))
+    # Le premier plan est remonté, et la suite au même niveau que lui.
+    assert m.sonie(debut) == pytest.approx(m.sonie(bas) + attendu, abs=1)
+    assert m.sonie(film, 3.2) == pytest.approx(m.sonie(debut), abs=1)
 
 
 def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3, monkeypatch):
