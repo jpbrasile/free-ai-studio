@@ -997,7 +997,11 @@ def texte_maitre(plans: list, longueur: int = LONGUEUR_MAITRE) -> dict:
             morceaux.append("[Shot 1] " + t)
         elif p.get("enchainement", "coupe") == "coupe":
             n += 1
-            morceaux.append("[Shot %d] At %s, the camera cuts to a new shot. %s" % (n, _horodatage(debut), t))
+            # Une coupe franche, nommée (05/10, propriétaire : « la prochaine coupe franche (web search) ») :
+            # jalon 0 bis, clip 9, H3 a fondu un plan dans l'autre. Exemple du guide de MiniMax : « [Shot 2]
+            # At 00:01.300, hard cut to an extreme close-up… » ; un « cuts to » vague donne souvent un fondu
+            # (prompt-architects.com, transitions).
+            morceaux.append("[Shot %d] At %s, hard cut to a new shot. %s" % (n, _horodatage(debut), t))
         else:
             morceaux.append("From %s, without a cut: %s" % (_horodatage(debut), t))
     ambiances = []
@@ -2409,7 +2413,7 @@ def tenues_par_plan(par_plan: dict, nombre: int) -> list:
 def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=None,
                       presents=None, depart=None, parleurs=None, suite=False, au_depart=None,
                       planches=(), vues=(), legere=False, lieu=None, nb_plans=1, etiquettes=None,
-                      son_lieu=None) -> str:
+                      son_lieu=None, son_lieu_suite=False) -> str:
     """Les personnages, désignés par leurs images seulement : `nombres` dit
     combien d'images a chaque fiche, dans l'ordre des <Subject N>. La
     description d'une fiche ne sert qu'à fabriquer ses images : mise dans
@@ -2535,7 +2539,7 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
     if son_lieu:   # 05/10 : chaque clip réinventait son ambiance ; le fond du lieu part en référence
         definitions.append(f"<Audio {son_lieu}> is the ambience reference of the setting; it contains no speech.")
         garde_lieu = (f"<Audio {son_lieu}>: reference - its ambience guides the background sound of the target "
-                      "video; no words." if suite else
+                      "video; no words." if suite or son_lieu_suite else
                       f"<Audio {son_lieu}>: partially_copy - its ambience layer is copied as the background of "
                       "the target video; no words.")
     # ref-en.txt, 3 : un préfixe de types entre crochets, puis les étiquettes déjà définies.
@@ -3705,17 +3709,23 @@ PAROLES_INSEREES_MOTS = 2
 def mots_inseres(attendues, entendus) -> list:
     """Les suites de mots entendus qui s'insèrent dans une réplique écrite (ajouts de H3), en texte."""
     import difflib
-    ecrits = _mots(" ".join(attendues or []))
+    ecrits, bords = [], {0}
+    for replique in attendues or []:
+        ecrits += _mots(replique)
+        bords.add(len(ecrits))   # la fin d'une réplique est le début de la suivante
     ajouts = []
     for entendu in entendus or []:
         dits = _mots(entendu)
         if not ecrits or not dits:
             continue
         for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=ecrits, b=dits, autojunk=False).get_opcodes():
-            # Un remplacement mot pour mot est une erreur d'oreille ; seul l'excédent est un ajout. Au bord de la
-            # réplique (« Excuse me, is this seat taken? » pour « Is this seat taken? »), c'est une tournure
-            # que le Studio laisse passer depuis le 28/09 ; seul ce qui la coupe en deux compte ici.
-            if (op in ("insert", "replace") and 0 < i1 and i2 < len(ecrits)
+            # Un remplacement mot pour mot est une erreur d'oreille ; seul l'excédent est un ajout. Au bord d'une
+            # réplique (« Excuse me, is this seat taken? » pour « Is this seat taken? »), entre deux répliques
+            # comprises, c'est une tournure que le Studio laisse passer depuis le 28/09 ; seul ce qui coupe
+            # une réplique en deux compte ici. Un nombre écrit en chiffres et dit en mots (« 1999 »,
+            # « nineteen ninety-nine ») n'est pas un ajout (relecture du 05/10).
+            if (op in ("insert", "replace") and i1 not in bords and i2 not in bords
+                    and not any(re.search(r"\d", m) for m in ecrits[i1:i2])
                     and (j2 - j1) - (i2 - i1) >= PAROLES_INSEREES_MOTS):
                 ajouts.append(" ".join(dits[j1:j2]))
     return ajouts
@@ -4726,7 +4736,9 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         if piste:
             sons.append(base64.b64encode(piste).decode())
             son_lieu = len(sons)
-            ambiance = ((AMBIANCE_REFERENCE if payload.get("suite_video") else AMBIANCE_COPIEE) % son_lieu
+            # Une suite (raccord, ou tronçon : `suite_latent`) prend la piste en référence, pas en copie.
+            suite_son = payload.get("suite_video") or payload.get("suite_latent")
+            ambiance = ((AMBIANCE_REFERENCE if suite_son else AMBIANCE_COPIEE) % son_lieu
                         + " " + " ".join(str(ambiance or "").split())).strip()
     images_clefs = mode in ("texte", "premiere", "premiere_derniere")
     if images_clefs and " ".join(str(image_paroles or "").split()):
@@ -4793,7 +4805,8 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
                                    legere=payload.get("invite_legere") is True, lieu=numero_lieu,
                                    nb_plans=len(_MULTIPLAN.findall(texte)) or 1,
                                    etiquettes={k: f["etiquette_h3"] for k, f in enumerate(fiches)
-                                               if f.get("etiquette_h3")}, son_lieu=son_lieu)
+                                               if f.get("etiquette_h3")}, son_lieu=son_lieu,
+                                   son_lieu_suite=bool(payload.get("suite_latent")))
                  # En mode Références, le style est dit AVANT [Shot 1], en une phrase (ref-en.txt, 5.2 :
                  # « Established in one or two English sentences before [Shot 1] » ; après [Shot 1],
                  # c'est la règle des autres modes, appliquée ici par erreur le 04/10). Un texte en
@@ -4933,7 +4946,9 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
         ids = base.get("fiches") or ([base["fiche"]] if base.get("fiche") else [])
         nb, visages_seuls = photos_avec_depart(ids) if ids else (0, False)
         if 0 < nb < MODES["references"]["images_max"]:
-            plan = preparer(dict(base, mode="references", images=[], visages_seuls=visages_seuls), graine_hasard)
+            # `suite_latent` : la piste du lieu y part en référence, pas en copie (relecture du 05/10).
+            plan = preparer(dict(base, mode="references", images=[], visages_seuls=visages_seuls,
+                                 suite_latent=True), graine_hasard)
             d = plan["demande"]
             brancher_troncon(d["graphe"], v["latent_vers"])
             d["classes"] = list(d["classes"]) + list(NOEUDS_TRONCON)

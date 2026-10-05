@@ -540,7 +540,12 @@ class Film:
         lieux = None
         if len(plans) == len(self.etat["clips"]):
             liste = "\n".join("%d. %s" % (k + 1, p.get("image_paroles") or "") for k, p in enumerate(plans))
-            lieux = lire_lieux(self.chat(CONSIGNE_LIEUX % liste), len(plans))
+            # Un chat en panne (quota, délai) ne doit pas arrêter le film au montage (relecture du 05/10) :
+            # sans lieux, chaque clip garde son son, comme avant le fond continu.
+            try:
+                lieux = lire_lieux(self.chat(CONSIGNE_LIEUX % liste), len(plans))
+            except Exception as exc:   # noqa: BLE001 -- le chat lève HTTPException (429, 502, 503)
+                self.noter("lieux_sans_chat", erreur=str(getattr(exc, "detail", exc))[:200])
         film = self.route("POST", "/video-h3/montage", dict({"clips": [c["job"] for c in self.etat["clips"]],
                                                              "scenario": self.etat["titre"]},
                                                             **({"muets": muets} if muets else {}),

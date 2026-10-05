@@ -217,7 +217,7 @@ def test_le_clip_maitre_date_ses_coupes_sans_paroles_et_garde_sa_camera(h3):
     m = v.texte_maitre(plans)
     assert m["debuts_s"] == [0.0, 3.771, 7.542]
     assert m["texte"] == (v.MAITRE_TETE + " [Shot 1] Mila kneels by the pot. The camera pushes in with small "
-                          "amplitude at slow speed. [Shot 2] At 00:03.771, the camera cuts to a new shot. Close-up "
+                          "amplitude at slow speed. [Shot 2] At 00:03.771, hard cut to a new shot. Close-up "
                           "of the pot: a shoot grows. The camera holds a static shot. From 00:07.542, without a "
                           "cut: The shoot becomes a shrub. The camera holds a static shot.")
     # Des phrases de sons (base 4.6), et aucun « same place » : chaque plan dit son lieu (audit du 04/10).
@@ -1084,6 +1084,24 @@ def test_une_suite_par_troncon_garde_les_photos_de_ses_fiches(h3, monkeypatch):
     invite = plan["resume_public"]["invite"]
     assert "first frame" not in invite and "<Subject 1>" in invite
     assert plan["resume_public"]["voie"] == "troncon"
+
+
+def test_une_suite_par_troncon_prend_la_piste_du_lieu_en_reference(h3, monkeypatch):
+    """Relecture du 05/10 : le tronçon partait sans `suite_video` et recopiait la piste du lieu comme une coupe."""
+    v = h3.video_h3
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    lieu = v.fiche_creer("le jardin", "jardin de nuit", genre="decor")["id"]
+    v.fiche_poser_image(lieu, "face", PNG)
+    v.fiche_poser_son_lieu(lieu, b"RIFF....WAVEfmt ")
+    lea = v.fiche_creer("Léa", "x")["id"]
+    v.fiche_poser_image(lea, "face", PNG)
+    avant = _clip_reussi(h3, latent_vers="/poids/chaines/" + "b" * 32 + ".safetensors", plans=2)
+    plan = v.preparer_prolonger(demande(mode="references", fiches=[lea], decor=lieu,
+                                        image_paroles="Léa marche vers la maison."), avant)
+    invite = plan["resume_public"]["invite"]
+    assert plan["resume_public"]["voie"] == "troncon" and plan["resume_public"]["decor_son"]
+    assert "<Audio 1>: reference - its ambience guides" in invite and "partially_copy" not in invite
+    assert "The ambience of <Audio 1> continues throughout the target video." in invite
 
 
 def test_un_clip_sans_latent_garde_se_prolonge_par_l_image_meme_avec_l_option(h3, monkeypatch):
@@ -6930,6 +6948,11 @@ def test_des_mots_ajoutes_au_milieu_de_la_replique_sont_une_faute(h3):
     assert v.mots_inseres(attendues, ["Une dernière, juste une, euh."]) == []      # un mot de plus : toléré
     # Au bord de la réplique, une tournure (28/09) : laissée au juge comme avant.
     assert v.mots_inseres(["Is this seat taken?"], ["Excuse me, is this seat taken?"]) == []
+    # Relecture du 05/10 : un nombre en chiffres dit en mots, et deux mots entre deux répliques, passent.
+    assert v.mots_inseres(["I was born in 1999 there."], ["I was born in nineteen ninety-nine there."]) == []
+    assert v.mots_inseres(["It costs 250 euros now."], ["It costs two hundred fifty euros now."]) == []
+    assert v.mots_inseres(["Hello there.", "Bonjour toi."], ["Hello there. Oh well. Bonjour toi."]) == []
+    assert v.mots_inseres(["Hello there.", "Bonjour toi."], ["Hello big blue there. Bonjour toi."]) == ["big blue"]
     paroles = {"attendu": attendues, "entendu": small, "ok": False, "inseres": ["valeur sm"]}
     d = v.defaut_de_paroles(paroles, 36.3)
     assert d["t_s"] == 36.3 and "Mots ajoutés" in d["quoi"] and "valeur sm" in d["quoi"]

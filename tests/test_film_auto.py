@@ -304,6 +304,20 @@ def test_le_montage_donne_le_lieu_de_chaque_plan(fa, tmp_path):
     assert next(j for j in etat["journal"] if j["etape"] == "montage")["lieux"] == ["phare", "phare"]
 
 
+def test_un_chat_en_panne_au_montage_n_arrete_pas_le_film(fa, tmp_path):
+    """Relecture du 05/10 : le chat lève (quota, délai) ; le film se monte sans lieux, comme avant."""
+    def chat_en_panne(consigne):
+        if "label of its place" in consigne:
+            raise RuntimeError("429 quota")
+        return chat(consigne)
+    studio = FauxStudio()
+    etat = fa.nouvel_etat("Oscar allume le phare. Un bateau rentre au port.", essai=True)
+    fa.Film(etat, tmp_path, studio, chat_en_panne, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    assert "lieux" not in next(x for m, c, x in studio.appels if c == "/video-h3/montage")
+    assert any(j["etape"] == "lieux_sans_chat" and "429" in j["erreur"] for j in etat["journal"])
+
+
 def test_l_essai_a_blanc_va_du_texte_au_film_par_les_routes_du_studio(fa, tmp_path):
     studio = FauxStudio()
     etat = fa.nouvel_etat("Oscar allume le phare. Un bateau rentre au port.", essai=True)
