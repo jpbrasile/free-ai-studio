@@ -978,6 +978,20 @@ def test_les_coupes_demandees_ne_sont_pas_un_halo(h3):
     assert d and "s'éclaircit" in d["quoi"] and 13.0 < d["t_s"] < 16.0
 
 
+def test_la_voix_de_reference_est_ramenee_au_niveau_de_la_scene(h3, tmp_path):
+    """Jalon 0 bis, 05/10 : la voix de la fiche (−15,8 LUFS, près du micro) donnait des clips à −10,8 LUFS,
+    le fond sonore enterré ; elle part maintenant à VOIX_REFERENCE_LUFS."""
+    m = h3.montage
+    forte = tmp_path / "forte.wav"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=300:d=4:sample_rate=24000",
+                    "-af", "volume=6dB", str(forte)], check=True)
+    assert m.sonie(forte) > -17   # comme la voix de Leila, −15,8
+    sortie = tmp_path / "douce.wav"
+    sortie.write_bytes(m.niveler_son(forte.read_bytes(), h3.video_h3.VOIX_REFERENCE_LUFS))
+    assert abs(m.sonie(sortie) - h3.video_h3.VOIX_REFERENCE_LUFS) < 1.0
+    assert m.niveler_son(b"pas un son", -26.0) == b"pas un son"
+
+
 def test_la_luminosite_d_un_clip_se_mesure(h3, tmp_path):
     m = h3.montage
 

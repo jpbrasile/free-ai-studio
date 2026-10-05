@@ -180,6 +180,26 @@ def sonie(chemin: Path, debut_s: float = 0.0):
     return float(mesures[-1])
 
 
+def niveler_son(wav: bytes, cible: float) -> bytes:
+    """Le WAV ramené à la sonie `cible` (LUFS) par un gain simple, plafonné à ECART_SONIE_MAX_DB et
+    limité à −1 dBFS ; inchangé si la mesure échoue ou si l'écart est inaudible."""
+    with tempfile.TemporaryDirectory() as dossier:
+        entree, sortie = Path(dossier, "a.wav"), Path(dossier, "b.wav")
+        entree.write_bytes(wav)
+        avant = sonie(entree)
+        if avant is None:
+            return wav
+        gain = max(-ECART_SONIE_MAX_DB, min(ECART_SONIE_MAX_DB, cible - avant))
+        if abs(gain) < ECART_SONIE_MIN_DB:
+            return wav
+        fini = subprocess.run([_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(entree), "-af",
+                               "volume=%.2fdB,alimiter=limit=%.3f:level=0:latency=1" % (gain, LIMITE_CRETE),
+                               "-c:a", "pcm_s16le", str(sortie)], capture_output=True, text=True, timeout=DELAI_S)
+        if fini.returncode != 0 or not sortie.is_file():
+            return wav
+        return sortie.read_bytes()
+
+
 def luminosites(video: bytes, par_seconde: int = 4) -> list:
     """La luminosité moyenne (Y, 0-255) de `par_seconde` images par seconde de `video` ; [] si illisible
     (jalon 0, 05/10 : la dérive de lumière d'un clip, video_h3.defaut_de_lumiere)."""

@@ -36,6 +36,13 @@ from pathlib import Path
 from typing import Optional
 
 import budget_modal
+import montage
+
+# Le niveau de la voix de référence envoyée à H3 (05/10, jalon 0 bis) : la voix de Leila enregistrée
+# à −15,8 LUFS, près du micro ; les clips qui l'ont reçue sont sortis à −10,8 et −14 LUFS contre −26 à
+# −28 sans elle, le fond sonore enterré de 12 à 17 dB (« le fond sonore a disparu », propriétaire).
+# Ramenée au niveau des clips H3 de base sans voix. PROVISOIRE : à confirmer à l'écoute.
+VOIX_REFERENCE_LUFS = -26.0
 
 # --- Moteur et poids ------------------------------------------------------------
 
@@ -4648,7 +4655,7 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
         for k, langue in voix_du_plan(dites, avec_voix):
             son = fiche_voix(fiches[k]["id"], langue)
             if son:
-                sons.append(base64.b64encode(son).decode())
+                sons.append(base64.b64encode(montage.niveler_son(son, VOIX_REFERENCE_LUFS)).decode())
                 voix_k.setdefault(k, {})[langue] = len(sons)
         # Chaque réplique nomme la voix de sa langue quand son personnage en a deux ici.
         audios = {k: dict(v, **{l: v.get(l, next(iter(v.values()))) for _k, l in dites if _k == k})
