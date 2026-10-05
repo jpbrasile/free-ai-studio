@@ -2492,12 +2492,27 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
             continue
         etiquette = (etiquettes or {}).get(k)
         qui = etiquette or "the person"
-        definitions.append(f"<Subject {k + 1}> is {qui} in {images}"
-                           # Ce que chaque image apporte (guide de MiniMax, ref-en, 2.1) : la planche
-                           # est sa dernière image (fiche_images_h3, 01/10).
-                           + ((f"; <Picture {premiere - 1}> shows all angles." if legere else
-                               f"; <Picture {premiere - 1}> shows this same {'character' if etiquette else 'person'} "
-                               "from every angle: front, three-quarter, profile and back.") if k in planches else "."))
+        # La photo de tenue est fabriquée : son visage dérive (jalon 0 bis, clip 9, 05/10 ; propriétaire :
+        # « le clip 9 avait l'id card de leila en référence, elle s'en écarte »). Le visage vient des seules
+        # photos de la fiche, la tenue de sa photo (guide de MiniMax, 2.1 : « whose appearance comes from
+        # <Picture 1> and whose walking motion comes from <Video 1> »).
+        visage = tenue = None
+        if k in tenues and nombre > 1:
+            visage = ", ".join(f"<Picture {premiere - nombre + i}>" for i in range(nombre - 1))
+            tenue = f"<Picture {premiere - 1}>"
+            definitions.append(f"<Subject {k + 1}> is {qui} "
+                               + (f"whose look comes from {visage}" if etiquette
+                                  else f"whose face and hair come from {visage}")
+                               + f" and whose clothing comes from {tenue}; the face in {tenue} is not a reference.")
+        else:
+            definitions.append(f"<Subject {k + 1}> is {qui} in {images}"
+                               # Ce que chaque image apporte (guide de MiniMax, ref-en, 2.1) : la planche
+                               # est sa dernière image (fiche_images_h3, 01/10).
+                               + ((f"; <Picture {premiere - 1}> shows all angles." if legere else
+                                   f"; <Picture {premiere - 1}> shows this same "
+                                   f"{'character' if etiquette else 'person'} "
+                                   "from every angle: front, three-quarter, profile and back.")
+                                  if k in planches else "."))
         j = (voix or {}).get(k)
         if isinstance(j, dict) and len(j) == 1:
             j = next(iter(j.values()))
@@ -2521,7 +2536,8 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
         # (règle 1 du matin, retirée le soir ; remarque du propriétaire).
         ecrite = (ecrites or {}).get(k)
         if legere:   # 02/10 : une fois chaque chose ; la tenue écrite remplace « clothing retained »
-            garde.append(f"{ou}: fully_preserved - one single person, same face and hair; "
+            garde.append(f"{ou}: fully_preserved - one single person, "
+                         + (f"face and hair of {visage}; " if visage else "same face and hair; ")
                          + (f"wears {ecrite}." if ecrite else
                             f"clothing of <Picture {premiere - 1}>." if k in tenues else "same clothing."))
             continue
@@ -2530,10 +2546,10 @@ def sujets_des_fiches(nombres: list, tenues=(), ecrites=None, objets=(), voix=No
                  "or from afar." if ecrite else "")
         if k in tenues:   # la dernière de ses images le montre dans la tenue du scénario (29/09)
             garde.append((f"{ou}: fully_preserved - the face or head, body shape and size of {etiquette} in "
-                          f"{images} are retained, with the clothing of <Picture {premiere - 1}>, as one single "
-                          "character." if etiquette else
-                          f"{ou}: fully_preserved - the face and hair of the person in {images} "
-                          f"are retained, with the clothing of <Picture {premiere - 1}>, as one single person.")
+                          f"{visage or images} are retained, with the clothing of <Picture {premiere - 1}>, as one "
+                          "single character." if etiquette else
+                          f"{ou}: fully_preserved - the face and hair of the person in {visage or images} "
+                          f"are retained, with only the clothing of <Picture {premiere - 1}>, as one single person.")
                          + porte)
             continue
         # Les traits à garder sont ceux de ce qu'il est (ref-en.txt, 4.1, « the Samoyed's thick white

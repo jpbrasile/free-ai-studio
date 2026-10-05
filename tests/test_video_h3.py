@@ -2348,7 +2348,11 @@ def test_une_tenue_changee_par_le_scenario_ajoute_sa_photo_a_tous_les_plans(h3, 
     for p in fils[0][1]:
         assert p["payload"]["tenues"] == {fid: PNG}
         invite = v.preparer(p["payload"])["resume_public"]["invite"]
-        assert "with the clothing of <Picture 2>, as one single person" in invite
+        assert "with only the clothing of <Picture 2>, as one single person" in invite
+        # 05/10, jalon 0 bis, clip 9 : la photo de tenue est fabriquée, son visage n'est pas une référence.
+        assert ("<Subject 1> is the person whose face and hair come from <Picture 1> and whose clothing "
+                "comes from <Picture 2>; the face in <Picture 2> is not a reference.") in invite
+        assert "the face and hair of the person in <Picture 1> are retained" in invite
     assert v.lire_tenues("rien de lisible", ["Léa"]) == {}
 
 
