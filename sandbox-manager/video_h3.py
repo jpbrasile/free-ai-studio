@@ -4955,6 +4955,16 @@ if manque:
 if D.get("contexte") and not Path(D["contexte"]).is_file():
     print("CONTEXTE_ABSENT " + D["contexte"], file=sys.stderr)
     sys.exit(10)
+if D.get("contexte"):
+    # Le nœud Motion-Context ne lit un latent que sous le dossier de sortie de
+    # ComfyUI (« path must stay inside the ComfyUI output folder », jalon 0 du
+    # 05/10) : le latent gardé sur le disque y est copié, le graphe pointe la copie.
+    entree = Path("/tmp/sortie/contexte_entree") / Path(D["contexte"]).name
+    entree.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(D["contexte"], entree)
+    for n in D["graphe"].values():
+        if n.get("class_type") == "MiniMaxH3MotionContextLoadLatent":
+            n["inputs"]["latent_path"] = str(entree)
 
 Path("/tmp/chemins.yaml").write_text(
     "h3:\n  base_path: " + str(BASE) + "\n  diffusion_models: diffusion_models\n"

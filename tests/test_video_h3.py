@@ -949,6 +949,25 @@ def test_le_script_verifie_le_contexte_et_garde_le_latent(h3, monkeypatch):
     assert "par la dernière image" in v.phrase_d_echec("CONTEXTE_ABSENT /poids/chaines/x")
 
 
+def test_le_latent_du_troncon_est_copie_sous_le_dossier_de_sortie_de_comfyui(h3, monkeypatch, tmp_path):
+    # Jalon 0, 05/10 : le nœud refuse un latent hors du dossier de sortie (« path must
+    # stay inside the ComfyUI output folder ») ; /poids/chaines/… n'y est pas.
+    v = h3.video_h3
+    monkeypatch.setenv("H3_MOTION_CONTEXT", "true")
+    latent = tmp_path / "poids" / ("b" * 32 + ".safetensors")
+    latent.parent.mkdir()
+    latent.write_bytes(b"latent")
+    avant = _clip_reussi(h3, latent_vers=str(latent))
+    d = v.preparer_prolonger(demande(), avant)["demande"]
+    debut = v._SCRIPT.index('if D.get("contexte"):\n')
+    bloc = v._SCRIPT[debut:v._SCRIPT.index("\n\n", debut)].replace("/tmp/sortie", (tmp_path / "sortie").as_posix())
+    exec(bloc, {"D": d, "Path": Path, "shutil": shutil})
+    copie = tmp_path / "sortie" / "contexte_entree" / latent.name
+    assert copie.read_bytes() == b"latent"
+    assert d["graphe"]["30"]["inputs"]["latent_path"] == str(copie)
+    assert d["contexte"] == str(latent)   # la vérification CONTEXTE_ABSENT lit toujours l'original
+
+
 def test_prolonger_sans_copie_d_autorisation_rien_n_est_loue(h3):
     _clip_reussi(h3)
     r = client(h3).post("/video-h3/prolonger", headers=CLE, json=demande(precedent="b" * 32))
