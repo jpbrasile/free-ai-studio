@@ -896,6 +896,42 @@ def test_un_film_trop_bas_est_remonte_au_recollage(h3, tmp_path):
     assert m.sonie(film, 3.2) == pytest.approx(m.sonie(debut), abs=1)
 
 
+def test_un_clip_qui_s_eclaircit_en_halo_est_refuse_par_le_juge(h3):
+    """Jalon 0, 05/10 : le clip 4 de Leila (graine 104) monte de 48,6 à 69 en 7 s, maison noyée dans un
+    halo ; ni le juge ni l'écoute ne le voyaient. Courbes mesurées (4 par seconde) sur les clips du jalon."""
+    v = h3.video_h3
+    halo = [48.6, 49, 50, 51.3, 52.5, 53.3, 54.7, 55.9, 57.4, 59.4, 61.5, 62.9, 64.2, 65.6, 66.9, 64.5, 69]
+    d = v.defaut_de_lumiere(halo, "She points up at the sky.", 22.2)
+    assert d and d["quoi"].startswith("L'image s'éclaircit de 42 %") and d["t_s"] == 26.2
+    assert v.DERIVE_DE_LUMIERE.match(d["quoi"])
+    # Le clip 5 qui en repart : il retombe.
+    assert "s'assombrit de 21 %" in v.defaut_de_lumiere([69.3, 67.2, 62.2, 55.9, 54.6, 55.5, 60.5])["quoi"]
+    # Les bons : la graine 204 (2 %), la capuche relevée du clip 2 (10 %), le fondu Turbo de l'essai 1 (11 %).
+    assert v.defaut_de_lumiere([48.4, 48.6, 49.1, 47.2, 47.6, 48.9]) is None
+    assert v.defaut_de_lumiere([48.7, 47.0, 43.9, 45.2, 47.3]) is None
+    assert v.defaut_de_lumiere([46.6, 48.0, 51.8, 51.5]) is None
+    # Une lumière que le texte demande n'est pas une dérive ; une mesure vide ne juge rien.
+    assert v.defaut_de_lumiere(halo, "Oscar allume le phare.") is None
+    assert v.defaut_de_lumiere(halo, "She switches on the lamp.") is None
+    assert v.defaut_de_lumiere([]) is None and v.defaut_de_lumiere([50.0]) is None
+
+
+def test_la_luminosite_d_un_clip_se_mesure(h3, tmp_path):
+    m = h3.montage
+
+    def clip(nom, filtre):
+        f = tmp_path / nom
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=gray:s=64x48:r=24",
+                        "-t", "3", "-vf", filtre, "-c:v", "libx264", "-pix_fmt", "yuv420p", str(f)], check=True)
+        return f.read_bytes()
+    fixe = m.luminosites(clip("fixe.mp4", "null"))
+    monte = m.luminosites(clip("monte.mp4", "eq=brightness=0.1*t:eval=frame"))
+    assert len(fixe) == 12 and max(fixe) - min(fixe) < 1
+    assert monte[-1] > monte[0] * 1.3
+    assert h3.video_h3.defaut_de_lumiere(fixe) is None and h3.video_h3.defaut_de_lumiere(monte)
+    assert m.luminosites(b"pas une video") == []
+
+
 def test_une_suite_avec_fiches_garde_ses_sujets_et_part_de_la_derniere_image(h3, monkeypatch):
     """30/09 : une suite partait de la dernière image seule, en texte brut ; Marc y était
     réinventé, sa voix aussi. Elle garde maintenant ses fiches quand elles tiennent."""

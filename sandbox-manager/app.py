@@ -6810,6 +6810,7 @@ async def video_h3_scenario_juger(sid: str, authorization: Optional[str] = Heade
         if morceau is not None:
             verdict["paroles"] = await _ecouter(morceau, texte)
             _ajouter_defaut_de_paroles(verdict, debut)
+            await _ajouter_defaut_de_lumiere(verdict, morceau, texte, debut)
         # Les règles 9 à 12, numérotées (30/09 : « for each clip that rule n° 1 to xx are followed »).
         r = {9: regles.regle_paroles(verdict.get("paroles"))}
         r.update(await _regles_clip(film, debut, fins[k] / ips - debut, fiches, refs, initiaux[k]))
@@ -7003,6 +7004,17 @@ def _ajouter_defaut_de_paroles(verdict: dict, debut: float) -> None:
         verdict["verdict"] = "defaut"
 
 
+async def _ajouter_defaut_de_lumiere(verdict: dict, video: bytes, texte: str, debut: float) -> None:
+    """Jalon 0, 05/10 : un clip qui s'éclaircit en halo passait le juge et l'écoute ; mesuré, il est refusé
+    (et le film automatique le rejoue avec une autre graine)."""
+    courbe = await asyncio.to_thread(montage.luminosites, video, video_h3.LUMIERE_PAR_SECONDE)
+    verdict["lumiere"] = courbe
+    defaut = video_h3.defaut_de_lumiere(courbe, texte, debut)
+    if defaut:
+        verdict["defauts"] = list(verdict.get("defauts") or []) + [defaut]
+        verdict["verdict"] = "defaut"
+
+
 @app.post("/video-h3/jobs/{jid}/juger")
 async def video_h3_clip_juger(jid: str, authorization: Optional[str] = Header(default=None)):
     """Le juge du Studio sur un clip seul : sa planche avec les photos des fiches,
@@ -7025,6 +7037,8 @@ async def video_h3_clip_juger(jid: str, authorization: Optional[str] = Header(de
     verdict["paroles"] = await _ecouter(film, texte)
     _ajouter_defaut_de_paroles(verdict, 0.0)
     maitre = v.get("maitre")
+    if not maitre:   # le maître enchaîne des plans : sa lumière change aux coupes
+        await _ajouter_defaut_de_lumiere(verdict, film, texte, 0.0)
     if maitre:
         # Film « Le phare », 03/10 : trois maîtres sans une coupe demandée, vus seulement au dépliage,
         # une fois les trois essais passés. Le juge le dit : l'essai suivant le remplace.

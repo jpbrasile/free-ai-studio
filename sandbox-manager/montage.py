@@ -180,6 +180,20 @@ def sonie(chemin: Path, debut_s: float = 0.0):
     return float(mesures[-1])
 
 
+def luminosites(video: bytes, par_seconde: int = 4) -> list:
+    """La luminosité moyenne (Y, 0-255) de `par_seconde` images par seconde de `video` ; [] si illisible
+    (jalon 0, 05/10 : la dérive de lumière d'un clip, video_h3.defaut_de_lumiere)."""
+    with tempfile.TemporaryDirectory() as dossier:
+        chemin = Path(dossier, "v.mp4")
+        chemin.write_bytes(video)
+        fini = subprocess.run([_ffmpeg(), "-hide_banner", "-nostats", "-i", str(chemin), "-an", "-vf",
+                               "fps=%d,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-" % par_seconde,
+                               "-f", "null", "-"], capture_output=True, text=True, timeout=DELAI_S)
+    if fini.returncode != 0:
+        return []
+    return [float(x) for x in re.findall(r"YAVG=([\d.]+)", fini.stdout or "")]
+
+
 # Le plancher (05/10, jalon 0, PLAN 21.5) : H3 de base + LoRA Realism rend −26,5 LUFS là où la Turbo
 # LoRA rend −10,5 ; la suite suivant le film, un film tout entier en H3 de base restait 16 dB plus bas.
 # Sous le plancher, le film monté est remonté vers la cible (EBU R128, gain plafonné, limiteur), et la

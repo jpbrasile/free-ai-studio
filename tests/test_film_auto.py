@@ -4,6 +4,9 @@ import json
 
 import pytest
 
+# Le défaut que le juge écrit pour une lumière qui dérive (video_h3.defaut_de_lumiere, jalon 0 du 05/10).
+HALO = "L'image s'éclaircit de 42 % en cours de plan (de 49 à 69) : halo ou lumière qui bave, la prise a dérapé."
+
 
 @pytest.fixture
 def fa(sandbox):
@@ -47,6 +50,8 @@ class FauxStudio:
                 v = self.verdicts_maitre.pop(0)
                 return 200, {"verdict": v, "defauts": [] if v == "ok" else [{"quoi": "deux fillettes"}]}
             v = self.verdicts_clips.pop(0) if self.verdicts_clips else "ok"
+            if v == "halo":
+                return 200, {"verdict": "defaut", "defauts": [{"quoi": HALO}]}
             return 200, {"verdict": v, "defauts": [] if v == "ok" else [{"quoi": "geste manquant"}]}
         if chemin.endswith("/deplier"):
             if chemin.split("/")[-2] in self.sans_coupe:
@@ -346,6 +351,19 @@ def test_un_plan_refuse_par_le_juge_est_retourne_et_le_meilleur_garde(fa, tmp_pa
     assert etat["clips"][1]["job"] == rejoue["job"] and etat["clips"][1]["verdict"] == "ok"
     montage = next(x for m, c, x in studio.appels if c == "/video-h3/montage")
     assert montage["clips"] == [c["job"] for c in etat["clips"]]
+
+
+def test_un_plan_en_halo_est_rejoue_sans_retoucher_son_depart(fa, tmp_path):
+    """Jalon 0, 05/10 : le clip 4 de Leila s'éclaircit en halo (graine 104), la graine 204 le tient. Le juge
+    le refuse, le plan est rejoué (graine neuve), et le halo ne va pas à la retouche de l'image de départ."""
+    studio = FauxStudio(verdicts_clips=("ok", "halo", "ok"))
+    etat = fa.nouvel_etat("Oscar allume le phare.", essai=True)
+    fa.Film(etat, tmp_path, studio, chat, dormir=lambda s: None).derouler()
+    assert etat["statut"] == "fini", etat["erreur"]
+    depliers = [x for m, c, x in studio.appels if c.endswith("/deplier")]
+    assert [x.get("plans") for x in depliers] == [None, [2]]
+    assert depliers[1]["remarques"] == {"2": []} and "graine" not in depliers[1]
+    assert etat["clips"][1]["verdict"] == "ok"
 
 
 def test_un_plan_toujours_refuse_garde_le_moins_fautif(fa, tmp_path):

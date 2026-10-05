@@ -3686,6 +3686,37 @@ def defaut_de_paroles(paroles: dict, t_s: float):
             % (" / ".join(paroles["attendu"]), paroles["entendu"] or "rien")}
 
 
+# Jalon 0, 05/10 (PLAN 21.5) : le clip 4 de Leila (graine 104) s'éclaircit de 48,6 à 69 en 7 s, la maison
+# noyée dans un halo, et le clip 5 qui en repart casse le décor ; la même entrée avec la graine 204 tient
+# (47,2-49,1). Ni le juge ni l'écoute ne le voyaient. Écart à la première image, sur 16 clips du jalon :
+# 1 à 11 % pour les bons, 21 et 42 % pour les deux ratés. Seuil PROVISOIRE (2 ratés), à revoir avec le
+# propriétaire et les clips étiquetés (PLAN 21.2, point 4).
+DERIVE_LUMIERE_MAX = 0.20
+LUMIERE_PAR_SECONDE = 4
+# Une lumière que le texte demande (une lampe qu'on allume, l'aube) n'est pas une dérive.
+_LUMIERE_DEMANDEE = re.compile(r"\b(?:allum|éteint|eteint|aube|lever du soleil|coucher du soleil|éclair|"
+                               r"turns? (?:on|off)|switch|lights? up|dawn|sunrise|sunset|lightning|flash)",
+                               re.IGNORECASE)
+# Les défauts de defaut_de_lumiere : une prise qui a dérapé, pas une faute de l'image de départ.
+DERIVE_DE_LUMIERE = re.compile(r"^L'image s'(?:éclaircit|assombrit) de ")
+
+
+def defaut_de_lumiere(courbe: list, texte: str = "", t_s: float = 0.0):
+    """Un défaut du jugement quand la luminosité moyenne du clip (`courbe`, LUMIERE_PAR_SECONDE mesures
+    par seconde) s'écarte de plus de DERIVE_LUMIERE_MAX de sa première image ; None sinon."""
+    if len(courbe or []) < 2 or courbe[0] <= 0 or _LUMIERE_DEMANDEE.search(texte or ""):
+        return None
+    debut = courbe[0]
+    pire = max(range(len(courbe)), key=lambda i: abs(courbe[i] - debut))
+    ecart = (courbe[pire] - debut) / debut
+    if abs(ecart) <= DERIVE_LUMIERE_MAX:
+        return None
+    return {"t_s": round(t_s + pire / LUMIERE_PAR_SECONDE, 1), "cause": "video",
+            "quoi": "L'image %s de %d %% en cours de plan (de %.0f à %.0f) : halo ou lumière qui bave, "
+                    "la prise a dérapé." % ("s'éclaircit" if ecart > 0 else "s'assombrit", round(abs(ecart) * 100),
+                                           debut, courbe[pire])}
+
+
 def consigne_correction(plans: list, retours: str, histoire: str = "") -> str:
     # L'histoire vient du scénario initial : des plans déjà réécrits peuvent l'avoir
     # abîmée, et la correction ne voyait qu'eux (28/09/2026).
