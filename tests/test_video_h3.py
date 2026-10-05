@@ -7255,13 +7255,14 @@ def test_le_decor_part_a_h3_avant_l_image_de_depart_quand_on_le_demande(h3):
     assert "<Picture 2>: fully_preserved - same place and fixed elements" in legere
 
 
-def test_la_piste_son_du_lieu_part_en_audio_quand_on_le_demande(h3):
-    """05/10, propriétaire : « le fond sonore devrait être dans les références », puis « ok fais 1 + 2 ».
-    Recopiée sur une coupe, simple référence sur une suite (guide de MiniMax) ; rien sans piste."""
+def test_la_piste_son_du_lieu_part_en_audio_par_defaut(h3):
+    """05/10, propriétaire : « le fond sonore devrait être dans les références », « ok fais 1 + 2 », puis
+    « allume decor_son par défaut ». Recopiée sur une coupe, simple référence sur une suite (guide de
+    MiniMax) ; rien sans piste, rien avec `decor_son: false`."""
     v = h3.video_h3
     lieu, leila = _decor_et_leila(v)
     base = {"mode": "references", "image_paroles": "Leila sits on the fountain.", "fiches": [leila],
-            "decor": lieu, "depart_reference": PNG, "decor_son": True}
+            "decor": lieu, "depart_reference": PNG}
     sans_piste = v.preparer(dict(base))
     assert not sans_piste["resume_public"]["decor_son"] and not sans_piste["demande"]["sons"]
     v.fiche_poser_son_lieu(lieu, b"RIFF....WAVEfmt ")

@@ -4718,8 +4718,10 @@ def preparer(payload: dict, graine_hasard=None) -> dict:
     # sonore devrait être dans les références », puis « ok fais 1 + 2 ») : chaque clip H3 réinventait son
     # ambiance. Guide de MiniMax : « The copied ambience layer from <Audio N> continues throughout the
     # target video » ; une suite la prend en simple référence. Seulement s'il reste une place de son.
+    # Allumé par défaut (propriétaire, 05/10 : « allume decor_son par défaut ») ; `decor_son: false` l'éteint.
     son_lieu = None
-    if refs and fiches and payload.get("decor") and payload.get("decor_son") is True and len(sons) < VOIX_PAR_PLAN:
+    if refs and fiches and payload.get("decor") and payload.get("decor_son") is not False \
+            and len(sons) < VOIX_PAR_PLAN:
         piste = fiche_son_lieu(payload["decor"])
         if piste:
             sons.append(base64.b64encode(piste).decode())
