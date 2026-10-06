@@ -7,13 +7,20 @@ image clé à la suivante, puis les tronçons sont mis bout à bout (la premièr
 précédent : retirée). Images clés : la plaque à 0° et 360°, les rendus `rendus/rendu_r<angle>.png` de scene_blender.py
 entre les deux (cibles {"devant": 0, "droite": 0, "tourne": angle} du plan, scene_plan.py).
 
+Avec les cartes d'identité du lieu (cartes_elements.py, <dossier>/cartes/cartes_lieu.json, prises d'office si
+présentes), chaque tronçon reçoit la liste exacte de ce qu'il voit au départ, à l'arrivée et en passant, et
+« rien d'autre » : sans elles, un mur nu laisse H3 inventer une autre pièce (05/10 : canapé gris, tableau, tapis).
+
   python tour360_h3.py <dossier de l'essai> [graine] [pas]      (lancer par la file : ressource gpu, ~3 min/tronçon)
-  -> <dossier>/tour360/tour360_g<graine>.mp4 (+ un mp4 par tronçon)
+  -> <dossier>/tour360_cartes/tour360_g<graine>.mp4 avec cartes, <dossier>/tour360/… sans (+ un mp4 par tronçon)
 """
+import json
+import math
 import subprocess
 import sys
 from pathlib import Path
 
+import cartes_elements
 import travelling_h3
 
 PAS = 45
@@ -27,20 +34,48 @@ CONSIGNE = {
 }
 
 
+def liste(fiches):
+    return "; ".join(f["description"] for f in fiches) if fiches else "plain cream walls"
+
+
+def consignes_cartes(dossier, n, pas):
+    """Une consigne par tronçon, tirée des cartes : ce que montrent la première et la dernière image, et tout ce que
+    la caméra croise entre les deux, rien de plus."""
+    fiches = json.loads((dossier / "cartes" / "cartes_lieu.json").read_text(encoding="utf-8"))
+    cfg = json.loads((dossier / "scene.json").read_text(encoding="utf-8"))
+    cam = next(c for c in cfg["cameras"] if c["nom"] == "verif_plaque")
+    demi = math.degrees(math.atan(cfg["taille"][0] / 2 / cam["f"]))
+    sortie = []
+    for k in range(n):
+        a, b = cam["lacet"] + k * pas, cam["lacet"] + (k + 1) * pas
+        chemin = cartes_elements.visibles(fiches, (a + b) / 2, demi + pas / 2)
+        sortie.append(dict(CONSIGNE, **{
+            "mouvement": CONSIGNE["mouvement"] + " The camera only passes: " + liste(chemin) + ". There is nothing "
+                         "else in this part of the room: no other furniture, no pictures on the walls, no rug, no "
+                         "other room.",
+            "premiere": "the living room, showing " + liste(cartes_elements.visibles(fiches, a, demi)) + ".",
+            "derniere": "the same living room, the camera turned further right, showing "
+                        + liste(cartes_elements.visibles(fiches, b, demi)) + "."}))
+    return sortie
+
+
 def main(dossier, graine=11, pas=PAS):
     dossier = Path(dossier).resolve()
-    sortie = dossier / "tour360"
+    avec_cartes = (dossier / "cartes" / "cartes_lieu.json").is_file()
+    sortie = dossier / ("tour360_cartes" if avec_cartes else "tour360")
     sortie.mkdir(exist_ok=True)
     cles = [dossier / "plaque.png"] + [dossier / "rendus" / ("rendu_r%03d.png" % a) for a in range(pas, 360, pas)] \
         + [dossier / "plaque.png"]
     manque = [str(c) for c in cles if not c.is_file()]
     if manque:
         raise SystemExit("images clés absentes : " + ", ".join(manque))
+    consignes = consignes_cartes(dossier, len(cles) - 1, pas) if avec_cartes else [CONSIGNE] * (len(cles) - 1)
+    (sortie / "consignes.json").write_text(json.dumps(consignes, indent=1, ensure_ascii=False), encoding="utf-8")
     troncons = []
     for k in range(len(cles) - 1):
         f = sortie / ("troncon_%02d_g%d.mp4" % (k, graine))
         if not f.is_file():
-            rc, _ = travelling_h3.clip(cles[k], cles[k + 1], f, graine, consigne=CONSIGNE)
+            rc, _ = travelling_h3.clip(cles[k], cles[k + 1], f, graine, consigne=consignes[k])
             if rc:
                 raise SystemExit("tronçon %d en échec (rc %d)" % (k, rc))
         troncons.append(f)

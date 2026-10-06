@@ -67,9 +67,20 @@ baie à x = -1) n'était pas la vraie. On mesure d'abord, puis on pose les empri
 5. **Dernière image** : `anyangle_local.py <essai> 11 <caméra>` (seulement cette caméra, sans témoin).
 6. **Clip H3** (première = plaque, dernière = vue AnyAngle), par la file, ressource gpu, ~170 s sur la 4090 :
    `python travelling_h3.py plaque.png anyangle/<cam>_aa_g11.png travelling/<nom>.mp4 11 [124] [--consigne c.json]`
-   **Tour 360°** : rotation sur place, donc exacte (aucune parallaxe). Cibles `tourne` 45, 90 … 315 à `devant = droite
-   = 0` ; les rendus servent directement d'images clés (pas d'AnyAngle) ; 8 clips H3 « pano_droite » de 45° mis bout
-   à bout : `python tour360_h3.py <essai> 11` → `<essai>/tour360/tour360_g11.mp4`.
+7. **Tour 360°** : rotation sur place, la géométrie métrique ne sert pas, **seule compte la cohérence** : toutes les
+   clés viennent du **seul panorama**, avec la caméra qui l'a peint (fx 904, horizontale), la clé 0 comprise. Mêler
+   la plaque (caméra mesurée) et le panorama (caméra devinée) fait sauter sol et plinthes au raccord (06/10).
+   ```
+   python gommer_bande.py pano.png pano_gomme.png <c0> <c1> <r0> <r1> droite   (si un défaut du pano flotte)
+   python vues_pano.py pano_gomme.png plaque.png <essai> <lacet de la plaque>
+   python cartes_elements.py <essai> plan.json cartes.json
+   python file_attente.py deposer --nom tour360 --ressources gpu -- python tour360_h3.py <essai> 11
+   ```
+   **Cartes d'identité d'abord** (`cartes_elements.py`) : chaque élément clé (y compris le mur nu) = découpe +
+   description + azimut ; les éléments du plan sont découpés dans la plaque, le reste dans le panorama. `tour360_h3.py`
+   les prend d'office : chaque tronçon de 45° reçoit ce qu'il voit au départ, à l'arrivée, en passant, et « rien
+   d'autre ». Sans elles, H3 inventait une autre pièce sur le mur nu (canapé gris, tableau, tapis, 05/10).
+   → `<essai>/tour360_cartes/tour360_g11.mp4` (+ `consignes.json`). Exemple : `Desktop\leila_sf\interieur\blender6`.
 
 ## Résultats (05/10, salon de Leila, 4090, graine 11)
 
