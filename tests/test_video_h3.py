@@ -6589,7 +6589,7 @@ def test_la_file_garde_l_ordre_d_arrivee(h3, monkeypatch):
 def test_la_page_offre_ici_ou_modal_et_l_envoie(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     assert 'id="ou_choix"' in page and "Ici, sans urgence" in page
-    assert page.count("ou: OU") == 5
+    assert page.count("ou: OU") == 6   # + le tour 360° d'un décor (06/10)
 
 
 def test_une_personne_sans_mouvement_ecrit_reste_vivante(h3):

@@ -81,6 +81,27 @@ baie à x = -1) n'était pas la vraie. On mesure d'abord, puis on pose les empri
    les prend d'office : chaque tronçon de 45° reçoit ce qu'il voit au départ, à l'arrivée, en passant, et « rien
    d'autre ». Sans elles, H3 inventait une autre pièce sur le mur nu (canapé gris, tableau, tapis, 05/10).
    → `<essai>/tour360_cartes/tour360_g11.mp4` (+ `consignes.json`). Exemple : `Desktop\leila_sf\interieur\blender6`.
+   **Mesuré 06/10** (clés du seul panorama + cartes) : sol et plinthes continus aux 7 raccords ; mais le tronçon 6
+   (bibliothèque → baie, 45° de mur nu) invente encore une autre pièce au milieu (canapé d'angle, tapis), malgré
+   « rien d'autre ». Pas de 30° proposé par le Studio sur ce cas ; non mesuré.
+
+## Dans le Studio : bouton « Tour 360° » d'une fiche décor (06/10)
+
+La même recette, sans main, depuis la photo de la fiche (`sandbox-manager/tour360.py`, script de la carte louée
+`tour360_pano.py`). Route `POST /video-h3/fiches/{fid}/tour360 {ou, pas: 30|45, graine}`, suivi `GET` même adresse,
+`.../tour360/{tid}/reprendre`. État et fichiers : `config/h3-fiches/<fid>/tour360/<tid>/` (tour.json, photo, clés,
+cartes, pano).
+1. **consigne** : le chat (avec la photo) écrit ce qui entoure la caméra hors photo, le nom du lieu, l'ambiance.
+2. **panorama** (Modal A100-80GB, une carte) : MoGe-3 mesure la photo → boîte de la pièce (murs = percentile 70 des
+   points debout tournés vers la caméra, repli = où le sol s'arrête) → arêtes équirectangulaires → Qwen 2.1 + Union
+   Lineart 2048×1024 → couture → SeedVR2 ×2 → photo recollée en retrait de 2,5 % → clés tous les `pas` degrés.
+3. **cartes** : le chat voit les clés et rend chaque élément (meuble, ouverture, mur nu) avec sa place par vue
+   (0-1000) ; azimut = cap + atan((x/1000 − 0,5)·1344/fx_vue) ; découpe par ffmpeg.
+4. **troncons** : `POST /video-h3/creer` premiere_derniere, pano_droite lente, 768p, 124 images, consigne des cartes.
+5. **montage** : `POST /video-h3/montage`, un seul lieu (fond sonore continu).
+Essai local de la mesure (salon de Leila, nuage MoGe de `blender3`) : pièce x [−0,30 ; 3,61] z [… ; 5,45] contre
+3,59 / 5,5 à la main. **Non mesuré** : le panorama sur Modal (MoGe installé par pip dans l'image ComfyUI, coût,
+durée), le tour complet depuis le Studio.
 
 ## Résultats (05/10, salon de Leila, 4090, graine 11)
 

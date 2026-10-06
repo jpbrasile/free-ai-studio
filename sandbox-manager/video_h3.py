@@ -5463,6 +5463,7 @@ PAGE_HTML = r"""<!doctype html>
   <div id="fiche_images" class="grille"></div>
   <div id="fiche_planche"></div>
   <div id="fiche_voix"></div>
+  <div id="fiche_tour360"></div>
   <p class="note">Les images sont faites par l'image du Studio (clé Google, gratuite) : d'abord le
   portrait de face, d'après la description, puis les autres angles à partir de lui, pour garder le même
   visage. Rejouez ou supprimez celles qui ne vont pas.</p>
@@ -6734,6 +6735,7 @@ async function montrerFiche(){
   document.getElementById("fiche_images").innerHTML = "";
   document.getElementById("fiche_planche").innerHTML = "";
   document.getElementById("fiche_voix").innerHTML = "";
+  document.getElementById("fiche_tour360").innerHTML = "";
   document.getElementById("fiche_supprimer").hidden = !id;
   document.getElementById("fiche_creer").hidden = !!id;
   for (const champ of ["fiche_nom", "fiche_description"]){
@@ -6750,6 +6752,61 @@ async function montrerFiche(){
   document.getElementById("fiche_nom").value = f.nom;
   document.getElementById("fiche_description").value = f.description;
   dessinerFiche(f);
+  if (f.genre === "decor" && f.images.face) tour360Suivre(f.id);
+}
+
+// Le tour 360° d'un décor (06/10) : panorama, cartes des éléments, tronçons H3, montage ; tout seul.
+const TOUR360_ETAPES = {consigne: "consigne du panorama", panorama: "panorama (Modal)", cartes: "cartes des éléments",
+  troncons: "tronçons", montage: "montage"};
+async function tour360Suivre(fid){
+  const zone = document.getElementById("fiche_tour360");
+  if (document.getElementById("fiche_choix").value !== fid) return;
+  const r = await fetch("/video-h3/fiches/" + fid + "/tour360", {headers: H});
+  const t = r.ok ? await r.json() : null;
+  zone.innerHTML = "";
+  const titre = document.createElement("h3");
+  titre.textContent = "Tour 360° du décor";
+  const pas = document.createElement("select");
+  pas.setAttribute("aria-label", "Pas du tour");
+  for (const [v, l] of [["45", "8 tronçons de 45°"], ["30", "12 tronçons de 30° (plus sûr sur un mur nu)"]]){
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = l;
+    pas.appendChild(o);
+  }
+  const etat = document.createElement("p");
+  etat.className = "note";
+  const lancer = bouton(t ? "Refaire le tour 360°" : "Faire le tour 360°", async () => {
+    lancer.disabled = true;
+    try {
+      await appeler("/video-h3/fiches/" + fid + "/tour360", {ou: OU, pas: Number(pas.value)});
+      tour360Suivre(fid);
+    } catch (e){ etat.textContent = e.message; lancer.disabled = false; }
+  });
+  zone.append(titre, pas, " ", lancer, etat);
+  if (!t) return;
+  const faits = (t.troncons || []).length, total = 360 / (t.pas || 45);
+  let texte = t.statut === "fini" ? "Fini." : t.statut === "arrete" ? "Arrêté : " + t.erreur
+    : "En cours : " + (TOUR360_ETAPES[t.etape] || t.etape || "départ") + ".";
+  if (t.faites && t.faites.includes("cartes")) texte += " Tronçons : " + faits + " / " + total + ".";
+  if (t.consigne && t.consigne.piece) texte += " Lieu : " + t.consigne.piece + ".";
+  if (t.cartes) texte += " Éléments : " + t.cartes.map(c => c.nom).join(", ") + ".";
+  etat.textContent = texte;
+  if (t.statut === "en cours") lancer.disabled = true;
+  if (t.statut === "arrete") zone.appendChild(bouton("Reprendre", async () => {
+    try {
+      await appeler("/video-h3/fiches/" + fid + "/tour360/" + t.id + "/reprendre", {});
+      tour360Suivre(fid);
+    } catch (e){ etat.textContent = e.message; }
+  }));
+  if (t.video_url){
+    const v = document.createElement("video");
+    v.controls = true;
+    v.src = t.video_url;
+    v.style.maxWidth = "100%";
+    zone.appendChild(v);
+  }
+  if (t.statut === "en cours") setTimeout(() => tour360Suivre(fid), 15000);
 }
 
 function dessinerFiche(f){

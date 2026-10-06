@@ -71,6 +71,7 @@ import notebooklm_pont
 import ou_calculer
 import poids_video
 import retouche_qwen
+import tour360
 import video
 import video_h3
 import visages
@@ -7719,6 +7720,142 @@ async def video_h3_film_auto_maitre(fid: str, request: Request, authorization: O
     etat["maitre_choisi"] = job
     film_auto.Film(etat, DOSSIER_FILMS_AUTO, _film_auto_appel, _film_auto_chat).ecrire()
     return etat
+
+
+# --- Le tour 360° d'un décor (06/10) : photo -> panorama -> cartes -> tronçons H3 -> montage (tour360.py) ---------
+_TOURS_360_FILS: dict = {}
+
+
+def _tour360_chat(consigne: str, images: list) -> str:
+    try:
+        return asyncio.run(_chat_du_studio(consigne, "le tour 360°", images=images))
+    except HTTPException as exc:
+        raise tour360.Arret("Chat du Studio : %s" % exc.detail) from exc
+
+
+def _tour360_panorama(photo: bytes, texte: str, graine: int, pas: int) -> dict:
+    """Le panorama et les images clés sur une carte Modal (tour360_pano.py), compté sur « video »."""
+    if not modal_configured():
+        raise tour360.Arret("Le panorama se calcule chez Modal, qui n'est pas configuré ici.")
+    jid = "tour360-" + uuid.uuid4().hex[:12]
+    code = tour360.construire_script(photo, texte, graine, pas)
+    try:
+        budget_modal.verifier("video", tour360.GPU, tour360.DUREE_MAX_S, tour360.MEMOIRE_MB,
+                              quoi="Le panorama du tour 360°", coeurs=tour360.COEURS)
+    except budget_modal.BudgetDepasse as exc:
+        raise tour360.Arret(str(exc)) from exc
+    debut = time.time()
+    try:
+        res = modal_execute(jid, code, True, True, gpu_type=tour360.GPU, timeout_s=tour360.DUREE_MAX_S,
+                            memory_mb=tour360.MEMOIRE_MB, coeurs=tour360.COEURS, paquets=tour360.PAQUETS,
+                            apt=video_h3.APT, commandes=tour360.commandes(), volume=video_h3.VOLUME,
+                            point_de_montage=video_h3.POINT_DE_MONTAGE, usage=None)
+    except BackendUnavailable as exc:
+        raise tour360.Arret("Panorama : %s" % str(exc)[:300]) from exc
+    finally:
+        budget_modal.consommer("video", tour360.GPU, time.time() - debut, tour360.MEMOIRE_MB,
+                               coeurs=tour360.COEURS, cle=jid)
+    if res.get("exit_code") != 0:
+        raise tour360.Arret(tour360.phrase_d_echec(res.get("stderr", "")) or
+                            "Le panorama a échoué : %s" % str(res.get("stderr") or "")[-300:])
+    fichiers = {}
+    for a in res.get("artifacts") or []:
+        chemin = JOBS / jid / "modal-output" / str(a.get("name", ""))
+        if not a.get("skipped") and chemin.is_file():
+            fichiers[chemin.name] = chemin.read_bytes()
+    return fichiers
+
+
+def _tour360_dossier(fid: str, tid: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{32}", tid or ""):
+        raise HTTPException(404, "Tour inconnu.")
+    try:
+        return video_h3._dossier_fiche(fid) / "tour360" / tid
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+def _tour360_public(etat: dict) -> dict:
+    sortie = {k: v for k, v in etat.items() if k != "consignes"}
+    if etat.get("film"):
+        sortie["video_url"] = f"/video/jobs/{etat['film']}/fichier?cle={jeton_video(etat['film'])}"
+    return sortie
+
+
+def _tour360_lancer(etat: dict) -> dict:
+    tour = tour360.Tour(etat, _tour360_dossier(etat["fiche"], etat["id"]), _film_auto_appel, _tour360_chat,
+                        _tour360_panorama)
+    tour.ecrire()
+    fil = threading.Thread(target=tour.derouler, daemon=True)
+    _TOURS_360_FILS[etat["id"]] = fil
+    fil.start()
+    return _tour360_public(etat)
+
+
+@app.post("/video-h3/fiches/{fid}/tour360")
+async def video_h3_tour360(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """{ou?, graine?, pas?} : le tour 360° du décor se fait seul, de sa photo au film monté.
+    Le panorama part toujours chez Modal ; `ou` vaut pour les tronçons H3."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    corps = corps if isinstance(corps, dict) else {}
+    ou = _ou_h3(corps)
+    _h3_peut(ou)
+    try:
+        fiche = video_h3.fiche_lire(fid)
+        photo = video_h3.fiche_lieu_image(fid)
+        etat = tour360.nouvel_etat(fiche, ou, corps.get("graine"), corps.get("pas"))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    dossier = _tour360_dossier(fid, etat["id"])
+    dossier.mkdir(parents=True, exist_ok=True)
+    (dossier / "photo.png").write_bytes(base64.b64decode(photo.split(",", 1)[1]))
+    return _tour360_lancer(etat)
+
+
+def _tour360_lire(fid: str, tid: str) -> dict:
+    try:
+        return json.loads((_tour360_dossier(fid, tid) / "tour.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(404, "Tour inconnu.") from exc
+
+
+@app.get("/video-h3/fiches/{fid}/tour360")
+def video_h3_tour360_dernier(fid: str, authorization: Optional[str] = Header(default=None)):
+    """Le dernier tour 360° de ce décor (404 s'il n'y en a pas)."""
+    _h3_ou_404()
+    auth(authorization)
+    try:
+        racine = video_h3._dossier_fiche(fid) / "tour360"
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    tours = []
+    for f in racine.glob("*/tour.json") if racine.is_dir() else []:
+        try:
+            tours.append(json.loads(f.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            continue
+    if not tours:
+        raise HTTPException(404, "Pas encore de tour 360° pour ce décor.")
+    return _tour360_public(max(tours, key=lambda t: t.get("cree_le", 0)))
+
+
+@app.post("/video-h3/fiches/{fid}/tour360/{tid}/reprendre")
+def video_h3_tour360_reprendre(fid: str, tid: str, authorization: Optional[str] = Header(default=None)):
+    """Reprend un tour arrêté là où il s'est arrêté ; les étapes faites (panorama, tronçons tournés) sont gardées."""
+    _h3_ou_404()
+    auth(authorization)
+    etat = _tour360_lire(fid, tid)
+    fil = _TOURS_360_FILS.get(tid)
+    if fil is not None and fil.is_alive():
+        raise HTTPException(409, "Ce tour est déjà en cours.")
+    etat.update(statut="en cours", erreur="")
+    return _tour360_lancer(etat)
 
 
 DEFAUTS_PAR_PLAN = 3
