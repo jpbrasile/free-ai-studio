@@ -390,6 +390,8 @@ def test_le_script_est_du_python_et_porte_la_demande(h3):
     ast.parse(code)
     b64 = code.split('b64decode("', 1)[1].split('"', 1)[0]
     assert json.loads(base64.b64decode(b64))["graphe"] == plan["demande"]["graphe"]
+    # carte d'ici, 07/10 : la sortie d'un travail interrompu était recollée au suivant ; vidée avant ComfyUI
+    assert -1 < code.index('shutil.rmtree("/tmp/sortie"') < code.index('"--output-directory", "/tmp/sortie"')
     ast.parse(v.construire_script_poids())
     assert v.HF_REVISION in base64.b64decode(
         v.construire_script_poids().split('b64decode("', 1)[1].split('"', 1)[0]).decode()
@@ -1282,7 +1284,7 @@ def test_la_langue_des_paroles_se_choisit_parmi_les_onze(h3):
     html = client(h3).get("/video-h3").text
     assert "__LANGUES__" not in html and '<option value="French" selected>français</option>' in html
     assert all(f'value="{code}"' in html for code in v.LANGUES_PAROLES)
-    assert html.count('langue: document.getElementById("langue").value') == 2   # créer, prolonger
+    assert html.count('langue: document.getElementById("langue").value') == 3   # créer, prolonger, gros plan
     # Le scénario prend la langue du personnage, sinon celle du clip.
     assert 'langue: f1 ? l1 : document.getElementById("langue").value' in html
     assert 'id="scenario_langue1"' in html and 'id="scenario_langue2"' in html
@@ -6589,7 +6591,7 @@ def test_la_file_garde_l_ordre_d_arrivee(h3, monkeypatch):
 def test_la_page_offre_ici_ou_modal_et_l_envoie(h3):
     page = client(h3).get("/video-h3", headers=CLE).text
     assert 'id="ou_choix"' in page and "Ici, sans urgence" in page
-    assert page.count("ou: OU") == 6   # + le tour 360° d'un décor (06/10)
+    assert page.count("ou: OU") == 7   # + le tour 360° d'un décor (06/10), + le gros plan (07/10)
 
 
 def test_une_personne_sans_mouvement_ecrit_reste_vivante(h3):
@@ -7797,3 +7799,121 @@ def test_le_decoupage_exige_la_valeur_de_chaque_plan_coupe(h3):
     with pytest.raises(ValueError, match="valeur de plan"):
         v.lire_correction(json.dumps([{"image_paroles": "Leila on the lawn.", "ambiance": "",
                                        "enchainement": "coupe"}]), p)
+
+
+def test_une_fiche_sans_genre_est_une_personne_dans_un_tour(h3, monkeypatch):
+    # 07/10 : la fiche de Leila (d'avant le genre) arrêtait le tour du château.
+    monkeypatch.setattr(h3.video_h3, "fiche_lire", lambda fid: {"nom": "Leila", "description": "une ado"})
+    assert h3._tour360_personne("c978c4e9daaa", None) == {"nom": "Leila", "description": "une ado"}
+    monkeypatch.setattr(h3.video_h3, "fiche_lire", lambda fid: {"nom": "Phare", "genre": "decor"})
+    with pytest.raises(h3.tour360.Arret, match="pas une fiche de personne"):
+        h3._tour360_personne("x", None)
+
+
+def test_les_vues_d_une_tenue_se_font_une_fois_depuis_sa_photo_en_pied(h3, monkeypatch):
+    # 07/10, tour du château : recette du jour, photos en pied SÉPARÉES dans la tenue (face, trois-quarts, dos),
+    # pas de planche multivue (réduite d'un bloc, elle dédouble le personnage)
+    v = h3.video_h3
+    fid = v.fiche_creer("Leila", "adolescente de 15 ans, sweat jaune")["id"]
+    v.fiche_poser_image(fid, "face", PNG)
+    demandes = []
+
+    async def image(demande):
+        demandes.append(demande)
+        return "data:image/png;base64," + base64.b64encode(CADRE).decode()
+    monkeypatch.setattr(h3, "_image_du_studio", image)
+    with pytest.raises(ValueError, match="photo en pied"):
+        v.fiche_poser_tenue_vue(fid, "a green gown", "pied_face", PNG)
+    photo, _ = asyncio.run(h3._photo_de_tenue(fid, "a green gown"))
+    vues = asyncio.run(h3._vues_de_tenue(fid, "a green gown", photo))
+    assert list(vues) == list(v.VUES_TENUE) and base64.b64decode(vues["visage_face"]) == CADRE
+    assert asyncio.run(h3._vues_de_tenue(fid, "a  green gown", photo)) == vues   # gardées, pas refaites
+    assert len(demandes) == 1 + len(v.VUES_TENUE)
+    # 07/10 : gros plans du visage coiffe comprise (carrés), photos en pied cadrées en hauteur ; jamais le prénom
+    tailles = {vue: d["size"] for vue, d in zip(v.VUES_TENUE, demandes[1:])}
+    assert tailles == {"visage_face": "1024x1024", "visage_trois_quarts": "1024x1024",
+                       "pied_face": "768x1344", "pied_trois_quarts": "768x1344"}
+    for d in demandes[1:]:
+        assert "a green gown" in d["prompt"] and "15 ans" not in d["prompt"] and "Leila" not in d["prompt"]
+        assert d["image_reference"][-1].endswith(photo) and len(d["image_reference"]) == 2
+    assert "gros plan" in demandes[1]["prompt"] and "en hauteur" in demandes[-1]["prompt"]
+
+
+# --- Le gros plan à la seconde X (07/10) ----------------------------------------
+
+def test_le_gros_plan_avance_vers_la_fiche_sans_la_nommer(h3, monkeypatch):
+    """Propriétaire, 07/10 : « i want a close up on leila (soft or hard cut) at second xxx ». La suite part de la fin
+    du film coupé, la caméra avance (phrase du guide), le nom de la fiche devient son <Subject N>."""
+    v = h3.video_h3
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    fiche = v.fiche_creer("Leila", "x")
+    v.fiche_poser_image(fiche["id"], "face", PNG)
+    payload = v.payload_gros_plan({"coupe": "franche", "replique": "[English] Every stone remembers.",
+                                   "longueur": 124}, fiche, tenue_photo=PNG)
+    assert payload["camera"] == {"mouvement": "zoom_avant", "amplitude": "grande", "vitesse": "lente"}
+    assert payload["tenues"] == {fiche["id"]: PNG} and payload["fiches"] == [fiche["id"]]
+    plan = v.preparer_prolonger(payload, _clip_reussi(h3), PNG, fin_b64="UkFDQ09SRA==")
+    invite = plan["resume_public"]["invite"]
+    assert "Leila" not in invite
+    assert "The camera zooms in with large amplitude at slow speed." in invite
+    assert "chest-up close-up" in invite and "<d>[English] Every stone remembers.</d>" in invite
+
+
+def test_le_gros_plan_refuse_une_coupe_inconnue_et_une_seconde_hors_du_film(h3):
+    v = h3.video_h3
+    with pytest.raises(ValueError, match="Coupe inconnue"):
+        v.payload_gros_plan({"coupe": "fondu"}, {"id": "a", "nom": "Leila"})
+    assert v.image_de_coupe("10", 480) == 240
+    for seconde in ("0.5", "30", "dix"):
+        with pytest.raises(ValueError):
+            v.image_de_coupe(seconde, 480)
+
+
+def test_la_coupe_franche_se_fait_ou_la_camera_s_arrete(sandbox):
+    """Coupe franche : le travelling vers le visage est ôté ; elle se place à la première image où la caméra est
+    arrêtée (écart d'image retombé et tenu)."""
+    import montage
+
+    k = montage.arret_camera([1.0] * 10 + [10.0] * 30 + [0.5] * 30)
+    assert 40 <= k <= 43
+    assert montage.arret_camera([6.0] * 60) is None          # elle ne s'arrête pas
+    assert montage.arret_camera([0.5] * 60) is None          # elle n'a pas bougé
+    assert montage.arret_camera([1.0] * 5) is None           # trop court pour le dire
+
+
+@pytest.mark.skipif(not (shutil.which("ffmpeg") and shutil.which("ffprobe")), reason="ffmpeg absent")
+def test_la_route_du_gros_plan_coupe_le_film_a_la_seconde_et_part_de_sa_fin(h3, monkeypatch, tmp_path):
+    v = h3.video_h3
+    monkeypatch.delenv("H3_MOTION_CONTEXT", raising=False)
+    monkeypatch.setattr(h3, "_h3_ou_404", lambda: None)
+    monkeypatch.setattr(h3, "_garde_licence_h3", lambda: None)
+    lances = []
+    monkeypatch.setattr(h3, "_lancer_h3", lambda plan, precedent, retirer, ou: lances.append(
+        (plan, precedent, retirer, ou)) or {"id": "x"})
+    film = tmp_path / "film.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=64x48:r=24",
+                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono", "-frames:v", "96", "-shortest",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(film)], check=True)
+    source = h3._film_h3(film.read_bytes(), {"mode": "tour", "plans": 1}, "Tour")
+    fiche = v.fiche_creer("Leila", "x")
+    v.fiche_poser_image(fiche["id"], "face", PNG)
+    c = TestClient(h3.app, base_url="http://127.0.0.1:8020")
+    r = c.post("/video-h3/gros-plan", headers={"Authorization": "Bearer cle-sandbox-de-test"},
+               json={"precedent": source, "seconde": 2, "fiche": fiche["id"], "coupe": "franche", "longueur": 124})
+    assert r.status_code == 200, r.text
+    plan, tete, retirer, ou = lances[0]
+    assert h3.montage.images(h3._video_h3_octets(tete)) == 48          # le film coupé à 2 s
+    assert retirer == v.RACCORD_IMAGES and ou == "modal"                # la suite part des 22 dernières images
+    assert plan["resume_public"]["gros_plan"] == {"coupe": "franche", "fiche": fiche["id"], "seconde": 2.0,
+                                                  "source": source}
+    assert "Leila" not in plan["resume_public"]["invite"]
+    r = c.post("/video-h3/gros-plan", headers={"Authorization": "Bearer cle-sandbox-de-test"},
+               json={"precedent": source, "seconde": 9, "fiche": fiche["id"]})
+    assert r.status_code == 400 and "hors du film" in r.json()["detail"]
+
+
+def test_la_page_propose_le_gros_plan_sous_un_clip_et_sous_un_tour(h3):
+    html = client(h3).get("/video-h3", headers=CLE).text
+    assert "function grosPlanBloc(jid, lecteur, defaut)" in html and 'id="gros_plan_clip"' in html
+    assert 'fetch("/video-h3/gros-plan"' in html and "Seconde du lecteur" in html
+    assert "grosPlanBloc(t.film_id, v, t.personnage || {})" in html   # sous le film d'un tour

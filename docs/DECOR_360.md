@@ -88,17 +88,40 @@ baie à x = -1) n'était pas la vraie. On mesure d'abord, puis on pose les empri
 ## Dans le Studio : bouton « Tour 360° » d'une fiche décor (06/10)
 
 La même recette, sans main, depuis la photo de la fiche (`sandbox-manager/tour360.py`, script de la carte louée
-`tour360_pano.py`). Route `POST /video-h3/fiches/{fid}/tour360 {ou, pas: 30|45, graine}`, suivi `GET` même adresse,
-`.../tour360/{tid}/reprendre`. État et fichiers : `config/h3-fiches/<fid>/tour360/<tid>/` (tour.json, photo, clés,
-cartes, pano).
+`tour360_pano.py`). Route `POST /video-h3/fiches/{fid}/tour360 {ou, pas: 30|45, graine, camera, finition}`, suivi
+`GET` même adresse, `.../tour360/{tid}/reprendre`. État et fichiers : `config/h3-fiches/<fid>/tour360/<tid>/`
+(tour.json, photo, clés, cartes, pano). `pas` = écart des clés que regarde le chat pour les cartes, plus celui des
+clips. `camera` = `{camera: tour_droite|tour_gauche|demi_tour|quart_de_tour|aller_retour, duree_s: 10-120,
+cap_depart, angle}` (liste « Caméra » et champ « Durée » de la page) ; `finition` = `{4k, musique, fluide,
+compresser}`.
 1. **consigne** : le chat (avec la photo) écrit ce qui entoure la caméra hors photo, le nom du lieu, l'ambiance.
-2. **panorama** (Modal A100-80GB, une carte) : MoGe-3 mesure la photo → boîte de la pièce (murs = percentile 70 des
-   points debout tournés vers la caméra, repli = où le sol s'arrête) → arêtes équirectangulaires → Qwen 2.1 + Union
-   Lineart 2048×1024 → couture → SeedVR2 ×2 → photo recollée en retrait de 2,5 % → clés tous les `pas` degrés.
-3. **cartes** : le chat voit les clés et rend chaque élément (meuble, ouverture, mur nu) avec sa place par vue
-   (0-1000) ; azimut = cap + atan((x/1000 − 0,5)·1344/fx_vue) ; découpe par ffmpeg.
-4. **troncons** : `POST /video-h3/creer` premiere_derniere, pano_droite lente, 768p, 124 images, consigne des cartes.
-5. **montage** : `POST /video-h3/montage`, un seul lieu (fond sonore continu).
+2. **mesure** (PLAN 21.6 étapes 1-3, 06/10) : MoGe-3 seul (`tour360_pano.py`, mode `mesure`) → `geometrie.json`
+   (repère, boîte de la pièce, retraits des bords par la profondeur, `retraits_bords`) et `grille.json` (points en
+   repère de la pièce). Ici : la carte de la maison (comfy-maison, poids `/poids/moge-3-vitl/model.pt`) ; sinon
+   Modal L4, courte.
+3. **plan** (`sandbox-manager/plan_piece.py`) : le chat propose la pièce et ses éléments ; un élément vu sur la
+   photo vient avec son cadre, mesuré sur les points MoGe (`depuis_cadre`) ; un élément hors photo, avec sa place en
+   mètres. Le tour s'arrête au statut `plan_a_valider` : vue de dessus et arêtes sur la photo
+   (`GET .../tour360/{tid}/plan/{dessus|camera}.svg`), le client modifie en chattant (`POST .../plan {message}`) puis
+   valide (`POST .../plan/valider`). Rien n'est calculé avant.
+4. **panorama** (Modal A100-80GB ou ici) : maquette par parties depuis le plan validé (`scene_du_plan`, gabarits par
+   genre : un canapé a dossier, assise, accoudoirs ; une baie, montants, traverse, seuil ; les trous des ouvertures
+   laissent passer le jour) → arêtes équirectangulaires → Qwen 2.1 + Union Lineart 2048×1024 → couture → SeedVR2 ×2
+   → photo recollée en retrait mesuré par côté → clés tous les `pas` degrés → une carte par élément et par mur nu
+   ≥ 35° (`cartes_du_plan`), découpée en perspective dans le panorama (`decoupe_carte`). Sans mesure (ancien
+   chemin) : boîte de la pièce seule, retrait de 2,5 %.
+5. **cartes** : celles du plan validé. Sans plan (ancien chemin) : le chat voit les clés et rend chaque élément avec
+   sa place par vue (0-1000) ; azimut = cap + atan((x/1000 − 0,5)·1344/fx_vue).
+6. **troncons** (`tour360_chaine.py`, recette du tour v3) : le chemin de la caméra en clips de 5 s (30 s pour 360° =
+   6 clips de 60°), groupes de 4 clips au plus ; un travail H3 par groupe, `POST .../tour360/{tid}/groupe/{k}` (la
+   demande se fait sur le Studio, depuis tour.json : la page n'envoie aucun graphe). Dans le groupe : Ref2VA, invite
+   des six sections par clip (`tour360.invite_clip`, droite ou gauche ; chaque élément croisé = `<Subject N>` + sa
+   carte), clé de départ épinglée (0), une vue exacte du panorama tous les 7,5°, clé d'arrivée (-1), clips suivants
+   par le latent (Motion-Context). Clés et épingles découpées dans `pano.png` SUR la machine de calcul ; clips
+   recollés là-bas en un `video.mp4`. Ici : nœud Motion-Context dans l'image comfy-maison ; Modal : `COMMANDES_MC`,
+   2 400 s par groupe.
+7. **montage** : `POST /video-h3/montage`, un seul lieu (fond sonore continu).
+8. **finition** : 4K → musique → 60 images/s (`fluide.py`, chemin mesuré sur le montage) → AV1 à 60 images/s.
 Essai local de la mesure (salon de Leila, nuage MoGe de `blender3`) : pièce x [−0,30 ; 3,61] z [… ; 5,45] contre
 3,59 / 5,5 à la main. **Non mesuré** : le panorama sur Modal (MoGe installé par pip dans l'image ComfyUI, coût,
 durée), le tour complet depuis le Studio.

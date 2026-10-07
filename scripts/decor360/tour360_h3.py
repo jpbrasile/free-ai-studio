@@ -34,6 +34,13 @@ CONSIGNE = {
 }
 
 
+NOMBRES = {30: "thirty", 45: "forty-five", 60: "sixty"}
+
+
+def tourne(pas):
+    return CONSIGNE["mouvement"].replace("forty-five", NOMBRES.get(pas, str(pas)))
+
+
 def liste(fiches):
     return "; ".join(f["description"] for f in fiches) if fiches else "plain cream walls"
 
@@ -50,7 +57,7 @@ def consignes_cartes(dossier, n, pas):
         a, b = cam["lacet"] + k * pas, cam["lacet"] + (k + 1) * pas
         chemin = cartes_elements.visibles(fiches, (a + b) / 2, demi + pas / 2)
         sortie.append(dict(CONSIGNE, **{
-            "mouvement": CONSIGNE["mouvement"] + " The camera only passes: " + liste(chemin) + ". There is nothing "
+            "mouvement": tourne(pas) + " The camera only passes: " + liste(chemin) + ". There is nothing "
                          "else in this part of the room: no other furniture, no pictures on the walls, no rug, no "
                          "other room.",
             "premiere": "the living room, showing " + liste(cartes_elements.visibles(fiches, a, demi)) + ".",
@@ -62,14 +69,14 @@ def consignes_cartes(dossier, n, pas):
 def main(dossier, graine=11, pas=PAS):
     dossier = Path(dossier).resolve()
     avec_cartes = (dossier / "cartes" / "cartes_lieu.json").is_file()
-    sortie = dossier / ("tour360_cartes" if avec_cartes else "tour360")
+    sortie = dossier / (("tour360_cartes" if avec_cartes else "tour360") + ("" if pas == PAS else "_%d" % pas))
     sortie.mkdir(exist_ok=True)
     cles = [dossier / "plaque.png"] + [dossier / "rendus" / ("rendu_r%03d.png" % a) for a in range(pas, 360, pas)] \
         + [dossier / "plaque.png"]
     manque = [str(c) for c in cles if not c.is_file()]
     if manque:
         raise SystemExit("images clés absentes : " + ", ".join(manque))
-    consignes = consignes_cartes(dossier, len(cles) - 1, pas) if avec_cartes else [CONSIGNE] * (len(cles) - 1)
+    consignes = consignes_cartes(dossier, len(cles) - 1, pas) if avec_cartes else [dict(CONSIGNE, mouvement=tourne(pas))] * (len(cles) - 1)
     (sortie / "consignes.json").write_text(json.dumps(consignes, indent=1, ensure_ascii=False), encoding="utf-8")
     troncons = []
     for k in range(len(cles) - 1):
@@ -79,7 +86,13 @@ def main(dossier, graine=11, pas=PAS):
             if rc:
                 raise SystemExit("tronçon %d en échec (rc %d)" % (k, rc))
         troncons.append(f)
-    # bout à bout : chaque tronçon après le premier perd sa première image (la clé déjà montrée)
+    final = sortie / ("tour360_g%d.mp4" % graine)
+    bout_a_bout(troncons, final)
+    print("FAIT", final, len(troncons), "tronçons", flush=True)
+
+
+def bout_a_bout(troncons, final):
+    """Chaque tronçon après le premier perd sa première image (la clé déjà montrée), son compris."""
     entrees, filtres = [], []
     for k, f in enumerate(troncons):
         entrees += ["-i", str(f)]
@@ -87,11 +100,9 @@ def main(dossier, graine=11, pas=PAS):
         filtres.append("[%d:v]%sformat=yuv420p[v%d];[%d:a]%sasetpts=PTS-STARTPTS[a%d]" % (
             k, coupe, k, k, "atrim=start=0.0417," if k else "", k))
     concat = "".join("[v%d][a%d]" % (k, k) for k in range(len(troncons))) + "concat=n=%d:v=1:a=1[v][a]" % len(troncons)
-    final = sortie / ("tour360_g%d.mp4" % graine)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *entrees, "-filter_complex", ";".join(filtres) + ";" + concat,
                     "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "16", "-c:a", "aac", str(final)],
                    check=True)
-    print("FAIT", final, len(troncons), "tronçons", flush=True)
 
 
 if __name__ == "__main__":

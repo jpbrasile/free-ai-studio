@@ -87,6 +87,61 @@ def decouper(pano, lacet, azimut, lignes, marge=0.08):
     return double.crop((int(c0), r0, int(c0 + largeur), r1))
 
 
+def decouper_droit(pano, lacet, azimut, lignes, marge=0.08, cote=1024):
+    """La carte en PERSPECTIVE (propriétaire, 06/10 : « il faut refaire la planche carte, les murs sont arrondis ») :
+    une découpe directe du panorama garde sa projection équirectangulaire (baie en arche, sol courbe), et H3, qui
+    reçoit la carte en <Subject N>, peut recopier ces courbes dans la pièce. Ici, une caméra virtuelle visée au
+    centre de l'élément (cap et site), champ à sa mesure, droites droites. Le côté le plus long fait `cote` pixels."""
+    import numpy as np
+    W, H = pano.size
+    a0, a1 = azimut
+    da = ((a1 - a0) % 360 or 360) * (1 + 2 * marge)
+    cap = math.radians(a0 + ((a1 - a0) % 360) / 2 - lacet)       # 0 = milieu du panorama (vues_pano.vue)
+    lat = [(0.5 - (r + 0.5) / H) * 180 for r in lignes]           # site du haut et du bas de l'élément
+    dl = (lat[0] - lat[1]) * (1 + 2 * marge)
+    site = math.radians((lat[0] + lat[1]) / 2)
+    tl, th = math.tan(math.radians(min(da, 150) / 2)), math.tan(math.radians(min(dl, 150) / 2))
+    fx = cote / 2 / max(tl, th)
+    lo, ho = int(2 * fx * tl), int(2 * fx * th)
+    x, y = np.meshgrid((np.arange(lo) - lo / 2 + 0.5) / fx, (np.arange(ho) - ho / 2 + 0.5) / fx)
+    # rayon caméra (x droite, y bas, z devant), relevé du site puis tourné du cap
+    cs, ss = math.cos(site), math.sin(site)
+    Y, Z = -y * cs + ss, y * ss + cs
+    cc, sc = math.cos(cap), math.sin(cap)
+    X, Z = x * cc + Z * sc, -x * sc + Z * cc
+    lon, la = np.arctan2(X, Z), np.arctan2(Y, np.hypot(X, Z))
+    u = ((lon / (2 * np.pi) + 0.5) * W - 0.5) % W
+    v = np.clip((0.5 - la / np.pi) * H - 0.5, 0, H - 1)
+    p = np.asarray(pano, np.float32)
+    u0, v0 = np.floor(u).astype(int), np.clip(np.floor(v).astype(int), 0, H - 2)
+    du, dv = (u - u0)[..., None], np.clip(v - v0, 0, 1)[..., None]
+    u1 = (u0 + 1) % W
+    haut = p[v0, u0] * (1 - du) + p[v0, u1] * du
+    bas = p[v0 + 1, u0] * (1 - du) + p[v0 + 1, u1] * du
+    return Image.fromarray((haut * (1 - dv) + bas * dv).clip(0, 255).astype(np.uint8))
+
+
+def redresser(essai, cartes_json, pano_png, lacet):
+    """Refait en perspective les cartes découpées dans le panorama (celles du plan viennent de la plaque, déjà
+    droites) ; l'ancienne image est gardée en <nom>_courbe.png, la planche est refaite."""
+    essai = Path(essai).resolve()
+    sortie = essai / "cartes"
+    pano = Image.open(pano_png).convert("RGB")
+    fiches = json.loads((sortie / "cartes_lieu.json").read_text(encoding="utf-8"))
+    entree = {c["nom"]: c for c in json.loads(Path(cartes_json).read_text(encoding="utf-8"))}
+    for f in fiches:
+        c = entree.get(f["nom"])
+        if not c or "lignes" not in c:
+            continue
+        img = sortie / f["image"]
+        garde = sortie / (f["nom"] + "_courbe.png")
+        if not garde.is_file():
+            img.replace(garde)
+        decouper_droit(pano, float(lacet), c["azimut"], c["lignes"]).save(img)
+        print("carte %-18s redressée" % f["nom"], flush=True)
+    planche(sortie, fiches)
+
+
 def cartes(essai, plan_json, cartes_json):
     essai = Path(essai).resolve()
     plan = json.loads(Path(plan_json).read_text(encoding="utf-8"))
@@ -166,5 +221,7 @@ def visibles(fiches, cap, demi_champ):
 if __name__ == "__main__":
     if sys.argv[1] == "--grille":
         grille(sys.argv[2])
+    elif sys.argv[1] == "--redresser":      # --redresser <essai> <cartes.json> <pano.png> <lacet>
+        redresser(*sys.argv[2:6])
     else:
         cartes(*sys.argv[1:4])

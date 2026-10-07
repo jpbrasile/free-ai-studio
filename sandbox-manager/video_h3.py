@@ -2381,6 +2381,68 @@ def fiche_poser_tenue(fid, tenue: str, image: str) -> dict:
     return fiche
 
 
+# Les vues d'une tenue (07/10, tour 360° du château, propriétaire : « do the recipe ») : pour H3, une personne dans
+# une autre tenue = son portrait de face et des photos en pied SÉPARÉES dans la tenue (face, trois-quarts, dos),
+# chacune à pleine définition, fond uni. Recherche du 07/10 : une planche multivue, réduite comme une seule image,
+# donne ~1/3 de définition par vue et dédouble la personne ; les vues séparées couvrent les angles d'un tour.
+# Puis (07/10, château, propriétaire : « the rendering of the visage in the clip is poor » ; « do you think zoom of
+# the visage in various position with the veil will help ») : deux GROS PLANS du visage dans la tenue (coiffe
+# comprise : le portrait de la fiche, cheveux lâchés, contredisait le voile) et deux photos en pied CADRÉES EN
+# HAUTEUR (en paysage, la personne n'occupait qu'un cinquième de l'image). Pas de dos : la caméra d'un tour tourne
+# sur place et ne la voit que de face ou de côté. {vue: (gros plan ?, angle, taille demandée)}, dans l'ordre des
+# références H3.
+VUES_TENUE = {
+    "visage_face": (True, "de face, regardant l'objectif", "1024x1024"),
+    "visage_trois_quarts": (True, "de trois-quarts, tournée de 45 degrés vers sa gauche", "1024x1024"),
+    "pied_face": (False, "de face", "768x1344"),
+    "pied_trois_quarts": (False, "de trois-quarts, tournée de 45 degrés vers sa gauche", "768x1344"),
+}
+
+
+def texte_vue_tenue(tenue: str, vue: str) -> str:
+    """Sans le prénom (07/10, propriétaire : « leila shall not be named in the prompt sent »). Images jointes : le
+    portrait de la fiche puis la photo en pied de la tenue (`references_vue_tenue`)."""
+    gros_plan, angle, _taille = VUES_TENUE[vue]
+    if gros_plan:
+        return ("Portrait en gros plan, tête et épaules, de la personne des photos jointes, " + angle + " : "
+                "exactement le visage du premier portrait (mêmes traits, mêmes yeux, même nez, même bouche, même "
+                f"forme du visage), mais coiffée et vêtue comme sur la photo en pied jointe : {tenue}. La coiffe "
+                "encadre le visage comme sur la photo en pied. Visage net et détaillé, expression calme et naturelle, "
+                "lumière douce et égale, fond neutre et clair uni. Une seule personne, aucun texte.")
+    return ("Photo en pied, cadrée en hauteur, de la personne des photos jointes, debout, " + angle + " : la "
+            "personne entière de la tête aux pieds occupe presque toute la hauteur de l'image. Le visage du premier "
+            f"portrait, la tenue de la photo en pied jointe : {tenue}. Fond neutre et clair uni, lumière douce et "
+            "égale. Une seule personne sur l'image, aucun texte.")
+
+
+def taille_vue_tenue(vue: str) -> str:
+    return VUES_TENUE[vue][2]
+
+
+def fiche_tenue_vue(fid, tenue: str, vue: str):
+    """La vue `vue` (base64 nu) de cette tenue sur la fiche ; None si elle n'est pas encore faite."""
+    variante = (fiche_lire(fid).get("tenues") or {}).get(_cle_tenue(tenue)) or {}
+    nom = (variante.get("vues") or {}).get(vue)
+    chemin = _dossier_fiche(fid) / nom if nom else None
+    return base64.b64encode(chemin.read_bytes()).decode() if chemin and chemin.is_file() else None
+
+
+def fiche_poser_tenue_vue(fid, tenue: str, vue: str, image: str) -> dict:
+    if vue not in VUES_TENUE:
+        raise ValueError("Vue de tenue inconnue.")
+    fiche = fiche_lire(fid)
+    variante = (fiche.get("tenues") or {}).get(_cle_tenue(tenue))
+    if not variante:
+        raise ValueError("Les vues d'une tenue suivent sa photo en pied : posez d'abord la photo.")
+    octets = base64.b64decode(_image(image, "Vue de la tenue"))
+    ext = next(e for debut, e in _EXTENSIONS.items() if octets.startswith(debut))
+    nom = variante["image"].rsplit(".", 1)[0] + "_" + vue + ext
+    (_dossier_fiche(fid) / nom).write_bytes(octets)
+    variante.setdefault("vues", {})[vue] = nom
+    _fiche_ecrire(fiche)
+    return fiche
+
+
 # La tenue ÉCRITE, en plus de sa photo (29/09) : au plan du tir, Leila filmée de dos
 # portait un sweat gris ; sa fiche dit « sweat jaune et veste violette », tenue que
 # le plan suivant, de face, a respectée. De dos, H3 ne relie plus les photos au
@@ -5050,6 +5112,60 @@ def preparer_prolonger(payload: dict, precedent: dict, derniere_b64: Optional[st
     return plan
 
 
+# --- Le gros plan à la seconde X (07/10) -------------------------------------------
+# Propriétaire, 07/10 (tour du château) : « the user run the video and ask i want a close up on leila (soft or hard
+# cut) at second xxx » ; et la recette : « h3 only : do a camera move to reach the closeup image, then crop this move
+# to have a clear cut plan ». Le film est coupé à la seconde X ; la suite part de sa fin (raccord ou tronçon, comme
+# « Prolonger »), avec les photos du personnage, et la caméra avance jusqu'au gros plan puis s'y arrête. Coupe
+# « douce » : le travelling reste. Coupe « franche » : le travelling est ôté au recollage, le film passe d'un coup du
+# plan large au gros plan (montage.arret_camera).
+COUPES_GROS_PLAN = {"douce": "Coupe douce (la caméra avance jusqu'au visage)",
+                    "franche": "Coupe franche (on passe d'un coup au gros plan)"}
+
+
+def texte_gros_plan(nom: str, replique: str = "") -> str:
+    """Le texte du plan : le nom de la fiche (remplacé par son <Subject N> à la préparation, jamais envoyé), la
+    caméra en phrase du guide (`phrase_camera`, ajoutée par `preparer` après la première phrase), le gros plan
+    tenu, puis la réplique s'il y en a une."""
+    nom = " ".join(str(nom or "").split())
+    if not nom:
+        raise ValueError("Le personnage du gros plan n'a pas de nom sur sa fiche.")
+    # Ni place ni état de départ du personnage (07/10, propriétaire : « do not text leila position, it comes from
+    # the latent space, just zoom in » ; « you can add movment … not initial state ») : la suite les tient du film.
+    texte = (f"{nom} goes on with the same gesture, moving naturally. The zoom slows down and stops on a chest-up "
+             f"close-up of {nom}, the face sharp and detailed, then the camera holds still until the end of the shot.")
+    replique = " ".join(str(replique or "").replace("«", "").replace("»", "").split())
+    return texte + (f" {nom} says « {replique} »" if replique else "")
+
+
+def payload_gros_plan(corps: dict, fiche: dict, tenue_photo: Optional[str] = None) -> dict:
+    """Le payload de `preparer_prolonger` pour un gros plan sur `fiche`. `tenue_photo` : le visage de la fiche dans
+    la tenue du film (base64), joint comme photo de tenue (le portrait de la fiche seul, sinon : autre coiffure)."""
+    if str(corps.get("coupe") or "douce") not in COUPES_GROS_PLAN:
+        raise ValueError("Coupe inconnue : « douce » ou « franche ».")
+    payload = {k: corps[k] for k in ("longueur", "graine", "langue", "ou", "decor", "decor_son") if k in corps}
+    payload.update(
+        fiches=[fiche["id"]],
+        image_paroles=texte_gros_plan(fiche["nom"], corps.get("replique", "")),
+        camera={"mouvement": "zoom_avant", "amplitude": "grande", "vitesse": "lente"})
+    if tenue_photo:
+        payload["tenues"] = {fiche["id"]: tenue_photo}
+    return payload
+
+
+def image_de_coupe(seconde, total: int) -> int:
+    """L'image où le film est coupé : il en reste au moins RACCORD_IMAGES avant (le raccord de la suite)."""
+    try:
+        s = float(seconde)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Seconde illisible.") from exc
+    n = int(round(s * IMAGES_PAR_SECONDE))
+    if not RACCORD_IMAGES <= n <= total:
+        raise ValueError("La seconde %.2f est hors du film (de %.2f à %.2f s)."
+                         % (s, RACCORD_IMAGES / IMAGES_PAR_SECONDE, total / IMAGES_PAR_SECONDE))
+    return n
+
+
 # --- La garde de licence ---------------------------------------------------------
 
 DOSSIER_AUTORISATION = budget_modal.CONFIG_DIR / "h3-autorisation"
@@ -5180,6 +5296,9 @@ Path("/tmp/chemins.yaml").write_text(
 for nom, b64 in {**D["images"], **(D.get("sons") or {}), **(D.get("videos") or {})}.items():
     (COMFY / "input" / nom).write_bytes(base64.b64decode(b64))
 
+# Sortie vidée avant chaque calcul : sur la carte d'ici, le conteneur vit d'un travail à l'autre, et les clips
+# d'un travail interrompu étaient recollés au suivant (château, 07/10 : un groupe de 15 s rendu en 60 s).
+shutil.rmtree("/tmp/sortie", ignore_errors=True)
 journal = open("/tmp/comfy.log", "w")
 proc = subprocess.Popen(
     [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", "8188", "--disable-pinned-memory",
@@ -5310,6 +5429,32 @@ def _emballer(gabarit: str, demande: dict) -> str:
 
 def construire_script(demande: dict) -> str:
     return _emballer(_SCRIPT, demande)
+
+
+# Un script écrit pour la carte d'ici (poids déjà dans /poids) envoyé chez Modal (07/10, propriétaire : « update
+# studio to be able to do the same on modal ») : les poids de `poser_hf` sont posés d'abord sur le disque de H3,
+# monté au même /poids, une seule fois. Inséré juste après la lecture de la demande : le gabarit ne contient
+# qu'une fois la demande (la vidéo y est), _emballer remplace toutes les occurrences.
+LIGNE_DEMANDE = 'D = json.loads(base64.b64decode("__DEMANDE_B64__").decode())\n'
+_POSER_POIDS_HF = r'''for _pose in D.get("poser_hf") or []:
+    _base = Path(D["base_poids"]) / _pose["dossier"]
+    _manque = [f for f in _pose["fichiers"] if not (_base / f).is_file()]
+    if _manque:
+        try:
+            from huggingface_hub import hf_hub_download
+            for _f in _manque:
+                hf_hub_download(_pose["depot"], _f, revision=_pose["revision"], local_dir=str(_base))
+            subprocess.run(["sync"], check=False)
+        except Exception as exc:
+            print("POIDS_ABSENTS " + repr(exc)[:500], file=sys.stderr)
+            sys.exit(3)
+'''
+
+
+def avec_poids_hf(gabarit: str) -> str:
+    if gabarit.count(LIGNE_DEMANDE) != 1:
+        raise ValueError("Gabarit sans lecture unique de la demande.")
+    return gabarit.replace(LIGNE_DEMANDE, LIGNE_DEMANDE + _POSER_POIDS_HF)
 
 
 def construire_script_poids() -> str:
@@ -5581,6 +5726,7 @@ PAGE_HTML = r"""<!doctype html>
       <p class="note" id="prolonger_note"></p>
       <button id="prolonger">Prolonger ce clip</button>
     </div>
+    <div id="gros_plan_clip"></div>
   </div>
   <pre id="journal" hidden></pre>
 </div>
@@ -6501,6 +6647,9 @@ function majProlonger(jid, v, r){
   const plans = v.plans || 1, max = ETAT.prolonger.plans_max;
   PRECEDENT = jid;
   bloc.hidden = false;
+  const gp = document.getElementById("gros_plan_clip");
+  gp.innerHTML = "";
+  gp.appendChild(grosPlanBloc(jid, document.getElementById("lecteur"), {}));
   const btn = document.getElementById("prolonger");
   btn.disabled = plans >= max;
   const troncon = ETAT.prolonger.par_troncon && v.latent_vers && r.latent_garde;
@@ -6540,6 +6689,86 @@ function alerteTexte(t){
   const st = document.getElementById("statut");
   st.className = "refus";
   st.textContent = t;
+}
+
+// Gros plan à la seconde X (07/10, propriétaire : « the user run the video and ask i want a close up on leila (soft or
+// hard cut) at second xxx ») : sous un clip fini et sous un tour fini. `lecteur` donne la seconde où l'on s'est arrêté ;
+// `defaut` : {fiche, tenue} du tour, s'il en a un.
+function grosPlanBloc(jid, lecteur, defaut){
+  const bloc = document.createElement("details");
+  bloc.className = "plie";
+  const titre = document.createElement("summary");
+  titre.textContent = "Gros plan sur un personnage à une seconde du film";
+  const qui = document.createElement("select");
+  qui.setAttribute("aria-label", "Personnage du gros plan");
+  for (const f of FICHES.filter(x => x.angles.length && x.genre === "personne")){
+    const o = document.createElement("option");
+    o.value = f.id;
+    o.textContent = f.nom;
+    qui.appendChild(o);
+  }
+  if (defaut.fiche) qui.value = defaut.fiche;
+  const tenue = document.createElement("select");
+  tenue.setAttribute("aria-label", "Tenue");
+  const majTenues = () => {
+    tenue.innerHTML = "";
+    const base = document.createElement("option");
+    base.value = "";
+    base.textContent = "Tenue de la fiche";
+    tenue.appendChild(base);
+    for (const t of ((FICHES.find(f => f.id === qui.value) || {}).tenues || [])){
+      const o = document.createElement("option");
+      o.value = o.textContent = t;
+      tenue.appendChild(o);
+    }
+    if (defaut.tenue && [...tenue.options].some(o => o.value === defaut.tenue)) tenue.value = defaut.tenue;
+  };
+  qui.addEventListener("change", majTenues);
+  majTenues();
+  const seconde = document.createElement("input");
+  Object.assign(seconde, {type: "number", min: 1, step: 0.1, value: 1});
+  seconde.style.width = "6em";
+  seconde.setAttribute("aria-label", "Seconde");
+  const ici = document.createElement("button");
+  ici.type = "button";
+  ici.textContent = "Seconde du lecteur";
+  ici.addEventListener("click", () => { seconde.value = (lecteur.currentTime || 0).toFixed(1); });
+  const coupe = document.createElement("select");
+  coupe.setAttribute("aria-label", "Coupe");
+  for (const [v, l] of [["douce", "Coupe douce : la caméra zoome jusqu'au visage"],
+                        ["franche", "Coupe franche : on passe d'un coup au gros plan"]]){
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = l;
+    coupe.appendChild(o);
+  }
+  const replique = document.createElement("input");
+  Object.assign(replique, {type: "text", maxLength: 300, placeholder: "Réplique (facultatif)"});
+  replique.setAttribute("aria-label", "Réplique");
+  const lancer = document.createElement("button");
+  lancer.textContent = "Faire le gros plan";
+  const note = document.createElement("p");
+  note.className = "note";
+  note.textContent = "Le film est coupé à cette seconde ; la suite part de ses dernières images, avec les photos du "
+    + "personnage. Sa place vient du film, jamais du texte. Même prix qu'un clip.";
+  lancer.addEventListener("click", async () => {
+    const graine = document.getElementById("graine").value;
+    const r = await fetch("/video-h3/gros-plan", {method: "POST", headers: H, body: JSON.stringify({
+      precedent: jid, seconde: Number(seconde.value), fiche: qui.value, tenue: tenue.value, coupe: coupe.value,
+      replique: replique.value, langue: document.getElementById("langue").value,
+      longueur: Number(document.getElementById("longueur").value), ou: OU,
+      graine: graine === "" ? null : Number(graine)})});
+    const d = await r.json();
+    if (!r.ok){ alerteTexte(typeof d.detail === "string" ? d.detail : "Refusé."); return; }
+    document.getElementById("resultat").hidden = true;
+    document.getElementById("statut").className = "note";
+    document.getElementById("statut").textContent = "Gros plan lancé.";
+    suivre(d.id);
+  });
+  const ligne = (...e) => { const p = document.createElement("p"); p.append(...e); return p; };
+  bloc.append(titre, ligne(qui, " ", tenue), ligne("À la seconde ", seconde, " ", ici), ligne(coupe),
+              ligne(replique), lancer, note);
+  return bloc;
 }
 
 document.getElementById("lancer").addEventListener("click", async () => {
@@ -6752,12 +6981,21 @@ async function montrerFiche(){
   document.getElementById("fiche_nom").value = f.nom;
   document.getElementById("fiche_description").value = f.description;
   dessinerFiche(f);
+  tour360Photo = f.images.face || "";
   if (f.genre === "decor" && f.images.face) tour360Suivre(f.id);
 }
+let tour360Photo = "";
 
 // Le tour 360° d'un décor (06/10) : panorama, cartes des éléments, tronçons H3, montage ; tout seul.
-const TOUR360_ETAPES = {consigne: "consigne du panorama", panorama: "panorama (Modal)", cartes: "cartes des éléments",
-  troncons: "tronçons", montage: "montage"};
+const TOUR360_ETAPES = {consigne: "consigne du panorama", mesure: "mesure de la pièce (MoGe)",
+  plan_propose: "plan au sol proposé", plan_valide: "plan validé", panorama: "panorama (Modal)",
+  cartes: "cartes des éléments",
+  troncons: "tronçons", montage: "montage", finition: "finition (4K, musique, 60 images/s, AV1)"};
+// La caméra du tour (PLAN 21.6 étape 4, 06/10 : « une liste défilante pour les options ; la durée de 30 s est un
+// paramètre réglable ») : tour360_chaine.CAMERAS ; des clips de 5 s, donc la durée fixe la vitesse.
+const TOUR360_CAMERAS = [["tour_droite", "Tour complet vers la droite"], ["tour_gauche", "Tour complet vers la gauche"],
+  ["demi_tour", "Demi-tour vers la droite"], ["quart_de_tour", "Quart de tour vers la droite"],
+  ["aller_retour", "Aller-retour lent (angle choisi)"]];
 async function tour360Suivre(fid){
   const zone = document.getElementById("fiche_tour360");
   if (document.getElementById("fiche_choix").value !== fid) return;
@@ -6766,29 +7004,52 @@ async function tour360Suivre(fid){
   zone.innerHTML = "";
   const titre = document.createElement("h3");
   titre.textContent = "Tour 360° du décor";
-  const pas = document.createElement("select");
-  pas.setAttribute("aria-label", "Pas du tour");
-  for (const [v, l] of [["45", "8 tronçons de 45°"], ["30", "12 tronçons de 30° (plus sûr sur un mur nu)"]]){
+  const camera = document.createElement("select");
+  camera.setAttribute("aria-label", "Caméra");
+  for (const [v, l] of TOUR360_CAMERAS){
     const o = document.createElement("option");
     o.value = v;
     o.textContent = l;
-    pas.appendChild(o);
+    camera.appendChild(o);
   }
+  const champ = (libelle, valeur, min, max, pas) => {
+    const e = document.createElement("input");
+    Object.assign(e, {type: "number", value: valeur, min: min, max: max, step: pas});
+    e.setAttribute("aria-label", libelle);
+    e.style.width = "5em";
+    const l = document.createElement("label");
+    l.append(libelle + " ", e);
+    return [l, e];
+  };
+  const [duree_l, duree] = champ("Durée (s)", 30, 10, 120, 5);
+  const [angle_l, angle] = champ("Angle (°, négatif : à gauche)", 90, -180, 180, 15);
+  const [cap_l, cap] = champ("Cap de départ (°)", 0, -180, 180, 15);
+  const montrer = () => {
+    angle_l.hidden = camera.value !== "aller_retour";
+    cap_l.hidden = camera.value.startsWith("tour_");
+  };
+  camera.addEventListener("change", montrer);
+  montrer();
   const etat = document.createElement("p");
   etat.className = "note";
   const lancer = bouton(t ? "Refaire le tour 360°" : "Faire le tour 360°", async () => {
     lancer.disabled = true;
     try {
-      await appeler("/video-h3/fiches/" + fid + "/tour360", {ou: OU, pas: Number(pas.value)});
+      await appeler("/video-h3/fiches/" + fid + "/tour360", {ou: OU, camera: {camera: camera.value,
+        duree_s: Number(duree.value), angle: Number(angle.value), cap_depart: Number(cap.value)}});
       tour360Suivre(fid);
     } catch (e){ etat.textContent = e.message; lancer.disabled = false; }
   });
-  zone.append(titre, pas, " ", lancer, etat);
+  zone.append(titre, camera, " ", duree_l, " ", angle_l, " ", cap_l, " ", lancer, etat);
   if (!t) return;
-  const faits = (t.troncons || []).length, total = 360 / (t.pas || 45);
+  const faits = (t.troncons || []).length, total = t.groupes_nombre || "?";
   let texte = t.statut === "fini" ? "Fini." : t.statut === "arrete" ? "Arrêté : " + t.erreur
+    : t.statut === "plan_a_valider" ? "Plan au sol à valider : rien ne part au calcul avant « Valider le plan »."
     : "En cours : " + (TOUR360_ETAPES[t.etape] || t.etape || "départ") + ".";
-  if (t.faites && t.faites.includes("cartes")) texte += " Tronçons : " + faits + " / " + total + ".";
+  if (t.faites && t.faites.includes("cartes")) texte += " Groupes de clips : " + faits + " / " + total + ".";
+  const fin = t.finition || {};
+  if (fin.sans_musique) texte += " Sans musique : " + fin.sans_musique;
+  if (fin.sans_fluide) texte += " Resté à 24 images/s : " + fin.sans_fluide;
   if (t.consigne && t.consigne.piece) texte += " Lieu : " + t.consigne.piece + ".";
   if (t.cartes) texte += " Éléments : " + t.cartes.map(c => c.nom).join(", ") + ".";
   etat.textContent = texte;
@@ -6799,14 +7060,102 @@ async function tour360Suivre(fid){
       tour360Suivre(fid);
     } catch (e){ etat.textContent = e.message; }
   }));
+  if (t.plan) zone.appendChild(tour360Plan(fid, t, etat));
   if (t.video_url){
     const v = document.createElement("video");
     v.controls = true;
     v.src = t.video_url;
     v.style.maxWidth = "100%";
     zone.appendChild(v);
+    // pas pendant le calcul : la zone est redessinée toutes les 15 s, le formulaire serait effacé
+    if (t.film_id && t.statut !== "en cours") zone.appendChild(grosPlanBloc(t.film_id, v, t.personnage || {}));
   }
   if (t.statut === "en cours") setTimeout(() => tour360Suivre(fid), 15000);
+}
+
+// Le plan au sol (PLAN 21.6 étape 1, propriétaire 06/10 : « le client peut chatter pour modifier et valider ») :
+// la vue de dessus, les arêtes de la maquette posées sur la photo, le chat, puis « Valider le plan ».
+function tour360Plan(fid, t, etat){
+  const bloc = document.createElement(t.statut === "plan_a_valider" ? "div" : "details");
+  if (bloc.tagName === "DETAILS"){
+    const s = document.createElement("summary");
+    s.textContent = "Plan au sol (validé)";
+    bloc.appendChild(s);
+  }
+  const base = "/video-h3/fiches/" + fid + "/tour360/" + t.id + "/plan";
+  const vues = document.createElement("div");
+  vues.style.cssText = "display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start";
+  const dessus = document.createElement("div");
+  dessus.style.cssText = "flex:1 1 300px;max-width:480px";
+  const camera = document.createElement("div");
+  camera.style.cssText = "flex:2 1 400px;position:relative";
+  if (tour360Photo){
+    const img = document.createElement("img");
+    img.src = tour360Photo;
+    img.alt = "Photo du décor";
+    img.style.cssText = "width:100%;display:block";
+    camera.appendChild(img);
+  }
+  vues.append(dessus, camera);
+  bloc.appendChild(vues);
+  const charger = async (vue, ou, dessus_photo) => {
+    const r = await fetch(base + "/" + vue + ".svg", {headers: H});
+    if (!r.ok) return;
+    const boite = document.createElement("div");
+    boite.innerHTML = await r.text();
+    const svg = boite.querySelector("svg");
+    if (!svg) return;
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", vue === "dessus" ? "Vue de dessus du plan" : "Maquette vue par la caméra");
+    svg.style.cssText = dessus_photo ? "position:absolute;left:0;top:0;width:100%;height:100%" : "width:100%";
+    ou.appendChild(svg);
+  };
+  charger("dessus", dessus, false);
+  charger("camera", camera, !!tour360Photo);
+  const liste = document.createElement("ul");
+  for (const e of t.plan.elements){
+    const li = document.createElement("li");
+    li.textContent = e.nom + " (" + e.genre + ") : " + e.description;
+    liste.appendChild(li);
+  }
+  bloc.appendChild(liste);
+  if ((t.plan_remarques || []).length){
+    const r = document.createElement("p");
+    r.className = "note";
+    r.textContent = "Remarques : " + t.plan_remarques.join(" ");
+    bloc.appendChild(r);
+  }
+  const relu = t.plan_relecture || {};
+  if ((relu.problemes || []).length){
+    const r = document.createElement("p");
+    r.className = "note";
+    r.textContent = (relu.corrige ? "Relecture (plan corrigé) : " : "Relecture : ") + relu.problemes.join(" ");
+    bloc.appendChild(r);
+  }
+  if (t.statut !== "plan_a_valider") return bloc;
+  const message = document.createElement("textarea");
+  message.rows = 2;
+  message.style.width = "100%";
+  message.placeholder = "Par exemple : déplace le canapé contre la fenêtre ; ajoute une lampe à côté du fauteuil.";
+  message.setAttribute("aria-label", "Modifier le plan");
+  const modifier = bouton("Modifier le plan", async () => {
+    if (!message.value.trim()) return;
+    modifier.disabled = true;
+    etat.textContent = "Le chat modifie le plan…";
+    try {
+      await appeler(base, {message: message.value});
+      tour360Suivre(fid);
+    } catch (e){ etat.textContent = e.message; modifier.disabled = false; }
+  });
+  const valider = bouton("Valider le plan", async () => {
+    valider.disabled = true;
+    try {
+      await appeler(base + "/valider", {});
+      tour360Suivre(fid);
+    } catch (e){ etat.textContent = e.message; valider.disabled = false; }
+  });
+  bloc.append(message, modifier, " ", valider);
+  return bloc;
 }
 
 function dessinerFiche(f){

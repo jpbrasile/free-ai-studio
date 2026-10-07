@@ -44,6 +44,12 @@ ECHELLES = {
     "4k": {"titre": "4K (2160p)", "redim": {"resize_type": "scale height", "resize_type.height": 2160},
            "decoupe": True, "s_par_image": 578.9 / 121},
 }
+# Chez Modal aussi, la 4K par FlashVSR (07/10, voir FLASHVSR_MODAL) : SeedVR2 4K vieillissait les visages. EN
+# ATTENTE (propriétaire, 07/10 : « hold modal works ») : éteint, jamais lancé chez Modal. NON MESURÉ sur L40S :
+# la 4090 du 03/10 (160,8 s pour 120 images) avec un quart de marge, davantage au départ (image, poids).
+FLASHVSR_CHEZ_MODAL = False
+if FLASHVSR_CHEZ_MODAL:
+    ECHELLES["4k"].update(s_par_image=160.8 / 120 * 1.25, demarrage_s=240, modele="FlashVSR v1.1")
 DEMARRAGE_S = 150
 # Un morceau au plus de cette longueur : celle de l'essai (121 images, 12 Go de
 # mémoire vive pour les images de sortie en 4K).
@@ -68,6 +74,21 @@ FLASHVSR = {"depot": "JunhaoZhuang/FlashVSR-v1.1", "revision": "27561b186ded3402
             "fichiers": ("diffusion_pytorch_model_streaming_dmd.safetensors", "LQ_proj_in.ckpt", "TCDecoder.ckpt"),
             "wanvsr": "/opt/flashvsr/examples/WanVSR", "chemins": ["/opt/flashvsr-sm89", "/opt/flashvsr"]}
 MOTEUR_MAISON = "FlashVSR v1.1"
+# La même 4K chez Modal (07/10) : flashvsr-sm89-ops vise les cartes Ada (sm89), la 4090 d'ici et la L40S de
+# Modal. Mémoire : le film réduit (1,6 Mo l'image) et un morceau de 32 images en 4K tiennent largement.
+FLASHVSR_MODAL = {"gpu": "L40S", "memoire_mb": 32768, "coeurs": 4.0}
+FLASHVSR_COMMIT = "cf910c61a60733e610e9c6e8b607f80c3a6c202b"   # ceux de comfy-maison/Dockerfile
+SM89_COMMIT = "59c74311b715b0f038854365b799707636236e73"
+APT_FLASHVSR = video_h3.APT + ("gcc", "libc6-dev")      # Triton compile ses noyaux au premier appel
+COMMANDES_FLASHVSR = video_h3.COMMANDES + (
+    "git clone https://github.com/OpenImagingLab/FlashVSR /opt/flashvsr"
+    f" && git -C /opt/flashvsr checkout {FLASHVSR_COMMIT}"
+    " && git clone https://github.com/aireet/flashvsr-sm89-ops /opt/flashvsr-sm89"
+    f" && git -C /opt/flashvsr-sm89 checkout {SM89_COMMIT}"
+    f" && ln -s {video_h3.POINT_DE_MONTAGE}/flashvsr/FlashVSR-v1.1 /opt/flashvsr/examples/WanVSR/FlashVSR-v1.1",
+    "pip install --no-deps imageio==2.37.0 imageio-ffmpeg==0.6.0 opencv-python-headless==4.11.0.86 ftfy==6.3.1"
+    " peft==0.16.0 wcwidth==0.9.1",
+)
 # SeedVR2 perd des images d'un morceau qui n'en a pas un multiple de 4 (01/10 : 31 images
 # rendues 30, et le film recollé passé à 24,8 images par seconde) ; 124 et 724 ont été
 # rendues entières. Le script complète chaque morceau jusqu'au multiple de 4 en répétant
@@ -88,7 +109,26 @@ def bornes(total: int, fins=None, morceau_max: int = MORCEAU_MAX) -> list:
 
 
 def estimation_s(images: int, echelle: str) -> float:
-    return DEMARRAGE_S + images * ECHELLES[echelle]["s_par_image"]
+    e = ECHELLES[echelle]
+    return e.get("demarrage_s", DEMARRAGE_S) + images * e["s_par_image"]
+
+
+def machine(echelle: str) -> dict:
+    """La machine louée pour cette échelle : FlashVSR (4K) sur L40S, SeedVR2 (×2) sur A100-80GB."""
+    if echelle == "4k" and FLASHVSR_CHEZ_MODAL:
+        return dict(FLASHVSR_MODAL)
+    return {"gpu": GPU, "memoire_mb": MEMOIRE_MB, "coeurs": COEURS}
+
+
+def image(echelle: str) -> dict:
+    """De quoi construire l'image Modal de cette échelle (arguments de modal_execute)."""
+    if echelle == "4k" and FLASHVSR_CHEZ_MODAL:
+        return {"apt": APT_FLASHVSR, "commandes": COMMANDES_FLASHVSR, "paquets": PAQUETS}
+    return {"apt": video_h3.APT, "commandes": video_h3.COMMANDES, "paquets": PAQUETS}
+
+
+def modele(echelle: str) -> str:
+    return ECHELLES[echelle].get("modele", "SeedVR2")
 
 
 def estimation_maison_s(images: int) -> float:
@@ -112,7 +152,8 @@ def prix(images: int, echelle: str) -> dict:
     if estime > DUREE_MAX_S * 0.8:
         raise ValueError("Trop long pour %s en une fois (%d s de calcul estimées, %d au plus) : "
                          "choisissez ×2." % (ECHELLES[echelle]["titre"], estime, int(DUREE_MAX_S * 0.8)))
-    par_s = budget_modal.prix_seconde(GPU, MEMOIRE_MB, COEURS)
+    m = machine(echelle)
+    par_s = budget_modal.prix_seconde(m["gpu"], m["memoire_mb"], m["coeurs"])
     return {"echelle": echelle, "titre": ECHELLES[echelle]["titre"], "images": images,
             "secondes_estimees": round(estime), "estime_usd": round(par_s * estime, 2),
             "pire_usd": round(par_s * delai_s(images, echelle), 2), "delai_s": delai_s(images, echelle)}
@@ -175,7 +216,18 @@ def demande(video: bytes, echelle: str, coupes: list, delai_s: int = DUREE_MAX_S
             "delai_s": delai_s, "echelle": echelle}
 
 
-def construire_script(video: bytes, echelle: str, coupes: list, delai_s: int = DUREE_MAX_S) -> str:
+def construire_script(video: bytes, echelle: str, coupes: list, delai_s: int = DUREE_MAX_S,
+                      fins=None, taille=None) -> str:
+    """Le script de la machine louée. En 4K : celui de la carte d'ici (FlashVSR), en morceaux de
+    MORCEAU_MAX_MAISON, recoupés aux `fins` de plans (à défaut, aux coupes données), poids posés
+    sur le disque Modal d'abord ; `taille` = (largeur, hauteur) du film."""
+    if echelle == "4k" and FLASHVSR_CHEZ_MODAL:
+        fins = list(coupes[1:]) if fins is None else list(fins)
+        coupes = bornes(coupes[-1], fins, MORCEAU_MAX_MAISON)
+        d = dict(demande_maison(video, coupes, fins, *taille, delai_s),
+                 poser_hf=[{"depot": FLASHVSR["depot"], "revision": FLASHVSR["revision"],
+                            "dossier": DOSSIER_MAISON, "fichiers": list(FLASHVSR["fichiers"])}])
+        return video_h3._emballer(video_h3.avec_poids_hf(_SCRIPT_MAISON), d)
     return video_h3._emballer(_SCRIPT, demande(video, echelle, coupes, delai_s))
 
 

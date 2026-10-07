@@ -72,6 +72,8 @@ import ou_calculer
 import poids_video
 import retouche_qwen
 import tour360
+import fluide
+import tour360_chaine
 import video
 import video_h3
 import visages
@@ -3914,12 +3916,14 @@ def video_page():
 # Le detail (graphe, scripts, page, garde de licence) est dans video_h3.py.
 
 def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: int = 0,
-                 ou: str = "modal"):
+                 ou: str = "modal", groupe: bool = False):
     """Un clip H3 chez Modal ; le temps de location est encaisse meme en echec.
 
     Avec `precedent` (prolonger), le plan rendu est recolle apres le clip
     precedent, son compris, et la video du travail devient la chaine entiere.
-    `ou="maison"` : la file de la carte de cet ordinateur, gratuite."""
+    `ou="maison"` : la file de la carte de cet ordinateur, gratuite.
+    `groupe` : un groupe de clips d'un tour 360° enchaînés par le latent (tour360_chaine) :
+    le nœud Motion-Context toujours, et le délai d'un groupe."""
     if ou == "maison":
         return run_video_h3_maison(jid, code, precedent, retirer)
     debut = time.time()
@@ -3930,11 +3934,11 @@ def run_video_h3(jid: str, code: str, precedent: Optional[str] = None, retirer: 
         finish_execution(jid, "modal", modal_execute(
             jid, code, True, True,
             gpu_type=video_h3.GPU,
-            timeout_s=video_h3.DUREE_MAX_S,
+            timeout_s=tour360_chaine.GROUPE_MODAL_S if groupe else video_h3.DUREE_MAX_S,
             memory_mb=video_h3.MEMOIRE_MB,
             coeurs=video_h3.COEURS,
             apt=video_h3.APT,
-            commandes=video_h3.commandes(),
+            commandes=(video_h3.COMMANDES + video_h3.COMMANDES_MC) if groupe else video_h3.commandes(),
             volume=video_h3.VOLUME,
             point_de_montage=video_h3.POINT_DE_MONTAGE,
             # Compte juste en dessous, sur l'usage « video » : pas deux fois.
@@ -4024,17 +4028,29 @@ def recoller_h3(jid: str, precedent: str, retirer: int):
     la chaine entiere. Un montage rate fait echouer le travail, avec sa phrase :
     montrer le plan seul le ferait passer pour la chaine."""
     job = read_job(jid)
+    video = job.get("video") or {}
     avant, plan = _video_h3_octets(precedent), _video_h3_octets(jid)
     try:
         if not avant or not plan:
             raise montage.MontageImpossible("Le clip précédent ou le plan neuf est introuvable.")
-        chaine = montage.recoller_son(avant.read_bytes(), plan.read_bytes(), retirer)
+        suite = plan.read_bytes()
+        gros_plan = video.get("gros_plan") or {}
+        if gros_plan.get("coupe") == "franche":
+            # Le travelling vers le visage est ôté : le film passe d'un coup au gros plan (07/10).
+            ecarts = montage.ecarts_d_images(suite)[retirer:]
+            k = montage.arret_camera(ecarts)
+            if k is None:
+                gros_plan["arret"] = "La caméra ne s'arrête pas : le travelling est gardé (coupe douce)."
+            else:
+                suite = montage.extraire(suite, retirer + k, len(ecarts) + retirer + 1)
+                gros_plan["arret"] = round(k / video_h3.IMAGES_PAR_SECONDE, 2)
+                retirer = 0
+        chaine = montage.recoller_son(avant.read_bytes(), suite, retirer)
     except montage.MontageImpossible as exc:
         job.update({"status": "failed", "error": str(exc), "etape": ""})
         write_job(jid, job)
         return
     plan.write_bytes(chaine)
-    video = job.get("video") or {}
     # Compte sur la chaine rendue : le plan par troncon arrive deja raccourci.
     video["secondes"] = round(montage.images(plan) / video_h3.IMAGES_PAR_SECONDE, 2)
     job.update({"video": video, "status": "succeeded", "etape": ""})
@@ -4385,6 +4401,60 @@ async def video_h3_prolonger(request: Request, authorization: Optional[str] = He
     return _lancer_h3(plan, precedent, retirer=video_h3.images_a_retirer(plan), ou=_ou_h3(payload))
 
 
+@app.post("/video-h3/gros-plan")
+async def video_h3_gros_plan(request: Request, authorization: Optional[str] = Header(default=None)):
+    """Un gros plan sur un personnage à la seconde X d'un film H3 (07/10, propriétaire : « i want a close up on
+    leila (soft or hard cut) at second xxx »). Le film est coupé à X, la suite part de sa fin comme « Prolonger »
+    (fiche du personnage, sa tenue du film si `tenue` est donnée), la caméra avance jusqu'au gros plan et s'y tient ;
+    `coupe` « franche » ôte le travelling au recollage (`recoller_h3`). Champs : precedent, seconde, fiche, coupe,
+    replique, tenue, et ceux de « Prolonger » (longueur, graine, langue, ou)."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    corps = await request.json()
+    precedent = str(corps.get("precedent") or "")
+    if not re.fullmatch(r"[0-9a-f]{32}", precedent):
+        raise HTTPException(400, "Film illisible.")
+    try:
+        avant = read_job(precedent)
+    except HTTPException as exc:
+        raise HTTPException(404, "Ce film n'existe plus sur ce Studio.") from exc
+    chemin = _video_h3_octets(precedent) if avant.get("status") == "succeeded" else None
+    if not chemin:
+        raise HTTPException(404, "La vidéo de ce film n'est pas (ou plus) sur ce Studio.")
+    try:
+        fiche = video_h3.fiche_lire(str(corps.get("fiche") or ""))
+    except ValueError as exc:
+        raise HTTPException(404, "Fiche du personnage introuvable.") from exc
+    tenue = str(corps.get("tenue") or "").strip()
+    photo = (video_h3.fiche_tenue_vue(fiche["id"], tenue, "visage_face")
+             or video_h3.fiche_tenue_image(fiche["id"], tenue)) if tenue else None
+    if tenue and not photo:
+        raise HTTPException(400, "Cette tenue n'a pas encore de photo sur la fiche.")
+    film, total = chemin.read_bytes(), montage.images(chemin)
+    coupe = str(corps.get("coupe") or "douce")
+    try:
+        payload = video_h3.payload_gros_plan(corps, fiche, photo)
+        n = video_h3.image_de_coupe(corps.get("seconde"), total)
+        tete = montage.extraire(film, 0, n) if n < total else film
+        v = avant.get("video") or {}
+        tete_jid = _film_h3(tete, {k: x for k, x in {
+            "mode": "coupe", "mode_titre": "Film coupé à %.2f s" % (n / video_h3.IMAGES_PAR_SECONDE),
+            "invite": v.get("invite", ""), "plans": v.get("plans"), "chaine": v.get("chaine"),
+            "source": precedent}.items() if x is not None}, "Gros plan : film coupé")
+        derniere, fin = _derniere_et_raccord(tete, ambiance=_ambiance_du_lieu(payload))
+        plan = video_h3.preparer_prolonger(payload, read_job(tete_jid), derniere, fin_b64=fin)
+    except montage.MontageImpossible as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    plan["resume_public"].update(
+        mode_titre="Gros plan sur %s (coupe %s)" % (fiche["nom"], coupe),
+        gros_plan={"coupe": coupe, "fiche": fiche["id"], "seconde": round(n / video_h3.IMAGES_PAR_SECONDE, 2),
+                   "source": precedent})
+    return _lancer_h3(plan, tete_jid, retirer=video_h3.images_a_retirer(plan), ou=_ou_h3(payload))
+
+
 def _ambiance_du_lieu(payload: dict) -> Optional[bytes]:
     """La piste son du décor du plan (fiche du lieu), si elle existe et que `decor_son` n'est pas éteint."""
     if not payload.get("decor") or payload.get("decor_son") is False:
@@ -4598,6 +4668,10 @@ def _mo_du_film(jid: str) -> Optional[float]:
     return round(chemin.stat().st_size / 1e6, 1) if chemin else None
 
 
+# Les films en haute définition : agrandis (4K, 1080p) ou fluidifiés à 60 images/s (06/10, fluide.py).
+MOTEURS_HD = ("SeedVR2 (agrandissement)", fluide.MOTEUR)
+
+
 def _films_hd() -> list:
     """Les films et clips agrandis (4K, 1080p) réussis, du plus récent au plus ancien. Ils
     n'entrent pas dans un montage de clips 480p, mais la page doit les retrouver : le
@@ -4611,7 +4685,7 @@ def _films_hd() -> list:
         except (OSError, ValueError):
             continue
         v = job.get("video") if isinstance(job, dict) else None
-        if not isinstance(v, dict) or v.get("moteur") != "SeedVR2 (agrandissement)" or v.get("passages"):
+        if not isinstance(v, dict) or v.get("moteur") not in MOTEURS_HD or v.get("passages"):
             continue
         if job.get("status") != "succeeded" or not _video_h3_octets(job.get("id", "")):
             continue
@@ -4673,22 +4747,22 @@ def video_h3_agrandir_prix(job: str = Query(...), authorization: Optional[str] =
     return {"images": images, "echelles": echelles, "budget": budget_modal.vue("video")}
 
 
-def run_agrandir(jid: str, code: str, delai: int):
-    """L'agrandissement chez Modal ; le temps de location est encaissé même en échec."""
+def run_agrandir(jid: str, code: str, delai: int, echelle: str = "x2"):
+    """L'agrandissement chez Modal (SeedVR2 ×2 ; FlashVSR en 4K depuis le 07/10, agrandir.machine) ; le temps de
+    location est encaissé même en échec."""
     debut = time.time()
+    m = agrandir.machine(echelle)
     job = read_job(jid)
     job.update({"status": "running", "started_at": debut, "provider_effective": "modal"})
     write_job(jid, job)
     try:
         finish_execution(jid, "modal", modal_execute(
             jid, code, True, True,
-            gpu_type=agrandir.GPU,
+            gpu_type=m["gpu"],
             timeout_s=delai,
-            memory_mb=agrandir.MEMOIRE_MB,
-            coeurs=agrandir.COEURS,
-            paquets=agrandir.PAQUETS,
-            apt=video_h3.APT,
-            commandes=video_h3.COMMANDES,
+            memory_mb=m["memoire_mb"],
+            coeurs=m["coeurs"],
+            **agrandir.image(echelle),
             volume=video_h3.VOLUME,
             point_de_montage=video_h3.POINT_DE_MONTAGE,
             # Compté juste en dessous, sur l'usage « video » : pas deux fois.
@@ -4697,8 +4771,8 @@ def run_agrandir(jid: str, code: str, delai: int):
     except BackendUnavailable as exc:
         terminer_en_echec(jid, str(exc)[:1000])
     finally:
-        etat = budget_modal.consommer("video", agrandir.GPU, time.time() - debut,
-                                      agrandir.MEMOIRE_MB, coeurs=agrandir.COEURS, cle=jid)
+        etat = budget_modal.consommer("video", m["gpu"], time.time() - debut,
+                                      m["memoire_mb"], coeurs=m["coeurs"], cle=jid)
         job = read_job(jid)
         job["budget"] = etat
         if job.get("status") == "failed" and not job.get("error"):
@@ -4747,13 +4821,16 @@ async def video_h3_agrandir(request: Request, authorization: Optional[str] = Hea
     try:
         devis = agrandir.prix(images, echelle)
         coupes = _agrandir_coupes(images, str(corps.get("scenario") or ""))
-        code = agrandir.construire_script(chemin.read_bytes(), echelle, coupes)
-    except ValueError as exc:
+        video = chemin.read_bytes()
+        code = agrandir.construire_script(video, echelle, coupes,
+                                          taille=montage.taille(video) if echelle == "4k" and agrandir.FLASHVSR_CHEZ_MODAL else None)
+    except (ValueError, montage.MontageImpossible) as exc:
         raise HTTPException(422, str(exc)) from exc
     _modal_ou_refus()
+    m = agrandir.machine(echelle)
     try:
-        budget_modal.verifier("video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
-                              quoi="L'agrandissement", coeurs=agrandir.COEURS)
+        budget_modal.verifier("video", m["gpu"], devis["delai_s"], m["memoire_mb"],
+                              quoi="L'agrandissement", coeurs=m["coeurs"])
     except budget_modal.BudgetDepasse as exc:
         raise HTTPException(429, str(exc)) from exc
     jid = uuid.uuid4().hex
@@ -4762,8 +4839,8 @@ async def video_h3_agrandir(request: Request, authorization: Optional[str] = Hea
         "id": jid, "provider": "modal", "title": "Free AI Studio agrandissement", "gpu": True,
         "internet": True, "status": "queued", "created_at": time.time(), "artifacts": [],
         # Pas « MiniMax H3 » : une vidéo agrandie n'entre pas dans un montage de clips 480p.
-        "video": {"moteur": "SeedVR2 (agrandissement)", "source": source, "echelle": echelle,
-                  "morceaux": len(coupes) - 1, "devis": devis,
+        "video": {"moteur": "SeedVR2 (agrandissement)", "modele": agrandir.modele(echelle), "source": source,
+                  "echelle": echelle, "morceaux": len(coupes) - 1, "devis": devis,
                   "secondes": round(images / video_h3.IMAGES_PAR_SECONDE, 2)},
         "titre": ((origine.get("titre") or "Vidéo H3") + " — " + devis["titre"])[:200],
     })
@@ -5339,9 +5416,11 @@ def run_finaliser(fid: str):
                 else:
                     devis = agrandir.prix(n, echelle)
                     coupes = agrandir.bornes(n, fins)
-                    code = agrandir.construire_script(video, echelle, coupes)
-                    budget_modal.verifier("video", agrandir.GPU, devis["delai_s"], agrandir.MEMOIRE_MB,
-                                          quoi="L'agrandissement", coeurs=agrandir.COEURS)
+                    code = agrandir.construire_script(video, echelle, coupes, fins=fins,
+                                                      taille=montage.taille(video) if echelle == "4k" and agrandir.FLASHVSR_CHEZ_MODAL else None)
+                    m = agrandir.machine(echelle)
+                    budget_modal.verifier("video", m["gpu"], devis["delai_s"], m["memoire_mb"],
+                                          quoi="L'agrandissement", coeurs=m["coeurs"])
                 jid = uuid.uuid4().hex
                 write_job(jid, {
                     "id": jid, "provider": "maison" if ici else "modal", "title": "Free AI Studio agrandissement",
@@ -5349,7 +5428,7 @@ def run_finaliser(fid: str):
                     "artifacts": [], **({"machine": "comfy", "attente_carte": True} if ici else {}),
                     "video": {"moteur": "SeedVR2 (agrandissement)", "source": source, "echelle": echelle,
                               # « moteur » reste la catégorie (agrandissement) ; le modèle qui a tourné :
-                              "modele": agrandir.MOTEUR_MAISON if ici else "SeedVR2",
+                              "modele": agrandir.MOTEUR_MAISON if ici else agrandir.modele(echelle),
                               "passages": [[plans[k]["de"], plans[k]["a"]] for k in ks],
                               "morceaux": len(coupes) - 1, "devis": devis, "finalisation": fid,
                               "secondes": round(n / video_h3.IMAGES_PAR_SECONDE, 2)},
@@ -5506,7 +5585,7 @@ def _compacter_hd(film: bytes, moteur: str, plafond: int = 0) -> tuple:
     """Un film en haute définition passe en AV1 si la qualité mesurée tient
     (`montage.compacter_av1`, 30/09) ; les autres, et tout échec, restent tels quels.
     `plafond` (octets) : recompression plus forte, sur demande seulement (02/10)."""
-    if moteur != "SeedVR2 (agrandissement)":
+    if moteur not in MOTEURS_HD:
         return film, None
     try:
         return montage.compacter_av1(film, plafond)
@@ -5653,7 +5732,7 @@ def _films_du_studio() -> set:
 def _moteur_du_film(video: dict) -> str:
     """Un film HD reste HD (il n'entre pas dans un montage de clips 480p)."""
     m = str(video.get("moteur") or "")
-    return m if m == "SeedVR2 (agrandissement)" else "MiniMax H3 (montage)"
+    return m if m in MOTEURS_HD else "MiniMax H3 (montage)"
 
 
 # --- Sous-titres en français, faits ici (30/09/2026) ---------------------------
@@ -5809,7 +5888,7 @@ def run_sous_titres(jid: str, film_jid: str):
         _job_noter(jid, etape="Incrustation dans l'image")
         film = montage.incruster_sous_titres(video, texte_srt)
         moteur = str((read_job(jid).get("video") or {}).get("moteur") or "")
-        if moteur == "SeedVR2 (agrandissement)":
+        if moteur in MOTEURS_HD:
             _job_noter(jid, etape="Compression AV1 (qualité mesurée)")
         film, compression = _compacter_hd(film, moteur)
         chemin = JOBS / jid / "video.mp4"
@@ -5927,6 +6006,79 @@ def run_compresser(jid: str, film_jid: str, plafond: int):
         _job_noter(jid, etape="")
         terminer_en_echec(jid, str(exc) if isinstance(exc, montage.MontageImpossible)
                           else "La compression a échoué : %s" % type(exc).__name__)
+
+
+# --- 60 images/s à pas réguliers (06/10/2026, PLAN 21.6 étape 5) -------------------------
+# Propriétaire : « plus de saccades, tout est ok » sur le tour fluidifié à l'atelier. Sur la
+# carte d'ici seulement (fluide.py) ; rien n'est loué.
+
+@app.post("/video-h3/fluidifier")
+async def video_h3_fluidifier(request: Request, authorization: Optional[str] = Header(default=None)):
+    """{job, chemin?} : le film à 60 images/s, images placées à pas égaux le long du mouvement.
+    `chemin` : le film d'avant l'agrandissement (mêmes images), sur lequel le mouvement se mesure."""
+    _h3_ou_404()
+    auth(authorization)
+    corps = await request.json()
+    film_jid, chemin_jid = str(corps.get("job") or ""), str(corps.get("chemin") or "")
+    films = _films_du_studio()
+    for j in [film_jid] + ([chemin_jid] if chemin_jid else []):
+        if j not in films or not _video_h3_octets(j):
+            raise HTTPException(404, "Ce film n'est plus sur ce Studio.")
+    source = _video_h3_octets(film_jid)
+    try:
+        images = montage.images(source)
+        _, hauteur = montage.taille(source.read_bytes())
+        if not fluide.tient(images, hauteur):
+            raise ValueError("Film trop long pour une passe sur la carte d'ici (%d images, environ %d s de "
+                             "calcul ; %d s au plus)." % (images, fluide.estimation_s(images, hauteur),
+                                                          video_h3.MAISON_DUREE_MAX_S * 0.8))
+        code = fluide.construire_script(source.read_bytes(),
+                                        _video_h3_octets(chemin_jid).read_bytes() if chemin_jid else b"")
+    except (ValueError, montage.MontageImpossible) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    ici = h3_ici({"fichiers": list(fluide.FICHIERS)})
+    if not ici["possible"]:
+        raise HTTPException(409, ici["motif"].replace("de H3", "de GIMM-VFI") + " Rien n'est parti.")
+    origine = read_job(film_jid)
+    avant = origine.get("video") or {}
+    jid = uuid.uuid4().hex
+    write_job(jid, {
+        "id": jid, "provider": "maison", "title": "Free AI Studio fluidification", "gpu": True, "internet": False,
+        "status": "queued", "created_at": time.time(), "artifacts": [],
+        "video": dict({"moteur": fluide.MOTEUR, "mode": "fluide", "mode_titre": "Film à 60 images/s",
+                       "source": film_jid, "chemin": chemin_jid, "clips": [film_jid],
+                       "invite": avant.get("invite", ""), "plans": avant.get("plans") or 1,
+                       "secondes": avant.get("secondes"), "ips": fluide.IPS,
+                       "estimation_s": round(fluide.estimation_s(images, hauteur))},
+                      **({"echelle": avant["echelle"]} if avant.get("echelle") else {})),
+        "titre": ((origine.get("titre") or "Film H3")[:60] + " (60 i/s)"),
+    })
+    threading.Thread(target=run_fluidifier, args=(jid, code), daemon=True).start()
+    return read_job(jid)
+
+
+def run_fluidifier(jid: str, code: str):
+    """Comme run_agrandir_maison : la file de la carte, puis la machine de la carte d'ici."""
+    if not attendre_la_carte(jid):
+        return
+    try:
+        job = read_job(jid)
+        job.update({"status": "running", "started_at": time.time(), "provider_effective": "maison",
+                    "attente_carte": False, "file_position": None})
+        write_job(jid, job)
+        try:
+            finish_execution(jid, "maison", maison_execute(jid, code, secondes=video_h3.MAISON_DUREE_MAX_S,
+                                                           url=WORKER_COMFY_URL))
+        except BackendUnavailable as exc:
+            terminer_en_echec(jid, str(exc)[:1000])
+    finally:
+        file_carte.rendre(jid)
+    job = read_job(jid)
+    if job.get("status") == "failed" and not job.get("error"):
+        phrase = fluide.phrase_d_echec(job.get("stderr", ""))
+        if phrase:
+            job["error"] = phrase
+            write_job(jid, job)
 
 
 @app.post("/video-h3/sous-titres")
@@ -6635,6 +6787,26 @@ async def _photo_de_tenue(fid: str, tenue: str) -> tuple:
     image = await _image_du_studio(demande)
     video_h3.fiche_poser_tenue(fid, tenue, image)
     return image.split(",", 1)[1], False
+
+
+async def _vues_de_tenue(fid: str, tenue: str, photo: str) -> dict:
+    """{vue: base64} : les vues de la personne dans cette tenue (video_h3.VUES_TENUE : gros plans du visage coiffe
+    comprise, photos en pied cadrées en hauteur), chacune gardée sur la fiche, sinon faite par l'image du Studio
+    depuis le portrait de face et la photo en pied de la tenue (`photo`), puis gardée (07/10)."""
+    visage = video_h3.fiche_images(fid, visage_seul=True)[:1]
+    vues = {}
+    for vue in video_h3.VUES_TENUE:
+        b64 = video_h3.fiche_tenue_vue(fid, tenue, vue)
+        if not b64:
+            # le portrait d'abord (le visage à reprendre), puis la photo en pied de la tenue
+            image = await _image_du_studio({
+                "prompt": video_h3.texte_vue_tenue(tenue, vue), "n": 1,
+                "size": video_h3.taille_vue_tenue(vue),
+                "image_reference": [video_h3._data_url(b) for b in visage + [photo]]})
+            video_h3.fiche_poser_tenue_vue(fid, tenue, vue, image)
+            b64 = image.split(",", 1)[1]
+        vues[vue] = b64
+    return vues
 
 
 async def _scenario_traduire(a_tourner: list, musique):
@@ -7726,44 +7898,134 @@ async def video_h3_film_auto_maitre(fid: str, request: Request, authorization: O
 _TOURS_360_FILS: dict = {}
 
 
-def _tour360_chat(consigne: str, images: list) -> str:
+def _tour360_chat(consigne: str, images: list, modele: str = "free-ai-auto") -> str:
     try:
-        return asyncio.run(_chat_du_studio(consigne, "le tour 360°", images=images))
+        return asyncio.run(_chat_du_studio(consigne, "le tour 360°", images=images, modele=modele))
     except HTTPException as exc:
         raise tour360.Arret("Chat du Studio : %s" % exc.detail) from exc
 
 
-def _tour360_panorama(photo: bytes, texte: str, graine: int, pas: int) -> dict:
-    """Le panorama et les images clés sur une carte Modal (tour360_pano.py), compté sur « video »."""
+def _tour360_relecteur(consigne: str, images: list) -> str:
+    """Le relecteur du plan sur le modèle fort du routeur (propriétaire, 06/10 : « ok for 1 ») ; le plan proposé
+    reste sur free-ai-auto. Le routeur passe au secours de lui-même quand Max est en pause."""
+    return _tour360_chat(consigne, images, MODELE_CORRECTION)
+
+
+def _tour360_modal(jid: str, code: str, quoi: str, gpu: str, duree_s: int, memoire_mb: int, coeurs: float) -> dict:
+    """Un script du tour (tour360_pano.py) sur une carte Modal, compté sur « video » : {nom: octets} rendus."""
     if not modal_configured():
-        raise tour360.Arret("Le panorama se calcule chez Modal, qui n'est pas configuré ici.")
-    jid = "tour360-" + uuid.uuid4().hex[:12]
-    code = tour360.construire_script(photo, texte, graine, pas)
+        raise tour360.Arret("%s se calcule chez Modal, qui n'est pas configuré ici." % quoi)
     try:
-        budget_modal.verifier("video", tour360.GPU, tour360.DUREE_MAX_S, tour360.MEMOIRE_MB,
-                              quoi="Le panorama du tour 360°", coeurs=tour360.COEURS)
+        budget_modal.verifier("video", gpu, duree_s, memoire_mb, quoi=quoi + " du tour 360°", coeurs=coeurs)
     except budget_modal.BudgetDepasse as exc:
         raise tour360.Arret(str(exc)) from exc
     debut = time.time()
     try:
-        res = modal_execute(jid, code, True, True, gpu_type=tour360.GPU, timeout_s=tour360.DUREE_MAX_S,
-                            memory_mb=tour360.MEMOIRE_MB, coeurs=tour360.COEURS, paquets=tour360.PAQUETS,
+        res = modal_execute(jid, code, True, True, gpu_type=gpu, timeout_s=duree_s,
+                            memory_mb=memoire_mb, coeurs=coeurs, paquets=tour360.PAQUETS,
                             apt=video_h3.APT, commandes=tour360.commandes(), volume=video_h3.VOLUME,
                             point_de_montage=video_h3.POINT_DE_MONTAGE, usage=None)
     except BackendUnavailable as exc:
-        raise tour360.Arret("Panorama : %s" % str(exc)[:300]) from exc
+        raise tour360.Arret("%s : %s" % (quoi, str(exc)[:300])) from exc
     finally:
-        budget_modal.consommer("video", tour360.GPU, time.time() - debut, tour360.MEMOIRE_MB,
-                               coeurs=tour360.COEURS, cle=jid)
+        budget_modal.consommer("video", gpu, time.time() - debut, memoire_mb, coeurs=coeurs, cle=jid)
     if res.get("exit_code") != 0:
         raise tour360.Arret(tour360.phrase_d_echec(res.get("stderr", "")) or
-                            "Le panorama a échoué : %s" % str(res.get("stderr") or "")[-300:])
+                            "%s a échoué : %s" % (quoi, str(res.get("stderr") or "")[-300:]))
     fichiers = {}
     for a in res.get("artifacts") or []:
         chemin = JOBS / jid / "modal-output" / str(a.get("name", ""))
         if not a.get("skipped") and chemin.is_file():
             fichiers[chemin.name] = chemin.read_bytes()
     return fichiers
+
+
+def _tour360_panorama(photo: bytes, texte: str, graine: int, pas: int, **plan) -> dict:
+    """Le panorama, les images clés (et les cartes du plan) sur une carte Modal (tour360_pano.py)."""
+    return _tour360_modal("tour360-" + uuid.uuid4().hex[:12],
+                          tour360.construire_script(photo, texte, graine, pas, **plan), "Le panorama",
+                          tour360.GPU, tour360.DUREE_MAX_S, tour360.MEMOIRE_MB, tour360.COEURS)
+
+
+def _tour360_mesure(photo: bytes, ou: str) -> dict:
+    """PLAN 21.6 étape 1 : MoGe mesure la pièce. Ici (« ou » = maison) : la file de la carte de cet ordinateur,
+    poids sur /poids, gratuit ; sinon une L4 chez Modal."""
+    jid = "tour360-mesure-" + uuid.uuid4().hex[:12]
+    if ou != "maison":
+        return _tour360_modal(jid, tour360.construire_mesure(photo), "La mesure de la pièce", tour360.GPU_MESURE,
+                              tour360.DUREE_MESURE_S, tour360.MEMOIRE_MESURE_MB, tour360.COEURS_MESURE)
+    sortie = _tour360_ici(jid, tour360.construire_mesure(photo, maison=True), "La mesure de la pièce",
+                          "Tour 360° : mesure de la pièce")
+    return {n: o for n, o in sortie.items() if n.endswith(".json")}
+
+
+def _tour360_ici(jid: str, script: str, quoi: str, titre: str) -> dict:
+    """Un script du tour (tour360_pano.py) sur la carte de cet ordinateur, à son tour dans sa file : {nom: octets}."""
+    write_job(jid, {"id": jid, "provider": "maison", "title": "Free AI Studio " + titre, "gpu": True,
+                    "internet": False, "status": "queued", "created_at": time.time(), "artifacts": [],
+                    "machine": "comfy", "attente_carte": True, "provider_effective": "maison",
+                    "attente_motif": "En file pour la carte de cet ordinateur.", "titre": titre})
+    if not attendre_la_carte(jid):
+        raise tour360.Arret("%s a été annulée." % quoi)
+    try:
+        res = maison_execute(jid, script, secondes=tour360.DUREE_MESURE_S, url=WORKER_COMFY_URL)
+        finish_execution(jid, "maison", res)
+    except BackendUnavailable as exc:
+        terminer_en_echec(jid, str(exc)[:1000])
+        raise tour360.Arret("%s : %s" % (quoi, str(exc)[:300])) from exc
+    finally:
+        file_carte.rendre(jid)
+    if res.get("exit_code") != 0:
+        raise tour360.Arret(tour360.phrase_d_echec(res.get("stderr", "")) or
+                            "%s a échoué : %s" % (quoi, str(res.get("stderr") or "")[-300:]))
+    sortie = JOBS / jid / "output"
+    return {p.name: p.read_bytes() for p in sortie.iterdir() if p.is_file() and not p.is_symlink()}
+
+
+def _tour360_peindre(ou: str):
+    """`peindre` du tour (07/10) : la vue du panorama au cap du personnage (script « vue »), le personnage ajouté
+    par l'image du Studio, puis seul ce qui a changé recollé dans le panorama (script « coller »)."""
+    def calcul(script: str, quoi: str) -> dict:
+        jid = "tour360-personnage-" + uuid.uuid4().hex[:12]
+        if ou != "maison":
+            return _tour360_modal(jid, script, quoi, tour360.GPU_MESURE, tour360.DUREE_MESURE_S,
+                                  tour360.MEMOIRE_MESURE_MB, tour360.COEURS_MESURE)
+        return _tour360_ici(jid, script, quoi, "Tour 360° : personnage dans le panorama")
+
+    def qwen(vue: bytes, images: list, texte: str, boite, graine: int) -> bytes:
+        """Le personnage peint par Qwen-Image 2.1 sous le masque `boite` de la vue (tour360.boite_personne)."""
+        jid = "tour360-personnage-qwen-" + uuid.uuid4().hex[:12]
+        masque = retouche_qwen.masque_rectangle(tour360.VUE_L, tour360.VUE_H, boite)
+        code = retouche_qwen.construire_script(vue, images, texte, graine, masque=masque, maison=ou == "maison")
+        if ou == "maison":
+            sortie = _tour360_ici(jid, code, "Le personnage peint par Qwen", "Tour 360° : personnage peint (Qwen)")
+        else:
+            sortie = _tour360_modal(jid, code, "Le personnage peint par Qwen", retouche_qwen.GPU,
+                                    retouche_qwen.DUREE_MAX_S, retouche_qwen.MEMOIRE_MB, retouche_qwen.COEURS)
+        if "retouche.png" not in sortie:
+            raise ValueError("Qwen n'a rendu aucune image.")
+        return sortie["retouche.png"]
+
+    def peindre(pano: bytes, cap: float, fx: float, texte: str, images: list, boite=None, graine: int = 11) -> tuple:
+        vue = calcul(tour360.construire_incrustation("vue", pano, cap, fx), "La vue du personnage")["vue.png"]
+        if boite is not None:
+            try:
+                peinte = qwen(vue, images, texte, boite, graine)
+            except tour360.Arret as exc:
+                raise ValueError(str(exc)) from exc
+        else:
+            try:
+                image = asyncio.run(_image_du_studio({
+                    "prompt": texte, "n": 1, "size": video_h3.TAILLE_IMAGE_DEMANDEE,
+                    "image_reference": [video_h3._data_url(base64.b64encode(b).decode()) for b in [vue] + images]}))
+            except HTTPException as exc:
+                raise ValueError(str(exc.detail)) from exc
+            peinte = base64.b64decode(image.split(",", 1)[1])
+        sortie = calcul(tour360.construire_incrustation("coller", pano, cap, fx, peinte),
+                        "Le personnage dans le panorama")
+        # la vue avant et après, pour que le tour fasse juger ce qui a changé (tour360.verdict_peinture)
+        return sortie["pano.png"], dict(json.loads(sortie["ajout.json"]), avant=vue, apres=peinte)
+    return peindre
 
 
 def _tour360_dossier(fid: str, tid: str) -> Path:
@@ -7776,15 +8038,45 @@ def _tour360_dossier(fid: str, tid: str) -> Path:
 
 
 def _tour360_public(etat: dict) -> dict:
-    sortie = {k: v for k, v in etat.items() if k != "consignes"}
-    if etat.get("film"):
-        sortie["video_url"] = f"/video/jobs/{etat['film']}/fichier?cle={jeton_video(etat['film'])}"
+    sortie = {k: v for k, v in etat.items() if k not in ("consignes", "groupes", "plan_historique", "plan_propose")}
+    sortie["groupes_nombre"] = len(etat.get("groupes") or [])
+    sortie["plan_retouches"] = len(etat.get("plan_historique") or [])
+    film = etat.get("film_final") or etat.get("film")
+    if film:
+        sortie["video_url"] = f"/video/jobs/{film}/fichier?cle={jeton_video(film)}"
+        sortie["film_id"] = film   # le « Gros plan » de la page part de ce film (07/10)
     return sortie
 
 
+def _tour360_personne(fid: str, tenue) -> dict:
+    """Le personnage d'un tour (07/10) : sa fiche, et avec `tenue` la photo de cette tenue (gardée sur la fiche,
+    faite par l'image du Studio la première fois) et son portrait de face."""
+    try:
+        fiche = video_h3.fiche_lire(fid)
+    except ValueError as exc:
+        raise tour360.Arret("Personnage : %s" % exc) from exc
+    # une fiche sans genre est une personne (les fiches d'avant le genre, comme partout dans le Studio)
+    if (fiche.get("genre") or "personne") != "personne":
+        raise tour360.Arret("« %s » n'est pas une fiche de personne." % fiche.get("nom", fid))
+    # l'étiquette H3 (anglais, sans âge) avant la description de la fiche (français) : elle va dans l'invite H3
+    sortie = {"nom": fiche["nom"], "description": fiche.get("etiquette_h3") or fiche.get("description") or ""}
+    if tenue is None:
+        return sortie
+    try:
+        b64, _reprise = asyncio.run(_photo_de_tenue(fid, tenue))
+        vues = asyncio.run(_vues_de_tenue(fid, tenue, b64))
+        visage = video_h3.fiche_images(fid, visage_seul=True)[0]
+    except (HTTPException, ValueError, IndexError) as exc:
+        raise tour360.Arret("La tenue de %s : %s" % (fiche["nom"], getattr(exc, "detail", exc))) from exc
+    return dict(sortie, tenue=base64.b64decode(b64), visage=base64.b64decode(visage),
+                vues={v: base64.b64decode(b) for v, b in vues.items()})
+
+
 def _tour360_lancer(etat: dict) -> dict:
+    ou = etat.get("ou") or "modal"
     tour = tour360.Tour(etat, _tour360_dossier(etat["fiche"], etat["id"]), _film_auto_appel, _tour360_chat,
-                        _tour360_panorama)
+                        _tour360_panorama, mesure=lambda photo: _tour360_mesure(photo, ou),
+                        relecteur=_tour360_relecteur, personne=_tour360_personne, peindre=_tour360_peindre(ou))
     tour.ecrire()
     fil = threading.Thread(target=tour.derouler, daemon=True)
     _TOURS_360_FILS[etat["id"]] = fil
@@ -7794,7 +8086,8 @@ def _tour360_lancer(etat: dict) -> dict:
 
 @app.post("/video-h3/fiches/{fid}/tour360")
 async def video_h3_tour360(fid: str, request: Request, authorization: Optional[str] = Header(default=None)):
-    """{ou?, graine?, pas?} : le tour 360° du décor se fait seul, de sa photo au film monté.
+    """{ou?, graine?, pas?, camera?, finition?} : le tour 360° du décor se fait seul, de sa photo au film fini
+    (finition : {4k, musique, fluide, compresser}, tour360.FINITION_DEFAUT).
     Le panorama part toujours chez Modal ; `ou` vaut pour les tronçons H3."""
     _h3_ou_404()
     auth(authorization)
@@ -7809,7 +8102,9 @@ async def video_h3_tour360(fid: str, request: Request, authorization: Optional[s
     try:
         fiche = video_h3.fiche_lire(fid)
         photo = video_h3.fiche_lieu_image(fid)
-        etat = tour360.nouvel_etat(fiche, ou, corps.get("graine"), corps.get("pas"))
+        etat = tour360.nouvel_etat(fiche, ou, corps.get("graine"), corps.get("pas"), corps.get("finition"),
+                                     corps.get("camera"), personnage=corps.get("personnage"),
+                                     ref_image_size=corps.get("ref_image_size"))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     dossier = _tour360_dossier(fid, etat["id"])
@@ -7856,6 +8151,143 @@ def video_h3_tour360_reprendre(fid: str, tid: str, authorization: Optional[str] 
         raise HTTPException(409, "Ce tour est déjà en cours.")
     etat.update(statut="en cours", erreur="")
     return _tour360_lancer(etat)
+
+
+def _tour360_libre(tid: str):
+    fil = _TOURS_360_FILS.get(tid)
+    if fil is not None and fil.is_alive():
+        raise HTTPException(409, "Ce tour est déjà en cours.")
+
+
+@app.post("/video-h3/fiches/{fid}/tour360/{tid}/plan")
+async def video_h3_tour360_plan(fid: str, tid: str, request: Request,
+                                authorization: Optional[str] = Header(default=None)):
+    """{message} : le client retouche le plan au sol en l'écrivant (PLAN 21.6 étape 1) ; le chat rend le plan
+    modifié. Rien n'est lancé : le tour attend toujours « valider »."""
+    _h3_ou_404()
+    auth(authorization)
+    _tour360_libre(tid)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    etat = _tour360_lire(fid, tid)
+    dossier = _tour360_dossier(fid, tid)
+
+    def chat(consigne, images):
+        return _tour360_chat(consigne, images)
+
+    try:
+        etat = await asyncio.to_thread(tour360.retoucher_plan, etat, (corps or {}).get("message", ""), chat,
+                                       (dossier / "photo.png").read_bytes())
+    except tour360.Arret as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    tour360.Tour(etat, dossier, _film_auto_appel, _tour360_chat, _tour360_panorama).ecrire()
+    return _tour360_public(etat)
+
+
+@app.post("/video-h3/fiches/{fid}/tour360/{tid}/personnage")
+async def video_h3_tour360_personnage(fid: str, tid: str, request: Request,
+                                      authorization: Optional[str] = Header(default=None)):
+    """{fiche, pres_de?, action?, tenue?} : un personnage dans un tour qui n'a pas encore écrit ses clips (07/10) ;
+    ce que le client ne fixe pas, le chat le choisit pour le lieu (place, action, tenue). Rien n'est lancé."""
+    _h3_ou_404()
+    auth(authorization)
+    _tour360_libre(tid)
+    try:
+        corps = await request.json()
+    except ValueError:
+        corps = {}
+    try:
+        video_h3.fiche_lire(str((corps or {}).get("fiche") or ""))
+        etat = tour360.poser_personnage(_tour360_lire(fid, tid), corps)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    tour360.Tour(etat, _tour360_dossier(fid, tid), _film_auto_appel, _tour360_chat, _tour360_panorama).ecrire()
+    return _tour360_public(etat)
+
+
+@app.post("/video-h3/fiches/{fid}/tour360/{tid}/plan/valider")
+def video_h3_tour360_plan_valider(fid: str, tid: str, authorization: Optional[str] = Header(default=None)):
+    """Le client valide le plan : le tour repart (panorama, cartes, groupes H3…)."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    _tour360_libre(tid)
+    try:
+        etat = tour360.valider_plan(_tour360_lire(fid, tid))
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return _tour360_lancer(etat)
+
+
+@app.get("/video-h3/fiches/{fid}/tour360/{tid}/plan/{vue}.svg")
+def video_h3_tour360_plan_vue(fid: str, tid: str, vue: str, authorization: Optional[str] = Header(default=None)):
+    """La vue de dessus du plan (« dessus »), ou ses arêtes vues par la caméra de la photo (« camera »), à poser
+    sur la photo."""
+    _h3_ou_404()
+    auth(authorization)
+    etat = _tour360_lire(fid, tid)
+    if not etat.get("plan") or not etat.get("mesure"):
+        raise HTTPException(404, "Ce tour n'a pas encore de plan.")
+    if vue not in ("dessus", "camera"):
+        raise HTTPException(404, "Vue inconnue.")
+    dessin = (tour360.plan_piece.svg_dessus if vue == "dessus" else tour360.plan_piece.svg_camera)(
+        etat["plan"], etat["mesure"])
+    return Response(dessin, media_type="image/svg+xml")
+
+
+@app.post("/video-h3/fiches/{fid}/tour360/{tid}/groupe/{k}")
+def video_h3_tour360_groupe(fid: str, tid: str, k: int, authorization: Optional[str] = Header(default=None)):
+    """Un groupe de clips du tour (tour360_chaine : vues du panorama épinglées, latent entre les clips). La
+    demande se fait ici, depuis l'état et les fichiers du tour : la page n'envoie aucun graphe."""
+    _h3_ou_404()
+    auth(authorization)
+    _garde_licence_h3()
+    etat = _tour360_lire(fid, tid)
+    ou = etat.get("ou") or "modal"
+    delai = (video_h3.MAISON_DUREE_MAX_S if ou == "maison" else tour360_chaine.GROUPE_MODAL_S) - 120
+    try:
+        # des invites écrites par un code plus ancien se réécrivent avant de partir (tour360.SIGNATURE_INVITES)
+        tour360.Tour(etat, _tour360_dossier(fid, tid), _film_auto_appel, _tour360_chat, _tour360_panorama)._groupes()
+    except tour360.Arret as exc:
+        raise HTTPException(409, "Groupe du tour impossible : %s" % exc) from exc
+    try:
+        demande = tour360.demande_du_groupe(etat, _tour360_dossier(fid, tid), k, delai)
+    except (ValueError, OSError, KeyError) as exc:
+        raise HTTPException(400, "Groupe du tour impossible : %s" % exc) from exc
+    if ou == "modal":
+        if not video_h3.poids_etat()["prets"]:
+            raise HTTPException(409, "Les poids de H3 ne sont pas encore sur le disque Modal : "
+                                     "cliquez « Préparer les poids » (une fois).")
+        _modal_ou_refus()
+        try:
+            budget_modal.verifier("video", video_h3.GPU, tour360_chaine.GROUPE_MODAL_S, video_h3.MEMOIRE_MB,
+                                  quoi="Ce groupe du tour 360°", coeurs=video_h3.COEURS)
+        except budget_modal.BudgetDepasse as exc:
+            raise HTTPException(429, str(exc)) from exc
+    else:
+        _h3_peut(ou, demande)
+    groupe = etat["groupes"][k]
+    jid = uuid.uuid4().hex
+    resume = {"moteur": "MiniMax H3 (ComfyUI " + video_h3.COMFY_VERSION + ")", "mode": "references",
+              "mode_titre": "Tour 360° : groupe %d sur %d" % (k + 1, len(etat["groupes"])),
+              "invite": "Tour 360° : %s, groupe %d" % (etat.get("nom", ""), k + 1),
+              "secondes": round(demande["longueur"] / video_h3.IMAGES_PAR_SECONDE, 1),
+              "tour360": {"tour": tid, "groupe": k, "clips": groupe["clips"]}}
+    fiche = {"id": jid, "provider": ou, "title": "Free AI Studio video H3", "gpu": True,
+             "internet": ou == "modal", "status": "queued", "created_at": time.time(), "artifacts": [],
+             "video": resume, "titre": resume["invite"][:60]}
+    if ou == "maison":
+        resume.update(carte="ici", cout_max_usd=0.0, prix_estime_usd=0.0)
+        fiche.update(machine="comfy", attente_carte=True, provider_effective="maison",
+                     attente_motif="En file pour la carte de cet ordinateur.")
+    write_job(jid, fiche)
+    threading.Thread(target=run_video_h3, args=(jid, tour360_chaine.construire_script(demande), None, 0, ou),
+                     kwargs={"groupe": True}, daemon=True).start()
+    return read_job(jid)
 
 
 DEFAUTS_PAR_PLAN = 3

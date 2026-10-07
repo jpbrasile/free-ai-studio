@@ -33,6 +33,10 @@ T8 = ("https://github.com/T8mars/Comfyui-Qwen-Image-2.1-Fun-Controlnet-Union-T8"
 UNION = ("Qwen-Image-2.1-Fun-Controlnet-Union-ComfyUI.safetensors", "t8star/Qwen-Image-2.1-Fun-Controlnet-Union-Comfy",
          "199bd863c41b5401e3c9bbc2b1bd4b62f468229c")
 FX, PL_L, PL_H, MARGE = 904.0, 1344, 768, 12
+TANGAGE = 0.0              # caméra devinée de maquette.py ; camera.json du dossier source (maquette_plan.py) la remplace
+# La photo est recollée en retrait de ses bords, repeints par l'Union (comme tour360_pano.py du Studio, 2,5 %) : un
+# objet coupé par le bord du cadre (chant d'un panneau au premier plan) devenait un poteau isolé dans le tour (06/10).
+RETRAIT = 40
 PANO_L, PANO_H = 2048, 1024
 RESOLUTION = 1440          # -> latent 2048x1024 pour une image 2:1
 BANDE = 25.0
@@ -112,6 +116,8 @@ def directions(l, h):
 def coord_plaque(l, h):
     import numpy as np
     x, y, z = directions(l, h)
+    t = -np.radians(TANGAGE)            # y vers le bas : plaque tournée vers le bas (< 0) = horizon au-dessus du milieu
+    y, z = y * np.cos(t) - z * np.sin(t), z * np.cos(t) + y * np.sin(t)
     devant = z > 1e-3
     zs = np.where(devant, z, 1.0)
     return devant, FX * x / zs + PL_L / 2, FX * y / zs + PL_H / 2
@@ -121,7 +127,7 @@ def masque_hors_plaque():
     import cv2
     import numpy as np
     devant, u, v = coord_plaque(PANO_L, PANO_H)
-    dedans = devant & (u >= 0) & (u < PL_L) & (v >= 0) & (v < PL_H)
+    dedans = devant & (u >= RETRAIT) & (u < PL_L - RETRAIT) & (v >= RETRAIT) & (v < PL_H - RETRAIT)
     m = cv2.dilate((~dedans).astype(np.uint8) * 255, np.ones((2 * MARGE + 1, 2 * MARGE + 1), np.uint8))
     return cv2.GaussianBlur(m, (0, 0), 4)
 
@@ -140,7 +146,7 @@ def recoller_plaque(pano, plaque):
     import numpy as np
     h, w = pano.shape[:2]
     devant, u, v = coord_plaque(w, h)
-    bord = np.minimum.reduce([u, PL_L - u, v, PL_H - v])
+    bord = np.minimum.reduce([u, PL_L - u, v, PL_H - v]) - RETRAIT
     a = np.where(devant, np.clip(bord / FONDU, 0, 1), 0.0)
     a = (a * a * (3 - 2 * a))[..., None]
     echelle = (w / (2 * np.pi)) / FX
@@ -168,7 +174,10 @@ def reprojeter(pano, lacet):
 
 @app.function(image=image, gpu="A100-80GB", volumes={"/poids": poids}, timeout=3600)
 def carte(maquette: bytes, profondeur: bytes, aretes: bytes, plaque: bytes, essais: dict, seedvr: dict,
-          qwen: dict, seedvr_poids: dict):
+          qwen: dict, seedvr_poids: dict, camera: dict = None):
+    global FX, TANGAGE
+    if camera:                          # caméra mesurée de la plaque (maquette_plan.py : camera.json)
+        FX, TANGAGE = camera["f"], camera["tangage"]
     import subprocess
     import urllib.request
 
@@ -297,6 +306,8 @@ if __name__ == "__main__":
                                             {"fichiers": list(rq.FICHIERS), "depot": rq.HF,
                                              "revision": rq.HF_REVISION},
                                             {"fichiers": list(agrandir.FICHIERS), "depot": agrandir.HF,
-                                             "revision": agrandir.HF_REVISION}):
+                                             "revision": agrandir.HF_REVISION},
+                                            json.loads((src / "camera.json").read_text(encoding="utf-8"))
+                                            if (src / "camera.json").is_file() else None):
             (dossier / nom).write_bytes(octets)
             print("SORTI", nom, len(octets), round(time.time()), flush=True)

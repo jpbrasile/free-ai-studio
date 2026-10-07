@@ -720,6 +720,31 @@ def sauts_d_image(ecarts: list) -> list:
     return sauts
 
 
+# Arrêt de la caméra à la fin d'un travelling (07/10, gros plan à coupe franche) : l'écart lissé sur
+# ARRET_LISSAGE images retombe sous ARRET_FRACTION de son pic et y reste ARRET_TENUE images. Valeurs de
+# départ, PAS ENCORE MESURÉES sur un clip réel (à caler sur le premier gros plan rendu).
+ARRET_LISSAGE = 5
+ARRET_FRACTION = 0.3
+ARRET_TENUE = 12
+
+
+def arret_camera(ecarts: list) -> int | None:
+    """La première image où la caméra est arrêtée après son mouvement (indice dans le plan), None si
+    elle ne s'arrête pas (ou ne bouge pas) : la coupe franche se fait là."""
+    n = len(ecarts)
+    if n < ARRET_LISSAGE + ARRET_TENUE:
+        return None
+    demi = ARRET_LISSAGE // 2
+    lisse = [sum(ecarts[max(0, k - demi):k + demi + 1]) / len(ecarts[max(0, k - demi):k + demi + 1])
+             for k in range(n)]
+    pic = max(range(n), key=lisse.__getitem__)
+    seuil = ARRET_FRACTION * lisse[pic]
+    for k in range(pic + 1, n - ARRET_TENUE + 1):
+        if all(x < seuil for x in lisse[k:k + ARRET_TENUE]):
+            return k + 1   # l'écart k sépare les images k et k+1
+    return None
+
+
 # Sous-titres (30/09/2026, « il manque la musique et les sous-titres… via le studio »).
 # Mesuré sur le film campus : à -35 dB sur tout le spectre, l'ambiance fait un seul passage
 # de 17 à 28 s ; dans la bande de la voix (300-3400 Hz) à -30 dB, sept morceaux pour six
@@ -929,12 +954,20 @@ def _av1(crf: int) -> list:
 # cadence fixe jetait celles aux horodatages irréguliers des morceaux agrandis), et la
 # garde refusait le film. Chaque image passe, horodatée de neuf à 24 images/s.
 AV1_IPS = 24
+# 06/10, tour 360° fluidifié (GIMM-VFI) : un film à 60 images/s refait à 24 passerait 2,5 fois plus
+# lentement. La cadence refaite est la plus proche des cadences du Studio (24,77 -> 24, 60 -> 60).
+AV1_CADENCES = (24, 60)
 
 
-def _av1_film(crf: int) -> list:
+def cadence_av1(chemin: Path) -> int:
+    num, den = _cadence(chemin)
+    return min(AV1_CADENCES, key=lambda c: abs(c - num / den))
+
+
+def _av1_film(crf: int, ips: int = AV1_IPS) -> list:
     # « -fps_mode passthrough » laisse SVT-AV1 sans cadence (Invalid argument) : les
     # horodatages refaits sont réguliers, la cadence fixe n'a plus rien à jeter.
-    return ["-vf", "setpts=N/(%d*TB)" % AV1_IPS, "-r", str(AV1_IPS), *_av1(crf)]
+    return ["-vf", "setpts=N/(%d*TB)" % ips, "-r", str(ips), *_av1(crf)]
 
 
 def psnr(distordu: Path, reference: Path) -> tuple:
@@ -969,7 +1002,7 @@ def compacter_av1(film: bytes, plafond: int = 0) -> tuple:
         for crf in AV1_CRFS_PLAFOND:
             sortie = Path(dossier, "av1_%d.mp4" % crf)
             fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-map", "0:v", "-map", "0:a?",
-                                   *_av1_film(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                                   *_av1_film(crf, cadence_av1(a)), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
                                   capture_output=True, text=True, timeout=DELAI_AV1_S)
             if fini.returncode != 0 or images(sortie) != images(a):
                 break
@@ -993,7 +1026,7 @@ def _compacter_av1_qualite(film: bytes) -> tuple:
         for crf in AV1_CRFS:
             sortie = Path(dossier, "av1_%d.mp4" % crf)
             fini = subprocess.run([_ffmpeg(), "-loglevel", "error", "-y", "-i", str(a), "-map", "0:v", "-map", "0:a?",
-                                   *_av1_film(crf), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
+                                   *_av1_film(crf, cadence_av1(a)), "-c:a", "copy", "-movflags", "+faststart", str(sortie)],
                                   capture_output=True, text=True, timeout=DELAI_AV1_S)
             if fini.returncode != 0 or images(sortie) != images(a):
                 return film, {"codec": codec_video(a), "raison": "l'encodage AV1 a échoué", "essais": essais}

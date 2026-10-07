@@ -87,21 +87,59 @@ def graphe(base: str, refs: list, texte: str, graine: int = GRAINE) -> dict:
     return g
 
 
-def demande(image: bytes, refs: list, texte: str, graine: int = GRAINE) -> dict:
-    """`refs` : les photos des fiches (octets), dans l'ordre que `consigne` a nommé."""
+def graphe_masque(g: dict, masque: str) -> dict:
+    """Le graphe qui ne repeint que le masque (blanc) de <image1> : l'image encodée sous un masque de bruit
+    (VAEEncode -> SetLatentNoiseMask) au lieu du latent vide (07/10, château : le personnage peint à sa place du plan
+    dans la vue exacte, tout le reste de la vue gardé ; usage courant de Qwen-Image 2.1 pour repeindre)."""
+    g["50"] = {"class_type": "LoadImage", "inputs": {"image": masque}}
+    g["51"] = {"class_type": "ImageToMask", "inputs": {"image": ["50", 0], "channel": "red"}}
+    g["52"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["10", 0], "vae": ["3", 0]}}
+    g["53"] = {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["52", 0], "mask": ["51", 0]}}
+    g["41"]["inputs"]["latent_image"] = ["53", 0]
+    return g
+
+
+CLASSES_MASQUE = ("ImageToMask", "VAEEncode", "SetLatentNoiseMask")
+
+
+def demande(image: bytes, refs: list, texte: str, graine: int = GRAINE, masque: bytes = None,
+            maison: bool = False) -> dict:
+    """`refs` : les photos des fiches (octets), dans l'ordre que `consigne` a nommé. `masque` (PNG, blanc = à
+    repeindre) : seule cette zone de `image` est repeinte. `maison` : la carte de cet ordinateur, poids à plat
+    sur /poids."""
     if not refs:
         raise ValueError("Aucune photo de fiche pour la retouche Qwen.")
     refs = list(refs)[:REFERENCES_MAX]
     noms = ["ref_%02d.png" % k for k in range(len(refs))]
-    return {"base": base64.b64encode(image).decode(),
-            "refs": {n: base64.b64encode(r).decode() for n, r in zip(noms, refs)},
-            "graphe": graphe("base.png", noms, texte, graine), "classes": list(CLASSES),
-            "comfy": video_h3.DOSSIER_COMFY, "base_poids": DOSSIER_POIDS, "depot": HF, "revision": HF_REVISION,
-            "fichiers": list(FICHIERS), "delai_s": DUREE_MAX_S}
+    g, classes = graphe("base.png", noms, texte, graine), list(CLASSES)
+    fichiers = {n: base64.b64encode(r).decode() for n, r in zip(noms, refs)}
+    if masque is not None:
+        g, classes = graphe_masque(g, "masque.png"), classes + list(CLASSES_MASQUE)
+        fichiers["masque.png"] = base64.b64encode(masque).decode()
+    return {"base": base64.b64encode(image).decode(), "refs": fichiers, "graphe": g, "classes": classes,
+            "comfy": video_h3.DOSSIER_COMFY, "base_poids": "/poids" if maison else DOSSIER_POIDS, "depot": HF,
+            "revision": HF_REVISION, "fichiers": list(FICHIERS), "delai_s": DUREE_MAX_S}
 
 
-def construire_script(image: bytes, refs: list, texte: str, graine: int = GRAINE) -> str:
-    return video_h3._emballer(_SCRIPT, demande(image, refs, texte, graine))
+def construire_script(image: bytes, refs: list, texte: str, graine: int = GRAINE, masque: bytes = None,
+                      maison: bool = False) -> str:
+    return video_h3._emballer(_SCRIPT, demande(image, refs, texte, graine, masque, maison))
+
+
+def masque_rectangle(largeur: int, hauteur: int, boite) -> bytes:
+    """Un masque PNG (RGB) noir avec le rectangle `boite` (x0, y0, x1, y1, pixels) blanc, sans dépendance."""
+    x0, y0, x1, y1 = (int(round(v)) for v in boite)
+    x0, x1 = max(0, min(largeur, x0)), max(0, min(largeur, x1))
+    y0, y1 = max(0, min(hauteur, y0)), max(0, min(hauteur, y1))
+    noire = b"\x00" + b"\x00" * (3 * largeur)
+    trouee = b"\x00" + b"\x00" * (3 * x0) + b"\xff" * (3 * (x1 - x0)) + b"\x00" * (3 * (largeur - x1))
+    brut = b"".join(trouee if y0 <= y < y1 else noire for y in range(hauteur))
+
+    def bloc(genre, donnees):
+        return (struct.pack(">I", len(donnees)) + genre + donnees
+                + struct.pack(">I", zlib.crc32(genre + donnees) & 0xFFFFFFFF))
+    return (b"\x89PNG\r\n\x1a\n" + bloc(b"IHDR", struct.pack(">IIBBBBB", largeur, hauteur, 8, 2, 0, 0, 0))
+            + bloc(b"IDAT", zlib.compress(brut, 6)) + bloc(b"IEND", b""))
 
 
 # --- L'image de départ entière par Qwen (propriétaire, 05/10 : « qwen est meilleur pour le job ») ---
